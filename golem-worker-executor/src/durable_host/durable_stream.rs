@@ -90,6 +90,17 @@ pub(crate) struct ProducerOutputRegistrationV1 {
     pub(crate) source: ProducerOutputSourceV1,
 }
 
+pub(crate) struct PendingCommittedCancellation {
+    stream_id: StreamId,
+    sequence: u64,
+    role: StreamCancelRoleV1,
+    reason: StreamCancelReasonV1,
+    bus: Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>,
+    event: CommittedProducerStreamEventV1,
+    outcome: Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError>,
+    newly_committed: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
 pub(crate) enum CommittedProducerStreamEventPayloadV1 {
     Value(Vec<u8>),
@@ -3511,7 +3522,7 @@ impl DurableStreamProducer {
         skip_all,
         fields(stream_id = %stream_id, sequence, role = ?role, reason = ?reason)
     )]
-    async fn cancel_locked(
+    async fn commit_cancel_locked(
         &self,
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
@@ -3519,7 +3530,7 @@ impl DurableStreamProducer {
         role: StreamCancelRoleV1,
         reason: StreamCancelReasonV1,
         details: Option<String>,
-    ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
+    ) -> Result<PendingCommittedCancellation, DurableStreamProducerError> {
         let payload = CommittedProducerStreamEventPayloadV1::Cancel {
             role,
             reason,
@@ -3535,30 +3546,38 @@ impl DurableStreamProducer {
             TerminalReplayDecision::Append => {}
             TerminalReplayDecision::Replayed(event) => {
                 let offset = event.offset;
+                let bus = self.bus(stream_id)?;
                 drop(index);
                 self.cancel_source(stream_id);
-                self.publish_repair(stream_id, vec![event]).await?;
-                crate::metrics::durable_stream::record_producer_operation("cancel", true);
-                tracing::debug!(
-                    stream_id = %stream_id,
+                return Ok(PendingCommittedCancellation {
+                    stream_id,
                     sequence,
-                    durable_offset = %offset,
-                    role = ?role,
-                    reason = ?reason,
-                    replayed = true,
-                    "Durable stream cancellation resolved"
-                );
-                return Ok(ProducerWriteOutcomeV1 {
-                    value: offset,
-                    replayed: true,
+                    role,
+                    reason,
+                    bus,
+                    event,
+                    outcome: Ok(ProducerWriteOutcomeV1 {
+                        value: offset,
+                        replayed: true,
+                    }),
+                    newly_committed: false,
                 });
             }
             TerminalReplayDecision::Fenced(event) => {
                 let error = DurableStreamProducerError::FencedByTerminal(event.payload.clone());
+                let bus = self.bus(stream_id)?;
                 drop(index);
                 self.cancel_source(stream_id);
-                self.publish_repair(stream_id, vec![event]).await?;
-                return Err(error);
+                return Ok(PendingCommittedCancellation {
+                    stream_id,
+                    sequence,
+                    role,
+                    reason,
+                    bus,
+                    event,
+                    outcome: Err(error),
+                    newly_committed: false,
+                });
             }
         }
         index.ensure_producer_write_allowed()?;
@@ -3598,35 +3617,60 @@ impl DurableStreamProducer {
         let bus = self.bus(stream_id)?;
         drop(index);
         self.cancel_source(stream_id);
-        bus.publish_committed(DurableLiveStreamEvent {
-            offset,
-            payload: event,
-        })
-        .await?;
-        self.record_terminal_streams(1);
-        crate::metrics::durable_stream::record_producer_operation("cancel", false);
-        tracing::debug!(
-            stream_id = %stream_id,
+        Ok(PendingCommittedCancellation {
+            stream_id,
             sequence,
-            durable_offset = %offset,
-            role = ?role,
-            reason = ?reason,
-            replayed = false,
-            "Durable stream cancellation committed"
-        );
-        Ok(ProducerWriteOutcomeV1 {
-            value: offset,
-            replayed: false,
+            role,
+            reason,
+            bus,
+            event,
+            outcome: Ok(ProducerWriteOutcomeV1 {
+                value: offset,
+                replayed: false,
+            }),
+            newly_committed: true,
         })
     }
 
-    pub(crate) async fn cancel_open(
+    pub(crate) async fn publish_committed_cancellation(
+        &self,
+        pending: PendingCommittedCancellation,
+    ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
+        let offset = pending.event.offset;
+        let live_event = DurableLiveStreamEvent {
+            offset,
+            payload: pending.event,
+        };
+        if pending.newly_committed {
+            pending.bus.publish_committed(live_event).await?;
+        } else {
+            pending.bus.republish_committed(live_event).await;
+        }
+        if pending.newly_committed {
+            self.record_terminal_streams(1);
+        }
+        if let Ok(outcome) = &pending.outcome {
+            crate::metrics::durable_stream::record_producer_operation("cancel", outcome.replayed);
+            tracing::debug!(
+                stream_id = %pending.stream_id,
+                sequence = pending.sequence,
+                durable_offset = %offset,
+                role = ?pending.role,
+                reason = ?pending.reason,
+                replayed = outcome.replayed,
+                "Durable stream cancellation committed"
+            );
+        }
+        pending.outcome
+    }
+
+    pub(crate) async fn commit_cancel_open(
         &self,
         stream_id: StreamId,
         role: StreamCancelRoleV1,
         reason: StreamCancelReasonV1,
         details: Option<String>,
-    ) -> Result<(), DurableStreamProducerError> {
+    ) -> Result<Option<PendingCommittedCancellation>, DurableStreamProducerError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
             .await?;
@@ -3637,11 +3681,27 @@ impl DurableStreamProducer {
         if stream.terminal {
             drop(index);
             self.cancel_source(stream_id);
-            return Ok(());
+            return Ok(None);
         }
         let sequence = stream.next_sequence;
-        self.cancel_locked(index, stream_id, sequence, role, reason, details)
-            .await?;
+        self.commit_cancel_locked(index, stream_id, sequence, role, reason, details)
+            .await
+            .map(Some)
+    }
+
+    pub(crate) async fn cancel_open(
+        &self,
+        stream_id: StreamId,
+        role: StreamCancelRoleV1,
+        reason: StreamCancelReasonV1,
+        details: Option<String>,
+    ) -> Result<(), DurableStreamProducerError> {
+        if let Some(pending) = self
+            .commit_cancel_open(stream_id, role, reason, details)
+            .await?
+        {
+            self.publish_committed_cancellation(pending).await?;
+        }
         Ok(())
     }
 

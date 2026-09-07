@@ -1106,21 +1106,26 @@ impl DurableSessionStreams {
         &self,
     ) -> Result<tokio::sync::MutexGuard<'_, SessionControlMetadata>, String> {
         let horizon = self.oplog.current_oplog_index().await;
-        let metadata = self.control_metadata.lock().await;
-        if metadata.covered_through >= horizon {
-            if metadata.malformed_record {
-                return Err(
-                    "unsupported or malformed durable Stream Session record version".into(),
-                );
+        loop {
+            if let Ok(metadata) = self.control_metadata.try_lock() {
+                if metadata.covered_through >= horizon {
+                    if metadata.malformed_record {
+                        return Err(
+                            "unsupported or malformed durable Stream Session record version".into(),
+                        );
+                    }
+                    return Ok(metadata);
+                }
+            } else {
+                // A suspended store or select branch must not reserve this shared permit.
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                continue;
             }
-            return Ok(metadata);
+            let streams = self.clone();
+            tokio::spawn(async move { streams.refresh_control_metadata().await })
+                .await
+                .map_err(|error| format!("durable session metadata refresh failed: {error}"))??;
         }
-        drop(metadata);
-        let streams = self.clone();
-        tokio::spawn(async move { streams.refresh_control_metadata().await })
-            .await
-            .map_err(|error| format!("durable session metadata refresh failed: {error}"))??;
-        Ok(self.control_metadata.lock().await)
     }
 
     async fn refresh_control_metadata(&self) -> Result<(), String> {
@@ -2093,8 +2098,9 @@ impl DurableSessionStreams {
             }
         };
         if locally_produced {
-            self.producer
-                .cancel_open(
+            let pending = self
+                .producer
+                .commit_cancel_open(
                     mapping.handle.stream_id,
                     intent.role,
                     intent.reason,
@@ -2102,6 +2108,13 @@ impl DurableSessionStreams {
                 )
                 .await
                 .map_err(|error| error.to_string())?;
+            drop(session_guard);
+            if let Some(pending) = pending {
+                self.producer
+                    .publish_committed_cancellation(pending)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
         } else {
             drop(session_guard);
             let rpc = self.rpc.clone().ok_or_else(|| {
@@ -3396,6 +3409,7 @@ impl DurableSessionStreams {
             let response = match event.payload {
                 CommittedProducerStreamEventPayloadV1::Value(bytes) => {
                     let _session_guard = self.session_lock.lock().await;
+                    self.ensure_current_attachment().await?;
                     self.recover_session_mappings().await?;
                     let value = ProtoSchemaValue::decode(bytes.as_slice())
                         .map_err(|error| format!("invalid durable output value: {error}"))?;
@@ -5374,7 +5388,7 @@ mod tests {
     }
 
     #[test]
-    async fn local_cancellation_holds_session_lock_through_live_publication() {
+    async fn local_cancellation_releases_session_lock_after_commit_before_live_publication() {
         let (producer, streams, mut reader, handle) = backpressured_session_input().await;
         let cancellation = tokio::spawn({
             let streams = streams.clone();
@@ -5392,21 +5406,30 @@ mod tests {
         });
 
         wait_for_terminal_commit(&producer, handle.stream_id).await;
-        assert!(
-            streams.session_lock.try_lock().is_err(),
-            "local cancellation must retain session ownership until its terminal is published"
+        assert!(!cancellation.is_finished());
+        let session_guard = tokio::time::timeout(
+            Duration::from_secs(1),
+            streams.session_lock.lock(),
+        )
+        .await
+        .expect(
+            "local cancellation must release session ownership after its terminal is committed",
         );
+        drop(session_guard);
 
         assert_eq!(reader.next().await.unwrap().unwrap().producer_sequence, 0);
         cancellation.await.unwrap().unwrap();
+        let terminal = reader.next().await.unwrap().unwrap();
+        assert_eq!(terminal.producer_sequence, 1);
         assert!(matches!(
-            reader.next().await.unwrap().unwrap().payload,
+            terminal.payload,
             CommittedProducerStreamEventPayloadV1::Cancel {
                 role: StreamCancelRoleV1::InputConsumer,
                 reason: StreamCancelReasonV1::GuestDrop,
                 ..
             }
         ));
+        assert!(reader.next().await.unwrap().is_none());
     }
 
     #[test]
@@ -8539,6 +8562,81 @@ mod tests {
         let next = oplog.add(OplogEntry::interrupted()).await;
         streams.recover_session_mappings().await.unwrap();
         assert_eq!(oplog.take_read_ranges(), vec![(next, 1)]);
+    }
+
+    #[test]
+    async fn suspended_control_metadata_reader_does_not_reserve_the_shared_permit() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(producer, oplog, identity.invocation, []);
+
+        let guard = streams.control_metadata.lock().await;
+        let mut suspended = Box::pin(streams.current_control_metadata());
+        assert!(futures::poll!(&mut suspended).is_pending());
+        drop(guard);
+
+        let metadata =
+            tokio::time::timeout(Duration::from_secs(1), streams.current_control_metadata())
+                .await
+                .expect("a suspended reader must not block an independently polled lookup")
+                .unwrap();
+        drop(metadata);
+        drop(suspended);
+    }
+
+    #[test]
+    async fn invocation_winner_drops_queued_persisted_result_waiter_before_followup() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(producer, oplog, identity.invocation, []);
+
+        let guard = streams.control_metadata.lock().await;
+        let mut invocation = Box::pin(streams.recover_nested_input_mappings());
+        assert!(futures::poll!(&mut invocation).is_pending());
+        let mut result = Box::pin(streams.wait_persisted_result());
+        assert!(futures::poll!(&mut result).is_pending());
+        drop(guard);
+
+        enum Winner {
+            Invocation,
+            Result,
+        }
+        let winner = tokio::select! {
+            biased;
+            _ = &mut result => Winner::Result,
+            recovered = &mut invocation => {
+                recovered.unwrap();
+                Winner::Invocation
+            },
+        };
+        assert!(matches!(winner, Winner::Invocation));
+
+        drop(result);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), streams.persisted_result())
+                .await
+                .expect("the invocation follow-up must not remain behind the abandoned waiter")
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

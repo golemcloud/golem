@@ -960,8 +960,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(Some(result)) => Some(result),
                 Ok(None) if completed_output.is_some() => None,
                 Ok(None) => {
-                    let result = durable_streams.wait_persisted_result();
-                    tokio::pin!(result);
+                    let mut result = Box::pin(durable_streams.wait_persisted_result());
                     loop {
                         tokio::select! {
                             biased;
@@ -975,6 +974,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             output = &mut invocation => match output {
                                 Ok(output) => {
                                     completed_output = Some(Ok(output));
+                                    drop(result);
                                     match durable_streams.persisted_result().await {
                                         Ok(result) => break result,
                                         Err(error) => {
@@ -985,6 +985,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 }
                                 Err(error) => {
                                     completed_output = Some(Err(error));
+                                    drop(result);
                                     match durable_streams.persisted_result().await {
                                         Ok(result) => break result,
                                         Err(error) => {

@@ -88,14 +88,14 @@ impl Benchmark for StreamingProducer {
     async fn setup_iteration(&self, context: &StreamingContext) -> IterationContext {
         let user = context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
-        user.component(&env.id, "golem_it_tool_streaming_rust_provider")
-            .name("golem-it:tool-streaming-rust-provider")
+        let component = user
+            .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+            .name("golem-it:tool-streaming-rust-caller")
             .store()
             .await
             .unwrap();
-        let component = user
-            .component(&env.id, "golem_it_tool_streaming_rust_caller")
-            .name("golem-it:tool-streaming-rust-caller")
+        user.component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+            .name("golem-it:tool-streaming-rust-provider")
             .with_tool_agent_binding("streaming", "ToolStreamingCaller")
             .unwrap()
             .store()
