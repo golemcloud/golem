@@ -41,6 +41,7 @@ use crate::durable_host::durable_stream::{
     StreamAttachmentControl,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::durable_host::{
     agent_effective_surface_from_component_metadata, agent_monomorphization_context,
     recover_stderr_logs,
@@ -110,7 +111,9 @@ use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::entity::{ExecutableTarget, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
@@ -121,9 +124,10 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, TypedAgentConfigEntry,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
-    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, Timestamp, TimestampedAgentInvocation,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -459,6 +463,9 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
+    /// Prevents weak-reference background work from starting while an unloaded
+    /// worker is being conditionally removed from `ActiveAgents`.
+    cache_retirement_in_progress: AtomicBool,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -578,6 +585,24 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     fn all(&self) -> &All<Self::Ctx> {
         &self.deps
     }
+}
+
+fn into_pending_invocation_parts(
+    invocation: AgentInvocation,
+) -> (
+    Option<IdempotencyKey>,
+    IdempotencyKey,
+    AgentInvocationPayload,
+    InvocationContextStack,
+) {
+    let semantic_idempotency_key = invocation.idempotency_key().cloned();
+    let (storage_idempotency_key, payload, invocation_context) = invocation.into_parts();
+    (
+        semantic_idempotency_key,
+        storage_idempotency_key,
+        payload,
+        invocation_context,
+    )
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -972,6 +997,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             instance,
+            cache_retirement_in_progress: AtomicBool::new(false),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
@@ -1068,6 +1094,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn create_entity_context(
         self: &Arc<Self>,
         runtime: OwnerRuntime,
+        execution_mode: InvocationExecutionMode,
         filesystem: FilesystemCapability,
         executable_component: golem_service_base::model::component::Component,
         activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1131,13 +1158,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ),
             ));
         }
-        let retained_memory_grant = Arc::new(StdMutex::new(
-            self.active_agents()
-                .acquire_memory(initial_linear_memory)
-                .await,
-        ));
+        let retained_memory_grant = Arc::new(StdMutex::new(match execution_mode {
+            InvocationExecutionMode::Live => {
+                self.active_agents()
+                    .acquire_memory(initial_linear_memory)
+                    .await
+            }
+            InvocationExecutionMode::ReplayingCompleted
+            | InvocationExecutionMode::ReplayingIncomplete => {
+                MemoryGrant::inert(initial_linear_memory)
+            }
+        }));
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        let replaying = self.owner_execution.replay().await?.is_replay();
+        let replaying = matches!(
+            execution_mode,
+            InvocationExecutionMode::ReplayingCompleted
+                | InvocationExecutionMode::ReplayingIncomplete
+        );
         let linear_memory = LinearMemoryTracker::new_with_metering(
             initial_linear_memory,
             admitted_startup_bytes,
@@ -1202,6 +1239,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None,
             worker_metadata.original_phantom_id,
             runtime,
+            Some(execution_mode),
             self.owner_execution(),
             self.owner_runtime_resources(),
             filesystem,
@@ -1362,18 +1400,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     async fn start_deleting_internal(&self) -> Result<(), WorkerExecutorError> {
-        self.queue_interrupt(
-            InterruptKind::Interrupt(Timestamp::now_utc()),
-            false,
-            UnloadReason::Deleting,
-        )
-        .await;
+        let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
+        self.queue_interrupt(interrupt_kind, false, UnloadReason::Deleting)
+            .await;
         if let Some(active_agent) = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
         }
         // Stop any future background flush or clean-checkpoint write from resurrecting the cached
         // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
@@ -1544,6 +1581,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
+    pub(crate) fn interrupt_current_execution(&self) {
+        let interrupt_signal = match &*self.execution_status.read().unwrap() {
+            ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => Some(interrupt_signal.clone()),
+            _ => None,
+        };
+        if let Some(interrupt_signal) = interrupt_signal {
+            let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+        }
+    }
+
     fn mark_as_loading(&self, start_attempt: Uuid) {
         self.startup_attempt.begin(Some(start_attempt));
         let mut execution_status = self.execution_status.write().unwrap();
@@ -1638,6 +1687,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.non_detached_status().await
     }
 
+    /// Returns the authoritative status, reattaching it to the oplog first when necessary.
+    /// Unlike [`Self::get_non_detached_last_known_status`], this is safe for independent store
+    /// tasks that can overlap an invocation-loop jump or replay completion.
+    pub async fn get_attached_last_known_status(&self) -> AgentStatusRecord {
+        self.state_actor.attached_status().await.as_ref().clone()
+    }
+
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
         &self.owned_agent_id
     }
@@ -1674,14 +1730,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return None;
         }
-        if let Some(active_agent) = self
+        let active_agent = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
-            .await
-        {
-            active_agent.fence_entity_bodies();
+            .await;
+        if let Some(active_agent) = &active_agent {
+            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
+            active_agent
+                .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
         }
-        self.notify_queued_interrupt(interrupt_kind).await
+        let receiver = self.notify_queued_interrupt(interrupt_kind).await;
+        if let Some(active_agent) = active_agent {
+            active_agent.drain_fenced_entity_bodies().await;
+        }
+        debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
+        receiver
     }
 
     async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
@@ -1691,43 +1755,46 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         drop(instance_guard);
 
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running {
-                interrupt_signal, ..
-            } => {
-                let _ = interrupt_signal.send(interrupt_kind);
-                let (sender, receiver) = tokio::sync::broadcast::channel(1);
-                *execution_status = ExecutionStatus::Interrupting {
-                    interrupt_kind,
-                    await_interruption: Arc::new(sender),
-                    agent_mode: execution_status.agent_mode(),
-                    timestamp: Timestamp::now_utc(),
-                };
-                Some(receiver)
-            }
-            ExecutionStatus::Suspended { .. } => None,
-            ExecutionStatus::Interrupting {
-                interrupt_kind: current_kind,
-                await_interruption,
-                agent_mode,
-                timestamp,
-            } => {
-                let receiver = await_interruption.subscribe();
-                if matches!(current_kind, InterruptKind::Restart)
-                    && !matches!(interrupt_kind, InterruptKind::Restart)
-                {
+        {
+            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Signalling primary Store interruption");
+            let mut execution_status = self.execution_status.write().unwrap();
+            let current_execution_status = execution_status.clone();
+            match current_execution_status {
+                ExecutionStatus::Running {
+                    interrupt_signal, ..
+                } => {
+                    let _ = interrupt_signal.send(interrupt_kind);
+                    let (sender, receiver) = tokio::sync::broadcast::channel(1);
                     *execution_status = ExecutionStatus::Interrupting {
                         interrupt_kind,
-                        await_interruption,
-                        agent_mode,
-                        timestamp,
+                        await_interruption: Arc::new(sender),
+                        agent_mode: execution_status.agent_mode(),
+                        timestamp: Timestamp::now_utc(),
                     };
+                    Some(receiver)
                 }
-                Some(receiver)
+                ExecutionStatus::Suspended { .. } => None,
+                ExecutionStatus::Interrupting {
+                    interrupt_kind: current_kind,
+                    await_interruption,
+                    agent_mode,
+                    timestamp,
+                } => {
+                    let receiver = await_interruption.subscribe();
+                    if matches!(current_kind, InterruptKind::Restart)
+                        && !matches!(interrupt_kind, InterruptKind::Restart)
+                    {
+                        *execution_status = ExecutionStatus::Interrupting {
+                            interrupt_kind,
+                            await_interruption,
+                            agent_mode,
+                            timestamp,
+                        };
+                    }
+                    Some(receiver)
+                }
+                ExecutionStatus::Loading { .. } => None,
             }
-            ExecutionStatus::Loading { .. } => None,
         }
     }
 
@@ -2700,6 +2767,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
     }
 
+    /// Starts a conditional `ActiveAgents` retirement if this worker is
+    /// exactly unloaded. The returned guard rolls the marker back unless the
+    /// cache removal commits.
+    pub(crate) async fn try_begin_cache_retirement(&self) -> Option<WorkerCacheRetirement<'_>> {
+        if self
+            .cache_retirement_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+
+        let retirement = WorkerCacheRetirement {
+            in_progress: &self.cache_retirement_in_progress,
+            committed: false,
+        };
+        if matches!(
+            &*self.instance.lock().await,
+            WorkerInstance::Unloaded { .. }
+        ) {
+            Some(retirement)
+        } else {
+            None
+        }
+    }
+
+    fn cache_retirement_in_progress(&self) -> bool {
+        self.cache_retirement_in_progress.load(Ordering::Acquire)
+    }
+
     /// Classifies the worker for eviction ordering under memory pressure.
     /// Returns `None` if the worker is not evictable.
     ///
@@ -3126,17 +3223,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
 
-            let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
+            let (
+                semantic_idempotency_key,
+                idempotency_key,
+                invocation_payload,
+                invocation_context,
+            ) = into_pending_invocation_parts(invocation);
             let invocation_context = invocation_context
                 .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-            let invocation = AgentInvocation::from_parts(
-                idempotency_key.clone(),
-                invocation_payload.clone(),
-                invocation_context.clone(),
-            );
             let payload = self
                 .oplog
-                .upload_payload(&invocation_payload)
+                .upload_payload_owned(invocation_payload)
                 .await
                 .map_err(|e| {
                     WorkerExecutorError::invalid_request(format!(
@@ -3151,10 +3248,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context.trace_states,
                 invocation_context_spans,
             );
-            let timestamped_invocation = TimestampedAgentInvocation {
-                timestamp: entry.timestamp(),
-                invocation,
-            };
 
             // Snapshot the epoch under the instance lock that commits the
             // pending entry. Read-only captures the current epoch for later
@@ -3176,7 +3269,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.add_and_commit_oplog_internal(&instance_guard, entry, None)
                 .await;
 
-            if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+            if let Some(idempotency_key) = semantic_idempotency_key {
                 // Captured here, inside the producer span, because a consumer links
                 // back to the *creation context* of the work rather than to wherever
                 // the caller happened to call from.
@@ -3189,7 +3282,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.external_invocation_origins
                     .write()
                     .await
-                    .insert(idempotency_key.clone(), origin);
+                    .insert(idempotency_key, origin);
             }
 
             if let WorkerInstance::Running(running) = &*instance_guard {
@@ -3388,7 +3481,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
         let payload = self
             .oplog
-            .upload_payload(&invocation_payload)
+            .upload_payload_owned(invocation_payload)
             .await
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!(
@@ -4890,6 +4983,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let Some(worker) = worker.upgrade() else {
                     break;
                 };
+                if worker.cache_retirement_in_progress() {
+                    continue;
+                }
                 if let Err(error) = worker.recover_durable_stream_topologies().await {
                     warn!(
                         agent_id = %worker.agent_id(),
@@ -6773,6 +6869,14 @@ impl RunningWorker {
         CreateWorkerInstanceError,
     > {
         let component_id = parent.owned_agent_id.component_id();
+        let entity_generation = parent
+            .active_agents()
+            .try_get_active_agent(&parent.owned_agent_id)
+            .await
+            .map(|active_agent| {
+                let generation = active_agent.entity_fence_generation();
+                (active_agent, generation)
+            });
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
         parent.reattach_worker_status().await;
@@ -7123,6 +7227,7 @@ impl RunningWorker {
             pending_update,
             worker_metadata.original_phantom_id,
             OwnerRuntime::Agent,
+            None,
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
@@ -7166,6 +7271,12 @@ impl RunningWorker {
             );
         }
         let (instance, mut store) = hosted.into_parts();
+        if let Some((active_agent, generation)) = entity_generation {
+            let interrupt_state = parent.interrupt_signal.lock().await;
+            if !interrupt_state.has_interrupt() {
+                active_agent.reopen_entity_admission_if_generation(generation);
+            }
+        }
         let prepare_result =
             Ctx::prepare_instance(&parent.owned_agent_id.agent_id, &instance, &mut store).await;
         let decision = match prepare_result {
@@ -7420,6 +7531,25 @@ pub(crate) enum EvictionStopOutcome {
     Ineligible,
     Unloaded,
     CleanupFailed,
+}
+
+pub(crate) struct WorkerCacheRetirement<'a> {
+    in_progress: &'a AtomicBool,
+    committed: bool,
+}
+
+impl WorkerCacheRetirement<'_> {
+    pub(crate) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for WorkerCacheRetirement<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.in_progress.store(false, Ordering::Release);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7700,6 +7830,22 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
+        let target_revision = ComponentRevision::new(2).unwrap();
+        let (semantic_key, storage_key, payload, _) =
+            into_pending_invocation_parts(AgentInvocation::ManualUpdate { target_revision });
+
+        assert!(semantic_key.is_none());
+        assert!(!storage_key.value.is_empty());
+        assert!(matches!(
+            payload,
+            AgentInvocationPayload::ManualUpdate {
+                target_revision: actual
+            } if actual == target_revision
+        ));
+    }
+
+    #[test]
     fn reconstruction_agent_quota_maps_to_startup_suspension() {
         let error =
             reconstruction_startup_error(crate::services::agent_filesystem::Error::AgentQuota(
@@ -7728,6 +7874,26 @@ mod tests {
         assert!(!running_worker_can_be_evicted(
             true, false, false, false, false, true
         ));
+    }
+
+    #[test]
+    fn cache_retirement_guard_rolls_back_uncommitted_attempts_only() {
+        let in_progress = AtomicBool::new(true);
+        {
+            let _retirement = WorkerCacheRetirement {
+                in_progress: &in_progress,
+                committed: false,
+            };
+        }
+        assert!(!in_progress.load(Ordering::Acquire));
+
+        in_progress.store(true, Ordering::Release);
+        WorkerCacheRetirement {
+            in_progress: &in_progress,
+            committed: false,
+        }
+        .commit();
+        assert!(in_progress.load(Ordering::Acquire));
     }
 
     #[test]

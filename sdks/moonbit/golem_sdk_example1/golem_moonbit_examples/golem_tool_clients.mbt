@@ -2,6 +2,62 @@
 
 ///|
 ///
+pub(all) struct MoonbitStreamingClient {
+  client : @tool.ToolClient
+}
+
+///|
+///
+pub fn MoonbitStreamingClient::new() -> MoonbitStreamingClient {
+  { client: @tool.ToolClient::new("moonbit-streaming"), }
+}
+
+///|
+///
+pub fn MoonbitStreamingClient::drop(self : MoonbitStreamingClient) -> Unit {
+  self.client.drop()
+}
+
+///|
+///
+pub fn MoonbitStreamingClient::stream(
+  self : MoonbitStreamingClient,
+  mode : String,
+  stdin : @asyncCore.Stream[Byte],
+) -> Result[
+  @tool.TypedToolInvocation[UInt64, @tool.NoToolError],
+  @tool.ToolError[@tool.NoToolError],
+] {
+  let __golem_def = __golem_tool_def_MoonBitStreaming()
+  let __golem_index = match __golem_def.command_index_by_path(["stream"]) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @tool.tool_protocol_error(
+          "generated command path is missing from descriptor",
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  let __golem_values = []
+  __golem_values.push(("mode", @schema.to_value_as(mode)))
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  match
+    self.client.start(["stream"], __golem_input, Some(stdin), true, fn(_) {
+      Err("remote custom tool error is not declared by this client")
+    }) {
+    Err(__golem_error) => Err(__golem_error)
+    Ok(__golem_invocation) =>
+      @tool.typed_invocation(__golem_invocation, @tool.decode_result_value)
+  }
+}
+
+///|
+///
 pub(all) struct CanonicalGrepClient {
   client : @tool.ToolClient
 }
@@ -20,7 +76,7 @@ pub fn CanonicalGrepClient::drop(self : CanonicalGrepClient) -> Unit {
 
 ///|
 ///
-pub async fn CanonicalGrepClient::canonical_grep(
+pub fn CanonicalGrepClient::canonical_grep(
   self : CanonicalGrepClient,
   case_sensitive : Bool,
   color : CanonicalGrepColorMode,
@@ -30,23 +86,20 @@ pub async fn CanonicalGrepClient::canonical_grep(
   files : Array[@schema.Path],
   stdin : @asyncCore.Stream[Byte],
 ) -> Result[
-  (Array[CanonicalGrepHit], @asyncCore.Stream[Byte]),
+  @tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError],
   @tool.ToolError[CanonicalGrepError],
 ] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
   let __golem_index = match __golem_def.command_index_by_path([]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = []
@@ -56,14 +109,16 @@ pub async fn CanonicalGrepClient::canonical_grep(
   __golem_values.push(("extra-patterns", @schema.to_value_as(extra_patterns)))
   __golem_values.push(("max-count", @schema.to_value_as(max_count)))
   __golem_values.push(("files", @schema.to_value_as(files)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self.client.invoke_and_await_tool_error([], __golem_input, Some(stdin)) {
+  match
+    self.client.start([], __golem_input, Some(stdin), true, fn(__golem_value) {
+      CanonicalGrepError::from_error_payload_value(__golem_value)
+    }) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_result) => @tool.decode_result_with_stdout(__golem_result)
+    Ok(__golem_invocation) =>
+      @tool.typed_invocation(__golem_invocation, @tool.decode_result_value)
   }
 }
 
@@ -80,17 +135,14 @@ pub async fn CanonicalGrepClient::replace(
   let __golem_def = __golem_tool_def_CanonicalGrep()
   let __golem_index = match __golem_def.command_index_by_path(["replace"]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = []
@@ -99,14 +151,11 @@ pub async fn CanonicalGrepClient::replace(
   __golem_values.push(("pattern", @schema.to_value_as(pattern)))
   __golem_values.push(("replacement", @schema.to_value_as(replacement)))
   __golem_values.push(("files", @schema.to_value_as(files)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self
-    .client
-    .invoke_and_await_tool_error(["replace"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(["replace"], __golem_input, None) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_value(__golem_result)
   }
@@ -148,17 +197,14 @@ pub async fn CanonicalGitClient::commit(
   let __golem_def = __golem_tool_def_CanonicalGit()
   let __golem_index = match __golem_def.command_index_by_path(["commit"]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = []
@@ -172,12 +218,11 @@ pub async fn CanonicalGitClient::commit(
   __golem_values.push(("signoff", @schema.to_value_as(signoff)))
   __golem_values.push(("reset-author", @schema.to_value_as(reset_author)))
   __golem_values.push(("output", @schema.to_value_as(output)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self.client.invoke_and_await_tool_error(["commit"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(["commit"], __golem_input, None) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_value(__golem_result)
   }
@@ -210,7 +255,7 @@ pub fn CanonicalGitClient::remote(
   __golem_prefix.push(("git-dir", @schema.to_value_as(git_dir)))
   __golem_prefix.push(("paginate", @schema.to_value_as(paginate)))
   __golem_prefix.push(("config", @schema.to_value_as(config)))
-  { client: self.client, prefix: __golem_prefix }
+  { client: self.client, prefix: __golem_prefix, }
 }
 
 ///|
@@ -225,19 +270,17 @@ pub async fn CanonicalGitRemoteClient::add(
   fetch : Bool,
 ) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index = match __golem_def.command_index_by_path(["remote", "add"]) {
+  let __golem_index = match
+    __golem_def.command_index_by_path(["remote", "add"]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = self.prefix.copy()
@@ -247,14 +290,15 @@ pub async fn CanonicalGitRemoteClient::add(
   __golem_values.push(("master", @schema.to_value_as(master)))
   __golem_values.push(("tags", @schema.to_value_as(tags)))
   __golem_values.push(("fetch", @schema.to_value_as(fetch)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self
-    .client
-    .invoke_and_await_tool_error(["remote", "add"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(
+      ["remote", "add"],
+      __golem_input,
+      None,
+    ) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
   }
@@ -267,32 +311,30 @@ pub async fn CanonicalGitRemoteClient::remove(
   name : String,
 ) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index =
-    match __golem_def.command_index_by_path(["remote", "remove"]) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return Err(
-          @tool.tool_protocol_error(
-            "generated command path is missing from descriptor",
-          ),
-        )
-      }
-    }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_index = match
+    __golem_def.command_index_by_path(["remote", "remove"]) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @tool.tool_protocol_error(
+          "generated command path is missing from descriptor",
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = self.prefix.copy()
   __golem_values.push(("name", @schema.to_value_as(name)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self
-    .client
-    .invoke_and_await_tool_error(["remote", "remove"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(
+      ["remote", "remove"],
+      __golem_input,
+      None,
+    ) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
   }
@@ -310,20 +352,17 @@ pub async fn CanonicalGitRemoteClient::set_url(
   delete : Bool,
 ) -> Result[Unit, @tool.ToolError[CanonicalSetUrlError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index =
-    match __golem_def.command_index_by_path(["remote", "set-url"]) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return Err(
-          @tool.tool_protocol_error(
-            "generated command path is missing from descriptor",
-          ),
-        )
-      }
-    }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_index = match
+    __golem_def.command_index_by_path(["remote", "set-url"]) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @tool.tool_protocol_error(
+          "generated command path is missing from descriptor",
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = self.prefix.copy()
@@ -333,14 +372,15 @@ pub async fn CanonicalGitRemoteClient::set_url(
   __golem_values.push(("push", @schema.to_value_as(push)))
   __golem_values.push(("add", @schema.to_value_as(add)))
   __golem_values.push(("delete", @schema.to_value_as(delete)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self
-    .client
-    .invoke_and_await_tool_error(["remote", "set-url"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(
+      ["remote", "set-url"],
+      __golem_input,
+      None,
+    ) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
   }
@@ -369,7 +409,7 @@ pub fn CanonicalGitClient::stash(
   let __golem_prefix = []
   __golem_prefix.push(("verbose", @schema.to_value_as(verbose)))
   __golem_prefix.push(("git-dir", @schema.to_value_as(git_dir)))
-  { client: self.client, prefix: __golem_prefix }
+  { client: self.client, prefix: __golem_prefix, }
 }
 
 ///|
@@ -382,28 +422,24 @@ pub async fn CanonicalGitStashClient::stash(
   let __golem_def = __golem_tool_def_CanonicalGit()
   let __golem_index = match __golem_def.command_index_by_path(["stash"]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = self.prefix.copy()
   __golem_values.push(("message", @schema.to_value_as(message)))
   __golem_values.push(("keep-index", @schema.to_value_as(keep_index)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self.client.invoke_and_await_tool_error(["stash"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(["stash"], __golem_input, None) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
   }
@@ -417,32 +453,31 @@ pub async fn CanonicalGitStashClient::pop(
   index : UInt?,
 ) -> Result[Unit, @tool.ToolError[CanonicalStashError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index = match __golem_def.command_index_by_path(["stash", "pop"]) {
+  let __golem_index = match
+    __golem_def.command_index_by_path(["stash", "pop"]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = self.prefix.copy()
   __golem_values.push(("name", @schema.to_value_as(name)))
   __golem_values.push(("index", @schema.to_value_as(index)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self
-    .client
-    .invoke_and_await_tool_error(["stash", "pop"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(
+      ["stash", "pop"],
+      __golem_input,
+      None,
+    ) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
   }
@@ -456,33 +491,31 @@ pub async fn CanonicalGitStashClient::apply(
   index : UInt?,
 ) -> Result[Unit, @tool.ToolError[CanonicalStashError]] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index =
-    match __golem_def.command_index_by_path(["stash", "apply"]) {
-      Some(__golem_index) => __golem_index
-      None => {
-        return Err(
-          @tool.tool_protocol_error(
-            "generated command path is missing from descriptor",
-          ),
-        )
-      }
-    }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_index = match
+    __golem_def.command_index_by_path(["stash", "apply"]) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @tool.tool_protocol_error(
+          "generated command path is missing from descriptor",
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = self.prefix.copy()
   __golem_values.push(("name", @schema.to_value_as(name)))
   __golem_values.push(("index", @schema.to_value_as(index)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
-  match self
-    .client
-    .invoke_and_await_tool_error(["stash", "apply"], __golem_input, None) {
+  match
+    self.client.invoke_and_await_tool_error(
+      ["stash", "apply"],
+      __golem_input,
+      None,
+    ) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
   }
@@ -506,17 +539,14 @@ pub async fn CanonicalGitClient::log(
   let __golem_def = __golem_tool_def_CanonicalGit()
   let __golem_index = match __golem_def.command_index_by_path(["log"]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = []
@@ -530,9 +560,7 @@ pub async fn CanonicalGitClient::log(
   __golem_values.push(("oneline", @schema.to_value_as(oneline)))
   __golem_values.push(("graph", @schema.to_value_as(graph)))
   __golem_values.push(("paths", @schema.to_value_as(paths)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   match self.client.invoke_and_await_tool_error(["log"], __golem_input, None) {
@@ -568,24 +596,19 @@ pub async fn CanonicalBigBoundClient::canonical_big_bound(
   let __golem_def = __golem_tool_def_CanonicalBigBound()
   let __golem_index = match __golem_def.command_index_by_path([]) {
     Some(__golem_index) => __golem_index
-    None => {
+    None =>
       return Err(
         @tool.tool_protocol_error(
           "generated command path is missing from descriptor",
         ),
       )
-    }
   }
-  let __golem_model = try {
-    __golem_def.canonical_input_model(__golem_index)
-  } catch{
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   let __golem_values = []
   __golem_values.push(("count", @schema.to_value_as(count)))
-  let __golem_input = try {
-    @tool.build_canonical_input(__golem_model, __golem_values)
-  } catch{
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   match self.client.invoke_and_await_tool_error([], __golem_input, None) {

@@ -199,7 +199,7 @@ impl ReplayState {
         &self,
         handle: ReplayCallHandle,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
-        let (start_idx, mut receiver) = handle.into_parts();
+        let (start_idx, mut receiver, _historical_reconstruction) = handle.into_parts();
         let validate = |outcome: ResolutionOutcome| self.validate_resolved_outcome(outcome);
 
         loop {
@@ -250,7 +250,7 @@ impl ReplayState {
                                 // flushed it before its `End`, or a crash happened in between).
                                 // Drop the stale registration and report Incomplete so the caller
                                 // can re-execute the side effect and complete the existing `Start`.
-                                st.concurrent_resolver.unregister(start_idx);
+                                st.concurrent_resolver.unregister_incomplete(start_idx);
                                 Ok(ResolutionOutcome::Incomplete)
                             }
                             Err(oneshot::error::TryRecvError::Closed) => {

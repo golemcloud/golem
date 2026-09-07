@@ -112,27 +112,28 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("_root_.golem.runtime.macros.ToolDefinitionMacro.tryMetadata[Grep]"))
   }
 
-  test("drops Principal and stdout parameters and keeps stdin; stdout moves to the result") {
+  test("drops Principal and stdout parameters and keeps stdin; stdout returns a started invocation") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
 
-    // stdout excluded from the signature but present in the result tuple
+    // stdout is excluded from parameters and exposed independently from the structured result.
     assert(
       content.contains(
         "def grep(caseSensitive: Boolean, color: String, pattern: String, files: Seq[String], " +
           "stdin: _root_.golem.tool.ToolInputStream): " +
-          "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[GrepError], " +
-          "(Long, _root_.golem.tool.ToolOutputStream)]]"
+          "_root_.scala.Either[_root_.golem.tool.ToolError[GrepError], " +
+          "_root_.golem.tool.ToolInvocation[GrepError, Long]]"
       )
     )
     assert(content.contains("_root_.scala.Some(stdin)"))
-    assert(content.contains("decodeValueStdoutResult"))
+    assert(content.contains("ToolClientRuntime.start"))
+    assert(content.contains("decodeValueResult"))
   }
 
   test("the implicit-body root command invokes with an empty command path") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
     // `grep` is the tool's root command: no path element is appended
     assert(
-      content.contains("_root_.golem.tool.ToolClientRuntime.run[GrepError](__transport, _root_.scala.Nil, __input")
+      content.contains("_root_.golem.tool.ToolClientRuntime.start(__transport, _root_.scala.Nil, __input")
     )
   }
 

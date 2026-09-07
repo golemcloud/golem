@@ -17,6 +17,7 @@ use crate::durable_host::call_coordinator::{
     DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
 };
 use crate::durable_host::concurrent::{self, DropEvent, Resolution, ResolutionOutcome};
+use crate::durable_host::replay_state::{ReplayToLiveOutcome, ReplayToLiveRole};
 use crate::metrics::wasm::{
     record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
 };
@@ -1735,8 +1736,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             .await?
         {
             ResolutionOutcome::Incomplete => {
-                replay_state.switch_to_live().await;
-                linear_memory.switch_to_live();
+                let outcome = replay_state
+                    .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                    .await?;
+                if matches!(outcome, ReplayToLiveOutcome::ReplayResumed) {
+                    return Err(WorkerExecutorError::runtime(
+                        "replay target grew while an incomplete custom invocation was settling",
+                    )
+                    .into());
+                }
                 accessor.with(|mut access| {
                     access.get().state.active_custom_invocations.insert(
                         start_index,
@@ -1819,7 +1827,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         let latest_status = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .get_attached_last_known_status()
             .await;
         latest_status.current_retry_state.get(&retry_from).cloned()
     }
@@ -2020,6 +2028,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             let status = self.execution_status.read().unwrap();
             status.create_await_interrupt_signal()
         };
+        let entity_cancellation = self.entity_cancellation();
         if self
             .state
             .invocation_deadline_exceeded
@@ -2037,7 +2046,18 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 Timestamp::now_utc(),
             )));
         }
-        interrupt_signal
+        match entity_cancellation {
+            Some(cancellation) => Box::pin(async move {
+                tokio::select! {
+                    biased;
+                    interrupt = interrupt_signal => interrupt,
+                    _ = cancellation.cancelled() => {
+                        InterruptKind::Interrupt(Timestamp::now_utc())
+                    }
+                }
+            }),
+            None => interrupt_signal,
+        }
     }
 
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {

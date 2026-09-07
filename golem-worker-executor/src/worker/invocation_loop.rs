@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::model::{ReadFileResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
@@ -262,15 +263,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .permit_state
                 .take_permit()
                 .expect("startup must hold a concurrent-agent permit");
-            let entity_generation = self
-                .parent
-                .active_agents()
-                .try_get_active_agent(&self.owned_agent_id)
-                .await
-                .map(|active_agent| {
-                    let generation = active_agent.entity_fence_generation();
-                    (active_agent, generation)
-                });
             let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
                 CreateInstanceResult::Created {
                     agent,
@@ -329,12 +321,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.permit_state.install_window(window);
             *self.filesystem_activity.lock().unwrap() =
                 Some(filesystem_activity(&agent.filesystem));
-            if let Some((active_agent, generation)) = entity_generation {
-                let interrupt_state = self.interrupt_signal.lock().await;
-                if !interrupt_state.has_interrupt() {
-                    active_agent.reopen_entity_admission_if_generation(generation);
-                }
-            }
             let mut final_decision = recovery_decision;
             let mut recovery_failure = None;
             let mut final_interrupt = None;
@@ -454,7 +440,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     .try_get_active_agent(&self.owned_agent_id)
                                     .await
                                 {
-                                    active_agent.fence_entity_bodies();
+                                    let owner_failure = failure.clone().map_or_else(
+                                        || {
+                                            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
+                                                Timestamp::now_utc(),
+                                            ))
+                                        },
+                                        OwnerFailureWinner::Infrastructure,
+                                    );
+                                    active_agent.fence_entity_bodies(owner_failure).await;
                                 }
                                 let cleanup_failure = finish_filesystem_limit_unload(
                                     suspend,
@@ -558,7 +552,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .try_get_active_agent(&self.owned_agent_id)
                 .await
             {
-                active_agent.fence_entity_bodies();
+                let owner_failure = final_interrupt
+                    .map(OwnerFailureWinner::Lifecycle)
+                    .or_else(|| {
+                        recovery_failure
+                            .clone()
+                            .map(OwnerFailureWinner::Infrastructure)
+                    })
+                    .unwrap_or_else(|| {
+                        OwnerFailureWinner::Lifecycle(
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
+                        )
+                    });
+                active_agent.fence_entity_bodies(owner_failure).await;
             }
             if let Some(error) = Self::unload_running_agent(
                 agent,
@@ -780,7 +786,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            let failure = startup_failure.clone().map_or_else(
+                || OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
+                OwnerFailureWinner::Infrastructure,
+            );
+            active_agent.fence_entity_bodies(failure).await;
         }
         self.parent
             .stop_internal(
@@ -802,7 +812,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Infrastructure(error.clone()))
+                .await;
         }
         let pending_failure = error.clone();
         self.parent
@@ -2304,6 +2316,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     kind,
                 )
             }
+            Err(WorkerExecutorError::Interrupted { kind }) => {
+                let decision = self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
+                    .await;
+                let _ = self
+                    .parent
+                    .fail_durable_streaming_session(idempotency_key, kind.to_string())
+                    .await;
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+            }
             Err(error) => {
                 self.store
                     .data_mut()
@@ -2339,15 +2363,38 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .durable_ctx()
             .begin_stream_runtime_teardown();
         let details = format!("{result:?}");
-        let trap_type = match result {
-            Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
-                error,
-                OplogIndex::INITIAL,
-                false,
-                false,
-                self.parent.agent_mode(),
-            )),
+        let owner_failure = self
+            .store
+            .data()
+            .durable_ctx()
+            .selected_tool_owner_failure();
+        debug!(
+            owner_id = %self.parent.owned_agent_id(),
+            owner_failure = ?owner_failure,
+            "Classifying failed invocation after tool owner arbitration"
+        );
+        let trap_type = match owner_failure {
+            Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
+            Some(OwnerFailureWinner::Lifecycle(kind)) => Some(TrapType::Interrupt(kind)),
+            Some(OwnerFailureWinner::Infrastructure(error)) => {
+                Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                ))
+            }
+            None => match result {
+                Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                )),
+            },
         };
         let decision = match trap_type {
             Some(trap_type) => {

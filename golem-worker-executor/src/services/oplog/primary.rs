@@ -41,6 +41,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayl
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
+use golem_common::serialization::deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::cmp::{max, min};
@@ -88,6 +89,31 @@ where
             }
         }
     }
+}
+
+async fn read_persisted_oplog_entries(
+    indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
+    namespace: IndexedStorageNamespace,
+    key: String,
+    start: u64,
+    end: u64,
+) -> Result<Vec<(u64, OplogEntry)>, IndexedStorageError> {
+    let entries = indexed_storage
+        .with_entity("oplog", "read", "entry")
+        .read_raw(namespace, &key, start, end)
+        .await?;
+
+    tokio::task::spawn_blocking(move || {
+        entries
+            .into_iter()
+            .map(|(idx, bytes)| deserialize(&bytes).map(|entry| (idx, entry)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(IndexedStorageError::Other)
+    })
+    .await
+    .map_err(|error| {
+        IndexedStorageError::Other(format!("oplog deserialization task failed: {error}"))
+    })?
 }
 
 /// The primary oplog service implementation, suitable for direct use (top level of a multi-layered setup).
@@ -464,11 +490,7 @@ impl OplogService for PrimaryOplogService {
                     agent_mode,
                 };
                 let key = key.clone();
-                async move {
-                    is.with_entity("oplog", "read", "entry")
-                        .read(ns, &key, start, end)
-                        .await
-                }
+                async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
             })
             .await
             .into_iter()
@@ -1049,11 +1071,7 @@ impl OplogReader {
                     agent_mode,
                 };
                 let key = key.clone();
-                async move {
-                    is.with_entity("oplog", "read", "entry")
-                        .read(ns, &key, idx, idx)
-                        .await
-                }
+                async move { read_persisted_oplog_entries(is, ns, key, idx, idx).await }
             })
             .await
         };
@@ -1096,11 +1114,7 @@ impl OplogReader {
                     agent_mode,
                 };
                 let key = key.clone();
-                async move {
-                    is.with_entity("oplog", "read", "entry")
-                        .read(ns, &key, start, end)
-                        .await
-                }
+                async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
             })
             .await
             .into_iter()

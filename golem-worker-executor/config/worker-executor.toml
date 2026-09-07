@@ -171,6 +171,7 @@ max_active_agents = 1024
 max_concurrent_streams = 1024
 max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
+max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
 
 [memory]
@@ -566,6 +567,7 @@ without_time = false
 # max_concurrent_streams = 1024
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
+# max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
 # [memory]
@@ -931,6 +933,7 @@ without_time = false
 # max_concurrent_streams = 1024
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
+# max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
 # [memory]

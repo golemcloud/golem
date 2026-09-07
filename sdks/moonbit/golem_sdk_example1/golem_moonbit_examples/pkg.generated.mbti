@@ -134,13 +134,13 @@ pub async fn CanonicalGitStashClient::pop(Self, String?, UInt?) -> Result[Unit, 
 pub async fn CanonicalGitStashClient::stash(Self, String, Bool) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
 
 type CanonicalGrep
-pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @async-core.Sink[Byte]) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
+pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @tool-core.ProviderStdout) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
 pub fn CanonicalGrep::replace(Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, CanonicalGrepError]
 
 pub(all) struct CanonicalGrepClient {
   client : @tool.ToolClient
 }
-pub async fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[(Array[CanonicalGrepHit], @async-core.Stream[Byte]), @tool.ToolError[CanonicalGrepError]]
+pub fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError], @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalGrepClient::drop(Self) -> Unit
 pub fn CanonicalGrepClient::new() -> Self
 pub async fn CanonicalGrepClient::replace(Self, Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
@@ -268,6 +268,36 @@ pub(all) struct DatabaseConfigOverride {
   timeout : UInt64?
 }
 pub fn DatabaseConfigOverride::empty() -> Self
+
+type MoonBitStreaming
+pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool-core.ProviderStdout) -> UInt64
+
+type MoonBitToolStreamingCaller
+pub async fn MoonBitToolStreamingCaller::marker_before_eof(Self, Bytes) -> UInt64
+
+pub(all) struct MoonBitToolStreamingCallerClient {
+  client : @rpc.AgentClient
+}
+pub fn MoonBitToolStreamingCallerClient::drop(Self) -> Unit
+pub fn MoonBitToolStreamingCallerClient::get(String) -> Self raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub async fn MoonBitToolStreamingCallerClient::marker_before_eof(Self, Bytes) -> UInt64
+pub fn MoonBitToolStreamingCallerClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::phantom_id(Self) -> @types.Uuid?
+pub fn MoonBitToolStreamingCallerClient::schedule_cancelable_marker_before_eof(Self, @system-clock.Instant, Bytes) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::schedule_marker_before_eof(Self, @system-clock.Instant, Bytes) -> Unit raise @common.AgentError
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn MoonBitToolStreamingCallerClient::trigger_marker_before_eof(Self, Bytes) -> Unit raise @common.AgentError
+
+pub(all) struct MoonbitStreamingClient {
+  client : @tool.ToolClient
+}
+pub fn MoonbitStreamingClient::drop(Self) -> Unit
+pub fn MoonbitStreamingClient::new() -> Self
+pub fn MoonbitStreamingClient::stream(Self, String, @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[UInt64, @tool-core.NoToolError], @tool.ToolError[@tool-core.NoToolError]]
 
 pub(all) enum Priority {
   Low

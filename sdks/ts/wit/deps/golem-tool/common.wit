@@ -375,7 +375,7 @@ interface common {
     body:  string,
   }
 
-  // Invocation contract — shared between guest and host
+  // Invocation contract — shared between guest and host.
   variant tool-error {
     invalid-tool-name(string),
     invalid-command-path(list<string>),

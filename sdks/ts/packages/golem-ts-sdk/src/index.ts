@@ -17,8 +17,15 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import type { ExtendedCommandBody } from './internal/tool';
-import { schemaValueFromWit, typedSchemaValueFromWit } from './internal/schema-model';
+import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/host@0.1.0';
+import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
+import {
+  schemaValueFromWit,
+  t,
+  typedSchemaValueFromWit,
+  typedSchemaValueToWit,
+  v,
+} from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -36,6 +43,7 @@ import {
 } from './internal/tool/invocationResult';
 import { closeAsyncIterable } from './internal/tool/asyncIterable';
 import { awaitAbortable, throwIfAborted } from './internal/pollableUtils';
+import { ToolStreamError, toolStreamFailureFromError } from './internal/tool/startedToolInvocation';
 import './schema/zod';
 import './schema/valibot';
 import './schema/arktype';
@@ -138,6 +146,7 @@ export type {
   ToolHelpError,
   ToolHelpResult,
   ToolImplementation,
+  ToolInputStream,
   ToolInvocationContext,
   ToolInvokeErrorCause,
   ToolMiddlewareHandler,
@@ -176,6 +185,8 @@ export * from './websocket';
 export * from './rdbms';
 export * as http from './http';
 export * as bridge from './bridge';
+export type { StartedToolInvocation } from './bridge/tool';
+export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
@@ -198,7 +209,8 @@ interface GolemToolGuest {
     toolName: string,
     commandPath: string[],
     input: TypedSchemaValue,
-    stdin: AsyncIterable<number> | undefined,
+    stdin: AsyncIterable<ByteStreamItem> | undefined,
+    stdout: ToolStdoutWriter | undefined,
     principal: Principal,
   ): Promise<InvocationResult>;
 }
@@ -289,7 +301,8 @@ async function invokeTool(
   toolName: string,
   commandPath: string[],
   input: TypedSchemaValue,
-  stdin: AsyncIterable<number> | undefined,
+  stdin: AsyncIterable<ByteStreamItem> | undefined,
+  stdout: ToolStdoutWriter | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
@@ -330,13 +343,18 @@ async function invokeTool(
     }
 
     if (body.stdout) {
-      outputAdapter = createToolOutputStream();
-      context.stdout = outputAdapter.stream;
+      if (!stdout && body.stdout.required) {
+        throw invalidToolInput('tool invocation did not contain declared stdout stream');
+      }
+      if (stdout) {
+        outputAdapter = createToolOutputStream(stdout);
+        context.stdout = outputAdapter.stream;
+      }
     }
 
     const outcome = await prepared.invoke(context);
-    const stdout = await outputAdapter?.finish();
-    const result = projectToolOutcome(body, outcome, stdout);
+    await outputAdapter?.finish();
+    const result = projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
@@ -345,11 +363,7 @@ async function invokeTool(
   }
 }
 
-function projectToolOutcome(
-  body: ExtendedCommandBody,
-  outcome: unknown,
-  stdout: AsyncIterable<number> | undefined,
-): InvocationResult {
+function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): InvocationResult {
   if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
     throw invalidToolResult('tool handler returned an invalid outcome');
   }
@@ -362,11 +376,10 @@ function projectToolOutcome(
       if (outcome.value !== undefined) {
         throw invalidToolResult('unit tool handler returned a structured result');
       }
-      return { result: undefined, stdout };
+      return { result: undefined };
     }
     return {
       result: encodeToolValue(body.result.codec, outcome.value, 'tool result'),
-      stdout,
     };
   }
 
@@ -397,11 +410,11 @@ interface ToolInputStreamAdapter {
 
 interface ToolOutputStreamAdapter {
   readonly stream: WritableStream<Uint8Array>;
-  finish(): Promise<AsyncIterable<number>>;
+  finish(): Promise<void>;
   abort(reason?: unknown): Promise<void>;
 }
 
-function readableStreamFromInput(input: AsyncIterable<number>): ToolInputStreamAdapter {
+function readableStreamFromInput(input: AsyncIterable<ByteStreamItem>): ToolInputStreamAdapter {
   const iterator = input[Symbol.asyncIterator]();
   const cancellation = new AbortController();
   let activePull: Promise<void> | undefined;
@@ -455,7 +468,7 @@ function readableStreamFromInput(input: AsyncIterable<number>): ToolInputStreamA
 }
 
 async function pullInput(
-  iterator: AsyncIterator<number>,
+  iterator: AsyncIterator<ByteStreamItem>,
   controller: ReadableStreamDefaultController<Uint8Array>,
   signal: AbortSignal,
   disposeIterator: () => Promise<void>,
@@ -472,22 +485,23 @@ async function pullInput(
       return;
     }
 
-    if (!Number.isInteger(next.value) || next.value < 0 || next.value > 255) {
-      throw new TypeError('tool stdin yielded a value outside the byte range');
+    if (next.value.tag === 'err') {
+      throw new ToolStreamError(next.value.val);
     }
-    controller.enqueue(Uint8Array.of(next.value));
+    if (next.value.val.byteLength === 0) throw new TypeError('tool stdin yielded an empty chunk');
+    controller.enqueue(next.value.val);
   } catch (error) {
     if (signal.aborted) closeReadableStream(controller);
     else controller.error(error);
   }
 }
 
-function createToolOutputStream(): ToolOutputStreamAdapter {
-  const chunks: Uint8Array[] = [];
+function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapter {
   const invocationCompleted = new Error('tool invocation completed');
   let activeOperation: Promise<void> | undefined;
   let controller: WritableStreamDefaultController | undefined;
   let acceptingOperations = true;
+  let terminated = false;
   let failed = false;
   let failure: unknown;
 
@@ -527,9 +541,16 @@ function createToolOutputStream(): ToolOutputStreamAdapter {
 
   const abort = async (reason?: unknown): Promise<void> => {
     const abortReason = reason === undefined ? new Error('tool stdout stream was aborted') : reason;
-    recordFailure(abortReason);
     acceptingOperations = false;
     controller?.error(abortReason);
+    if (!terminated) {
+      terminated = true;
+      try {
+        await writer.fail(toolStreamFailureFromError(abortReason));
+      } catch {
+        // An endpoint terminal selected by the handler remains authoritative.
+      }
+    }
     try {
       await settle();
     } catch {
@@ -548,13 +569,16 @@ function createToolOutputStream(): ToolOutputStreamAdapter {
           if (!(contents instanceof Uint8Array)) {
             throw new TypeError('tool stdout accepts only Uint8Array chunks');
           }
-          chunks.push(contents.slice());
+          if (contents.byteLength === 0) return;
+          return writer.write(contents);
         }),
       );
     },
     close() {
       if (!acceptingOperations) return Promise.reject(failed ? failure : invocationCompleted);
-      return track(Promise.resolve());
+      acceptingOperations = false;
+      terminated = true;
+      return track(writer.finish());
     },
     abort,
   });
@@ -568,16 +592,13 @@ function createToolOutputStream(): ToolOutputStreamAdapter {
       await settle();
       if (failed) throw failure;
       controller?.error(invocationCompleted);
-      return bytesFromChunks(chunks);
+      if (!terminated) {
+        terminated = true;
+        await writer.finish();
+      }
     },
     abort,
   };
-}
-
-async function* bytesFromChunks(chunks: readonly Uint8Array[]): AsyncIterable<number> {
-  for (const chunk of chunks) {
-    for (const byte of chunk) yield byte;
-  }
 }
 
 function closeReadableStream(controller: ReadableStreamDefaultController<Uint8Array>): void {

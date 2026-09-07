@@ -1755,7 +1755,8 @@ fn guest_tool_generation_emits_client_tree_and_runtime_boundary() {
         "_root_.golem.runtime.tool.client.ToolRpcClient.transport(\"grep\")",
         "_root_.golem.schema.TypedSchemaValue(__schema, _root_.golem.schema.SchemaValue.RecordValue(__fields))",
         "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[_root_.golem.bridge.client.grep.GrepError]",
-        "_root_.golem.tool.ToolClientRuntime.invokeAndAwaitInfallible",
+        "_root_.golem.tool.ToolClientRuntime.start[_root_.scala.Nothing, _root_.scala.Unit]",
+        "_root_.golem.tool.ToolInvocation[_root_.scala.Nothing, _root_.scala.Unit]",
         "object Codecs",
         "sealed trait ColorMode",
     ] {
@@ -1962,7 +1963,7 @@ fn tool_generation_result_decoding_compiles() {
 }
 
 #[test]
-fn tool_generation_optional_stdout_compiles_as_optional_result() {
+fn tool_generation_optional_stdout_compiles_as_started_invocation() {
     let mut tool = grep_tool();
     tool.commands.nodes[0].globals = Globals::default();
     tool.commands.nodes[0].subcommands = vec![];
@@ -1972,6 +1973,19 @@ fn tool_generation_optional_stdout_compiles_as_optional_result() {
             mime: vec![],
             required: false,
         }),
+        result: Some(ToolResultSpec {
+            type_: SchemaType::string(),
+            doc: doc("result"),
+            formatters: vec![],
+            default_formatter: String::new(),
+        }),
+        errors: vec![ErrorCase {
+            name: "failed".to_string(),
+            doc: doc("failed"),
+            kind: ErrorKind::RuntimeError,
+            exit_code: 1,
+            payload: Some(SchemaType::string()),
+        }],
         ..tool_body()
     });
     tool.commands.nodes.truncate(1);
@@ -1986,23 +2000,34 @@ fn tool_generation_optional_stdout_compiles_as_optional_result() {
 
 object OptionalStdoutCompileCheck {
   private val rpc = new _root_.golem.tool.ToolRpcTransport {
-def invokeAndAwait(
+def start(
   commandPath: _root_.scala.List[_root_.scala.Predef.String],
   input: _root_.golem.schema.TypedSchemaValue,
-  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream]
-): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolInvokeResult]] =
-  _root_.scala.concurrent.Future.successful(
-    _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None, _root_.scala.None))
-  )
+  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream],
+  stdout: _root_.scala.Boolean
+): _root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolRpcStarted] =
+  _root_.scala.Left(_root_.golem.tool.ToolRpcFailure.Cancelled)
   }
 
   private val client = new GrepClient(rpc, _root_.scala.collection.immutable.List())
-  val result: _root_.scala.concurrent.Future[
-_root_.scala.Either[
-  _root_.golem.tool.ToolError[_root_.scala.Nothing],
-  _root_.scala.Option[_root_.golem.tool.ToolOutputStream]
-]
+  val started: _root_.scala.Either[
+  _root_.golem.tool.ToolError[GrepError],
+  _root_.golem.tool.ToolInvocation[GrepError, _root_.scala.Predef.String]
   ] = client.grep()
+
+  started.foreach { invocation =>
+    val stdout: _root_.golem.tool.ToolInputStream = invocation.stdout
+    val result: _root_.scala.concurrent.Future[
+      _root_.scala.Either[_root_.golem.tool.ToolError[GrepError], _root_.scala.Predef.String]
+    ] = invocation.result
+    invocation.cancel()
+    val collected: _root_.scala.concurrent.Future[
+      _root_.scala.Either[
+        _root_.golem.tool.ToolError[GrepError],
+        (_root_.scala.Predef.String, _root_.scala.Array[_root_.scala.Byte])
+      ]
+    ] = invocation.collect()(_root_.scala.concurrent.ExecutionContext.parasitic)
+  }
 }
 "#,
     )
@@ -2070,13 +2095,20 @@ fn tool_generation_infallible_error_type_uses_scala_nothing_when_user_type_is_na
 
 object NothingCompileCheck {
   private val rpc = new _root_.golem.tool.ToolRpcTransport {
-def invokeAndAwait(
+def start(
   commandPath: _root_.scala.List[_root_.scala.Predef.String],
   input: _root_.golem.schema.TypedSchemaValue,
-  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream]
-): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolInvokeResult]] =
-  _root_.scala.concurrent.Future.successful(
-    _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None, _root_.scala.None))
+  stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream],
+  stdout: _root_.scala.Boolean
+): _root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolRpcStarted] =
+  _root_.scala.Right(
+    _root_.golem.tool.ToolRpcStarted(
+      _root_.scala.None,
+      _root_.scala.concurrent.Future.successful(
+        _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None))
+      ),
+      () => ()
+    )
   )
   }
 
