@@ -678,7 +678,8 @@ impl StreamSessionIndexService {
                             &decoded
                         }
                         OplogPayload::External { cached: None, .. } => {
-                            unreachable!("stream session records are inline")
+                            decoded = oplog.download_payload(id, mode, record.clone()).await?;
+                            &decoded
                         }
                     };
                     if let StreamSessionRecordV1::ConsumerDeleting(record) = record {

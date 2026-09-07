@@ -1763,6 +1763,49 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     Ok(())
 }
 
+#[test]
+#[timeout("2 minutes")]
+async fn binary_transform_large_chunks(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+    let mut session = TrustedInvocationSession::start_with(
+        deps,
+        &component,
+        &agent,
+        "transform_binary",
+        proto_record_values(vec![proto_stream(101)]),
+        false,
+    )
+    .await?;
+    let values = [65536, 17]
+        .into_iter()
+        .map(|size| {
+            SchemaValue::Binary(golem_common::schema::BinaryValuePayload {
+                bytes: (0..size).map(|i| (i % 251) as u8).collect(),
+                mime_type: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    for (sequence, value) in values.iter().enumerate() {
+        session
+            .send_input_value(101, sequence as u64, value.clone())
+            .await?;
+    }
+    session.end_input(101, 2).await?;
+    let report = session.finish(TrustedInvocationReport::default()).await?;
+    let output_id = proto_stream_id(report.successful_result()?)?;
+    assert_eq!(report.decoded_output(output_id)?, values);
+    assert!(report.output_ends.contains(&output_id));
+    Ok(())
+}
+
 async fn assert_moonbit_target_ping(
     deps: &EnvBasedTestDependencies,
     component: &ComponentDto,
