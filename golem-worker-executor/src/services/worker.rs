@@ -1140,13 +1140,12 @@ impl WorkerService for DefaultWorkerService {
                 .invocation_results
                 .oldest_retained_index()
                 .is_some_and(|oldest| oldest <= metadata.covered_through);
+        if !complete {
+            return Ok(InvocationResultIndexLookup::Incomplete);
+        }
 
         let Some(value) = values.get(1).and_then(Option::as_ref) else {
-            return Ok(if complete {
-                InvocationResultIndexLookup::DefinitiveMiss
-            } else {
-                InvocationResultIndexLookup::Incomplete
-            });
+            return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         };
         let value: PersistedInvocationResult = deserialize(value)?;
         if value.revert_generation != metadata.revert_generation
@@ -1154,11 +1153,7 @@ impl WorkerService for DefaultWorkerService {
                 .deleted_regions
                 .is_in_deleted_region(value.oplog_index)
         {
-            return Ok(if complete {
-                InvocationResultIndexLookup::DefinitiveMiss
-            } else {
-                InvocationResultIndexLookup::Incomplete
-            });
+            return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         }
 
         Ok(InvocationResultIndexLookup::Found(value.oplog_index))
@@ -1965,29 +1960,44 @@ mod tests {
         let first = idempotency_key("first");
         let second = idempotency_key("second");
         let third = idempotency_key("third");
+        let fourth = idempotency_key("fourth");
+        let fifth = idempotency_key("fifth");
         let missing = idempotency_key("missing");
         let (service, _oplog, owned_agent_id) = index_test_service(invocation_entries(&[
             first.clone(),
             second.clone(),
             third.clone(),
+            fourth.clone(),
+            fifth.clone(),
         ]));
-        let indexed =
-            invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
+        let indexed = invocation_status(
+            9,
+            2,
+            &[(&first, 3), (&second, 5), (&third, 7), (&fourth, 9)],
+            0,
+            DeletedRegions::new(),
+        );
         service
             .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &indexed)
             .await
             .unwrap();
 
         let current = invocation_status(
-            7,
+            11,
             2,
-            &[(&first, 3), (&second, 5), (&third, 7)],
+            &[
+                (&first, 3),
+                (&second, 5),
+                (&third, 7),
+                (&fourth, 9),
+                (&fifth, 11),
+            ],
             0,
             DeletedRegions::new(),
         );
         assert_eq!(
             current.invocation_results.oldest_retained_index(),
-            Some(OplogIndex::from_u64(5))
+            Some(OplogIndex::from_u64(9))
         );
         assert_eq!(
             service
@@ -1995,6 +2005,45 @@ mod tests {
                 .await
                 .unwrap(),
             InvocationResultIndexLookup::DefinitiveMiss
+        );
+    }
+
+    #[test]
+    async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result() {
+        let repeated = idempotency_key("repeated");
+        let (service, _oplog, owned_agent_id) =
+            index_test_service(invocation_entries(&[repeated.clone(), repeated.clone()]));
+        let partial = invocation_status(3, 0, &[(&repeated, 3)], 0, DeletedRegions::new());
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &partial)
+            .await
+            .unwrap();
+
+        let current = invocation_status(
+            5,
+            0,
+            &[(&repeated, 3), (&repeated, 5)],
+            0,
+            DeletedRegions::new(),
+        );
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &current, &repeated)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::Incomplete
+        );
+
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &current)
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &current, &repeated)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::Found(OplogIndex::from_u64(5))
         );
     }
 

@@ -2629,6 +2629,8 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
             config.invocation_results.recent_capacity = 2;
+            config.invocation_results.bloom_bits = 128;
+            config.invocation_results.bloom_hashes = 2;
             config.invocation_results.physical_index_catch_up_chunk_size = 2;
         })),
         ..TestExecutorOverrides::default()
@@ -2664,8 +2666,15 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(
+        executor
+            .start_agent(&component.id, counter_id.clone())
+            .await?,
+        worker_id
+    );
 
     let oldest_key = oldest_key.unwrap();
+    let read_exact_before = executor.oplog_service_call_count(&worker_id, "read_exact");
     let duplicate_result = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -2677,6 +2686,11 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .await?
         .into_typed::<u32>()?;
     assert_eq!(duplicate_result, 1);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "read_exact"),
+        read_exact_before,
+        "an evicted idempotency result must resolve from the hot physical index without scanning the oplog"
+    );
 
     let next_key = IdempotencyKey::fresh();
     let next_result = executor

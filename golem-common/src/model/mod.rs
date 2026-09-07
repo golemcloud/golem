@@ -693,7 +693,8 @@ impl SafeDisplay for RetryConfig {
 }
 
 pub const DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY: usize = 1024;
-pub const DEFAULT_INVOCATION_RESULT_BLOOM_BITS: usize = 1 << 16;
+// Four probes keep the false-positive rate below 2% through 100 times the default exact capacity.
+pub const DEFAULT_INVOCATION_RESULT_BLOOM_BITS: usize = 1 << 20;
 pub const DEFAULT_INVOCATION_RESULT_BLOOM_HASHES: u8 = 4;
 
 /// A fixed-size, persistent Bloom filter used to prove that unseen idempotency keys are new
@@ -765,17 +766,32 @@ impl Default for InvocationResultBloom {
     }
 }
 
-/// The bounded in-memory projection of completed invocation results.
-///
-/// The two persistent maps keep cloning proportional to changed paths while providing both
-/// key lookup and deterministic eviction in oplog order.
+// A deterministic approximation of the persistent tree node, pointers, and scalar value. Dynamic
+// idempotency-key bytes are accounted for separately. This only controls when the representation
+// switches; neither correctness nor the eventual memory bound depends on exact allocator sizing.
+const INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+enum InvocationResultMembershipState {
+    Exact {
+        by_key: OrdMap<IdempotencyKey, OplogIndex>,
+        key_bytes: usize,
+    },
+    Indexed {
+        recent_by_key: OrdMap<IdempotencyKey, OplogIndex>,
+        recent_by_index: OrdMap<OplogIndex, IdempotencyKey>,
+        bloom: InvocationResultBloom,
+    },
+}
+
+/// An exact projection of completed invocation results that switches to a bounded representation
+/// once the estimated exact-map footprint exceeds the Bloom filter plus its recent exact entries.
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub struct InvocationResultMembership {
-    recent_by_key: OrdMap<IdempotencyKey, OplogIndex>,
-    recent_by_index: OrdMap<OplogIndex, IdempotencyKey>,
-    bloom: InvocationResultBloom,
+    state: InvocationResultMembershipState,
     capacity: usize,
-    exact_complete: bool,
+    bloom_bits: usize,
+    bloom_hashes: u8,
     change_generation: u64,
     /// Number of revert entries folded into this status. It identifies the current oplog branch
     /// so physical and hydrated result entries from an earlier branch are never reused.
@@ -785,57 +801,75 @@ pub struct InvocationResultMembership {
 impl InvocationResultMembership {
     pub fn new(capacity: usize, bloom_bits: usize, bloom_hashes: u8) -> Self {
         Self {
-            recent_by_key: OrdMap::new(),
-            recent_by_index: OrdMap::new(),
-            bloom: InvocationResultBloom::new(bloom_bits, bloom_hashes),
+            state: InvocationResultMembershipState::Exact {
+                by_key: OrdMap::new(),
+                key_bytes: 0,
+            },
             capacity,
-            exact_complete: true,
+            bloom_bits,
+            bloom_hashes,
             change_generation: 0,
             revert_generation: 0,
         }
     }
 
     pub fn get(&self, key: &IdempotencyKey) -> Option<&OplogIndex> {
-        self.recent_by_key.get(key)
+        match &self.state {
+            InvocationResultMembershipState::Exact { by_key, .. } => by_key.get(key),
+            InvocationResultMembershipState::Indexed { recent_by_key, .. } => {
+                recent_by_key.get(key)
+            }
+        }
     }
 
     pub fn contains_key(&self, key: &IdempotencyKey) -> bool {
-        self.recent_by_key.contains_key(key)
+        self.get(key).is_some()
     }
 
     pub fn insert(&mut self, key: IdempotencyKey, result_index: OplogIndex) {
         self.change_generation = self.change_generation.wrapping_add(1);
-        self.bloom.insert(&key);
-        if let Some(previous_index) = self.recent_by_key.remove(&key) {
-            self.recent_by_index.remove(&previous_index);
-        }
-        self.recent_by_key.insert(key.clone(), result_index);
-        self.recent_by_index.insert(result_index, key);
-
-        while self.recent_by_key.len() > self.capacity {
-            let Some((oldest_index, oldest_key)) = self
-                .recent_by_index
-                .get_min()
-                .map(|(index, key)| (*index, key.clone()))
-            else {
-                break;
-            };
-            self.recent_by_index.remove(&oldest_index);
-            self.recent_by_key.remove(&oldest_key);
-            self.exact_complete = false;
+        match &mut self.state {
+            InvocationResultMembershipState::Exact { by_key, key_bytes } => {
+                if !by_key.contains_key(&key) {
+                    *key_bytes = key_bytes.saturating_add(key.value.len());
+                }
+                by_key.insert(key, result_index);
+                self.promote_if_needed();
+            }
+            InvocationResultMembershipState::Indexed {
+                recent_by_key,
+                recent_by_index,
+                bloom,
+            } => {
+                bloom.insert(&key);
+                if let Some(previous_index) = recent_by_key.remove(&key) {
+                    recent_by_index.remove(&previous_index);
+                }
+                recent_by_key.insert(key.clone(), result_index);
+                recent_by_index.insert(result_index, key);
+                Self::truncate_recent(self.capacity, recent_by_key, recent_by_index);
+            }
         }
     }
 
     pub fn might_contain(&self, key: &IdempotencyKey) -> bool {
-        self.bloom.might_contain(key)
+        match &self.state {
+            InvocationResultMembershipState::Exact { by_key, .. } => by_key.contains_key(key),
+            InvocationResultMembershipState::Indexed { bloom, .. } => bloom.might_contain(key),
+        }
     }
 
     pub fn is_exact_complete(&self) -> bool {
-        self.exact_complete
+        matches!(self.state, InvocationResultMembershipState::Exact { .. })
     }
 
     pub fn oldest_retained_index(&self) -> Option<OplogIndex> {
-        self.recent_by_index.get_min().map(|(index, _)| *index)
+        match &self.state {
+            InvocationResultMembershipState::Exact { by_key, .. } => by_key.values().copied().min(),
+            InvocationResultMembershipState::Indexed {
+                recent_by_index, ..
+            } => recent_by_index.get_min().map(|(index, _)| *index),
+        }
     }
 
     /// Changes whenever a result is added to or removed from the exact membership. It allows
@@ -856,26 +890,110 @@ impl InvocationResultMembership {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&IdempotencyKey, &OplogIndex)> {
-        self.recent_by_key.iter()
+        match &self.state {
+            InvocationResultMembershipState::Exact { by_key, .. } => by_key.iter(),
+            InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.iter(),
+        }
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &IdempotencyKey> {
-        self.recent_by_key.keys()
+        match &self.state {
+            InvocationResultMembershipState::Exact { by_key, .. } => by_key.keys(),
+            InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.keys(),
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.recent_by_key.len()
+        match &self.state {
+            InvocationResultMembershipState::Exact { by_key, .. } => by_key.len(),
+            InvocationResultMembershipState::Indexed { recent_by_key, .. } => recent_by_key.len(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.recent_by_key.is_empty()
+        self.len() == 0
     }
 
     pub fn remove(&mut self, key: &IdempotencyKey) -> Option<OplogIndex> {
-        let index = self.recent_by_key.remove(key)?;
-        self.recent_by_index.remove(&index);
+        let index = match &mut self.state {
+            InvocationResultMembershipState::Exact { by_key, key_bytes } => {
+                let index = by_key.remove(key)?;
+                *key_bytes = key_bytes.saturating_sub(key.value.len());
+                index
+            }
+            InvocationResultMembershipState::Indexed {
+                recent_by_key,
+                recent_by_index,
+                ..
+            } => {
+                let index = recent_by_key.remove(key)?;
+                recent_by_index.remove(&index);
+                index
+            }
+        };
         self.change_generation = self.change_generation.wrapping_add(1);
         Some(index)
+    }
+
+    fn promote_if_needed(&mut self) {
+        let InvocationResultMembershipState::Exact { by_key, key_bytes } = &self.state else {
+            return;
+        };
+        let count = by_key.len();
+        if count == 0 {
+            return;
+        }
+        let exact_bytes = key_bytes
+            .saturating_add(count.saturating_mul(INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES));
+        let retained = count.min(self.capacity);
+        let average_key_bytes = key_bytes.div_ceil(count);
+        let indexed_bytes =
+            self.bloom_bits
+                .div_ceil(u8::BITS as usize)
+                .saturating_add(retained.saturating_mul(2usize.saturating_mul(
+                    INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES.saturating_add(average_key_bytes),
+                )));
+        if exact_bytes <= indexed_bytes {
+            return;
+        }
+
+        let mut bloom = InvocationResultBloom::new(self.bloom_bits, self.bloom_hashes);
+        let mut by_index: Vec<_> = by_key
+            .iter()
+            .map(|(key, index)| {
+                bloom.insert(key);
+                (*index, key.clone())
+            })
+            .collect();
+        by_index.sort_unstable_by_key(|(index, _)| *index);
+        let mut recent_by_key = OrdMap::new();
+        let mut recent_by_index = OrdMap::new();
+        for (index, key) in by_index.into_iter().rev().take(self.capacity) {
+            recent_by_key.insert(key.clone(), index);
+            recent_by_index.insert(index, key);
+        }
+        self.state = InvocationResultMembershipState::Indexed {
+            recent_by_key,
+            recent_by_index,
+            bloom,
+        };
+    }
+
+    fn truncate_recent(
+        capacity: usize,
+        recent_by_key: &mut OrdMap<IdempotencyKey, OplogIndex>,
+        recent_by_index: &mut OrdMap<OplogIndex, IdempotencyKey>,
+    ) {
+        while recent_by_key.len() > capacity {
+            let Some((oldest_index, oldest_key)) = recent_by_index
+                .get_min()
+                .map(|(index, key)| (*index, key.clone()))
+            else {
+                break;
+            };
+            recent_by_index.remove(&oldest_index);
+            recent_by_key.remove(&oldest_key);
+        }
     }
 }
 

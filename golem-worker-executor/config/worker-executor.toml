@@ -122,7 +122,7 @@ min_delay = "100ms"
 multiplier = 3.0
 
 [invocation_results]
-bloom_bits = 65536
+bloom_bits = 1048576
 bloom_hashes = 4
 hydrated_cache_capacity = 1024
 physical_index_catch_up_chunk_size = 1024
@@ -550,7 +550,7 @@ without_time = false
 # multiplier = 3.0
 #
 # [invocation_results]
-# bloom_bits = 65536
+# bloom_bits = 1048576
 # bloom_hashes = 4
 # hydrated_cache_capacity = 1024
 # physical_index_catch_up_chunk_size = 1024
@@ -923,7 +923,7 @@ without_time = false
 # multiplier = 3.0
 #
 # [invocation_results]
-# bloom_bits = 65536
+# bloom_bits = 1048576
 # bloom_hashes = 4
 # hydrated_cache_capacity = 1024
 # physical_index_catch_up_chunk_size = 1024

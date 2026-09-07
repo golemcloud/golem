@@ -4379,31 +4379,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let status = self.get_last_known_status().await;
         for idempotency_key in unfinished {
-            let mut invocation_result = {
-                self.hydrated_invocation_results
-                    .read()
-                    .await
-                    .get_valid(&idempotency_key, &status)
-                    .map(|(result, _)| result.clone())
-            };
-            let Some(invocation_result) = invocation_result.as_mut() else {
-                continue;
-            };
-            invocation_result
-                .cache(
-                    &self.owned_agent_id,
-                    self.agent_mode(),
-                    self.initial_worker_metadata.fingerprint,
-                    self,
-                )
-                .await;
-            match lookup_result_from_cached_result(
-                &status,
-                &idempotency_key,
-                invocation_result.clone(),
-            ) {
+            match self.lookup_invocation_result(&idempotency_key).await {
                 LookupResult::Complete(Ok(_)) => {
                     self.complete_durable_streaming_session(&idempotency_key)
                         .await?;
@@ -5411,9 +5388,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
                 *oplog_idx,
             ))
-        } else if status.invocation_results.is_exact_complete()
-            || !status.invocation_results.might_contain(key)
-        {
+        } else if status.invocation_results.is_exact_complete() {
+            crate::metrics::workers::record_invocation_result_resolution("memory_exact_miss");
+            None
+        } else if !status.invocation_results.might_contain(key) {
             crate::metrics::workers::record_invocation_result_resolution("bloom_negative");
             None
         } else {

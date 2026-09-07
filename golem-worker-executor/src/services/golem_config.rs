@@ -2577,7 +2577,7 @@ mod tests {
             ..InvocationResultsConfig::default()
         };
         let mut membership = config.membership();
-        for index in 1..=3 {
+        for index in 1..=6 {
             membership.insert(
                 golem_common::model::IdempotencyKey::fresh(),
                 golem_common::model::oplog::OplogIndex::from_u64(index),
