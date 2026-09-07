@@ -81,6 +81,29 @@ describe('SchemaRef canonical JSON', () => {
     expect(ref.validateJson({ ...json, mantissa: '123' }).success).toBe(false);
   });
 
+  it('uses lossless JSON numbers for s64 and u64 values', () => {
+    const signed = schema(t.s64());
+    const unsigned = schema(t.u64());
+
+    expect(signed.packJson(Number.MIN_SAFE_INTEGER)).toEqual(
+      v.s64(BigInt(Number.MIN_SAFE_INTEGER)),
+    );
+    expect(unsigned.packJson(Number.MAX_SAFE_INTEGER)).toEqual(
+      v.u64(BigInt(Number.MAX_SAFE_INTEGER)),
+    );
+    expect(signed.unpackJson(v.s64(BigInt(Number.MAX_SAFE_INTEGER)))).toBe(Number.MAX_SAFE_INTEGER);
+    expect(unsigned.validateJson(-1).success).toBe(false);
+    expect(signed.validateJson(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
+    expect(() => unsigned.unpackJson(v.u64(2n ** 63n))).toThrow(/cannot be represented losslessly/);
+  });
+
+  it('rejects out-of-range and malformed primitive values', () => {
+    expect(schema(t.s8()).validateJson(-129).success).toBe(false);
+    expect(schema(t.u8()).validateJson(256).success).toBe(false);
+    expect(schema(t.u32()).validateJson(1.5).success).toBe(false);
+    expect(schema(t.string()).validateValue(v.bool(true)).success).toBe(false);
+  });
+
   it('rejects unknown and duplicate flags', () => {
     const ref = schema(t.flags(['read', 'write']));
 

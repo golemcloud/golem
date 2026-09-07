@@ -109,9 +109,9 @@ function createAgentIdString(
 }
 
 /**
- * Parsed component-local agent identity string.
+ * Parsed environment-scoped agent identity string.
  *
- * A ParsedAgentId wraps the string representation of an agent ID and can parse it
+ * A ParsedAgentId wraps the environment-scoped string representation of an agent ID and can parse it
  * into its constituent parts: agent type name, constructor parameters, and optional phantom ID.
  *
  * Constructor parameters are carried as the schema-native {@link SchemaValue} (the recursive

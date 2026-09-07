@@ -16,10 +16,14 @@
 // Checked by the package typecheck script; NOT executed by vitest.
 
 import { AgentId, ComponentId, Uuid, defineAgentClient, method } from '../dist/index.mjs';
+import { ComponentId as ReflectionComponentId, getAgentType } from '../dist/reflection.mjs';
 import { z } from 'zod';
 import { v } from '../dist/schema.mjs';
 
 const componentId = new ComponentId(new Uuid(1n, 2n));
+const reflectionComponentId: ReflectionComponentId = componentId;
+getAgentType('ExampleAgent')!.implementedBy satisfies ReflectionComponentId;
+reflectionComponentId satisfies ComponentId;
 const id = AgentId.create({
   componentId,
   typeName: 'ExampleAgent',

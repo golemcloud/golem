@@ -138,13 +138,19 @@ export function resolveComponentId(componentReference: string): ComponentId | un
   return raw ? ComponentId.from(raw) : undefined;
 }
 
-/** Resolve an agent reference and enrich the returned identity. */
+/**
+ * Resolve an agent reference without checking that the concrete agent exists.
+ * Returns `undefined` only when the component reference cannot be resolved.
+ */
 export function resolveAgentId(componentReference: string, agentName: string): AgentId | undefined {
   const raw = rawResolveAgentId(componentReference, agentName);
   return raw ? wrapAgentId(raw) : undefined;
 }
 
-/** Strictly resolve an agent reference and enrich the returned identity. */
+/**
+ * Resolve an agent reference and require the concrete agent to exist.
+ * Returns `undefined` when either the component or the agent cannot be found.
+ */
 export function resolveAgentIdStrict(
   componentReference: string,
   agentName: string,

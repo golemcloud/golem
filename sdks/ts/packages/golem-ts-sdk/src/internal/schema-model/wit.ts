@@ -302,8 +302,17 @@ export function schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph {
   return new GraphEncoder(graph.defs).encodeGraphRoot(graph.root);
 }
 
-/** Decode a Component Model carrier into the recursive SDK model. */
-export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
+/** Definitions and selected roots decoded from one Component Model graph. */
+export interface DecodedSchemaGraphRoots {
+  readonly defs: Map<TypeId, SchemaTypeDef>;
+  readonly roots: readonly SchemaType[];
+}
+
+/** Decode one WIT graph and any number of roots while sharing decoded nodes and definitions. */
+export function schemaGraphRootsFromWit(
+  wit: WitSchemaGraph,
+  roots: readonly TypeNodeIndex[],
+): DecodedSchemaGraphRoots {
   const nodes = wit.typeNodes;
   const witDefs = wit.defs;
   // See `schemaValueFromWit`: a flat on-path `Uint8Array` (`1` = on the current
@@ -312,6 +321,7 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
   // (which resolves to a def id without recursing here), so only a structural
   // back-edge in raw type-node indices is reported as a cycle.
   const onPath = new Uint8Array(nodes.length);
+  const decoded = new Array<SchemaType | undefined>(nodes.length);
 
   function idByDefIndex(di: DefIndex): TypeId {
     if (di < 0 || di >= witDefs.length) {
@@ -327,10 +337,13 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     if (onPath[idx] === 1) {
       throw new SchemaDecodeError(`cyclic type node reference at index ${idx}`);
     }
+    const cached = decoded[idx];
+    if (cached !== undefined) return cached;
     onPath[idx] = 1;
     const node = nodes[idx];
     const result = { body: fromBody(node.body), metadata: node.metadata };
     onPath[idx] = 0;
+    decoded[idx] = result;
     return result;
   }
 
@@ -454,8 +467,13 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     }
     defs.set(d.id, { name: d.name, body: fromType(d.body) });
   }
-  const root = fromType(wit.root);
-  return { defs, root };
+  return { defs, roots: roots.map(fromType) };
+}
+
+/** Decode a Component Model carrier into the recursive SDK model. */
+export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
+  const decoded = schemaGraphRootsFromWit(wit, [wit.root]);
+  return { defs: decoded.defs, root: decoded.roots[0] };
 }
 
 // ============================================================

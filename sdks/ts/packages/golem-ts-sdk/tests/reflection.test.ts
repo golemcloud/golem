@@ -30,7 +30,7 @@ import {
   type SchemaGraph,
 } from '../src/internal/schema-model';
 import { getAgentType, getAgentTypeByAgentId } from '../src/reflection';
-import { RemoteCallError } from '../src/client';
+import { RemoteCallError, RemoteOutputError } from '../src/client';
 import { Uuid } from '../src/uuid';
 import { AgentId } from '../src/agentId';
 
@@ -112,9 +112,56 @@ describe('SchemaRef', () => {
       }),
     ).toThrow('immutable schema graph');
   });
+
+  it('deep-clones caller-owned schema nodes before freezing', () => {
+    const root = t.record([field('value', t.string())]);
+    const definition = { name: 'Shared', body: t.string() };
+    const owned: SchemaGraph = { defs: new Map([['shared', definition]]), root };
+    const reflected = new SchemaRef(owned);
+
+    (root.body as Extract<typeof root.body, { tag: 'record' }>).fields[0].name = 'changed';
+    definition.name = 'Changed';
+    owned.defs.set('later', { name: 'Later', body: t.bool() });
+
+    expect(
+      (reflected.root.body as Extract<typeof reflected.root.body, { tag: 'record' }>).fields[0]
+        .name,
+    ).toBe('value');
+    expect(reflected.graph.defs.get('shared')?.name).toBe('Shared');
+    expect(reflected.graph.defs.has('later')).toBe(false);
+  });
 });
 
 describe('agent reflection', () => {
+  it('returns undefined when an optional type lookup misses', () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(undefined);
+    expect(getAgentType('Missing')).toBeUndefined();
+  });
+
+  it('rejects malformed reflected schema graphs', () => {
+    const malformed = registeredType();
+    const output = malformed.agentType.methods[0].outputSchema;
+    if (output.tag !== 'single') throw new Error('test agent must declare a single output');
+    output.val = malformed.agentType.schema.typeNodes.length;
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(malformed);
+    expect(() => getAgentType('ReflectedEcho')).toThrow(/type node index out of range/);
+  });
+
+  it('rejects malformed constructor values and agent IDs', () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
+    const reflected = getAgentType('ReflectedEcho')!;
+    expect(() => reflected.client.get({ id: 1 })).toThrow(/expected .*string/);
+
+    vi.mocked(parseAgentId).mockImplementationOnce(() => {
+      throw new TypeError('malformed agent id');
+    });
+    const malformed = AgentId.from({
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'not-an-agent-id',
+    });
+    expect(() => AgentId.parse(malformed)).toThrow('malformed agent id');
+  });
+
   it('discovers a type and invokes through its reflected schemas', async () => {
     vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
     const reflected = getAgentType('ReflectedEcho')!;
@@ -132,6 +179,52 @@ describe('agent reflection', () => {
       metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'key' },
       value: 'hello',
     });
+  });
+
+  it('decodes a reflected graph once and shares immutable definitions and type nodes', () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
+    const reflected = getAgentType('ReflectedEcho')!;
+    const method = reflected.method('echo')!;
+    const constructorField = (
+      reflected.constructorInput.root.body as Extract<
+        typeof reflected.constructorInput.root.body,
+        { tag: 'record' }
+      >
+    ).fields[0];
+    const methodField = (
+      method.input.root.body as Extract<typeof method.input.root.body, { tag: 'record' }>
+    ).fields[0];
+
+    expect(reflected.constructorInput.graph.defs).toBe(method.input.graph.defs);
+    expect(method.input.graph.defs).toBe(method.output!.graph.defs);
+    expect(constructorField.body).toBe(methodField.body);
+    expect(methodField.body).toBe(method.output!.root);
+    expect(() =>
+      (method.output!.graph.defs as Map<string, unknown>).set('new', t.string()),
+    ).toThrow('immutable schema graph');
+  });
+
+  it('rejects missing and malformed values for a declared output', async () => {
+    vi.mocked(hostGetAgentType).mockReturnValue(registeredType());
+    const reflected = getAgentType('ReflectedEcho')!;
+    const client = reflected.client.get({ id: 'one' });
+    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+
+    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
+      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'missing' },
+      future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
+    });
+    await expect(client.method('echo').invokeValue(v.record([]))).rejects.toBeInstanceOf(
+      RemoteOutputError,
+    );
+
+    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
+      metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'malformed' },
+      future: { get: vi.fn().mockResolvedValue(schemaValueToWit(v.u32(1))), cancel: vi.fn() },
+    });
+    await expect(client.method('echo').invokeValue(v.record([]))).rejects.toBeInstanceOf(
+      RemoteOutputError,
+    );
   });
 
   it('looks up the current schema for a concrete agent instance', () => {

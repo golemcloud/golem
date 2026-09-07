@@ -13,7 +13,9 @@
 // limitations under the License.
 
 import {
+  cloneSchemaGraph,
   freezeSchemaGraph,
+  freezeSchemaValue,
   type SchemaGraph,
   type SchemaType,
   type SchemaValue,
@@ -43,9 +45,20 @@ export class SchemaRef {
   readonly root: SchemaType;
 
   constructor(graph: SchemaGraph, root: SchemaType = graph.root) {
-    this.graph = freezeSchemaGraph({ defs: new Map(graph.defs), root });
+    this.graph = freezeSchemaGraph(cloneSchemaGraph({ defs: graph.defs, root }));
     this.root = this.graph.root;
     Object.freeze(this);
+  }
+
+  /** @internal Build a view over definitions already owned and frozen by the SDK. */
+  static fromImmutableGraph(graph: SchemaGraph, root: SchemaType): SchemaRef {
+    freezeSchemaValue(root, new WeakSet());
+    const ref = Object.create(SchemaRef.prototype) as SchemaRef;
+    Object.defineProperties(ref, {
+      graph: { value: Object.freeze({ defs: graph.defs, root }), enumerable: true },
+      root: { value: root, enumerable: true },
+    });
+    return Object.freeze(ref);
   }
 
   validateJson(value: JsonValue): SchemaValidationResult<SchemaValue> {

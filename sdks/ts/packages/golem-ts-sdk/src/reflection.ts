@@ -27,17 +27,24 @@ import type {
   OutputSchema as HostOutputSchema,
 } from 'golem:agent/common@2.0.0';
 import type { SchemaGraph as WitSchemaGraph } from 'golem:core/types@2.0.0';
-import { resolveRemoteAgentFallibly, type RemoteAgentHandle } from './bridge/agent';
+import {
+  RemoteOutputError,
+  resolveRemoteAgentFallibly,
+  type RemoteAgentHandle,
+} from './bridge/agent';
 import {
   field,
-  schemaGraphFromWit,
+  freezeSchemaGraph,
+  schemaGraphRootsFromWit,
   t,
   type SchemaGraph,
+  type SchemaType,
   type SchemaValue,
 } from './internal/schema-model';
 import { SchemaRef, type JsonValue } from './schema/ref';
 import { Uuid } from './uuid';
 import { ComponentId } from './ids';
+export { ComponentId } from './ids';
 import { AgentId, bindAgentClient } from './agentId';
 export {
   DynamicAgentClient,
@@ -67,7 +74,7 @@ export class AgentMethod {
   readonly input: SchemaRef;
   readonly output?: SchemaRef;
 
-  constructor(raw: HostAgentMethod, graph: WitSchemaGraph) {
+  constructor(raw: HostAgentMethod, graph: ReflectedGraph) {
     this.name = raw.name;
     this.description = raw.description;
     this.promptHint = raw.promptHint;
@@ -82,20 +89,21 @@ export class AgentType {
   readonly description: string;
   readonly sourceLanguage: string;
   readonly mode: 'durable' | 'ephemeral';
-  readonly implementedBy: RegisteredAgentType['implementedBy'];
+  readonly implementedBy: ComponentId;
   readonly constructorInput: SchemaRef;
   readonly methods: readonly AgentMethod[];
   readonly client: ReflectedAgentClientFactory;
 
   constructor(registered: RegisteredAgentType) {
     const raw = registered.agentType;
+    const graph = decodeReflectedGraph(raw.schema);
     this.name = raw.typeName;
     this.description = raw.description;
     this.sourceLanguage = raw.sourceLanguage;
     this.mode = raw.mode;
-    this.implementedBy = registered.implementedBy;
-    this.constructorInput = inputSchemaRef(raw.schema, raw.constructor.inputSchema);
-    this.methods = Object.freeze(raw.methods.map((method) => new AgentMethod(method, raw.schema)));
+    this.implementedBy = ComponentId.from(registered.implementedBy);
+    this.constructorInput = inputSchemaRef(graph, raw.constructor.inputSchema);
+    this.methods = Object.freeze(raw.methods.map((method) => new AgentMethod(method, graph)));
     this.client = new ReflectedAgentClientFactory(this);
     Object.freeze(this);
   }
@@ -112,7 +120,7 @@ export class AgentType {
   /** Construct an agent identity from an already packed constructor value. */
   agentIdValue(input: SchemaValue, phantomId?: Uuid): AgentId {
     return AgentId.create({
-      componentId: ComponentId.from(this.implementedBy),
+      componentId: this.implementedBy,
       typeName: this.name,
       constructorValue: input,
       phantomId,
@@ -229,9 +237,7 @@ export class ReflectedAgentMethod {
     return {
       metadata: result.metadata,
       value:
-        result.value === undefined || this.definition.output === undefined
-          ? undefined
-          : this.definition.output.unpackJson(result.value),
+        result.value === undefined ? undefined : this.definition.output?.unpackJson(result.value),
     };
   }
 
@@ -239,7 +245,25 @@ export class ReflectedAgentMethod {
     input: SchemaValue,
     signal?: AbortSignal,
   ): Promise<ReflectedInvocation<SchemaValue>> {
-    return this.remote.invokeAndAwaitWithMetadata(this.definition.name, input, signal);
+    const result = await this.remote.invokeAndAwaitWithMetadata(
+      this.definition.name,
+      input,
+      signal,
+    );
+    if (this.definition.output !== undefined && result.value === undefined) {
+      throw new RemoteOutputError(
+        `Remote agent ${this.remote.agentId}.${this.definition.name} returned no value for a non-unit output`,
+      );
+    }
+    if (this.definition.output !== undefined && result.value !== undefined) {
+      const validation = this.definition.output.validateValue(result.value);
+      if (!validation.success) {
+        throw new RemoteOutputError(
+          `Remote agent ${this.remote.agentId}.${this.definition.name} returned an invalid output: ${validation.issues.map((issue) => issue.message).join('; ')}`,
+        );
+      }
+    }
+    return result;
   }
 
   trigger(input: JsonValue): InvocationMetadata {
@@ -263,28 +287,58 @@ export function getAllAgentTypes(): readonly AgentType[] {
   return Object.freeze(hostGetAllAgentTypes().map((registered) => new AgentType(registered)));
 }
 
+/**
+ * Look up a deployed agent type by name.
+ *
+ * This is an optional discovery operation: it returns `undefined` when the type is not visible in
+ * the current environment. Once returned, each schema operation is strict and throws for malformed
+ * JSON or schema values.
+ */
 export function getAgentType(name: string): AgentType | undefined {
   const registered = hostGetAgentType(name);
   return registered === undefined ? undefined : new AgentType(registered);
 }
 
+/**
+ * Look up the current deployed schema for a full environment-scoped identity.
+ *
+ * Returns `undefined` when the agent does not exist, its ID is malformed, its type is missing, or
+ * the caller lacks `View` permission. Use {@link AgentId.parse} when strict identity parsing is
+ * required independently of discovery.
+ */
 export function getAgentTypeByAgentId(agentId: AgentId): AgentType | undefined {
   const registered = hostGetAgentTypeByAgentId(agentId);
   return registered === undefined ? undefined : new AgentType(registered);
 }
 
-function inputSchemaRef(graph: WitSchemaGraph, input: HostInputSchema): SchemaRef {
-  const decoded = schemaGraphFromWit(graph);
-  const fields = input.val
-    .filter((entry) => entry.source.tag === 'user-supplied')
-    .map((entry) =>
-      field(entry.name, schemaGraphFromWit({ ...graph, root: entry.schema }).root, entry.metadata),
-    );
-  const reflectedGraph: SchemaGraph = { defs: decoded.defs, root: t.record(fields) };
-  return new SchemaRef(reflectedGraph);
+interface ReflectedGraph {
+  readonly graph: SchemaGraph;
+  readonly types: readonly SchemaType[];
 }
 
-function outputSchemaRef(graph: WitSchemaGraph, output: HostOutputSchema): SchemaRef | undefined {
+function decodeReflectedGraph(graph: WitSchemaGraph): ReflectedGraph {
+  const indices = graph.typeNodes.map((_, index) => index);
+  const decoded = schemaGraphRootsFromWit(graph, indices);
+  const shared = freezeSchemaGraph({ defs: decoded.defs, root: t.tuple([...decoded.roots]) });
+  return { graph: shared, types: decoded.roots };
+}
+
+function inputSchemaRef(graph: ReflectedGraph, input: HostInputSchema): SchemaRef {
+  const fields = input.val
+    .filter((entry) => entry.source.tag === 'user-supplied')
+    .map((entry) => field(entry.name, reflectedTypeAt(graph, entry.schema), entry.metadata));
+  return SchemaRef.fromImmutableGraph(graph.graph, t.record(fields));
+}
+
+function outputSchemaRef(graph: ReflectedGraph, output: HostOutputSchema): SchemaRef | undefined {
   if (output.tag === 'unit') return undefined;
-  return new SchemaRef(schemaGraphFromWit({ ...graph, root: output.val }));
+  return SchemaRef.fromImmutableGraph(graph.graph, reflectedTypeAt(graph, output.val));
+}
+
+function reflectedTypeAt(graph: ReflectedGraph, index: number): SchemaType {
+  const type = graph.types[index];
+  if (type === undefined) {
+    throw new TypeError(`reflected schema type node index out of range: ${index}`);
+  }
+  return type;
 }

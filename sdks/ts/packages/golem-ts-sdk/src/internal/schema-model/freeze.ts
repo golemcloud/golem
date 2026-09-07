@@ -14,6 +14,50 @@
 
 import type { SchemaGraph } from './model';
 
+/** Clone a caller-owned graph before the SDK turns it into immutable public state. */
+export function cloneSchemaGraph(graph: SchemaGraph): SchemaGraph {
+  const seen = new WeakMap<object, unknown>();
+  return cloneSchemaValue(graph, seen);
+}
+
+function cloneSchemaValue<T>(value: T, seen: WeakMap<object, unknown>): T {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value;
+
+  const object = value as object;
+  const existing = seen.get(object);
+  if (existing !== undefined) return existing as T;
+
+  if (value instanceof Map) {
+    const clone = new Map();
+    seen.set(object, clone);
+    value.forEach((entryValue, key) => {
+      clone.set(cloneSchemaValue(key, seen), cloneSchemaValue(entryValue, seen));
+    });
+    return clone as T;
+  }
+
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(object, clone);
+    value.forEach((entry) => clone.push(cloneSchemaValue(entry, seen)));
+    return clone as T;
+  }
+
+  if (value instanceof Uint8Array) {
+    return value.slice() as T;
+  }
+
+  const clone = Object.create(Object.getPrototypeOf(value)) as Record<PropertyKey, unknown>;
+  seen.set(object, clone);
+  Reflect.ownKeys(value).forEach((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor) return;
+    if ('value' in descriptor) descriptor.value = cloneSchemaValue(descriptor.value, seen);
+    Object.defineProperty(clone, key, descriptor);
+  });
+  return clone as T;
+}
+
 /** Recursively freezes a schema graph, including the mutable methods of its definition map. */
 export function freezeSchemaGraph(graph: SchemaGraph): SchemaGraph {
   freezeSchemaValue(graph, new WeakSet());
