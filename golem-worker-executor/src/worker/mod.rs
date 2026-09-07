@@ -1037,6 +1037,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .expect("Failed enqueuing initial agent invocations to worker");
         };
         if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
+            && worker.has_durable_stream_history()
             && !worker
                 .durable_stream_producer()
                 .await?
@@ -4368,7 +4369,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         }
                     })
                 });
-                DurableStreamProducer::load_with_commit(
+                let producer = DurableStreamProducer::load_with_commit(
                     self.oplog.clone(),
                     self.owned_agent_id.environment_id,
                     self.owned_agent_id.agent_id.clone(),
@@ -4383,7 +4384,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     commit,
                 )
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                producer.set_control_metadata_provider(self.worker_service(), self.agent_mode());
+                Ok(producer)
             })
             .await
             .cloned()
@@ -4407,7 +4410,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ))
     }
 
+    fn has_durable_stream_history(&self) -> bool {
+        self.durable_stream_producer.get().is_some()
+            || self.last_known_status.load().has_durable_stream_history
+    }
+
     async fn reconcile_durable_stream_attachments(&self) -> Result<(), WorkerExecutorError> {
+        if !self.has_durable_stream_history() {
+            return Ok(());
+        }
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
         let config = &self.deps.config().durable_stream;
@@ -4425,6 +4436,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn recover_durable_stream_topologies(&self) -> Result<(), WorkerExecutorError> {
+        if !self.has_durable_stream_history() {
+            return Ok(());
+        }
         let current = self.oplog.current_oplog_index().await;
         if !current.is_defined() {
             return Ok(());
@@ -8685,7 +8699,7 @@ fn stream_effective_identity_is_agent(effective_identity: &[u8]) -> bool {
     .is_some_and(|principal| matches!(principal, Principal::Agent(_)))
 }
 
-fn stream_session_record_key(
+pub(crate) fn stream_session_record_key(
     record: &StreamSessionRecordV1,
 ) -> Option<&golem_common::base_model::durable_stream::StreamSessionKeyV1> {
     match record {

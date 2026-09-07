@@ -1,6 +1,5 @@
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
-use golem_common::base_model::durable_stream::StreamSessionRecordV1;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
@@ -279,6 +278,17 @@ pub fn update_status_with_new_entries(
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
     let durable_stream_sessions =
         calculate_durable_stream_sessions(last_known.durable_stream_sessions, &new_entries);
+    let has_durable_stream_history = last_known.has_durable_stream_history
+        || new_entries.values().any(|entry| {
+            matches!(
+                entry,
+                OplogEntry::StreamRegistered { .. }
+                    | OplogEntry::StreamItems { .. }
+                    | OplogEntry::StreamEnd { .. }
+                    | OplogEntry::StreamCancel { .. }
+                    | OplogEntry::StreamSession { .. }
+            )
+        });
     let (
         pending_updates,
         failed_updates,
@@ -349,6 +359,7 @@ pub fn update_status_with_new_entries(
         invocation_results,
         received_card_transfers,
         durable_stream_sessions,
+        has_durable_stream_history,
         current_idempotency_key,
         component_revision,
         component_size,
@@ -934,74 +945,10 @@ fn calculate_durable_stream_sessions(
     mut sessions: DurableStreamSessionIndex,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> DurableStreamSessionIndex {
-    fn apply(
-        sessions: &mut DurableStreamSessionIndex,
-        oplog_idx: OplogIndex,
-        record: &StreamSessionRecordV1,
-    ) {
-        apply_durable_stream_session_record(sessions, oplog_idx, record);
-    }
-
     for (oplog_idx, entry) in entries {
-        let OplogEntry::StreamSession { record, .. } = entry else {
-            continue;
-        };
-        match record {
-            OplogPayload::Inline(record) => apply(&mut sessions, *oplog_idx, record),
-            OplogPayload::SerializedInline {
-                cached: Some(record),
-                ..
-            }
-            | OplogPayload::External {
-                cached: Some(record),
-                ..
-            } => apply(&mut sessions, *oplog_idx, record),
-            OplogPayload::SerializedInline {
-                bytes,
-                cached: None,
-            } => {
-                let record = deserialize::<StreamSessionRecordV1>(bytes)
-                    .expect("stream session records are valid inline payloads");
-                apply(&mut sessions, *oplog_idx, &record);
-            }
-            OplogPayload::External { cached: None, .. } => {
-                unreachable!("stream session records are always stored inline")
-            }
-        }
+        sessions.apply_oplog_entry(*oplog_idx, entry);
     }
     sessions
-}
-
-pub(crate) fn apply_durable_stream_session_record(
-    sessions: &mut DurableStreamSessionIndex,
-    oplog_idx: OplogIndex,
-    record: &StreamSessionRecordV1,
-) {
-    let key = match record {
-        StreamSessionRecordV1::Prepared(record) => &record.attempt.session_key.idempotency_key,
-        StreamSessionRecordV1::InvocationResult(record) => &record.session_key.idempotency_key,
-        StreamSessionRecordV1::Finished(record) => &record.session_key.idempotency_key,
-        _ => return,
-    };
-    let mut status = match sessions.get(key) {
-        Some(status) => status.clone(),
-        None if matches!(record, StreamSessionRecordV1::Prepared(_)) => Default::default(),
-        // Caller-side results do not have a local Prepared/Finished lifecycle. Retaining them
-        // as unfinished sessions would make the status grow with every outgoing invocation.
-        None => return,
-    };
-    match record {
-        StreamSessionRecordV1::Prepared(_) => {
-            status.first_prepared.get_or_insert(oplog_idx);
-            status.prepared = Some(oplog_idx);
-        }
-        StreamSessionRecordV1::InvocationResult(_) => status.invocation_result = Some(oplog_idx),
-        StreamSessionRecordV1::Finished(_) => {
-            status.finished.get_or_insert(oplog_idx);
-        }
-        _ => unreachable!(),
-    }
-    sessions.insert(key.clone(), status);
 }
 
 #[allow(clippy::type_complexity)]
@@ -2820,6 +2767,19 @@ mod test {
 
     #[async_trait]
     impl OplogService for TestCase {
+        fn set_stream_session_index(
+            &self,
+            _: Arc<crate::services::stream_session_index::StreamSessionIndexService>,
+        ) {
+            unreachable!("status-fold fixture does not open raw oplogs")
+        }
+
+        fn stream_session_index(
+            &self,
+        ) -> Option<Arc<crate::services::stream_session_index::StreamSessionIndexService>> {
+            None
+        }
+
         async fn create(
             &self,
             _owned_agent_id: &OwnedAgentId,

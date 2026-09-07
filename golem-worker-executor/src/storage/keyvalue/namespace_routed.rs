@@ -84,6 +84,35 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
             .await
     }
 
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        let backend = self.backend_for_namespace(&namespace);
+        if Arc::ptr_eq(backend, &self.cache) {
+            for (_, value) in pairs {
+                crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
+            }
+        }
+        backend
+            .compare_and_set_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                expected,
+                pairs,
+            )
+            .await
+    }
+
     async fn set_if_not_exists(
         &self,
         svc_name: &'static str,

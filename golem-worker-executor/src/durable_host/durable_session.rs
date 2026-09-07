@@ -56,6 +56,7 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
@@ -104,6 +105,293 @@ pub(crate) struct DurableSessionStreams {
     session_lock: Arc<Mutex<()>>,
     attachment_epoch: u64,
     attachment_attempt_id: Option<AttemptId>,
+    recovered_mappings_through: Arc<Mutex<OplogIndex>>,
+    control_metadata: Arc<Mutex<SessionControlMetadata>>,
+}
+
+#[derive(Clone, Default, desert_rust::BinaryCodec)]
+pub struct SessionControlMetadata {
+    pub(crate) covered_through: OplogIndex,
+    malformed_record: bool,
+    explicit_mappings: HashSet<(u64, DurableStreamHandleV1, SessionStreamRoleV1)>,
+    persisted_mappings: HashSet<(u64, DurableStreamHandleV1, SessionStreamRoleV1)>,
+    recoverable_mappings: Vec<(OplogIndex, StreamSessionMappingRecordV1)>,
+    caller_attempt: Option<AttemptId>,
+    caller_attempt_conflict: bool,
+    pub(crate) invocation_result: Option<OplogIndex>,
+    pub(crate) finished: Option<OplogIndex>,
+    root_outputs: Vec<u64>,
+    topology_epoch: Option<u64>,
+    topologies: HashMap<
+        (
+            AttachmentId,
+            golem_common::model::StreamId,
+            u64,
+            SessionStreamRoleV1,
+        ),
+        SessionTopologyMetadata,
+    >,
+    visible_mappings: HashSet<(u64, DurableStreamHandleV1, SessionStreamRoleV1)>,
+    topology_error: Option<String>,
+    pub(crate) consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
+    pub(crate) consumer_deleting:
+        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
+}
+
+#[derive(Clone, desert_rust::BinaryCodec)]
+struct SessionTopologyMetadata {
+    attachment: StreamAttachmentKeyV1,
+    mapping: StreamSessionMappingRecordV1,
+    active: bool,
+    prepared_index: Option<OplogIndex>,
+    activated_index: Option<OplogIndex>,
+    repeated_activation_index: Option<OplogIndex>,
+}
+
+impl SessionControlMetadata {
+    pub(crate) fn topology_status(
+        &self,
+        attachment: &StreamAttachmentKeyV1,
+        expected_mapping: Option<&StreamSessionMappingRecordV1>,
+    ) -> Result<ConsumerAttachmentStatus, String> {
+        if self.malformed_record {
+            return Err("unsupported or malformed durable Stream Session record version".into());
+        }
+        if let Some(error) = &self.topology_error {
+            return Err(error.clone());
+        }
+        let mut events = Vec::new();
+        for topology in self
+            .topologies
+            .values()
+            .filter(|topology| same_attachment_slot(&topology.attachment, attachment))
+        {
+            if topology.attachment.epoch < attachment.epoch {
+                continue;
+            }
+            if topology.attachment != *attachment {
+                return Ok(attachment_mismatch_status(&topology.attachment, attachment));
+            }
+            if expected_mapping.is_some_and(|mapping| mapping != &topology.mapping) {
+                continue;
+            }
+            events.extend(topology.prepared_index.map(|index| (index, false)));
+            events.extend(topology.activated_index.map(|index| (index, true)));
+            events.extend(
+                topology
+                    .repeated_activation_index
+                    .map(|index| (index, true)),
+            );
+        }
+        events.sort_unstable_by_key(|(index, _)| *index);
+        let mut state = ConsumerAttachmentStatus::Missing;
+        for (_, active) in events {
+            if !active {
+                if state == ConsumerAttachmentStatus::Missing {
+                    state = ConsumerAttachmentStatus::Prepared;
+                }
+            } else if !(expected_mapping.is_none() && state == ConsumerAttachmentStatus::Active) {
+                if state != ConsumerAttachmentStatus::Prepared {
+                    return Err("durable topology activation has no matching preparation".into());
+                }
+                state = ConsumerAttachmentStatus::Active;
+            }
+        }
+        Ok(state)
+    }
+
+    pub(crate) fn apply(
+        &mut self,
+        index: OplogIndex,
+        key: &StreamSessionKeyV1,
+        record: &StreamSessionRecordV1,
+    ) {
+        self.malformed_record |= !record.has_supported_format();
+        if let StreamSessionRecordV1::ConsumerDeleting(record) = record {
+            self.consumer_deleting = Some(record.clone());
+        }
+        let consumer_stream = match record {
+            StreamSessionRecordV1::ConsumerItemValue(record) if &record.session_key == key => {
+                Some(record.stream_id)
+            }
+            StreamSessionRecordV1::ConsumerTerminal(record) if &record.session_key == key => {
+                Some(record.stream_id)
+            }
+            StreamSessionRecordV1::SourceUnavailable(record) if &record.key.session_key == key => {
+                Some(record.key.stream_id)
+            }
+            _ => None,
+        };
+        if let Some(stream) = consumer_stream {
+            *self.consumer_record_counts.entry(stream).or_default() += 1;
+        }
+        match record {
+            StreamSessionRecordV1::Attached(record) if &record.session_key == key => {
+                self.topology_epoch = Some(record.epoch);
+            }
+            StreamSessionRecordV1::ResumeAttempt(record) if &record.attempt.session_key == key => {
+                self.topology_epoch = Some(record.accepted_epoch);
+            }
+            _ => {}
+        }
+        let topology = match record {
+            StreamSessionRecordV1::TopologyPrepared(record) if &record.session_key == key => {
+                Some((&record.attachment, &record.mapping, false))
+            }
+            StreamSessionRecordV1::TopologyActivated(record) if &record.session_key == key => {
+                Some((&record.attachment, &record.mapping, true))
+            }
+            _ => None,
+        };
+        if let Some((attachment, mapping, active)) = topology {
+            let slot = (
+                attachment.attachment_id,
+                attachment.stream_id,
+                mapping.transport_stream_id,
+                mapping.role,
+            );
+            match self.topologies.get_mut(&slot) {
+                Some(existing)
+                    if &existing.attachment != attachment || &existing.mapping != mapping =>
+                {
+                    if attachment.epoch > existing.attachment.epoch {
+                        if active {
+                            self.topology_error.get_or_insert_with(|| {
+                                "durable topology activation has no matching preparation".into()
+                            });
+                        }
+                        *existing = SessionTopologyMetadata {
+                            attachment: attachment.clone(),
+                            mapping: mapping.clone(),
+                            active,
+                            prepared_index: (!active).then_some(index),
+                            activated_index: active.then_some(index),
+                            repeated_activation_index: None,
+                        };
+                    } else {
+                        self.topology_error.get_or_insert_with(|| {
+                            "conflicting durable topology preparation or activation".into()
+                        });
+                    }
+                }
+                Some(existing) => {
+                    existing.active |= active;
+                    if active {
+                        if existing.activated_index.is_some() {
+                            existing.repeated_activation_index.get_or_insert(index);
+                        } else {
+                            existing.activated_index = Some(index);
+                        }
+                    } else {
+                        existing.prepared_index.get_or_insert(index);
+                    }
+                }
+                None => {
+                    if active {
+                        self.topology_error.get_or_insert_with(|| {
+                            "durable topology activation has no matching preparation".into()
+                        });
+                    }
+                    self.topologies.insert(
+                        slot,
+                        SessionTopologyMetadata {
+                            attachment: attachment.clone(),
+                            mapping: mapping.clone(),
+                            active,
+                            prepared_index: (!active).then_some(index),
+                            activated_index: active.then_some(index),
+                            repeated_activation_index: None,
+                        },
+                    );
+                }
+            }
+        }
+        let mappings: &[StreamSessionMappingRecordV1] = match record {
+            StreamSessionRecordV1::CallerAttempt(record) if &record.session_key == key => {
+                if self
+                    .caller_attempt
+                    .is_some_and(|attempt| attempt != record.attempt_id)
+                {
+                    self.caller_attempt_conflict = true;
+                }
+                self.caller_attempt.get_or_insert(record.attempt_id);
+                &[]
+            }
+            StreamSessionRecordV1::Mapping(record) if &record.session_key == key => {
+                self.explicit_mappings.insert((
+                    record.mapping.transport_stream_id,
+                    record.mapping.handle.clone(),
+                    record.mapping.role,
+                ));
+                std::slice::from_ref(&record.mapping)
+            }
+            StreamSessionRecordV1::Prepared(record) if &record.attempt.session_key == key => {
+                &record.stream_mappings
+            }
+            StreamSessionRecordV1::TopologyPrepared(record) if &record.session_key == key => {
+                std::slice::from_ref(&record.mapping)
+            }
+            StreamSessionRecordV1::TopologyActivated(record) if &record.session_key == key => {
+                std::slice::from_ref(&record.mapping)
+            }
+            StreamSessionRecordV1::ConsumerItemValue(record) if &record.session_key == key => {
+                &record.recursive_mappings
+            }
+            StreamSessionRecordV1::InvocationResult(record) if &record.session_key == key => {
+                self.invocation_result.get_or_insert(index);
+                for mapping in &record.stream_mappings {
+                    if mapping.role == SessionStreamRoleV1::Output
+                        && !self.root_outputs.contains(&mapping.transport_stream_id)
+                    {
+                        self.root_outputs.push(mapping.transport_stream_id);
+                    }
+                }
+                &record.stream_mappings
+            }
+            StreamSessionRecordV1::Finished(record) if &record.session_key == key => {
+                self.finished.get_or_insert(index);
+                &[]
+            }
+            _ => &[],
+        };
+        if matches!(
+            record,
+            StreamSessionRecordV1::Prepared(_)
+                | StreamSessionRecordV1::Mapping(_)
+                | StreamSessionRecordV1::InvocationResult(_)
+        ) {
+            self.visible_mappings.extend(mappings.iter().map(|mapping| {
+                (
+                    mapping.transport_stream_id,
+                    mapping.handle.clone(),
+                    mapping.role,
+                )
+            }));
+        }
+        if matches!(
+            record,
+            StreamSessionRecordV1::Mapping(_) | StreamSessionRecordV1::InvocationResult(_)
+        ) {
+            for mapping in mappings {
+                if !self
+                    .recoverable_mappings
+                    .iter()
+                    .any(|(_, existing)| existing == mapping)
+                {
+                    self.recoverable_mappings.push((index, mapping.clone()));
+                }
+            }
+        }
+        self.persisted_mappings
+            .extend(mappings.iter().map(|mapping| {
+                (
+                    mapping.transport_stream_id,
+                    mapping.handle.clone(),
+                    mapping.role,
+                )
+            }));
+        self.covered_through = index;
+    }
 }
 
 struct DurableInputSchema {
@@ -324,10 +612,13 @@ impl DurableSessionStreams {
             session_lock,
             attachment_epoch: 1,
             attachment_attempt_id: None,
+            recovered_mappings_through: Arc::new(Mutex::new(OplogIndex::NONE)),
+            control_metadata: Arc::new(Mutex::new(SessionControlMetadata::default())),
         }
     }
 
     pub(crate) fn with_attachment(mut self, epoch: u64, attempt_id: AttemptId) -> Self {
+        self.recovered_mappings_through = Arc::new(Mutex::new(OplogIndex::NONE));
         self.attachment_epoch = epoch;
         self.attachment_attempt_id = Some(attempt_id);
         self
@@ -337,6 +628,7 @@ impl DurableSessionStreams {
         mut self,
         consumer_invocation: StreamInvocationIdV1,
     ) -> Self {
+        self.recovered_mappings_through = Arc::new(Mutex::new(OplogIndex::NONE));
         self.consumer_invocation = consumer_invocation;
         self
     }
@@ -503,64 +795,24 @@ impl DurableSessionStreams {
     }
 
     async fn authoritative_attachment_state(&self) -> Result<(u64, AttemptId, bool), String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Err("durable session has no attachment authority".to_string());
-        }
-        let mut state = None;
-        for (_, entry) in self
+        let raw = self
             .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            match self.download_record(record).await? {
-                StreamSessionRecordV1::Attached(record)
-                    if record.session_key == self.session_key =>
-                {
-                    if state.is_some() {
-                        return Err("durable session contains a repeated initial attachment".into());
-                    }
-                    state = Some((record.epoch, record.attempt_id, true));
-                }
-                StreamSessionRecordV1::ResumeAttempt(record)
-                    if record.attempt.session_key == self.session_key =>
-                {
-                    let Some((epoch, _, _)) = state else {
-                        return Err("durable resume precedes initial attachment".into());
-                    };
-                    if record.attempt.expected_epoch != epoch
-                        || record.accepted_epoch
-                            != epoch.checked_add(1).ok_or_else(|| {
-                                "durable attachment epoch cannot advance past u64::MAX".to_string()
-                            })?
-                    {
-                        return Err("durable resume contains an invalid epoch transition".into());
-                    }
-                    state = Some((record.accepted_epoch, record.attempt.attempt_id, true));
-                }
-                StreamSessionRecordV1::Detached(record)
-                    if record.session_key == self.session_key =>
-                {
-                    let Some((epoch, attempt_id, attached)) = state else {
-                        return Err("durable detach precedes initial attachment".into());
-                    };
-                    if record.epoch != epoch || record.owner_attempt_id != attempt_id {
-                        return Err("durable detach does not match the current attachment".into());
-                    }
-                    if attached {
-                        state = Some((epoch, attempt_id, false));
-                    }
-                }
-                _ => {}
-            }
+            .raw_durable_stream_session_status(&self.session_key)
+            .await;
+        let status = raw
+            .status?
+            .ok_or_else(|| "durable session has no attachment authority".to_string())?;
+        if let Some(error) = status.lifecycle_error {
+            return Err(error);
         }
-        state.ok_or_else(|| "durable session has no attachment authority".to_string())
+        match (
+            status.attachment_epoch,
+            status.attachment_attempt_id,
+            status.attachment_attached,
+        ) {
+            (Some(epoch), Some(attempt), Some(attached)) => Ok((epoch, attempt, attached)),
+            _ => Err("durable session has no attachment authority".to_string()),
+        }
     }
 
     pub(crate) async fn detach_current(&self) -> Result<bool, String> {
@@ -688,43 +940,16 @@ impl DurableSessionStreams {
 
     pub(crate) async fn caller_attempt_id(&self) -> Result<AttemptId, String> {
         let _guard = self.session_lock.lock().await;
-        let current = self.oplog.current_oplog_index().await;
-        let mut persisted = None;
-        if current.is_defined() {
-            for (_, entry) in self
-                .oplog
-                .read_exact(
-                    golem_common::model::oplog::OplogIndex::INITIAL,
-                    current.as_u64(),
-                )
-                .await
-            {
-                let OplogEntry::StreamSession { record, .. } = entry else {
-                    continue;
-                };
-                let StreamSessionRecordV1::CallerAttempt(record) =
-                    self.download_record(record).await?
-                else {
-                    continue;
-                };
-                if record.session_key != self.session_key {
-                    continue;
-                }
-                match persisted {
-                    Some(existing) if existing != record.attempt_id => {
-                        return Err(
-                            "conflicting caller attempt IDs are persisted for the Stream Session"
-                                .to_string(),
-                        );
-                    }
-                    Some(_) => {}
-                    None => persisted = Some(record.attempt_id),
-                }
-            }
+        let metadata = self.current_control_metadata().await?;
+        if metadata.caller_attempt_conflict {
+            return Err(
+                "conflicting caller attempt IDs are persisted for the Stream Session".into(),
+            );
         }
-        if let Some(attempt_id) = persisted {
+        if let Some(attempt_id) = metadata.caller_attempt {
             return Ok(attempt_id);
         }
+        drop(metadata);
         let attempt_id = AttemptId::fresh();
         self.append_record(StreamSessionRecordV1::CallerAttempt(
             StreamCallerAttemptRecordV1 {
@@ -750,31 +975,83 @@ impl DurableSessionStreams {
         }
     }
 
+    async fn current_control_metadata(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, SessionControlMetadata>, String> {
+        let horizon = self.oplog.current_oplog_index().await;
+        let metadata = self.control_metadata.lock().await;
+        if metadata.covered_through >= horizon {
+            if metadata.malformed_record {
+                return Err(
+                    "unsupported or malformed durable Stream Session record version".into(),
+                );
+            }
+            return Ok(metadata);
+        }
+        drop(metadata);
+        let streams = self.clone();
+        tokio::spawn(async move { streams.refresh_control_metadata().await })
+            .await
+            .map_err(|error| format!("durable session metadata refresh failed: {error}"))??;
+        Ok(self.control_metadata.lock().await)
+    }
+
+    async fn refresh_control_metadata(&self) -> Result<(), String> {
+        let mut metadata = self.control_metadata.lock().await;
+        if !metadata.covered_through.is_defined()
+            && let Some(persisted) = self
+                .producer
+                .persisted_control_metadata(&self.session_key)
+                .await?
+        {
+            *metadata = persisted;
+        }
+        if metadata.malformed_record {
+            return Err("unsupported or malformed durable Stream Session record version".into());
+        }
+        // This is deliberately the raw horizon, not the last published AgentStatusRecord:
+        // local control records remain visible before and after the append buffer is committed.
+        let horizon = self.oplog.current_oplog_index().await;
+        while metadata.covered_through < horizon {
+            let count = (horizon.as_u64() - metadata.covered_through.as_u64()).min(1024);
+            for (index, entry) in self
+                .oplog
+                .read_exact(metadata.covered_through.next(), count)
+                .await
+            {
+                if let OplogEntry::StreamSession { record, .. } = entry {
+                    let record = self.download_record(record).await?;
+                    metadata.apply(index, &self.session_key, &record);
+                } else {
+                    metadata.covered_through = index;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn session_record_at(&self, index: OplogIndex) -> Result<StreamSessionRecordV1, String> {
+        let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await else {
+            return Err("durable session metadata points at a non-session record".into());
+        };
+        self.download_record(record).await
+    }
+
     async fn append_mapping_once(
         &self,
         mapping: StreamSessionMappingRecordV1,
     ) -> Result<(), String> {
-        let current = self.oplog.current_oplog_index().await;
-        if current.is_defined() {
-            for (_, entry) in self
-                .oplog
-                .read_exact(
-                    golem_common::model::oplog::OplogIndex::INITIAL,
-                    current.as_u64(),
-                )
-                .await
-            {
-                let OplogEntry::StreamSession { record, .. } = entry else {
-                    continue;
-                };
-                if let StreamSessionRecordV1::Mapping(existing) =
-                    self.download_record(record).await?
-                    && existing.session_key == self.session_key
-                    && existing.mapping == mapping
-                {
-                    return Ok(());
-                }
-            }
+        if self
+            .current_control_metadata()
+            .await?
+            .explicit_mappings
+            .contains(&(
+                mapping.transport_stream_id,
+                mapping.handle.clone(),
+                mapping.role,
+            ))
+        {
+            return Ok(());
         }
         self.producer
             .ensure_session_accepts_new_events(&self.session_key)
@@ -885,88 +1162,30 @@ impl DurableSessionStreams {
         if !self.has_local_session_authority() {
             return Ok(());
         }
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Err("durable topology has no local session authority".to_string());
-        }
-        let mut prepared_attempt = None;
-        let mut attachment_authority = None;
-        for (_, entry) in self
+        let status = self
             .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
+            .raw_durable_stream_session_status(&self.session_key)
             .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            match self.download_record(record).await? {
-                StreamSessionRecordV1::Prepared(record)
-                    if record.attempt.session_key == self.session_key =>
-                {
-                    if prepared_attempt
-                        .replace(record.attempt.attempt_id)
-                        .is_some()
-                    {
-                        return Err(
-                            "durable Stream Session contains multiple Prepared records".to_string()
-                        );
-                    }
-                }
-                StreamSessionRecordV1::Attached(record)
-                    if record.session_key == self.session_key =>
-                {
-                    if attachment_authority.is_some() {
-                        return Err(
-                            "durable Stream Session contains a repeated initial attachment"
-                                .to_string(),
-                        );
-                    }
-                    attachment_authority = Some((record.epoch, record.attempt_id, true));
-                }
-                StreamSessionRecordV1::ResumeAttempt(record)
-                    if record.attempt.session_key == self.session_key =>
-                {
-                    let Some((epoch, _, _)) = attachment_authority else {
-                        return Err("durable resume precedes initial attachment".to_string());
-                    };
-                    if record.attempt.expected_epoch != epoch
-                        || record.accepted_epoch
-                            != epoch.checked_add(1).ok_or_else(|| {
-                                "durable attachment epoch cannot advance past u64::MAX".to_string()
-                            })?
-                    {
-                        return Err("durable resume contains an invalid epoch transition".into());
-                    }
-                    attachment_authority =
-                        Some((record.accepted_epoch, record.attempt.attempt_id, true));
-                }
-                StreamSessionRecordV1::Detached(record)
-                    if record.session_key == self.session_key =>
-                {
-                    let Some((epoch, owner_attempt, attached)) = attachment_authority else {
-                        return Err("durable detach precedes initial attachment".to_string());
-                    };
-                    if record.epoch != epoch || record.owner_attempt_id != owner_attempt {
-                        return Err(
-                            "durable detach does not match the current attachment".to_string()
-                        );
-                    }
-                    if attached {
-                        attachment_authority = Some((epoch, owner_attempt, false));
-                    }
-                }
-                _ => {}
-            }
+            .status?
+            .ok_or_else(|| "durable topology has no local session authority".to_string())?;
+        if let Some(error) = status.lifecycle_error {
+            return Err(error);
         }
-        let prepared_attempt = prepared_attempt
+        let prepared_attempt = status
+            .prepared_attempt_id
             .ok_or_else(|| "durable topology has no Prepared session authority".to_string())?;
-        let (attached_epoch, attached_attempt_id, attached) =
-            attachment_authority.ok_or_else(|| {
-                "durable topology cannot activate before session attachment".to_string()
-            })?;
+        let (attached_epoch, attached_attempt_id, attached) = match (
+            status.attachment_epoch,
+            status.attachment_attempt_id,
+            status.attachment_attached,
+        ) {
+            (Some(epoch), Some(attempt), Some(attached)) => (epoch, attempt, attached),
+            _ => {
+                return Err(
+                    "durable topology cannot activate before session attachment".to_string()
+                );
+            }
+        };
         if !attached
             || (attached_epoch == 1 && attached_attempt_id != prepared_attempt)
             || attached_epoch != attachment.epoch
@@ -981,7 +1200,7 @@ impl DurableSessionStreams {
                 && !matches!(
                     self.oplog
                         .read(
-                            self.initial_attached_pending_index().await?.ok_or_else(|| {
+                            status.initial_pending_invocation_oplog_index.ok_or_else(|| {
                                 "durable initial attachment has no pending invocation".to_string()
                             })?
                         )
@@ -1002,33 +1221,6 @@ impl DurableSessionStreams {
         self.session_key.callee_environment_id == self.producer.environment_id()
             && self.session_key.callee == *self.producer.agent_id()
             && self.session_key.callee_fingerprint == self.producer.fingerprint()
-    }
-
-    async fn initial_attached_pending_index(
-        &self,
-    ) -> Result<Option<golem_common::model::oplog::OplogIndex>, String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(None);
-        }
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            if let StreamSessionRecordV1::Attached(record) = self.download_record(record).await?
-                && record.session_key == self.session_key
-            {
-                return Ok(Some(record.pending_invocation_oplog_index));
-            }
-        }
-        Ok(None)
     }
 
     fn validate_forwarded_mapping(
@@ -1068,85 +1260,18 @@ impl DurableSessionStreams {
         {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(ConsumerAttachmentStatus::Missing);
+        let metadata = self.current_control_metadata().await?;
+        let state = metadata.topology_status(attachment, expected_mapping)?;
+        if matches!(
+            state,
+            ConsumerAttachmentStatus::IncarnationMismatch | ConsumerAttachmentStatus::EpochMismatch
+        ) {
+            return Ok(state);
         }
-        let mut state = ConsumerAttachmentStatus::Missing;
         let local_session_authority = self.has_local_session_authority();
-        let mut attached_epoch = (!local_session_authority).then_some(attachment.epoch);
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let durable_topology = match self.download_record(record).await? {
-                StreamSessionRecordV1::Attached(record)
-                    if record.session_key == self.session_key =>
-                {
-                    attached_epoch = Some(record.epoch);
-                    None
-                }
-                StreamSessionRecordV1::ResumeAttempt(record)
-                    if record.attempt.session_key == self.session_key =>
-                {
-                    attached_epoch = Some(record.accepted_epoch);
-                    None
-                }
-                StreamSessionRecordV1::TopologyPrepared(record)
-                    if record.session_key == self.session_key =>
-                {
-                    if same_attachment_slot(&record.attachment, attachment) {
-                        if record.attachment.epoch < attachment.epoch {
-                            continue;
-                        }
-                        if record.attachment != *attachment {
-                            return Ok(attachment_mismatch_status(&record.attachment, attachment));
-                        }
-                        if expected_mapping.is_none_or(|mapping| mapping == &record.mapping)
-                            && state == ConsumerAttachmentStatus::Missing
-                        {
-                            state = ConsumerAttachmentStatus::Prepared;
-                        }
-                    }
-                    None
-                }
-                StreamSessionRecordV1::TopologyActivated(record)
-                    if record.session_key == self.session_key =>
-                {
-                    Some((record.attachment, record.mapping))
-                }
-                _ => None,
-            };
-            if let Some((durable_attachment, durable_mapping)) = durable_topology
-                && same_attachment_slot(&durable_attachment, attachment)
-            {
-                if durable_attachment.epoch < attachment.epoch {
-                    continue;
-                }
-                if durable_attachment != *attachment {
-                    return Ok(attachment_mismatch_status(&durable_attachment, attachment));
-                }
-                if expected_mapping.is_some_and(|mapping| mapping != &durable_mapping) {
-                    continue;
-                }
-                if expected_mapping.is_none() && state == ConsumerAttachmentStatus::Active {
-                    continue;
-                }
-                if state != ConsumerAttachmentStatus::Prepared {
-                    return Err(
-                        "durable topology activation has no matching preparation".to_string()
-                    );
-                }
-                state = ConsumerAttachmentStatus::Active;
-            }
-        }
+        let attached_epoch = metadata
+            .topology_epoch
+            .or_else(|| (!local_session_authority).then_some(attachment.epoch));
         match attached_epoch {
             Some(epoch) if epoch == attachment.epoch => Ok(state),
             Some(_) => Ok(ConsumerAttachmentStatus::EpochMismatch),
@@ -1162,47 +1287,23 @@ impl DurableSessionStreams {
     }
 
     pub(crate) async fn recover_session_mappings(&self) -> Result<(), String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(());
+        // Clones share both the mapping table and its coverage. Keep the cursor locked across
+        // validation so another output pump cannot observe coverage before the mappings exist.
+        let mut covered = self.recovered_mappings_through.lock().await;
+        let metadata = self.current_control_metadata().await?;
+        let horizon = metadata.covered_through;
+        let mappings: Vec<_> = metadata
+            .recoverable_mappings
+            .iter()
+            .filter(|(index, _)| index > &*covered)
+            .map(|(_, mapping)| mapping.clone())
+            .collect();
+        drop(metadata);
+        for mapping in mappings {
+            self.validate_recovered_mapping(&mapping).await?;
+            self.insert_mapping(mapping.transport_stream_id, mapping.handle, mapping.role)?;
         }
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            match self.download_record(record).await? {
-                StreamSessionRecordV1::Mapping(record)
-                    if record.session_key == self.session_key =>
-                {
-                    self.validate_recovered_mapping(&record.mapping).await?;
-                    self.insert_mapping(
-                        record.mapping.transport_stream_id,
-                        record.mapping.handle,
-                        record.mapping.role,
-                    )?;
-                }
-                StreamSessionRecordV1::InvocationResult(record)
-                    if record.session_key == self.session_key =>
-                {
-                    for mapping in record.stream_mappings {
-                        self.validate_recovered_mapping(&mapping).await?;
-                        self.insert_mapping(
-                            mapping.transport_stream_id,
-                            mapping.handle,
-                            mapping.role,
-                        )?;
-                    }
-                }
-                _ => {}
-            }
-        }
+        *covered = horizon;
         Ok(())
     }
 
@@ -1402,50 +1503,15 @@ impl DurableSessionStreams {
         &self,
         expected: &StreamSessionMappingRecordV1,
     ) -> Result<bool, String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(false);
-        }
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let found = match self.download_record(record).await? {
-                StreamSessionRecordV1::Prepared(record) => {
-                    record.attempt.session_key == self.session_key
-                        && record.stream_mappings.contains(expected)
-                }
-                StreamSessionRecordV1::Mapping(record) => {
-                    record.session_key == self.session_key && record.mapping == *expected
-                }
-                StreamSessionRecordV1::TopologyPrepared(record) => {
-                    record.session_key == self.session_key && record.mapping == *expected
-                }
-                StreamSessionRecordV1::TopologyActivated(record) => {
-                    record.session_key == self.session_key && record.mapping == *expected
-                }
-                StreamSessionRecordV1::ConsumerItemValue(record) => {
-                    record.session_key == self.session_key
-                        && record.recursive_mappings.contains(expected)
-                }
-                StreamSessionRecordV1::InvocationResult(record) => {
-                    record.session_key == self.session_key
-                        && record.stream_mappings.contains(expected)
-                }
-                _ => false,
-            };
-            if found {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(self
+            .current_control_metadata()
+            .await?
+            .persisted_mappings
+            .contains(&(
+                expected.transport_stream_id,
+                expected.handle.clone(),
+                expected.role,
+            )))
     }
 
     async fn ensure_nested_mapping(
@@ -2506,29 +2572,18 @@ impl DurableSessionStreams {
     async fn remote_result_record(
         &self,
     ) -> Result<Option<StreamSessionInvocationResultRecordV1>, String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
+        let index = self.current_control_metadata().await?.invocation_result;
+        let Some(index) = index else {
             return Ok(None);
-        }
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            if let StreamSessionRecordV1::InvocationResult(record) =
-                self.download_record(record).await?
-                && record.session_key == self.session_key
+        };
+        match self.session_record_at(index).await? {
+            StreamSessionRecordV1::InvocationResult(record)
+                if record.session_key == self.session_key =>
             {
-                return Ok(Some(record));
+                Ok(Some(record))
             }
+            _ => Err("durable result metadata points at a different record".into()),
         }
-        Ok(None)
     }
 
     async fn drain_output(
@@ -2886,108 +2941,22 @@ impl DurableSessionStreams {
     }
 
     async fn validate_topology_complete(&self) -> Result<(), String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(());
+        let metadata = self.current_control_metadata().await?;
+        if let Some(error) = &metadata.topology_error {
+            return Err(error.clone());
         }
-        let mut topology = HashMap::<
-            (
-                golem_common::base_model::durable_stream::AttachmentId,
-                golem_common::base_model::durable_stream::StreamId,
-                u64,
-                SessionStreamRoleV1,
-            ),
-            (
-                StreamAttachmentKeyV1,
-                StreamSessionMappingRecordV1,
-                ConsumerAttachmentStatus,
-            ),
-        >::new();
-        let mut visible_mappings = Vec::new();
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            match self.download_record(record).await? {
-                StreamSessionRecordV1::Prepared(record)
-                    if record.attempt.session_key == self.session_key =>
-                {
-                    visible_mappings.extend(record.stream_mappings);
-                }
-                StreamSessionRecordV1::TopologyPrepared(record)
-                    if record.session_key == self.session_key =>
-                {
-                    let slot = (
-                        record.attachment.attachment_id,
-                        record.attachment.stream_id,
-                        record.mapping.transport_stream_id,
-                        record.mapping.role,
-                    );
-                    match topology.get(&slot) {
-                        Some((attachment, mapping, _))
-                            if attachment != &record.attachment || mapping != &record.mapping =>
-                        {
-                            return Err("conflicting durable topology preparation".to_string());
-                        }
-                        Some(_) => {}
-                        None => {
-                            topology.insert(
-                                slot,
-                                (
-                                    record.attachment,
-                                    record.mapping,
-                                    ConsumerAttachmentStatus::Prepared,
-                                ),
-                            );
-                        }
-                    }
-                }
-                StreamSessionRecordV1::TopologyActivated(record)
-                    if record.session_key == self.session_key =>
-                {
-                    let slot = (
-                        record.attachment.attachment_id,
-                        record.attachment.stream_id,
-                        record.mapping.transport_stream_id,
-                        record.mapping.role,
-                    );
-                    let Some((attachment, mapping, state)) = topology.get_mut(&slot) else {
-                        return Err(
-                            "durable topology activation has no matching preparation".to_string()
-                        );
-                    };
-                    if attachment != &record.attachment || mapping != &record.mapping {
-                        return Err("conflicting durable topology activation".to_string());
-                    }
-                    *state = ConsumerAttachmentStatus::Active;
-                }
-                StreamSessionRecordV1::Mapping(record)
-                    if record.session_key == self.session_key =>
-                {
-                    visible_mappings.push(record.mapping);
-                }
-                StreamSessionRecordV1::InvocationResult(record)
-                    if record.session_key == self.session_key =>
-                {
-                    visible_mappings.extend(record.stream_mappings);
-                }
-                _ => {}
-            }
-        }
-        for (_, mapping, state) in topology.values() {
-            if *state != ConsumerAttachmentStatus::Active {
+        for topology in metadata.topologies.values() {
+            if !topology.active {
                 return Err(
                     "durable session has prepared but inactive foreign topology".to_string()
                 );
             }
-            if !visible_mappings.contains(mapping) {
+            let mapping = &topology.mapping;
+            if !metadata.visible_mappings.contains(&(
+                mapping.transport_stream_id,
+                mapping.handle.clone(),
+                mapping.role,
+            )) {
                 return Err(
                     "durable session has activated foreign topology without a visible mapping"
                         .to_string(),
@@ -3037,52 +3006,28 @@ impl DurableSessionStreams {
     pub(crate) async fn persisted_result(
         &self,
     ) -> Result<Option<(ProtoSchemaValue, Vec<DurableStreamMapping>)>, String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(None);
-        }
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self.download_record(record).await?;
-            if let StreamSessionRecordV1::InvocationResult(result) = record
-                && result.session_key == self.session_key
-            {
-                let value =
-                    ProtoSchemaValue::decode(result.result.as_slice()).map_err(|error| {
-                        format!("invalid persisted durable invocation result: {error}")
-                    })?;
-                let transport_value =
-                    remap_recursive_stream_references(value, |handle_index, _| {
-                        let index = usize::try_from(handle_index).map_err(|_| {
-                            format!("durable result handle index {handle_index} is too large")
-                        })?;
-                        result
-                            .stream_mappings
-                            .get(index)
-                            .map(|mapping| mapping.transport_stream_id)
-                            .ok_or_else(|| {
-                                format!("unknown durable result handle index {handle_index}")
-                            })
-                    })?;
-                let proto_mappings = result
+        if let Some(result) = self.remote_result_record().await? {
+            let value = ProtoSchemaValue::decode(result.result.as_slice())
+                .map_err(|error| format!("invalid persisted durable invocation result: {error}"))?;
+            let transport_value = remap_recursive_stream_references(value, |handle_index, _| {
+                let index = usize::try_from(handle_index).map_err(|_| {
+                    format!("durable result handle index {handle_index} is too large")
+                })?;
+                result
                     .stream_mappings
-                    .iter()
-                    .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
-                    .collect();
-                for mapping in result.stream_mappings {
-                    self.insert_mapping(mapping.transport_stream_id, mapping.handle, mapping.role)?;
-                }
-                return Ok(Some((transport_value, proto_mappings)));
+                    .get(index)
+                    .map(|mapping| mapping.transport_stream_id)
+                    .ok_or_else(|| format!("unknown durable result handle index {handle_index}"))
+            })?;
+            let proto_mappings = result
+                .stream_mappings
+                .iter()
+                .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
+                .collect();
+            for mapping in result.stream_mappings {
+                self.insert_mapping(mapping.transport_stream_id, mapping.handle, mapping.role)?;
             }
+            return Ok(Some((transport_value, proto_mappings)));
         }
         Ok(None)
     }
@@ -3102,28 +3047,16 @@ impl DurableSessionStreams {
     }
 
     pub(crate) async fn persisted_finished(&self) -> Result<Option<Result<(), Vec<u8>>>, String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
+        let index = self.current_control_metadata().await?.finished;
+        let Some(index) = index else {
             return Ok(None);
-        }
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            if let StreamSessionRecordV1::Finished(record) = self.download_record(record).await?
-                && record.session_key == self.session_key
-            {
-                return Ok(Some(record.result));
+        };
+        match self.session_record_at(index).await? {
+            StreamSessionRecordV1::Finished(record) if record.session_key == self.session_key => {
+                Ok(Some(record.result))
             }
+            _ => Err("durable finished metadata points at a different record".into()),
         }
-        Ok(None)
     }
 
     pub(crate) async fn wait_persisted_finished(&self) -> Result<Result<(), Vec<u8>>, String> {
@@ -3613,37 +3546,7 @@ impl DurableSessionStreams {
     }
 
     pub(crate) async fn session_root_output_mapping_ids(&self) -> Result<Vec<u64>, String> {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok(Vec::new());
-        }
-        let mut output_ids = Vec::new();
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self.download_record(record).await?;
-            match record {
-                StreamSessionRecordV1::InvocationResult(result)
-                    if result.session_key == self.session_key =>
-                {
-                    output_ids.extend(result.stream_mappings.into_iter().filter_map(|mapping| {
-                        (mapping.role
-                            == golem_common::model::durable_stream::SessionStreamRoleV1::Output)
-                            .then_some(mapping.transport_stream_id)
-                    }));
-                }
-                _ => {}
-            }
-        }
-        Ok(output_ids)
+        Ok(self.current_control_metadata().await?.root_outputs.clone())
     }
 
     pub(crate) async fn decode_initial(
@@ -3747,6 +3650,44 @@ impl DurableSessionStreams {
         Ok(reader)
     }
 
+    async fn consumer_history_positions(
+        &self,
+        stream_id: golem_common::model::StreamId,
+    ) -> Result<Vec<OplogIndex>, String> {
+        let (mut covered, mut positions) = self
+            .producer
+            .persisted_consumer_positions(&self.session_key, stream_id)
+            .await?
+            .unwrap_or((OplogIndex::NONE, Vec::new()));
+        let horizon = self.oplog.current_oplog_index().await;
+        while covered < horizon {
+            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
+            for (index, entry) in self.oplog.read_exact(covered.next(), count).await {
+                if let OplogEntry::StreamSession { record, .. } = entry {
+                    let record = self.download_record(record).await?;
+                    let matches = match record {
+                        StreamSessionRecordV1::ConsumerItemValue(record) => {
+                            record.session_key == self.session_key && record.stream_id == stream_id
+                        }
+                        StreamSessionRecordV1::ConsumerTerminal(record) => {
+                            record.session_key == self.session_key && record.stream_id == stream_id
+                        }
+                        StreamSessionRecordV1::SourceUnavailable(record) => {
+                            record.key.session_key == self.session_key
+                                && record.key.stream_id == stream_id
+                        }
+                        _ => false,
+                    };
+                    if matches {
+                        positions.push(index);
+                    }
+                }
+                covered = index;
+            }
+        }
+        Ok(positions)
+    }
+
     async fn consumer_history(
         &self,
         stream_id: golem_common::model::durable_stream::StreamId,
@@ -3759,23 +3700,9 @@ impl DurableSessionStreams {
         ),
         String,
     > {
-        let current = self.oplog.current_oplog_index().await;
-        if !current.is_defined() {
-            return Ok((VecDeque::new(), None, 0, false));
-        }
         let mut events = Vec::new();
-        for (_, entry) in self
-            .oplog
-            .read_exact(
-                golem_common::model::oplog::OplogIndex::INITIAL,
-                current.as_u64(),
-            )
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self.download_record(record).await?;
+        for index in self.consumer_history_positions(stream_id).await? {
+            let record = self.session_record_at(index).await?;
             match record {
                 StreamSessionRecordV1::ConsumerItemValue(record)
                     if record.session_key == self.session_key && record.stream_id == stream_id =>
@@ -4911,8 +4838,8 @@ mod tests {
     use golem_common::base_model::durable_stream::{
         AttachmentId, PersistedStreamInvocationDescriptorV1, ResumeAttemptDescriptorV1,
         StartAttemptDescriptorV1, StreamAttachmentKeyV1, StreamId, StreamInvocationIdV1,
-        StreamOffsetV1, StreamSessionAttachedRecordV1, StreamSessionMappingV1,
-        StreamSessionPreparedRecordV1,
+        StreamOffsetV1, StreamSessionAttachedRecordV1, StreamSessionFinishedRecordV1,
+        StreamSessionMappingV1, StreamSessionPreparedRecordV1,
     };
     use golem_common::base_model::environment::EnvironmentId;
     use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
@@ -6986,6 +6913,108 @@ mod tests {
         assert_eq!(consumer_oplog.current_oplog_index().await, consumer_length);
         assert_eq!(producer_oplog.current_oplog_index().await, producer_length);
 
+        for _ in 0..2050 {
+            consumer_oplog.add(OplogEntry::interrupted()).await;
+        }
+        assert_eq!(
+            streams
+                .topology_state(&attachment, Some(&mapping))
+                .await
+                .unwrap(),
+            ConsumerAttachmentStatus::Active
+        );
+        consumer_oplog.take_read_ranges();
+        assert_eq!(
+            streams
+                .topology_state(&attachment, Some(&mapping))
+                .await
+                .unwrap(),
+            ConsumerAttachmentStatus::Active
+        );
+        streams.validate_topology_complete().await.unwrap();
+        assert!(
+            consumer_oplog.take_read_ranges().is_empty(),
+            "warm topology checks must not revisit unrelated history"
+        );
+
+        let mut projection = streams.current_control_metadata().await.unwrap().clone();
+        let initial_size = golem_common::serialization::serialize(&projection)
+            .unwrap()
+            .len();
+        let mut resumed_attachment = attachment.clone();
+        for epoch in 2..1002 {
+            resumed_attachment.epoch = epoch;
+            projection.apply(
+                OplogIndex::from_u64(10_000 + epoch * 2),
+                &consumer.invocation,
+                &StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+                    format_version: 1,
+                    session_key: consumer.invocation.clone(),
+                    attachment: resumed_attachment.clone(),
+                    mapping: mapping.clone(),
+                }),
+            );
+            assert_eq!(
+                projection
+                    .topology_status(&resumed_attachment, Some(&mapping))
+                    .unwrap(),
+                ConsumerAttachmentStatus::Prepared
+            );
+            projection.apply(
+                OplogIndex::from_u64(10_001 + epoch * 2),
+                &consumer.invocation,
+                &StreamSessionRecordV1::TopologyActivated(StreamTopologyActivatedRecordV1 {
+                    format_version: 1,
+                    session_key: consumer.invocation.clone(),
+                    attachment: resumed_attachment.clone(),
+                    mapping: mapping.clone(),
+                }),
+            );
+            assert_eq!(
+                projection
+                    .topology_status(&resumed_attachment, Some(&mapping))
+                    .unwrap(),
+                ConsumerAttachmentStatus::Active
+            );
+        }
+        assert_eq!(
+            projection
+                .topology_status(&attachment, Some(&mapping))
+                .unwrap(),
+            ConsumerAttachmentStatus::EpochMismatch
+        );
+        assert!(
+            projection.topology_error.is_none(),
+            "successive epochs for the same attachment slot are not conflicting topology"
+        );
+        assert!(
+            golem_common::serialization::serialize(&projection)
+                .unwrap()
+                .len()
+                < initial_size + 1024,
+            "topology metadata must not grow with resume count"
+        );
+
+        let mut conflicting = projection.clone();
+        let mut conflicting_attachment = resumed_attachment.clone();
+        conflicting_attachment.expected_consumer_fingerprint = AgentFingerprint::new();
+        conflicting.apply(
+            OplogIndex::from_u64(20_000),
+            &consumer.invocation,
+            &StreamSessionRecordV1::TopologyPrepared(StreamTopologyPreparedRecordV1 {
+                format_version: 1,
+                session_key: consumer.invocation.clone(),
+                attachment: conflicting_attachment,
+                mapping: mapping.clone(),
+            }),
+        );
+        assert!(
+            conflicting
+                .topology_status(&resumed_attachment, Some(&mapping))
+                .is_err(),
+            "a conflicting same-epoch identity must not leave the old topology active"
+        );
+
         remote_producer
             .write_items(
                 handle.stream_id,
@@ -8097,6 +8126,136 @@ mod tests {
                 nested_mapping.transport_stream_id,
             ])
         );
+    }
+
+    #[test]
+    async fn session_control_metadata_pages_history_and_reads_only_raw_suffix_after_warmup() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams =
+            DurableSessionStreams::new(producer, oplog.clone(), identity.invocation.clone(), []);
+        for _ in 0..2050 {
+            oplog.add(OplogEntry::interrupted()).await;
+        }
+        assert!(
+            streams
+                .session_root_output_mapping_ids()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            oplog.take_read_ranges(),
+            vec![
+                (OplogIndex::INITIAL, 1024),
+                (OplogIndex::from_u64(1025), 1024),
+                (OplogIndex::from_u64(2049), 2),
+            ]
+        );
+        assert!(streams.persisted_finished().await.unwrap().is_none());
+        assert!(streams.remote_result_record().await.unwrap().is_none());
+        assert!(oplog.take_read_ranges().is_empty());
+
+        let attempt_id = AttemptId::fresh();
+        let index = oplog
+            .add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::CallerAttempt(
+                    StreamCallerAttemptRecordV1 {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation,
+                        attempt_id,
+                    },
+                ))),
+            })
+            .await;
+        // No commit: another local append must already be visible.
+        assert_eq!(streams.caller_attempt_id().await.unwrap(), attempt_id);
+        assert_eq!(oplog.take_read_ranges(), vec![(index, 1)]);
+        oplog.commit(CommitLevel::Always).await;
+        assert_eq!(
+            streams.clone().caller_attempt_id().await.unwrap(),
+            attempt_id
+        );
+        assert!(oplog.take_read_ranges().is_empty());
+    }
+
+    #[test]
+    async fn session_mapping_recovery_pages_once_and_shares_coverage_with_clones() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(producer, oplog.clone(), identity.invocation, []);
+        for _ in 0..2050 {
+            oplog.add(OplogEntry::interrupted()).await;
+        }
+        streams.recover_session_mappings().await.unwrap();
+        assert_eq!(
+            oplog.take_read_ranges().iter().map(|(_, n)| n).sum::<u64>(),
+            2050
+        );
+        streams.clone().recover_session_mappings().await.unwrap();
+        assert!(oplog.take_read_ranges().is_empty());
+        let next = oplog.add(OplogEntry::interrupted()).await;
+        streams.recover_session_mappings().await.unwrap();
+        assert_eq!(oplog.take_read_ranges(), vec![(next, 1)]);
+    }
+
+    #[test]
+    async fn finished_in_raw_suffix_is_visible_and_cached() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams =
+            DurableSessionStreams::new(producer, oplog.clone(), identity.invocation.clone(), []);
+        let index = oplog
+            .add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::Finished(
+                    StreamSessionFinishedRecordV1 {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation,
+                        result: Err(vec![1, 2, 3]),
+                    },
+                ))),
+            })
+            .await;
+
+        assert_eq!(
+            streams.persisted_finished().await.unwrap(),
+            Some(Err(vec![1, 2, 3]))
+        );
+        assert_eq!(oplog.take_read_ranges(), vec![(index, 1)]);
+        assert_eq!(
+            streams.persisted_finished().await.unwrap(),
+            Some(Err(vec![1, 2, 3]))
+        );
+        assert!(oplog.take_read_ranges().is_empty());
     }
 
     #[test]

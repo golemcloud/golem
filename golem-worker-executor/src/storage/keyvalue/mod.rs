@@ -90,6 +90,20 @@ pub trait KeyValueStorage: Debug {
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String>;
 
+    /// Atomically compares `key` with `expected` and writes every pair only on a match.
+    /// `None` requires absence, not an empty value. A mismatch changes nothing.
+    /// Redis supports this operation only for namespaces stored as a single hash.
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String>;
+
     async fn set_if_not_exists(
         &self,
         svc_name: &'static str,
@@ -429,6 +443,26 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 self.api_name,
                 self.entity_name,
                 namespace,
+                pairs,
+            )
+            .await
+    }
+
+    pub async fn compare_and_set_many_raw(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        self.storage
+            .compare_and_set_many(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                expected,
                 pairs,
             )
             .await

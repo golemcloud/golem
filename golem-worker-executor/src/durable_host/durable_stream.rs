@@ -269,6 +269,7 @@ struct IndexedProducerStream {
     events: BTreeMap<u64, CommittedProducerStreamEventV1>,
     batches: BTreeMap<u64, (StreamItemsPayloadV1, Vec<StreamOffsetV1>, Vec<StreamId>)>,
     next_sequence: u64,
+    last_offset: Option<StreamOffsetV1>,
     terminal: bool,
 }
 
@@ -846,6 +847,7 @@ impl ProducerStreamIndex {
             .next_sequence
             .checked_add(events.len() as u64)
             .ok_or(DurableStreamProducerError::CounterOverflow)?;
+        stream.last_offset = record.offsets.last().copied();
         stream.batches.insert(
             record.first_sequence,
             (record.payload, record.offsets, record.nested_stream_ids),
@@ -880,6 +882,7 @@ impl ProducerStreamIndex {
             payload: CommittedProducerStreamEventPayloadV1::End(record.result),
         };
         stream.events.insert(record.sequence, event.clone());
+        stream.last_offset = Some(record.offset);
         stream.terminal = true;
         Ok(event)
     }
@@ -938,6 +941,7 @@ impl ProducerStreamIndex {
             },
         };
         stream.events.insert(record.sequence, event.clone());
+        stream.last_offset = Some(record.offset);
         stream.terminal = true;
         Ok(event)
     }
@@ -1345,6 +1349,7 @@ pub(crate) type DurableStreamCommit = Arc<
 pub(crate) struct DurableStreamProducer {
     oplog: Arc<dyn Oplog>,
     commit: DurableStreamCommit,
+    control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
     environment_id: EnvironmentId,
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,
@@ -1360,6 +1365,63 @@ pub(crate) struct DurableStreamProducer {
 }
 
 impl DurableStreamProducer {
+    pub(crate) fn set_control_metadata_provider(
+        &self,
+        service: Arc<dyn WorkerService>,
+        mode: AgentMode,
+    ) {
+        assert!(self.control_metadata_provider.set((service, mode)).is_ok());
+    }
+
+    pub(crate) async fn persisted_control_metadata(
+        &self,
+        key: &StreamSessionKeyV1,
+    ) -> Result<Option<super::durable_session::SessionControlMetadata>, String> {
+        let Some((service, mode)) = self.control_metadata_provider.get() else {
+            return Ok(None);
+        };
+        service
+            .lookup_durable_stream_control_metadata(
+                &OwnedAgentId::new(self.environment_id, &self.producer),
+                *mode,
+                key,
+            )
+            .await
+            .map(Some)
+    }
+
+    pub(crate) async fn persisted_consumer_positions(
+        &self,
+        key: &StreamSessionKeyV1,
+        stream: StreamId,
+    ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, String> {
+        let Some((service, mode)) = self.control_metadata_provider.get() else {
+            return Ok(None);
+        };
+        let owner = OwnedAgentId::new(self.environment_id, &self.producer);
+        let metadata = service
+            .lookup_durable_stream_control_metadata(&owner, *mode, key)
+            .await?;
+        let count = metadata
+            .consumer_record_counts
+            .get(&stream)
+            .copied()
+            .unwrap_or_default();
+        let page_size = crate::services::stream_session_index::CONSUMER_JOURNAL_INDEX_PAGE_SIZE;
+        let mut positions = Vec::new();
+        for page in 0..count.div_ceil(page_size) {
+            let records = service
+                .read_durable_stream_consumer_page(&owner, key, stream, page)
+                .await?;
+            let needed = (count - page * page_size).min(page_size) as usize;
+            if records.len() < needed {
+                return Err("consumer journal index page is shorter than its coverage".into());
+            }
+            positions.extend_from_slice(&records[..needed]);
+        }
+        Ok(Some((metadata.covered_through, positions)))
+    }
+
     #[cfg(test)]
     pub(crate) async fn load(
         oplog: Arc<dyn Oplog>,
@@ -1402,11 +1464,12 @@ impl DurableStreamProducer {
         let mut index = ProducerStreamIndex::default();
         let mut pending_nested_registrations = Vec::new();
         let current_index = oplog.current_oplog_index().await;
-        if current_index.is_defined() {
-            let entries = oplog
-                .read_exact(OplogIndex::INITIAL, current_index.as_u64())
-                .await;
+        let mut covered = OplogIndex::NONE;
+        while covered < current_index {
+            let count = (current_index.as_u64() - covered.as_u64()).min(1024);
+            let entries = oplog.read_exact(covered.next(), count).await;
             for (oplog_index, entry) in entries {
+                covered = oplog_index;
                 match entry {
                     OplogEntry::StreamRegistered { record, .. } => {
                         let record = oplog
@@ -1521,14 +1584,10 @@ impl DurableStreamProducer {
 
         let mut buses = HashMap::with_capacity(index.streams.len());
         for (stream_id, stream) in &index.streams {
-            let bus = Arc::new(DurableLiveStreamBus::new(live_join_capacity)?);
-            for event in stream.events.values() {
-                bus.publish_committed(DurableLiveStreamEvent {
-                    offset: event.offset,
-                    payload: event.clone(),
-                })
-                .await?;
-            }
+            let bus = Arc::new(DurableLiveStreamBus::from_committed_high_water(
+                live_join_capacity,
+                stream.last_offset,
+            )?);
             buses.insert(*stream_id, bus);
         }
 
@@ -1548,6 +1607,7 @@ impl DurableStreamProducer {
         Ok(Arc::new(Self {
             oplog,
             commit,
+            control_metadata_provider: std::sync::OnceLock::new(),
             environment_id,
             producer,
             producer_fingerprint,
@@ -2500,12 +2560,16 @@ impl DurableStreamProducer {
             .streams
             .get(&stream_id)
             .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
-        let Some((highest_contiguous_sequence, event)) = stream.events.last_key_value() else {
+        let Some(resulting_offset) = stream.last_offset else {
             return Ok(None);
         };
         Ok(Some(InputStreamHighWaterV1 {
-            highest_contiguous_sequence: *highest_contiguous_sequence,
-            resulting_offset: event.offset,
+            highest_contiguous_sequence: if stream.terminal {
+                stream.next_sequence
+            } else {
+                stream.next_sequence - 1
+            },
+            resulting_offset,
             terminal: stream.terminal,
         }))
     }
@@ -3608,11 +3672,45 @@ impl DurableStreamProducer {
             return Ok(());
         };
         let index = self.index.lock().await;
-        if index
+        let high_water = index
             .streams
             .get(&stream_id)
-            .is_some_and(|stream| stream.events.values().any(|event| event.offset == after))
+            .and_then(|stream| stream.last_offset);
+        drop(index);
+        if high_water.is_none_or(|high_water| after > high_water)
+            || !after.producer_oplog_index().is_defined()
         {
+            return Err(DurableStreamProducerError::CursorUnavailable);
+        }
+        let valid = match self.oplog.read(after.producer_oplog_index()).await {
+            OplogEntry::StreamItems { record, .. } => {
+                let record = self
+                    .oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(DurableStreamProducerError::Oplog)?;
+                record.stream_id == stream_id
+                    && record.offsets.get(after.sub_index() as usize) == Some(&after)
+            }
+            OplogEntry::StreamEnd { record, .. } => {
+                let record = self
+                    .oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(DurableStreamProducerError::Oplog)?;
+                record.stream_id == stream_id && record.offset == after
+            }
+            OplogEntry::StreamCancel { record, .. } => {
+                let record = self
+                    .oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(DurableStreamProducerError::Oplog)?;
+                record.stream_id == stream_id && record.offset == after
+            }
+            _ => false,
+        };
+        if valid {
             Ok(())
         } else {
             Err(DurableStreamProducerError::CursorUnavailable)
@@ -4171,138 +4269,75 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
         let session_mode = session_metadata.initial_worker_metadata.agent_mode;
-        let session_current = self
-            .oplog_service
-            .get_last_index(&session_owner, session_mode)
-            .await;
-        if !session_current.is_defined() {
-            return Ok(ConsumerAttachmentStatus::Missing);
-        }
-        let mut prepared_attempt_id = None;
-        let mut initial_attachment = None;
-        let mut attachment_authority = None;
-        let mut pending_invocations = HashMap::new();
-        for (oplog_index, entry) in self
-            .oplog_service
-            .read_exact(
+        let session_index = self.oplog_service.stream_session_index().ok_or_else(|| {
+            DurableStreamProducerError::Oplog(
+                "stream session index service is unavailable".to_string(),
+            )
+        })?;
+        let Some(status) = session_index
+            .lookup_latest(
                 &session_owner,
                 session_mode,
-                OplogIndex::INITIAL,
-                session_current.as_u64(),
+                &key.session_key.idempotency_key,
             )
             .await
-        {
-            if let OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
-            } = &entry
-            {
-                pending_invocations.insert(oplog_index, idempotency_key.clone());
-            }
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self
-                .oplog_service
-                .download_payload(&session_owner, session_mode, record)
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            if !record.has_supported_format() {
-                return Err(DurableStreamProducerError::CorruptHistory(
-                    "unsupported or malformed durable Stream Session record".to_string(),
-                ));
-            }
-            match record {
-                StreamSessionRecordV1::Prepared(record)
-                    if record.attempt.session_key == key.session_key =>
-                {
-                    if record.attempt.attachment_id != key.attachment_id
-                        || record.attempt.expected_callee_fingerprint
-                            != key.session_key.callee_fingerprint
-                        || record.attempt.invocation.session_key != key.session_key
-                    {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if prepared_attempt_id
-                        .replace(record.attempt.attempt_id)
-                        .is_some()
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable Stream Session contains multiple Prepared records".to_string(),
-                        ));
-                    }
-                }
-                StreamSessionRecordV1::Attached(record)
-                    if record.session_key == key.session_key =>
-                {
-                    if record.attachment_id != key.attachment_id {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if initial_attachment.replace(record.clone()).is_some()
-                        || attachment_authority.is_some()
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable Stream Session contains multiple Attached records".to_string(),
-                        ));
-                    }
-                    attachment_authority = Some((record.epoch, record.attempt_id, true));
-                }
-                StreamSessionRecordV1::ResumeAttempt(record)
-                    if record.attempt.session_key == key.session_key =>
-                {
-                    if record.attempt.attachment_id != key.attachment_id {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    let Some((epoch, _, _)) = attachment_authority else {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable resume precedes initial attachment".to_string(),
-                        ));
-                    };
-                    if record.attempt.expected_epoch != epoch
-                        || record.accepted_epoch != epoch.checked_add(1).unwrap_or_default()
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable resume contains an invalid epoch transition".to_string(),
-                        ));
-                    }
-                    attachment_authority =
-                        Some((record.accepted_epoch, record.attempt.attempt_id, true));
-                }
-                StreamSessionRecordV1::Detached(record)
-                    if record.session_key == key.session_key =>
-                {
-                    let Some((epoch, attempt_id, attached)) = attachment_authority else {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable detach precedes initial attachment".to_string(),
-                        ));
-                    };
-                    if record.attachment_id != key.attachment_id
-                        || record.epoch != epoch
-                        || record.owner_attempt_id != attempt_id
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable detach does not match the current attachment".to_string(),
-                        ));
-                    }
-                    if attached {
-                        attachment_authority = Some((epoch, attempt_id, false));
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(prepared_attempt_id) = prepared_attempt_id else {
+            .map_err(DurableStreamProducerError::Oplog)?
+        else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
-        if let Some(attached) = &initial_attachment
-            && (attached.attempt_id != prepared_attempt_id
-                || pending_invocations.get(&attached.pending_invocation_oplog_index)
-                    != Some(&key.session_key.idempotency_key))
-        {
-            return Err(DurableStreamProducerError::CorruptHistory(
-                    "durable Attached record does not identify its Prepared attempt and pending invocation"
-                        .to_string(),
-                ));
+        if status.session_key.as_ref() != Some(&key.session_key) {
+            return Ok(ConsumerAttachmentStatus::Missing);
         }
+        if let Some(error) = status.lifecycle_error {
+            return Err(DurableStreamProducerError::CorruptHistory(error));
+        }
+        let Some(prepared_attempt_id) = status.prepared_attempt_id else {
+            return Ok(ConsumerAttachmentStatus::Missing);
+        };
+        let primary_attachment_id = AttachmentId::primary(
+            key.session_key.callee_environment_id,
+            &key.session_key.callee,
+            &key.session_key.idempotency_key,
+        )
+        .map_err(|error| DurableStreamProducerError::CorruptHistory(error.to_string()))?;
+        if key.attachment_id != primary_attachment_id {
+            return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
+        }
+        match (
+            status.initial_attachment_epoch,
+            status.initial_attachment_attempt_id,
+            status.initial_pending_invocation_oplog_index,
+        ) {
+            (None, None, None) => {}
+            (Some(_), Some(initial_attempt_id), Some(pending_index)) => {
+                let pending = self
+                    .oplog_service
+                    .read_exact(&session_owner, session_mode, pending_index, 1)
+                    .await;
+                if initial_attempt_id != prepared_attempt_id
+                    || !matches!(
+                        pending.get(&pending_index),
+                        Some(OplogEntry::PendingAgentInvocation { idempotency_key, .. })
+                            if idempotency_key == &key.session_key.idempotency_key
+                    )
+                {
+                    return Err(DurableStreamProducerError::CorruptHistory(
+                        "durable Attached record does not identify its Prepared attempt and pending invocation"
+                            .to_string(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(DurableStreamProducerError::CorruptHistory(
+                    "durable attachment lifecycle index is incomplete".to_string(),
+                ));
+            }
+        }
+        let attachment_authority = status
+            .attachment_epoch
+            .zip(status.attachment_attempt_id)
+            .zip(status.attachment_attached)
+            .map(|((epoch, attempt_id), attached)| (epoch, attempt_id, attached));
         if attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch) {
             return Ok(ConsumerAttachmentStatus::EpochMismatch);
         }
@@ -4322,93 +4357,28 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         if agent_mode != AgentMode::Durable {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        let current = self
-            .oplog_service
-            .get_last_index(&consumer, agent_mode)
-            .await;
-        if !current.is_defined() {
+        let metadata = self
+            .worker_service
+            .lookup_durable_stream_control_metadata(&consumer, agent_mode, &key.session_key)
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        if !metadata.covered_through.is_defined() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
-        let mut topology = ConsumerAttachmentStatus::Missing;
-        let mut deleting = false;
-        for (_, entry) in self
-            .oplog_service
-            .read_exact(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self
-                .oplog_service
-                .download_payload(&consumer, agent_mode, record)
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            if !record.has_supported_format() {
-                return Err(DurableStreamProducerError::CorruptHistory(
-                    "unsupported or malformed durable Stream Session record".to_string(),
-                ));
-            }
-            match record {
-                StreamSessionRecordV1::ConsumerDeleting(record)
-                    if record.consumer_environment_id == key.consumer_environment_id
-                        && record.consumer == key.consumer
-                        && record.consumer_fingerprint == key.expected_consumer_fingerprint =>
-                {
-                    deleting = true;
-                }
-                StreamSessionRecordV1::TopologyPrepared(record)
-                    if record.session_key == key.session_key
-                        && record.attachment.attachment_id == key.attachment_id
-                        && record.attachment.stream_id == key.stream_id =>
-                {
-                    if record.attachment.epoch < key.epoch {
-                        continue;
-                    }
-                    if record.attachment.epoch > key.epoch {
-                        return Ok(ConsumerAttachmentStatus::EpochMismatch);
-                    }
-                    if record.attachment != *key {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if expected_mapping.is_some_and(|mapping| mapping != &record.mapping) {
-                        continue;
-                    }
-                    if topology == ConsumerAttachmentStatus::Missing {
-                        topology = ConsumerAttachmentStatus::Prepared;
-                    }
-                }
-                StreamSessionRecordV1::TopologyActivated(record)
-                    if record.session_key == key.session_key
-                        && record.attachment.attachment_id == key.attachment_id
-                        && record.attachment.stream_id == key.stream_id =>
-                {
-                    if record.attachment.epoch < key.epoch {
-                        continue;
-                    }
-                    if record.attachment.epoch > key.epoch {
-                        return Ok(ConsumerAttachmentStatus::EpochMismatch);
-                    }
-                    if record.attachment != *key {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if expected_mapping.is_some_and(|mapping| mapping != &record.mapping) {
-                        continue;
-                    }
-                    if expected_mapping.is_none() && topology == ConsumerAttachmentStatus::Active {
-                        continue;
-                    }
-                    if topology != ConsumerAttachmentStatus::Prepared {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable topology activation has no matching preparation".to_string(),
-                        ));
-                    }
-                    topology = ConsumerAttachmentStatus::Active;
-                }
-                _ => {}
-            }
+        let topology = metadata
+            .topology_status(key, expected_mapping)
+            .map_err(DurableStreamProducerError::CorruptHistory)?;
+        if matches!(
+            topology,
+            ConsumerAttachmentStatus::EpochMismatch | ConsumerAttachmentStatus::IncarnationMismatch
+        ) {
+            return Ok(topology);
         }
-        if deleting {
+        if metadata.consumer_deleting.as_ref().is_some_and(|record| {
+            record.consumer_environment_id == key.consumer_environment_id
+                && record.consumer == key.consumer
+                && record.consumer_fingerprint == key.expected_consumer_fingerprint
+        }) {
             return Ok(ConsumerAttachmentStatus::Deleting);
         }
         match (attachment_authority, topology) {
@@ -5430,7 +5400,8 @@ pub(crate) mod tests {
     };
     use crate::services::oplog::{
         CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
-        OrderedOplogStart, PendingUpload, checked_range_end, exact_from_source, fail_stop,
+        OrderedOplogStart, PendingUpload, RawDurableStreamSessionStatus, checked_range_end,
+        exact_from_source, fail_stop,
     };
     use async_trait::async_trait;
     use futures::FutureExt;
@@ -5478,6 +5449,8 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct TestOplog {
         state: Mutex<TestOplogState>,
+        read_ranges: Mutex<Vec<(OplogIndex, u64)>>,
+        point_reads: AtomicU64,
     }
 
     impl Debug for TestOplog {
@@ -5487,6 +5460,10 @@ pub(crate) mod tests {
     }
 
     impl TestOplog {
+        pub(crate) fn take_read_ranges(&self) -> Vec<(OplogIndex, u64)> {
+            std::mem::take(&mut *self.read_ranges.lock().unwrap())
+        }
+
         fn committed_length(&self) -> u64 {
             self.state.lock().unwrap().committed.as_u64()
         }
@@ -5560,6 +5537,42 @@ pub(crate) mod tests {
                 .map_or(OplogIndex::NONE, |(index, _)| *index)
         }
 
+        async fn raw_durable_stream_session_status(
+            &self,
+            session_key: &StreamInvocationIdV1,
+        ) -> RawDurableStreamSessionStatus {
+            let state = self.state.lock().unwrap();
+            let watermark = state
+                .entries
+                .last_key_value()
+                .map_or(OplogIndex::NONE, |(i, _)| *i);
+            let mut status = golem_common::model::DurableStreamSessionStatus {
+                session_key: Some(session_key.clone()),
+                ..Default::default()
+            };
+            for (index, entry) in &state.entries {
+                if let OplogEntry::StreamSession { record, .. } = entry {
+                    let record = match record {
+                        OplogPayload::Inline(record) => record.as_ref(),
+                        OplogPayload::SerializedInline {
+                            cached: Some(record),
+                            ..
+                        }
+                        | OplogPayload::External {
+                            cached: Some(record),
+                            ..
+                        } => record.as_ref(),
+                        _ => continue,
+                    };
+                    status.apply_record(*index, record);
+                }
+            }
+            RawDurableStreamSessionStatus {
+                watermark,
+                status: Ok(Some(status)),
+            }
+        }
+
         async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
             self.state
                 .lock()
@@ -5575,6 +5588,7 @@ pub(crate) mod tests {
         }
 
         async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            self.point_reads.fetch_add(1, Ordering::Relaxed);
             self.state
                 .lock()
                 .unwrap()
@@ -5589,6 +5603,7 @@ pub(crate) mod tests {
             oplog_index: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.read_ranges.lock().unwrap().push((oplog_index, n));
             let state = self.state.lock().unwrap();
             let end = fail_stop(checked_range_end(oplog_index, n));
             let entries = end.map_or_else(BTreeMap::new, |end| {
@@ -5989,6 +6004,71 @@ pub(crate) mod tests {
                 probe,
             )
             .await
+    }
+
+    #[test]
+    async fn cursor_validation_point_reads_without_historical_event_cache() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let offsets = producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![1, 2, 3]),
+            )
+            .await
+            .unwrap()
+            .value;
+        for _ in 0..2050 {
+            oplog.add(OplogEntry::interrupted()).await;
+        }
+        producer
+            .end(handle.stream_id, 3, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        let high_water = producer.input_high_water(handle.stream_id).await.unwrap();
+        {
+            let mut index = producer.index.lock().await;
+            let stream = index.streams.get_mut(&handle.stream_id).unwrap();
+            stream.events.clear();
+            stream.batches.clear();
+        }
+        assert_eq!(
+            producer.input_high_water(handle.stream_id).await.unwrap(),
+            high_water
+        );
+        oplog.take_read_ranges();
+        let before = oplog.point_reads.load(Ordering::Relaxed);
+        producer
+            .validate_cursor(handle.stream_id, Some(offsets[1]))
+            .await
+            .unwrap();
+        assert_eq!(oplog.point_reads.load(Ordering::Relaxed) - before, 1);
+        assert!(oplog.take_read_ranges().is_empty());
+        assert!(
+            producer
+                .validate_cursor(
+                    handle.stream_id,
+                    Some(StreamOffsetV1::new(offsets[0].producer_oplog_index(), 3)),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            producer
+                .validate_cursor(
+                    handle.stream_id,
+                    Some(StreamOffsetV1::new(OplogIndex::NONE, 0)),
+                )
+                .await
+                .is_err()
+        );
     }
 
     #[test]

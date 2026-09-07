@@ -188,6 +188,62 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         .await
     }
 
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        let namespace = Self::namespace(namespace);
+        let pairs = pairs
+            .iter()
+            .map(|(key, value)| {
+                record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+                ((*key).to_string(), (*value).to_vec())
+            })
+            .collect::<Vec<_>>();
+        let expected = expected.map(ToOwned::to_owned);
+        let key = key.to_string();
+        retry_on_pool_timeout(&self.retry_config, "compare_and_set_many", || {
+            let namespace = namespace.clone();
+            let pairs = pairs.clone();
+            let expected = expected.clone();
+            let key = key.clone();
+            async move {
+                self.pool.with_tx(svc_name, api_name, move |tx| async move {
+                    // Lock the comparison row against all writers, including ordinary set/delete.
+                    // An absent comparison needs a temporary row: a read lock cannot lock absence.
+                    let matched = match &expected {
+                        Some(expected) => tx.execute(sqlx::query(
+                            "UPDATE kv_storage SET value = value WHERE namespace = $1 AND key = $2 AND value = $3;"
+                        ).bind(&namespace).bind(&key).bind(expected)).await?.rows_affected() == 1,
+                        None => tx.execute(sqlx::query(
+                            "INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO NOTHING;"
+                        ).bind(&namespace).bind(&key).bind(b"".as_slice())).await?.rows_affected() == 1,
+                    };
+                    if !matched {
+                        return Ok(false);
+                    }
+                    for chunk in pairs.chunks(Self::SET_MANY_WRITE_CHUNK_SIZE) {
+                        let mut builder = QueryBuilder::<Postgres>::new("INSERT INTO kv_storage (namespace, key, value) ");
+                        builder.push_values(chunk, |mut row, (key, value)| { row.push_bind(&namespace).push_bind(key).push_bind(value); });
+                        builder.push(" ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;");
+                        tx.execute(builder.build()).await?;
+                    }
+                    if expected.is_none() && !pairs.iter().any(|(field, _)| field == &key) {
+                        tx.execute(sqlx::query("DELETE FROM kv_storage WHERE namespace = $1 AND key = $2;")
+                            .bind(&namespace).bind(&key)).await?;
+                    }
+                    Ok(true)
+                }.boxed()).await
+            }
+        }).await
+    }
+
     async fn set_if_not_exists(
         &self,
         svc_name: &'static str,

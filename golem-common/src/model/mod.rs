@@ -711,6 +711,7 @@ pub struct AgentStatusRecord {
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
+    pub has_durable_stream_history: bool,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
@@ -760,6 +761,7 @@ impl Default for AgentStatusRecord {
             invocation_results: HashMap::new(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
+            has_durable_stream_history: false,
             current_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
@@ -862,6 +864,117 @@ pub struct DurableStreamSessionStatus {
     pub prepared: Option<OplogIndex>,
     pub invocation_result: Option<OplogIndex>,
     pub finished: Option<OplogIndex>,
+    pub session_key: Option<crate::model::durable_stream::StreamSessionKeyV1>,
+    pub prepared_attempt_id: Option<crate::model::durable_stream::AttemptId>,
+    pub initial_attachment_epoch: Option<u64>,
+    pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
+    pub initial_pending_invocation_oplog_index: Option<OplogIndex>,
+    pub attachment_epoch: Option<u64>,
+    pub attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
+    pub attachment_attached: Option<bool>,
+    pub lifecycle_error: Option<String>,
+}
+
+impl DurableStreamSessionStatus {
+    pub fn apply_record(
+        &mut self,
+        oplog_idx: OplogIndex,
+        record: &crate::model::durable_stream::StreamSessionRecordV1,
+    ) {
+        use crate::model::durable_stream::StreamSessionRecordV1;
+
+        let record_key = match record {
+            StreamSessionRecordV1::Prepared(v) => Some(&v.attempt.session_key),
+            StreamSessionRecordV1::Attached(v) => Some(&v.session_key),
+            StreamSessionRecordV1::ResumeAttempt(v) => Some(&v.attempt.session_key),
+            StreamSessionRecordV1::Detached(v) => Some(&v.session_key),
+            StreamSessionRecordV1::InvocationResult(v) => Some(&v.session_key),
+            StreamSessionRecordV1::Finished(v) => Some(&v.session_key),
+            _ => None,
+        };
+        let Some(record_key) = record_key else { return };
+        if self
+            .session_key
+            .as_ref()
+            .is_some_and(|key| key != record_key)
+        {
+            return;
+        }
+        self.session_key.get_or_insert_with(|| record_key.clone());
+        if self.lifecycle_error.is_some() {
+            return;
+        }
+        if !record.has_supported_format() {
+            self.lifecycle_error =
+                Some("unsupported or malformed durable Stream Session record version".into());
+            return;
+        }
+        match record {
+            StreamSessionRecordV1::Prepared(v) => {
+                if self.prepared.is_some() {
+                    self.lifecycle_error =
+                        Some("durable Stream Session contains multiple Prepared records".into());
+                } else {
+                    self.first_prepared = Some(oplog_idx);
+                    self.prepared = Some(oplog_idx);
+                    self.prepared_attempt_id = Some(v.attempt.attempt_id);
+                }
+            }
+            StreamSessionRecordV1::Attached(v) => {
+                if self.initial_attachment_epoch.is_some() {
+                    self.lifecycle_error =
+                        Some("durable session contains a repeated initial attachment".into());
+                } else {
+                    self.initial_attachment_epoch = Some(v.epoch);
+                    self.initial_attachment_attempt_id = Some(v.attempt_id);
+                    self.initial_pending_invocation_oplog_index =
+                        Some(v.pending_invocation_oplog_index);
+                    self.attachment_epoch = Some(v.epoch);
+                    self.attachment_attempt_id = Some(v.attempt_id);
+                    self.attachment_attached = Some(true);
+                }
+            }
+            StreamSessionRecordV1::ResumeAttempt(v) => {
+                let Some(epoch) = self.attachment_epoch else {
+                    self.lifecycle_error =
+                        Some("durable resume precedes initial attachment".into());
+                    return;
+                };
+                if v.attempt.expected_epoch != epoch
+                    || epoch.checked_add(1) != Some(v.accepted_epoch)
+                {
+                    self.lifecycle_error =
+                        Some("durable resume contains an invalid epoch transition".into());
+                } else {
+                    self.attachment_epoch = Some(v.accepted_epoch);
+                    self.attachment_attempt_id = Some(v.attempt.attempt_id);
+                    self.attachment_attached = Some(true);
+                }
+            }
+            StreamSessionRecordV1::Detached(v) => {
+                match (self.attachment_epoch, self.attachment_attempt_id) {
+                    (None, _) => {
+                        self.lifecycle_error =
+                            Some("durable detach precedes initial attachment".into())
+                    }
+                    (Some(epoch), Some(owner))
+                        if epoch == v.epoch && owner == v.owner_attempt_id =>
+                    {
+                        self.attachment_attached = Some(false);
+                    }
+                    _ => {
+                        self.lifecycle_error =
+                            Some("durable detach does not match the current attachment".into())
+                    }
+                }
+            }
+            StreamSessionRecordV1::InvocationResult(_) => self.invocation_result = Some(oplog_idx),
+            StreamSessionRecordV1::Finished(_) => {
+                self.finished.get_or_insert(oplog_idx);
+            }
+            _ => {}
+        };
+    }
 }
 
 pub const DURABLE_STREAM_SESSION_RECENT_CAPACITY: usize = 128;
@@ -879,6 +992,64 @@ pub struct DurableStreamSessionIndex {
 impl DurableStreamSessionIndex {
     pub fn get(&self, key: &IdempotencyKey) -> Option<&DurableStreamSessionStatus> {
         self.sessions.get(&key.value).map(Arc::as_ref)
+    }
+
+    pub fn apply_oplog_entry(&mut self, index: OplogIndex, entry: &OplogEntry) {
+        use crate::model::oplog::OplogPayload;
+
+        let OplogEntry::StreamSession { record, .. } = entry else {
+            return;
+        };
+        let decoded;
+        let record = match record {
+            OplogPayload::Inline(record) => record.as_ref(),
+            OplogPayload::SerializedInline {
+                cached: Some(record),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(record),
+                ..
+            } => record.as_ref(),
+            OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            } => {
+                decoded = crate::serialization::deserialize(bytes)
+                    .expect("stream session records are valid inline payloads");
+                &decoded
+            }
+            OplogPayload::External { cached: None, .. } => {
+                unreachable!("stream session records are stored inline")
+            }
+        };
+        self.apply_record(index, record);
+    }
+
+    pub fn apply_record(
+        &mut self,
+        index: OplogIndex,
+        record: &crate::model::durable_stream::StreamSessionRecordV1,
+    ) {
+        use crate::model::durable_stream::StreamSessionRecordV1;
+
+        let key = match record {
+            StreamSessionRecordV1::Prepared(v) => &v.attempt.session_key.idempotency_key,
+            StreamSessionRecordV1::Attached(v) => &v.session_key.idempotency_key,
+            StreamSessionRecordV1::ResumeAttempt(v) => &v.attempt.session_key.idempotency_key,
+            StreamSessionRecordV1::Detached(v) => &v.session_key.idempotency_key,
+            StreamSessionRecordV1::InvocationResult(v) => &v.session_key.idempotency_key,
+            StreamSessionRecordV1::Finished(v) => &v.session_key.idempotency_key,
+            _ => return,
+        };
+        let mut status = match self.get(key) {
+            Some(status) => status.clone(),
+            None if matches!(record, StreamSessionRecordV1::Prepared(_)) => Default::default(),
+            // Caller-side results have no local Prepared/Finished lifecycle.
+            None => return,
+        };
+        status.apply_record(index, record);
+        self.insert(key.clone(), status);
     }
 
     pub fn insert(&mut self, key: IdempotencyKey, status: DurableStreamSessionStatus) {

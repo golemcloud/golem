@@ -183,6 +183,30 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
             .await
     }
 
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .compare_and_set_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                expected,
+                pairs,
+            )
+            .await
+    }
+
     async fn set_if_not_exists(
         &self,
         svc_name: &'static str,

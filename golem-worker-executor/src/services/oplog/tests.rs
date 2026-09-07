@@ -483,7 +483,7 @@ impl OplogArchive for TransferTestArchive {
 /// the storage level that fresh oplog construction performs no reads before
 /// its first append.
 #[derive(Debug)]
-struct ReadCountingIndexedStorage {
+pub(crate) struct ReadCountingIndexedStorage {
     inner: InMemoryIndexedStorage,
     reads: AtomicUsize,
     discard_compressed_appends: bool,
@@ -491,7 +491,7 @@ struct ReadCountingIndexedStorage {
 }
 
 impl ReadCountingIndexedStorage {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: InMemoryIndexedStorage::new(),
             reads: AtomicUsize::new(0),
@@ -518,11 +518,11 @@ impl ReadCountingIndexedStorage {
         }
     }
 
-    fn reads(&self) -> usize {
+    pub(crate) fn reads(&self) -> usize {
         self.reads.load(Ordering::Relaxed)
     }
 
-    fn reset(&self) {
+    pub(crate) fn reset(&self) {
         self.reads.store(0, Ordering::Relaxed)
     }
 

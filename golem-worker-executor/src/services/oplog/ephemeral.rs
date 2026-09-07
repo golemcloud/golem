@@ -88,6 +88,10 @@ enum EphemeralJob {
     CurrentIndex {
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
+    RawDurableStreamSessionStatus {
+        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        done: tokio::sync::oneshot::Sender<super::RawDurableStreamSessionStatus>,
+    },
     LastAddedNonHintEntry {
         done: tokio::sync::oneshot::Sender<Option<OplogIndex>>,
     },
@@ -112,6 +116,7 @@ struct EphemeralOplogState {
     max_operations_before_commit: u64,
     target: Arc<dyn OplogArchive + Send + Sync>,
     last_added_non_hint_entry: Option<OplogIndex>,
+    durable_stream_sessions: super::raw_session::RawSessionCache,
 }
 
 impl EphemeralOplogState {
@@ -121,6 +126,8 @@ impl EphemeralOplogState {
     /// single commit-threshold check, so the pair is never split by a commit.
     fn push(&mut self, entry: OplogEntry) -> OplogIndex {
         let is_hint = entry.is_hint();
+        self.durable_stream_sessions
+            .apply_entry(self.last_oplog_idx.next(), &entry);
         self.buffer.push_back(entry);
         self.last_oplog_idx = self.last_oplog_idx.next();
         if !is_hint {
@@ -180,11 +187,13 @@ impl EphemeralOplog {
             max_operations_before_commit,
             target,
             last_added_non_hint_entry: None,
+            durable_stream_sessions: super::raw_session::RawSessionCache::default(),
         };
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
         let actor_primary_service = primary_service.clone();
         let actor_owned_agent_id = owned_agent_id.clone();
+        let stream_session_index = primary_service.stream_session_index();
         let actor = tokio::spawn(async move {
             while let Some(job) = job_rx.recv().await {
                 match job {
@@ -250,6 +259,23 @@ impl EphemeralOplog {
                     }
                     EphemeralJob::CurrentIndex { done } => {
                         let _ = done.send(state.last_oplog_idx);
+                    }
+                    EphemeralJob::RawDurableStreamSessionStatus { session_key, done } => {
+                        let status = state
+                            .durable_stream_sessions
+                            .lookup(
+                                stream_session_index.as_ref(),
+                                &actor_owned_agent_id,
+                                agent_mode,
+                                state.last_committed_idx,
+                                &state.buffer,
+                                &session_key,
+                            )
+                            .await;
+                        let _ = done.send(super::RawDurableStreamSessionStatus {
+                            watermark: state.last_oplog_idx,
+                            status,
+                        });
                     }
                     EphemeralJob::LastAddedNonHintEntry { done } => {
                         let _ = done.send(state.last_added_non_hint_entry);
@@ -656,6 +682,17 @@ impl Oplog for EphemeralOplog {
         record_oplog_call("current_oplog_index");
         self.run_job(|done| EphemeralJob::CurrentIndex { done })
             .await
+    }
+
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> super::RawDurableStreamSessionStatus {
+        self.run_job(|done| EphemeralJob::RawDurableStreamSessionStatus {
+            session_key: session_key.clone(),
+            done,
+        })
+        .await
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {

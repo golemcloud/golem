@@ -57,6 +57,15 @@ impl<T: Clone> DurableLiveStreamBus<T> {
         Self::with_reader_limit(capacity, MAX_LIVE_READERS_PER_STREAM)
     }
 
+    pub(crate) fn from_committed_high_water(
+        capacity: usize,
+        high_water: Option<StreamOffsetV1>,
+    ) -> Result<Self, DurableLiveStreamBusError> {
+        let mut bus = Self::new(capacity)?;
+        bus.state.get_mut().high_water = high_water;
+        Ok(bus)
+    }
+
     fn with_reader_limit(
         capacity: usize,
         max_readers: usize,
