@@ -1,3 +1,8 @@
+---
+name: golem-agent-reflection-ts
+description: "Discovering and calling Golem agents through runtime reflection in TypeScript. Use when agent types or methods are selected dynamically, schemas must be inspected at runtime, or only an AgentId is available."
+---
+
 # Calling Agents with Runtime Reflection (TypeScript)
 
 Use reflection when the target agent type or method is chosen at runtime. When
@@ -137,7 +142,9 @@ function bindExisting(agentId: AgentId) {
 ```
 
 Lookup by `AgentId` does not create the agent. It returns `undefined` when the
-identity does not exist or its type cannot be resolved. Use
+identity does not exist, its type cannot be resolved, or the caller cannot view
+it. `AgentId.parse` is the strict local operation when malformed identity text
+must be reported instead of treated as a discovery miss. Use
 `agentId.dynamicClient()` only for lifecycle-free infrastructure that already
 holds schema-native values and intentionally invokes arbitrary method names
 without discovery.

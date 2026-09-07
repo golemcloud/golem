@@ -40,7 +40,8 @@ steps:
       string, and the two contract-call results. Make sure the project builds
       successfully.
     expectedSkills:
-      - "golem-call-agent-reflectively-ts"
+      - "golem-agent-reflection"
+      - "golem-agent-reflection-ts"
     verify:
       build: true
       deploy: true

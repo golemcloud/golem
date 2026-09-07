@@ -199,7 +199,7 @@ export function agentStreamToHandle<T>(
 
 /** @internal Lift a recursive schema-value-stream handle into an AgentStream. */
 export function agentStreamFromHandle<T>(
-  handle: GuestSchemaValueStreamHandle,
+  handle: Pick<GuestSchemaValueStreamHandle, 'take'>,
   itemCodec: SchemaCodec,
 ): AgentStream<T> {
   const endpoint = handle.take();

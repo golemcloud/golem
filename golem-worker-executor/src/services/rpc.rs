@@ -1827,8 +1827,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 #[cfg(test)]
 mod protocol_tests {
     use super::{RpcError, method_validation_revision, rpc_error_from_failure};
+    use crate::services::worker_proxy::WorkerProxyError;
     use golem_api_grpc::proto::golem::worker::{InvocationFailure, InvocationFailureKind};
-    use golem_common::model::agent::{AgentError as ModelAgentError, InvocationFreshnessDisposition};
+    use golem_common::model::agent::{
+        AgentError as ModelAgentError, InvocationFreshnessDisposition,
+    };
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::oplog::types::SerializableRpcError;
     use golem_service_base::error::worker_executor::WorkerExecutorError;

@@ -376,6 +376,8 @@ export function toCanonicalJson(
     case 'quota-token':
     case 'permission-card':
       fail(path, `${value.tag} values cannot be exposed as JSON`);
+    case 'stream':
+      fail(path, 'stream values have no JSON representation');
   }
 }
 

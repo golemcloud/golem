@@ -16,10 +16,6 @@
       "import": "./dist/index.mjs",
       "types": "./dist/index.d.mts"
     },
-    "./middleware": {
-      "import": "./dist/middleware.mjs",
-      "types": "./dist/middleware.d.mts"
-    },
     "./schema": {
       "import": "./dist/schema.mjs",
       "types": "./dist/schema.d.mts"
@@ -27,6 +23,10 @@
     "./reflection": {
       "import": "./dist/reflection.mjs",
       "types": "./dist/reflection.d.mts"
+    },
+    "./middleware": {
+      "import": "./dist/middleware.mjs",
+      "types": "./dist/middleware.d.mts"
     }
   },
   "typesVersions": {

@@ -11,9 +11,6 @@ interface host {
     /// Get a specific registered agent type by name
     get-agent-type: func(agent-type-name: string) -> option<registered-agent-type>;
 
-    /// Gets the registered agent type used by an existing agent, identified by its agent ID.
-    get-agent-type-by-agent-id: func(agent-id: agent-id) -> option<registered-agent-type>;
-
     /// Constructs a string agent-id from the agent type and its constructor parameters
     /// and an optional phantom ID.
     ///
@@ -95,14 +92,6 @@ interface host {
       /// cannot be created and is intended for statically generated clients.
       constructor(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>);
 
-      /// Creates an RPC client connecting to the given target agent.
-      ///
-      /// `constructor` is a value tree whose root encodes the target agent
-      /// constructor's parameter list. This fallible form returns an RPC error
-      /// if the client cannot be created and is intended for reflective and
-      /// other dynamic clients.
-      create: static func(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>) -> result<wasm-rpc, rpc-error>;
-
       /// Invokes a remote method with the given parameters, and awaits the result.
       ///
       /// `input` encodes the method's parameter list. The returned result is
@@ -126,6 +115,14 @@ interface host {
       /// cancellation capability. Call cancel on the returned resource to
       /// cancel the invocation before the scheduled time.
       schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<cancelable-scheduled-invocation-receipt, rpc-error>;
+
+      /// Creates an RPC client connecting to the given target agent.
+      ///
+      /// `constructor` is a value tree whose root encodes the target agent
+      /// constructor's parameter list. This fallible form returns an RPC error
+      /// if the client cannot be created and is intended for reflective and
+      /// other dynamic clients.
+      create: static func(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>) -> result<wasm-rpc, rpc-error>;
     }
 
     /// Represents an asynchronous invocation result
@@ -161,4 +158,7 @@ interface host {
     }
 
     get-config-value: func(key: list<string>, expected: schema-graph) -> result<schema-value-tree, config-value-error>;
+
+    /// Gets the registered agent type used by an existing agent, identified by its agent ID.
+    get-agent-type-by-agent-id: func(agent-id: agent-id) -> option<registered-agent-type>;
 }
