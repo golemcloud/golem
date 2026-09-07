@@ -77,6 +77,16 @@ pub(crate) enum NestedStreamWriteV1 {
     Forward(DurableStreamHandleV1),
 }
 
+pub(crate) enum ProducerOutputSourceV1 {
+    New(ProducerRegistrationRequestV1),
+    Existing(DurableStreamHandleV1),
+}
+
+pub(crate) struct ProducerOutputRegistrationV1 {
+    pub(crate) transport_stream_id: u64,
+    pub(crate) source: ProducerOutputSourceV1,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
 pub(crate) enum CommittedProducerStreamEventPayloadV1 {
     Value(Vec<u8>),
@@ -2208,10 +2218,49 @@ impl DurableStreamProducer {
 
     pub(crate) async fn register_result_streams(
         &self,
-        requests: Vec<ProducerRegistrationRequestV1>,
-        make_result: impl FnOnce(Vec<DurableStreamHandleV1>) -> StreamSessionRecordV1 + Send + 'static,
+        session_key: StreamSessionKeyV1,
+        result: Vec<u8>,
+        outputs: Vec<ProducerOutputRegistrationV1>,
     ) -> Result<(Vec<DurableStreamHandleV1>, StreamSessionRecordV1), DurableStreamProducerError>
     {
+        let requests = outputs
+            .iter()
+            .filter_map(|output| match &output.source {
+                ProducerOutputSourceV1::New(request) => Some(request.clone()),
+                ProducerOutputSourceV1::Existing(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let make_result = move |owned_handles: Vec<DurableStreamHandleV1>| {
+            let mut owned_handles = owned_handles.into_iter();
+            let stream_mappings = outputs
+                .into_iter()
+                .map(|output| {
+                    let handle = match output.source {
+                        ProducerOutputSourceV1::New(_) => owned_handles
+                            .next()
+                            .expect("result allocation supplies one handle per new output"),
+                        ProducerOutputSourceV1::Existing(handle) => handle,
+                    };
+                    StreamSessionMappingRecordV1 {
+                        transport_stream_id: output.transport_stream_id,
+                        handle,
+                        role: SessionStreamRoleV1::Output,
+                    }
+                })
+                .collect::<Vec<_>>();
+            StreamSessionRecordV1::InvocationResult(
+                golem_common::base_model::durable_stream::StreamSessionInvocationResultRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key,
+                    result,
+                    output_streams: stream_mappings
+                        .iter()
+                        .map(|mapping| mapping.handle.clone())
+                        .collect(),
+                    stream_mappings,
+                },
+            )
+        };
         let mut index = self.index.lock().await;
         index.ensure_producer_write_allowed()?;
         if requests.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
@@ -5452,9 +5501,10 @@ pub(crate) mod tests {
         AgentError, AttachedStreamSegmentSource, CommittedProducerStreamEventPayloadV1,
         CommittedProducerStreamEventV1, ConsumerAttachmentStatus, ConsumerJournalInspection,
         DurableCatchUpReader, DurableLiveStreamBus, DurableLiveStreamBusError, DurableStreamCommit,
-        DurableStreamProducer, DurableStreamProducerError, ProducerRegistrationRequestV1,
-        ProducerStreamIndex, StreamAttachmentConsumerProbe, StreamAttachmentControl,
-        StreamAttachmentStateV1, StreamSegmentSource, registration_record,
+        DurableStreamProducer, DurableStreamProducerError, ProducerOutputRegistrationV1,
+        ProducerOutputSourceV1, ProducerRegistrationRequestV1, ProducerStreamIndex,
+        StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentStateV1,
+        StreamSegmentSource, registration_record,
     };
     use crate::services::oplog::{
         CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
@@ -5475,10 +5525,10 @@ pub(crate) mod tests {
         StreamCascadeDependentResultV1, StreamConsumerDeletingRecordV1,
         StreamConsumerItemValueRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1,
         StreamItemsPayloadV1, StreamItemsRecordV1, StreamOffsetV1, StreamRegistrationCoordinateV1,
-        StreamRootKindV1, StreamSessionInvocationResultRecordV1, StreamSessionMappingRecordV1,
-        StreamSessionMappingUpdateRecordV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
-        StreamSourceKindV1, StreamTerminalAuthorV1, StreamTopologyActivatedRecordV1,
-        StreamTopologyPreparedRecordV1, StreamValuePathStepV1,
+        StreamRootKindV1, StreamSessionMappingRecordV1, StreamSessionMappingUpdateRecordV1,
+        StreamSessionPreparedRecordV1, StreamSessionRecordV1, StreamSourceKindV1,
+        StreamTerminalAuthorV1, StreamTopologyActivatedRecordV1, StreamTopologyPreparedRecordV1,
+        StreamValuePathStepV1,
     };
     use golem_common::base_model::environment::EnvironmentId;
     use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
@@ -7571,44 +7621,88 @@ pub(crate) mod tests {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
         let producer = producer(oplog.clone(), &identity, None).await;
-        let result = |payload: Vec<u8>| {
-            StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.clone(),
-                result: payload,
-                output_streams: Vec::new(),
-                stream_mappings: Vec::new(),
-            })
-        };
 
         producer
-            .register_result_streams(Vec::new(), {
-                let record = result(vec![1]);
-                move |_| record
-            })
+            .register_result_streams(identity.invocation.clone(), vec![1], Vec::new())
             .await
             .unwrap();
         let committed = oplog.committed_length();
 
         producer
-            .register_result_streams(Vec::new(), {
-                let record = result(vec![1]);
-                move |_| record
-            })
+            .register_result_streams(identity.invocation.clone(), vec![1], Vec::new())
             .await
             .unwrap();
         assert_eq!(oplog.committed_length(), committed);
 
         assert_eq!(
             producer
-                .register_result_streams(Vec::new(), {
-                    let record = result(vec![2]);
-                    move |_| record
-                })
+                .register_result_streams(identity.invocation.clone(), vec![2], Vec::new())
                 .await
                 .unwrap_err(),
             DurableStreamProducerError::RegistrationDivergence
         );
+        assert_eq!(oplog.committed_length(), committed);
+    }
+
+    #[test]
+    async fn result_plan_preserves_mixed_output_order_and_replays() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let existing = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let mut request = root_registration(&identity);
+        let StreamRegistrationCoordinateV1::Root {
+            recursive_value_path,
+            ..
+        } = &mut request.coordinate
+        else {
+            unreachable!();
+        };
+        recursive_value_path.push(StreamValuePathStepV1::RecordField(1));
+        let outputs = || {
+            vec![
+                ProducerOutputRegistrationV1 {
+                    transport_stream_id: 31,
+                    source: ProducerOutputSourceV1::New(request.clone()),
+                },
+                ProducerOutputRegistrationV1 {
+                    transport_stream_id: 12,
+                    source: ProducerOutputSourceV1::Existing(existing.clone()),
+                },
+            ]
+        };
+        let (owned, record) = producer
+            .register_result_streams(identity.invocation.clone(), vec![4, 5], outputs())
+            .await
+            .unwrap();
+        assert_eq!(owned.len(), 1);
+        let StreamSessionRecordV1::InvocationResult(result) = &record else {
+            unreachable!();
+        };
+        assert_eq!(result.session_key, identity.invocation);
+        assert_eq!(result.result, vec![4, 5]);
+        assert_eq!(
+            result.output_streams,
+            vec![owned[0].clone(), existing.clone()]
+        );
+        assert_eq!(
+            result
+                .stream_mappings
+                .iter()
+                .map(|mapping| mapping.transport_stream_id)
+                .collect::<Vec<_>>(),
+            vec![31, 12]
+        );
+        let committed = oplog.committed_length();
+        let replay = producer
+            .register_result_streams(identity.invocation.clone(), vec![4, 5], outputs())
+            .await
+            .unwrap();
+        assert_eq!(replay, (owned, record));
         assert_eq!(oplog.committed_length(), committed);
     }
 

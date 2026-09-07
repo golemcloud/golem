@@ -18,9 +18,10 @@ use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEventPayloadV1,
     CommittedProducerStreamEventV1, ConsumerAttachmentStatus, DurableCatchUpReader,
     DurableStreamProducer, DurableStreamProducerError, NestedStreamWriteV1,
-    ProducerRegistrationRequestV1, RoutedAttachedStreamSegmentSource,
-    RoutedStreamAttachmentControl, StreamAttachmentConsumerProbe, StreamAttachmentControl,
-    StreamAttachmentStateV1, StreamSegmentSource,
+    ProducerOutputRegistrationV1, ProducerOutputSourceV1, ProducerRegistrationRequestV1,
+    RoutedAttachedStreamSegmentSource, RoutedStreamAttachmentControl,
+    StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentStateV1,
+    StreamSegmentSource,
 };
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
@@ -2433,45 +2434,27 @@ impl DurableSessionStreams {
             transport_stream_ids.push(transport_stream_id);
         }
         let result_bytes = encoded.encode_to_vec();
-        let result_session_key = self.session_key.clone();
-        let transport_stream_ids_for_record = transport_stream_ids.clone();
-        let forwarded_handles_for_record = pending
+        let mut requests = requests.into_iter();
+        let outputs = pending
             .iter()
-            .map(|pending| pending.forwarded_handle.clone())
+            .zip(&transport_stream_ids)
+            .map(
+                |(pending, &transport_stream_id)| ProducerOutputRegistrationV1 {
+                    transport_stream_id,
+                    source: match &pending.forwarded_handle {
+                        Some(handle) => ProducerOutputSourceV1::Existing(handle.clone()),
+                        None => ProducerOutputSourceV1::New(
+                            requests
+                                .next()
+                                .expect("each owned output has a registration request"),
+                        ),
+                    },
+                },
+            )
             .collect::<Vec<_>>();
         let (owned_handles, _) = self
             .producer
-            .register_result_streams(requests, move |owned_handles| {
-                let mut owned_handles = owned_handles.into_iter();
-                let handles = forwarded_handles_for_record
-                    .into_iter()
-                    .map(|forwarded_handle| {
-                        forwarded_handle.unwrap_or_else(|| {
-                            owned_handles
-                                .next()
-                                .expect("result registration returned too few durable handles")
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let stream_mappings = transport_stream_ids_for_record
-                    .into_iter()
-                    .zip(handles.iter().cloned())
-                    .map(
-                        |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
-                            transport_stream_id,
-                            handle,
-                            role: golem_common::model::durable_stream::SessionStreamRoleV1::Output,
-                        },
-                    )
-                    .collect();
-                StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: result_session_key,
-                    result: result_bytes,
-                    output_streams: handles,
-                    stream_mappings,
-                })
-            })
+            .register_result_streams(self.session_key.clone(), result_bytes, outputs)
             .await
             .map_err(|error| error.to_string())?;
         self.producer.notify_session_records_changed();
