@@ -24,6 +24,7 @@ golem server run
 | `--mcp-port <PORT>` | Port to serve the MCP server on | `9007` |
 | `--ports-file <PATH>` | Write discovered startup ports to this JSON file | _(none)_ |
 | `--data-dir <PATH>` | Directory to store data in | Platform-specific (see below) |
+| `--memory-budget <BYTES>` | Positive byte budget for agent admission and eviction; not a hard RSS limit | Environment variable, manifest, then host/cgroup detection |
 | `--clean` | Clean the data directory before starting | `false` |
 | `--agent-filesystem-root <PATH>` | Use deterministic agent filesystem directories rooted at the given path instead of random temp directories. Layout: `<root>/<environment_id>/<component_id>/<agent_name>/` | _(none)_ |
 
@@ -82,6 +83,22 @@ When `--ports-file` is specified, the server writes a JSON file with the actual 
 ```
 
 The application manifest can configure the built-in local preset in its `localServer` section. `routerAddr` and `routerPort` define the main API endpoint used both by `golem server run` and by other `golem` commands that target the built-in local preset. `customRequestPort` and `mcpPort` control how deployment `subdomain` values expand: HTTP API domains resolve to `<label>.localhost:<customRequestPort>` and MCP domains resolve to `<label>.localhost:<mcpPort>`. Use nonzero ports for deployments that register persistent subdomains. Load [`golem-configure-api-domain`](/next/how-to-guides/common/golem-configure-api-domain) or [`golem-configure-mcp-server`](/next/how-to-guides/common/golem-configure-mcp-server) for the full `subdomain` versus `domain` rules.
+
+#### Memory Budget
+
+Set a separate memory budget for each concurrent local server. Without an explicit budget, Golem detects host or cgroup memory; on macOS, independent servers each see the full host RAM.
+
+```shell
+golem server run --memory-budget 2147483648
+GOLEM_LOCAL_SERVER_MEMORY_BUDGET=2147483648 golem server run
+```
+
+The value is a positive integer number of bytes (2147483648 is 2 GiB). Precedence is the `--memory-budget` flag, then `GOLEM_LOCAL_SERVER_MEMORY_BUDGET`, then `localServer.memoryBudget` in the manifest, then automatic detection. The executor uses 80% of the budget for agent admission and eviction, leaving 20% for host overhead. This is not an OS-enforced process RSS limit; compilation and other host allocations can exceed it. Check the startup log's measured memory limit and monitor RSS under load.
+
+```yaml
+localServer:
+  memoryBudget: 2147483648
+```
 
 #### Manual Testing with Free Ports
 

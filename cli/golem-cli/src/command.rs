@@ -2705,8 +2705,14 @@ pub mod server {
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
-    #[derive(Debug, Args, Default)]
+    #[derive(Clone, Debug, Args, Default)]
     pub struct RunArgs {
+        /// Memory budget in bytes for local agent admission and eviction.
+        /// Overrides GOLEM_LOCAL_SERVER_MEMORY_BUDGET and localServer.memoryBudget.
+        /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
+        #[clap(long)]
+        pub memory_budget: Option<std::num::NonZeroU64>,
+
         /// Address to serve the main API on, defaults to 0.0.0.0
         #[clap(long)]
         pub router_addr: Option<String>,
@@ -3102,6 +3108,36 @@ mod test {
     #[test]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
+    }
+
+    #[test]
+    #[cfg(feature = "server-commands")]
+    fn local_server_memory_budget_requires_positive_bytes() {
+        use clap::Parser;
+        for value in ["1", "2147483648", "18446744073709551615"] {
+            assert!(
+                GolemCliCommand::try_parse_from([
+                    "golem",
+                    "server",
+                    "run",
+                    "--memory-budget",
+                    value
+                ])
+                .is_ok()
+            );
+        }
+        for value in ["0", "-1", "1.5", "2GiB", "18446744073709551616"] {
+            assert!(
+                GolemCliCommand::try_parse_from([
+                    "golem",
+                    "server",
+                    "run",
+                    "--memory-budget",
+                    value
+                ])
+                .is_err()
+            );
+        }
     }
 
     #[test]

@@ -328,6 +328,12 @@ The generator reads only the release's safe tool definition and metadata digest.
   </Field>
 
   <Field meta={{
+    path: "localServer.memoryBudget",
+  }}>
+    ***Optional positive integer, in bytes*** that sets the memory budget for local agent admission and eviction. For example, `2147483648` sets a 2 GiB budget; the executor uses 80% for admission and reserves 20% for host overhead. Precedence is `--memory-budget`, then `GOLEM_LOCAL_SERVER_MEMORY_BUDGET`, then this field, then automatic host/cgroup memory detection. This is not a hard process RSS limit: compilation and other host allocations can exceed the budget. Set a separate budget for each concurrent local server.
+  </Field>
+
+  <Field meta={{
     path: "localServer.agentFilesystemRoot",
   }}>
     ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_name>/`.

@@ -75,6 +75,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
         let data_dir = default_data_dir()?;
 
         let mut join_set = launch_golem_services(&LaunchArgs {
+            memory_budget: memory_budget_from_env()?,
             router_addr: args.router_addr().to_string(),
             router_port: args.router_port(),
             custom_request_port: args.custom_request_port(),
@@ -119,8 +120,12 @@ fn launch_args_from_run_args_and_manifest(
     args: &RunArgs,
     ctx: &Context,
 ) -> anyhow::Result<LaunchArgs> {
+    let mut args = args.clone();
+    if args.memory_budget.is_none() {
+        args.memory_budget = memory_budget_from_env()?;
+    }
     launch_args_from_run_args_and_local_server(
-        args,
+        &args,
         ctx.manifest_local_server(),
         resource_usage_metering_from_env()?,
     )
@@ -132,6 +137,18 @@ fn resource_usage_metering_from_env() -> anyhow::Result<ResourceUsageMeteringCon
         memory: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__MEMORY")?,
         filesystem: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM")?,
     })
+}
+
+fn memory_budget_from_env() -> anyhow::Result<Option<std::num::NonZeroU64>> {
+    const NAME: &str = "GOLEM_LOCAL_SERVER_MEMORY_BUDGET";
+    match std::env::var(NAME) {
+        Ok(value) => value
+            .parse()
+            .map(Some)
+            .with_context(|| format!("{NAME} must be a positive integer number of bytes")),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(e) => Err(anyhow!("Invalid {NAME}: {e}")),
+    }
 }
 
 fn metering_dimension_from_env(name: &str) -> anyhow::Result<bool> {
@@ -165,6 +182,9 @@ fn launch_args_from_run_args_and_local_server(
     resource_usage_metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<LaunchArgs> {
     Ok(LaunchArgs {
+        memory_budget: args
+            .memory_budget
+            .or_else(|| local_server.and_then(|manifest| manifest.memory_budget)),
         router_addr: args
             .router_addr
             .clone()
@@ -260,6 +280,7 @@ mod tests {
     #[test]
     fn manifest_local_server_values_are_used_when_cli_args_are_absent() {
         let manifest = local_server(LocalServer {
+            memory_budget: std::num::NonZeroU64::new(2147483648),
             router_addr: Some("127.0.0.1".to_string()),
             router_port: Some(9882),
             custom_request_port: Some(9008),
@@ -277,6 +298,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(args.router_addr, "127.0.0.1");
+        assert_eq!(args.memory_budget.unwrap().get(), 2147483648);
         assert_eq!(args.router_port, 9882);
         assert_eq!(args.custom_request_port, 9008);
         assert_eq!(args.mcp_port, 9009);
@@ -292,8 +314,20 @@ mod tests {
     }
 
     #[test]
+    fn local_server_memory_budget_uses_detection_when_unset() {
+        let args = launch_args_from_run_args_and_local_server(
+            &RunArgs::default(),
+            None,
+            ResourceUsageMeteringConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(args.memory_budget, None);
+    }
+
+    #[test]
     fn cli_args_override_manifest_local_server_values() {
         let manifest = local_server(LocalServer {
+            memory_budget: std::num::NonZeroU64::new(2147483648),
             router_addr: Some("127.0.0.1".to_string()),
             router_port: Some(9882),
             custom_request_port: Some(9008),
@@ -303,6 +337,7 @@ mod tests {
             agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
         });
         let run_args = RunArgs {
+            memory_budget: std::num::NonZeroU64::new(1073741824),
             router_addr: Some("0.0.0.0".to_string()),
             router_port: Some(10000),
             custom_request_port: Some(10001),
@@ -321,6 +356,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(args.router_addr, "0.0.0.0");
+        assert_eq!(args.memory_budget.unwrap().get(), 1073741824);
         assert_eq!(args.router_port, 10000);
         assert_eq!(args.custom_request_port, 10001);
         assert_eq!(args.mcp_port, 10002);

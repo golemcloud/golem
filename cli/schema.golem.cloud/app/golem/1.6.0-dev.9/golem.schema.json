@@ -1110,6 +1110,12 @@
           "type": "string",
           "description": "Directory used by `golem server run` for local server data and removed by `golem server clean`."
         },
+        "memoryBudget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615,
+          "description": "Memory budget in bytes for local agent admission and eviction. Overridden by GOLEM_LOCAL_SERVER_MEMORY_BUDGET, then --memory-budget. The executor reserves 20% for host overhead; this is not a hard process RSS limit. When unset, Golem detects the memory limit from the host or cgroup."
+        },
         "agentFilesystemRoot": {
           "type": "string",
           "description": "Root directory for deterministic agent filesystem directories."

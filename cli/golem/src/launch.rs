@@ -62,6 +62,7 @@ use uuid::uuid;
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
 
 pub struct LaunchArgs {
+    pub memory_budget: Option<std::num::NonZeroU64>,
     pub router_addr: String,
     pub router_port: u16,
     pub custom_request_port: u16,
@@ -436,6 +437,7 @@ fn worker_executor_config(
         ..Default::default()
     };
 
+    config.memory.system_memory_override = args.memory_budget.map(|value| value.get());
     config.add_port_to_tracing_file_name_if_enabled();
     Ok(config)
 }

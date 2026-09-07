@@ -25,6 +25,7 @@ mod moonbit_tool_middleware;
 mod plugins;
 mod remote_releases;
 mod scala_tool_middleware;
+mod server_memory;
 mod tool_middleware;
 
 inherit_test_dep!(Tracing);
@@ -44,6 +45,7 @@ tag_suite!(directory_source_ifs, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);
 tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(server_memory, deploy);
 tag_suite!(tool_middleware, deploy);
 
 use crate::{Tracing, crate_path, workspace_path};
