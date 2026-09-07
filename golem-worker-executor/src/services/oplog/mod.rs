@@ -38,7 +38,7 @@ use golem_common::model::{
     DurableStreamSessionStatus, OwnedAgentId, ScanCursor, Timestamp,
 };
 use golem_common::read_only_lock;
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 pub use ephemeral::EphemeralOplog;
@@ -85,6 +85,12 @@ pub mod tests;
 ///
 #[async_trait]
 pub trait OplogService: Debug + Send + Sync {
+    /// Installs the shared index after the complete oplog layer stack has been constructed.
+    /// Primary actors need the index, but reconstruction must read through the outer service so
+    /// archived entries and payloads remain visible. Constructing an index from primary storage
+    /// alone would bypass those layers. The index therefore holds only a Weak reference back to
+    /// the completed service; this dependency does not form an owning Arc cycle. Installation is
+    /// single-shot so actors and worker-status persistence share the same index instance.
     fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>);
 
     fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>>;
@@ -720,9 +726,13 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
 ) -> Result<T, String> {
-    tokio::task::spawn_blocking(move || deserialize(&bytes))
-        .await
-        .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
+    tokio::task::spawn_blocking(move || {
+        golem_common::serialization::try_deserialize(&bytes)?.ok_or_else(|| {
+            "oplog payload has an unsupported or missing serialization version".into()
+        })
+    })
+    .await
+    .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
 }
 
 #[async_trait]

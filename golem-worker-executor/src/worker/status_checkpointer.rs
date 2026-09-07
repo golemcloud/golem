@@ -260,7 +260,12 @@ mod tests {
             Vec::new()
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
+            Ok(())
+        }
 
         async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
 

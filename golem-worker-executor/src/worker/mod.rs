@@ -901,7 +901,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             )
             .await
-            .expect("Failed to calculate worker status for worker even though it is initialized");
+            .map_err(|error| {
+                tracing::error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status");
+                error
+            })
+            .ok()??;
 
             initial_worker_metadata.last_known_status = last_known_status;
 
@@ -5932,7 +5936,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     last_known_status,
                 )
                 .await
-                .expect("Failed to calculate worker status for existing worker");
+                .map_err(WorkerExecutorError::runtime)?
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "worker oplog disappeared while loading existing worker",
+                    )
+                })?;
 
                 // Use the CREATE-time revision: `agent_id` parsing and
                 // `resolve_agent_properties` must stay tied to the metadata

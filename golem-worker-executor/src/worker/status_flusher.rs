@@ -466,7 +466,12 @@ mod tests {
         async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
             unimplemented!()
         }
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
+            Ok(())
+        }
         async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
         async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
             None

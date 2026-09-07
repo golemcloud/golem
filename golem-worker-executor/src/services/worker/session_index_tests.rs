@@ -1220,6 +1220,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
         )]),
         &RetryConfig::default(),
     )
+    .unwrap()
     .unwrap();
     assert!(!status.has_durable_stream_history);
     status = AgentStatusRecord::default();
@@ -1256,6 +1257,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
             BTreeMap::from([(OplogIndex::from_u64(offset as u64 + 1), entry)]),
             &RetryConfig::default(),
         )
+        .unwrap()
         .unwrap();
         if offset == 0 {
             assert!(!status.durable_stream_sessions.has_history());

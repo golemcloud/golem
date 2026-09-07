@@ -994,11 +994,15 @@ impl DurableStreamSessionIndex {
         self.sessions.get(&key.value).map(Arc::as_ref)
     }
 
-    pub fn apply_oplog_entry(&mut self, index: OplogIndex, entry: &OplogEntry) {
+    pub fn apply_oplog_entry(
+        &mut self,
+        index: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<(), String> {
         use crate::model::oplog::OplogPayload;
 
         let OplogEntry::StreamSession { record, .. } = entry else {
-            return;
+            return Ok(());
         };
         let decoded;
         let record = match record {
@@ -1015,15 +1019,22 @@ impl DurableStreamSessionIndex {
                 bytes,
                 cached: None,
             } => {
-                decoded = crate::serialization::deserialize(bytes)
-                    .expect("stream session records are valid inline payloads");
+                decoded = crate::serialization::try_deserialize(bytes)
+                    .map_err(|error| {
+                        format!("failed to decode inline durable stream session record: {error}")
+                    })?
+                    .ok_or_else(|| {
+                        "failed to decode inline durable stream session record: unsupported serialization version"
+                            .to_string()
+                    })?;
                 &decoded
             }
             OplogPayload::External { cached: None, .. } => {
-                unreachable!("stream session records are stored inline")
+                return Err("durable stream session record payload has not been loaded".into());
             }
         };
         self.apply_record(index, record);
+        Ok(())
     }
 
     pub fn apply_record(

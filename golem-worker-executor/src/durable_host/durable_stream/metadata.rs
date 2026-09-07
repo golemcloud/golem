@@ -955,72 +955,88 @@ impl DurableStreamProducer {
         let owner = OwnedAgentId::new(self.environment_id, &self.producer);
         let mut pending: Vec<_> = keys.into_iter().collect();
         pending.push(ProducerMetadataKey::Global);
-        while let Some(key) = pending.pop() {
-            let dependency = match &key {
-                ProducerMetadataKey::Batch(stream, _)
-                | ProducerMetadataKey::Attachment(_, stream) => {
-                    Some(ProducerMetadataKey::Stream(*stream))
+        while !pending.is_empty() {
+            let mut visiting = std::mem::take(&mut pending);
+            let mut seen = HashSet::new();
+            let mut batch = Vec::new();
+            while let Some(key) = visiting.pop() {
+                if !seen.insert(key.clone()) {
+                    continue;
                 }
-                ProducerMetadataKey::Stream(stream) => index
-                    .stream_sessions
-                    .get(stream)
-                    .cloned()
-                    .map(ProducerMetadataKey::Session),
-                ProducerMetadataKey::Coordinate(coordinate) => index
-                    .coordinates
-                    .get(coordinate)
-                    .copied()
-                    .map(ProducerMetadataKey::Stream),
-                _ => None,
-            };
-            if let Some(dependency) = dependency
-                && !Self::key_ready(index, &dependency)
-            {
-                pending.push(key);
-                pending.push(dependency);
+                let dependency = match &key {
+                    ProducerMetadataKey::Batch(stream, _)
+                    | ProducerMetadataKey::Attachment(_, stream) => {
+                        Some(ProducerMetadataKey::Stream(*stream))
+                    }
+                    ProducerMetadataKey::Stream(stream) => index
+                        .stream_sessions
+                        .get(stream)
+                        .cloned()
+                        .map(ProducerMetadataKey::Session),
+                    ProducerMetadataKey::Coordinate(coordinate) => index
+                        .coordinates
+                        .get(coordinate)
+                        .copied()
+                        .map(ProducerMetadataKey::Stream),
+                    _ => None,
+                };
+                if let Some(dependency) = dependency
+                    && !Self::key_ready(index, &dependency)
+                {
+                    pending.push(key);
+                    visiting.push(dependency);
+                    continue;
+                }
+                if Self::key_ready(index, &key) {
+                    continue;
+                }
+                if let ProducerMetadataKey::Position(stream, offset) = &key
+                    && index.batch_positions.contains_key(&(*stream, *offset))
+                {
+                    index.loaded_metadata.insert(key);
+                    continue;
+                }
+                batch.push(key);
+            }
+            if batch.is_empty() {
                 continue;
             }
-            if Self::key_ready(index, &key) {
-                continue;
-            }
-            if let ProducerMetadataKey::Position(stream, offset) = &key
-                && index.batch_positions.contains_key(&(*stream, *offset))
-            {
-                index.loaded_metadata.insert(key);
-                continue;
-            }
-            let (_, mut rows) = service
-                .lookup_durable_stream_producer_metadata(&owner, *mode, vec![key.clone()])
+            let (_, rows) = service
+                .lookup_durable_stream_producer_metadata(&owner, *mode, batch.clone())
                 .await
                 .map_err(DurableStreamProducerError::Oplog)?;
-            if rows.len() != 1 {
+            if rows.len() != batch.len() {
                 return Err(DurableStreamProducerError::CorruptHistory(
                     "producer metadata lookup returned an incorrect row count".into(),
                 ));
             }
-            if let Some(row) = rows.pop().flatten() {
-                match &row {
-                    ProducerMetadataRow::Coordinate(stream) => {
-                        pending.push(ProducerMetadataKey::Stream(*stream));
+            for (key, row) in batch.into_iter().zip(rows) {
+                if let Some(row) = row {
+                    match &row {
+                        ProducerMetadataRow::Coordinate(stream) => {
+                            pending.push(ProducerMetadataKey::Stream(*stream));
+                        }
+                        ProducerMetadataRow::Stream(stream) => {
+                            pending.push(ProducerMetadataKey::Session(stream.session_key.clone()));
+                            self.buses
+                                .write()
+                                .expect("durable stream bus map lock poisoned")
+                                .entry(stream.registration.handle.stream_id)
+                                .or_insert(Arc::new(
+                                    DurableLiveStreamBus::from_committed_high_water(
+                                        self.live_join_capacity,
+                                        stream.last_offset,
+                                    )?,
+                                ));
+                        }
+                        _ => {}
                     }
-                    ProducerMetadataRow::Stream(stream) => {
-                        pending.push(ProducerMetadataKey::Session(stream.session_key.clone()));
-                        self.buses
-                            .write()
-                            .expect("durable stream bus map lock poisoned")
-                            .entry(stream.registration.handle.stream_id)
-                            .or_insert(Arc::new(DurableLiveStreamBus::from_committed_high_water(
-                                self.live_join_capacity,
-                                stream.last_offset,
-                            )?));
-                    }
-                    _ => {}
+                    index
+                        .hydrate_metadata_row(key.clone(), row)
+                        .map_err(DurableStreamProducerError::CorruptHistory)?;
                 }
-                index
-                    .hydrate_metadata_row(key.clone(), row)
-                    .map_err(DurableStreamProducerError::CorruptHistory)?;
+                index.loaded_metadata.insert(key);
             }
-            index.loaded_metadata.insert(key);
         }
         Ok(())
     }

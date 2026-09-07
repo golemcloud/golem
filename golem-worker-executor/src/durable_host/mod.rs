@@ -5998,19 +5998,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             // other worker on this executor (which propagating would do — and would also fail
             // executor startup or the shard-assignment RPC, since one poison worker could
             // permanently block this executor from serving its shards).
-            let Some(latest_worker_status) = calculate_last_known_status_with_checkpoint(
+            let latest_worker_status = calculate_last_known_status_with_checkpoint(
                 this,
                 &owned_agent_id,
                 agent_mode,
                 worker.last_known_status,
             )
-            .await
-            else {
-                error!(
-                    agent_id = %owned_agent_id,
-                    "Failed to calculate worker status during shard-assignment recovery; skipping agent"
-                );
-                continue;
+            .await;
+            let latest_worker_status = match latest_worker_status {
+                Ok(Some(status)) => status,
+                Ok(None) => {
+                    error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
+                    continue;
+                }
+                Err(error) => {
+                    error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status during shard-assignment recovery; skipping agent");
+                    continue;
+                }
             };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.

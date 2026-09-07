@@ -1,3 +1,4 @@
+use crate::services::oplog::OplogServiceOps;
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -24,13 +25,13 @@ pub async fn calculate_last_known_status_for_existing_worker<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> AgentStatusRecord
+) -> Result<AgentStatusRecord, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
     calculate_last_known_status(this, owned_agent_id, agent_mode, last_known)
-        .await
-        .expect("Failed to calculate oplog index for existing worker")
+        .await?
+        .ok_or_else(|| "failed to calculate status for existing worker".into())
 }
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker
@@ -47,7 +48,7 @@ pub async fn calculate_last_known_status<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -75,7 +76,7 @@ pub async fn calculate_last_known_status_with_checkpoint<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + HasWorkerService + Sync,
 {
@@ -116,7 +117,7 @@ pub async fn calculate_last_known_status_with_checkpoint_reader<T, Fut>(
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
     read_checkpoint: impl FnOnce() -> Fut,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
@@ -124,20 +125,20 @@ where
     // 1. Try folding forward from the live cached status.
     if let Some(last_known) = last_known
         && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await
+            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await?
     {
         crate::metrics::workers::record_agent_status_recompute("cache");
-        return Some(status);
+        return Ok(Some(status));
     }
 
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
     //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
         && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await
+            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await?
     {
         crate::metrics::workers::record_agent_status_recompute("checkpoint");
-        return Some(status);
+        return Ok(Some(status));
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
@@ -147,11 +148,11 @@ where
         agent_mode,
         AgentStatusRecord::default(),
     )
-    .await;
+    .await?;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
-    status
+    Ok(status)
 }
 
 /// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
@@ -171,7 +172,7 @@ pub async fn try_fold_status_from<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     baseline: AgentStatusRecord,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -183,20 +184,20 @@ where
     if last_oplog_index == OplogIndex::NONE {
         // Worker status can only be recovered if we have at least the Create oplog entry, otherwise
         // we cannot recover information like the component version.
-        return None;
+        return Ok(None);
     }
 
     if last_oplog_index < baseline.oplog_idx {
         // The baseline is ahead of the oplog (e.g. a revert truncated it below a stale checkpoint);
         // we cannot fold forward, so the caller must retry from an earlier baseline.
-        return None;
+        return Ok(None);
     }
 
     if baseline.oplog_idx == last_oplog_index {
-        return Some(baseline);
+        return Ok(Some(baseline));
     }
 
-    let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
+    let mut new_entries: BTreeMap<OplogIndex, OplogEntry> = this
         .oplog_service()
         .read_exact(
             owned_agent_id,
@@ -205,6 +206,19 @@ where
             last_oplog_index.as_u64() - baseline.oplog_idx.as_u64(),
         )
         .await;
+
+    for entry in new_entries.values_mut() {
+        if let OplogEntry::StreamSession { record, .. } = entry {
+            let decoded = this
+                .oplog_service()
+                .download_payload(owned_agent_id, agent_mode, record.clone())
+                .await
+                .map_err(|error| {
+                    format!("failed to load durable stream session payload: {error}")
+                })?;
+            *record = OplogPayload::Inline(Box::new(decoded));
+        }
+    }
 
     update_status_with_new_entries(agent_mode, baseline, new_entries, &this.config().retry)
 }
@@ -216,7 +230,7 @@ pub fn update_status_with_new_entries(
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
     default_retry_policy: &RetryConfig,
-) -> Option<AgentStatusRecord> {
+) -> Result<Option<AgentStatusRecord>, String> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
 
@@ -254,7 +268,7 @@ pub fn update_status_with_new_entries(
         // We might have already calculated the status with these skipped regions as an override during a snapshot update.
         // No need to recompute in this case, we are already up to date.
         if effective_skipped_regions_changed {
-            return None;
+            return Ok(None);
         }
     }
 
@@ -277,7 +291,7 @@ pub fn update_status_with_new_entries(
     let received_card_transfers =
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
     let durable_stream_sessions =
-        calculate_durable_stream_sessions(last_known.durable_stream_sessions, &new_entries);
+        calculate_durable_stream_sessions(last_known.durable_stream_sessions, &new_entries)?;
     let has_durable_stream_history = last_known.has_durable_stream_history
         || new_entries.values().any(|entry| {
             matches!(
@@ -378,7 +392,7 @@ pub fn update_status_with_new_entries(
         agent_mode,
     };
 
-    Some(result)
+    Ok(Some(result))
 }
 
 fn calculate_latest_worker_status(
@@ -944,11 +958,11 @@ fn calculate_received_card_transfers(
 fn calculate_durable_stream_sessions(
     mut sessions: DurableStreamSessionIndex,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> DurableStreamSessionIndex {
+) -> Result<DurableStreamSessionIndex, String> {
     for (oplog_idx, entry) in entries {
-        sessions.apply_oplog_entry(*oplog_idx, entry);
+        sessions.apply_oplog_entry(*oplog_idx, entry)?;
     }
-    sessions
+    Ok(sessions)
 }
 
 #[allow(clippy::type_complexity)]
@@ -1401,6 +1415,10 @@ mod test {
     use golem_common::model::agent::{AgentMode, Principal};
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::durable_stream::{
+        AttachmentId, AttemptId, PersistedStreamInvocationDescriptorV1, StartAttemptDescriptorV1,
+        StreamInvocationIdV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
+    };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -1426,6 +1444,21 @@ mod test {
     use std::sync::Arc;
     use test_r::test;
     use uuid::Uuid;
+
+    fn update_status_with_new_entries(
+        agent_mode: AgentMode,
+        last_known: AgentStatusRecord,
+        new_entries: BTreeMap<OplogIndex, OplogEntry>,
+        default_retry_policy: &RetryConfig,
+    ) -> Option<AgentStatusRecord> {
+        super::update_status_with_new_entries(
+            agent_mode,
+            last_known,
+            new_entries,
+            default_retry_policy,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn successful_update_resets_total_linear_memory_size() {
@@ -2039,6 +2072,7 @@ mod test {
             None,
         )
         .await
+        .unwrap()
         .unwrap();
         let from_before_atomic_pair = calculate_last_known_status_for_existing_worker(
             &test_case,
@@ -2046,7 +2080,8 @@ mod test {
             AgentMode::Durable,
             Some(pending_baseline),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(from_start, expected);
         assert_eq!(from_before_atomic_pair, expected);
@@ -2156,11 +2191,13 @@ mod test {
             owned_agent_id: owned_agent_id.clone(),
             entries: vec![],
             read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         let result =
             calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
-                .await;
+                .await
+                .unwrap();
         assert2::assert!(let None = result);
     }
 
@@ -2212,7 +2249,8 @@ mod test {
             AgentMode::Durable,
             stale_live.clone(),
         )
-        .await;
+        .await
+        .unwrap();
         assert2::assert!(let None = direct);
 
         test_case.read_starts.lock().unwrap().clear();
@@ -2224,7 +2262,8 @@ mod test {
             Some(stale_live),
             || async { Some(checkpoint) },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(repaired, Some(final_expected));
 
@@ -2252,7 +2291,8 @@ mod test {
             Some(stale_live),
             || async { None },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, Some(final_expected));
 
@@ -2280,7 +2320,8 @@ mod test {
             Some(stale_live),
             || async { Some(unusable_checkpoint) },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, Some(final_expected));
 
@@ -2712,6 +2753,7 @@ mod test {
                     .map(|entry| entry.rounded())
                     .collect(),
                 read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
+                raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -2731,6 +2773,8 @@ mod test {
         }
     }
 
+    type RawPayloads = Vec<(PayloadId, Vec<u8>)>;
+
     #[derive(Debug, Clone)]
     struct TestCase {
         owned_agent_id: OwnedAgentId,
@@ -2738,6 +2782,7 @@ mod test {
         /// Records the `start_idx` of every exact read so tests can assert which baseline
         /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
         read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
+        raw_payloads: Arc<std::sync::Mutex<RawPayloads>>,
     }
 
     impl TestCase {
@@ -2887,10 +2932,16 @@ mod test {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-            _payload_id: PayloadId,
+            payload_id: PayloadId,
             _md5_hash: Vec<u8>,
         ) -> Result<Vec<u8>, String> {
-            unreachable!()
+            self.raw_payloads
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(stored_id, _)| *stored_id == payload_id)
+                .map(|(_, bytes)| bytes.clone())
+                .ok_or_else(|| format!("missing raw payload {payload_id}"))
         }
     }
 
@@ -2962,13 +3013,91 @@ mod test {
                 AgentMode::Durable,
                 last_known_status,
             )
-            .await;
+            .await
+            .unwrap();
 
             assert_eq!(
                 final_status, final_expected_status,
                 "Calculating the last known status from oplog index {idx}"
             )
         }
+    }
+
+    #[test]
+    async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
+        let mut test_case = TestCase::builder(1).build();
+        let session_key = StreamInvocationIdV1 {
+            callee_environment_id: test_case.owned_agent_id.environment_id,
+            callee: test_case.owned_agent_id.agent_id.clone(),
+            callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
+            idempotency_key: IdempotencyKey::fresh(),
+        };
+        let attachment_id = AttachmentId::primary(
+            session_key.callee_environment_id,
+            &session_key.callee,
+            &session_key.idempotency_key,
+        )
+        .unwrap();
+        let record = StreamSessionRecordV1::Prepared(StreamSessionPreparedRecordV1 {
+            format_version: 1,
+            attempt: StartAttemptDescriptorV1 {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: session_key.callee_fingerprint,
+                attempt_id: AttemptId::fresh(),
+                invocation: PersistedStreamInvocationDescriptorV1 {
+                    format_version: 1,
+                    session_key: session_key.clone(),
+                    target_component_revision: ComponentRevision::INITIAL,
+                    method_name: "large-cold-status".to_string(),
+                    invocation_value: vec![7; 70 * 1024],
+                    stream_handles: Vec::new(),
+                    execution_config: Vec::new(),
+                    effective_identity: Vec::new(),
+                },
+                effective_identity: Vec::new(),
+                live_join_buffer_events: 1,
+            },
+            stream_mappings: Vec::new(),
+        });
+        let bytes = golem_common::serialization::serialize(&record).unwrap();
+        assert!(bytes.len() > 64 * 1024);
+        let payload_id = PayloadId::new();
+        test_case
+            .raw_payloads
+            .lock()
+            .unwrap()
+            .push((payload_id.clone(), bytes));
+        test_case.entries.push(TestEntry {
+            oplog_entry: OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                record: OplogPayload::External {
+                    payload_id,
+                    md5_hash: vec![0; 16],
+                    cached: None,
+                },
+            },
+            expected_status: AgentStatusRecord::default(),
+        });
+
+        let status = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            status
+                .durable_stream_sessions
+                .get(&session_key.idempotency_key)
+                .unwrap()
+                .prepared,
+            Some(OplogIndex::from_u64(test_case.entries.len() as u64))
+        );
     }
 
     // --------------------------------------------------------------------------
@@ -3406,7 +3535,7 @@ mod test {
             },
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3440,7 +3569,7 @@ mod test {
             OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3473,7 +3602,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3499,7 +3628,7 @@ mod test {
             },
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3523,7 +3652,7 @@ mod test {
                 local_wallet_generation: Some(1),
             },
         )]);
-        let status_after_revoke = super::update_status_with_new_entries(
+        let status_after_revoke = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             revoked,
@@ -3536,7 +3665,7 @@ mod test {
             OplogIndex::from_u64(2),
             OplogEntry::card_installed(None, test_card(card_id).into(), Some(2)),
         )]);
-        let status_after_install = super::update_status_with_new_entries(
+        let status_after_install = update_status_with_new_entries(
             AgentMode::Durable,
             status_after_revoke,
             installed,
@@ -3579,7 +3708,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3618,7 +3747,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3671,7 +3800,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3728,7 +3857,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3773,7 +3902,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3799,7 +3928,7 @@ mod test {
             )),
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3840,7 +3969,7 @@ mod test {
             card: Some(stored_card.clone()),
         });
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             BTreeMap::from([(
@@ -3858,7 +3987,7 @@ mod test {
             }) if card == &stored_card
         ));
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             status,
             BTreeMap::from([(
@@ -3880,7 +4009,7 @@ mod test {
             }) if *recorded_source_card_id == source_card_id && card == &stored_card
         ));
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             status,
             BTreeMap::from([(
@@ -3939,7 +4068,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3994,7 +4123,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4040,7 +4169,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4086,7 +4215,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4137,7 +4266,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4186,7 +4315,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4243,7 +4372,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4300,7 +4429,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4329,7 +4458,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4354,7 +4483,7 @@ mod test {
             OplogEntry::card_event_queued(QueuedCardEvent::install(card.clone())),
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4384,7 +4513,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4414,7 +4543,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4442,7 +4571,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4475,7 +4604,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4508,7 +4637,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,

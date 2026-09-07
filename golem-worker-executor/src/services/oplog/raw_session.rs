@@ -27,11 +27,25 @@ use std::sync::Arc;
 pub(super) struct RawSessionCache {
     entries: HashMap<StreamSessionKeyV1, (Option<DurableStreamSessionStatus>, u64)>,
     clock: u64,
+    payload_error: Option<String>,
 }
 
 impl RawSessionCache {
-    pub async fn lookup(
+    pub fn cached(
         &mut self,
+        key: &StreamSessionKeyV1,
+    ) -> Result<Option<Option<DurableStreamSessionStatus>>, String> {
+        if let Some(error) = &self.payload_error {
+            return Err(error.clone());
+        }
+        self.clock += 1;
+        Ok(self.entries.get_mut(key).map(|(status, accessed)| {
+            *accessed = self.clock;
+            status.clone()
+        }))
+    }
+
+    pub async fn reconstruct(
         service: Option<&Arc<StreamSessionIndexService>>,
         id: &OwnedAgentId,
         mode: AgentMode,
@@ -39,18 +53,13 @@ impl RawSessionCache {
         buffer: &VecDeque<OplogEntry>,
         key: &StreamSessionKeyV1,
     ) -> Result<Option<DurableStreamSessionStatus>, String> {
-        self.clock += 1;
-        if let Some((status, accessed)) = self.entries.get_mut(key) {
-            *accessed = self.clock;
-            return Ok(status.clone());
-        }
         let service = service.ok_or_else(|| "stream session index is not installed".to_string())?;
         let mut status = service
             .lookup_persisted(id, mode, committed, &key.idempotency_key)
             .await?
             .filter(|status| status.session_key.as_ref() == Some(key));
         for (offset, entry) in buffer.iter().enumerate() {
-            if let Some(record) = record(entry)
+            if let Some(record) = record(entry)?
                 && record_key(&record) == Some(key)
             {
                 apply(
@@ -60,6 +69,11 @@ impl RawSessionCache {
                 );
             }
         }
+        Ok(status)
+    }
+
+    pub fn insert(&mut self, key: StreamSessionKeyV1, status: Option<DurableStreamSessionStatus>) {
+        self.clock += 1;
         if self.entries.len() == 128 {
             let oldest = self
                 .entries
@@ -70,13 +84,19 @@ impl RawSessionCache {
                 .clone();
             self.entries.remove(&oldest);
         }
-        self.entries
-            .insert(key.clone(), (status.clone(), self.clock));
-        Ok(status)
+        self.entries.insert(key, (status, self.clock));
     }
 
     pub fn apply_entry(&mut self, index: OplogIndex, entry: &OplogEntry) {
-        let Some(record) = record(entry) else { return };
+        let record = match record(entry) {
+            Ok(Some(record)) => record,
+            Ok(None) => return,
+            Err(error) => {
+                self.payload_error = Some(error);
+                self.entries.clear();
+                return;
+            }
+        };
         let Some(key) = record_key(&record) else {
             return;
         };
@@ -112,11 +132,11 @@ fn record_key(record: &StreamSessionRecordV1) -> Option<&StreamSessionKeyV1> {
     }
 }
 
-fn record(entry: &OplogEntry) -> Option<Cow<'_, StreamSessionRecordV1>> {
+fn record(entry: &OplogEntry) -> Result<Option<Cow<'_, StreamSessionRecordV1>>, String> {
     let OplogEntry::StreamSession { record, .. } = entry else {
-        return None;
+        return Ok(None);
     };
-    Some(match record {
+    Ok(Some(match record {
         OplogPayload::Inline(record) => Cow::Borrowed(record.as_ref()),
         OplogPayload::SerializedInline {
             cached: Some(record),
@@ -129,12 +149,13 @@ fn record(entry: &OplogEntry) -> Option<Cow<'_, StreamSessionRecordV1>> {
         OplogPayload::SerializedInline {
             bytes,
             cached: None,
-        } => Cow::Owned(
-            golem_common::serialization::deserialize(bytes)
-                .expect("stream session records are valid inline payloads"),
-        ),
-        OplogPayload::External { cached: None, .. } => {
-            unreachable!("stream session records are inline")
+        } => {
+            Cow::Owned(golem_common::serialization::try_deserialize(bytes)?.ok_or(
+                "stream session record has an unsupported or missing serialization version",
+            )?)
         }
-    })
+        OplogPayload::External { cached: None, .. } => {
+            return Err("uncached external stream session record cannot be folded".into());
+        }
+    }))
 }

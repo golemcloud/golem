@@ -624,3 +624,58 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
         } if decoded_scope_card == scope_card
     ));
 }
+
+#[test]
+fn durable_stream_session_index_rejects_unloaded_external_payload() {
+    use crate::model::oplog::{OplogEntry, OplogPayload, PayloadId};
+
+    let entry = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        record: OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![0; 16],
+            cached: None,
+        },
+    };
+
+    let error = DurableStreamSessionIndex::default()
+        .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
+        .unwrap_err();
+    assert!(error.contains("has not been loaded"));
+}
+
+#[test]
+fn durable_stream_session_index_rejects_unsupported_inline_payload_version() {
+    use crate::model::oplog::{OplogEntry, OplogPayload};
+
+    let entry = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        record: OplogPayload::SerializedInline {
+            bytes: vec![0xff],
+            cached: None,
+        },
+    };
+
+    let error = DurableStreamSessionIndex::default()
+        .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
+        .unwrap_err();
+    assert!(error.contains("unsupported serialization version"));
+}
+
+#[test]
+fn durable_stream_session_index_rejects_malformed_inline_payload() {
+    use crate::model::oplog::{OplogEntry, OplogPayload};
+
+    let entry = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        record: OplogPayload::SerializedInline {
+            bytes: vec![crate::serialization::SERIALIZATION_VERSION_V3, 0xff],
+            cached: None,
+        },
+    };
+
+    let error = DurableStreamSessionIndex::default()
+        .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
+        .unwrap_err();
+    assert!(error.contains("failed to decode"));
+}

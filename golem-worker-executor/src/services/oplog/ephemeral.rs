@@ -25,9 +25,9 @@ use crate::services::oplog::{
     OplogService, OrderedOplogStart, PendingUpload, ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
-use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
+use golem_common::model::{DurableStreamSessionStatus, OwnedAgentId};
 use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
@@ -90,7 +90,14 @@ enum EphemeralJob {
     },
     RawDurableStreamSessionStatus {
         session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
-        done: tokio::sync::oneshot::Sender<super::RawDurableStreamSessionStatus>,
+        done: tokio::sync::oneshot::Sender<RawSessionLookup>,
+    },
+    CompleteRawDurableStreamSessionStatus {
+        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        expected_watermark: OplogIndex,
+        expected_committed: OplogIndex,
+        status: Result<Option<DurableStreamSessionStatus>, String>,
+        done: tokio::sync::oneshot::Sender<Option<super::RawDurableStreamSessionStatus>>,
     },
     LastAddedNonHintEntry {
         done: tokio::sync::oneshot::Sender<Option<OplogIndex>>,
@@ -100,6 +107,13 @@ enum EphemeralJob {
     ReadSnapshot {
         done: tokio::sync::oneshot::Sender<EphemeralReadSnapshot>,
     },
+}
+
+struct RawSessionLookup {
+    watermark: OplogIndex,
+    committed: OplogIndex,
+    buffer: VecDeque<OplogEntry>,
+    cached: Option<Result<Option<DurableStreamSessionStatus>, String>>,
 }
 
 /// Snapshot of the uncommitted buffer and commit watermark, used to serve reads outside the
@@ -193,7 +207,6 @@ impl EphemeralOplog {
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
         let actor_primary_service = primary_service.clone();
         let actor_owned_agent_id = owned_agent_id.clone();
-        let stream_session_index = primary_service.stream_session_index();
         let actor = tokio::spawn(async move {
             while let Some(job) = job_rx.recv().await {
                 match job {
@@ -261,21 +274,44 @@ impl EphemeralOplog {
                         let _ = done.send(state.last_oplog_idx);
                     }
                     EphemeralJob::RawDurableStreamSessionStatus { session_key, done } => {
-                        let status = state
+                        let cached = state
                             .durable_stream_sessions
-                            .lookup(
-                                stream_session_index.as_ref(),
-                                &actor_owned_agent_id,
-                                agent_mode,
-                                state.last_committed_idx,
-                                &state.buffer,
-                                &session_key,
-                            )
-                            .await;
-                        let _ = done.send(super::RawDurableStreamSessionStatus {
+                            .cached(&session_key)
+                            .transpose();
+                        let _ = done.send(RawSessionLookup {
                             watermark: state.last_oplog_idx,
-                            status,
+                            committed: state.last_committed_idx,
+                            buffer: if cached.is_none() {
+                                state.buffer.clone()
+                            } else {
+                                VecDeque::new()
+                            },
+                            cached,
                         });
+                    }
+                    EphemeralJob::CompleteRawDurableStreamSessionStatus {
+                        session_key,
+                        expected_watermark,
+                        expected_committed,
+                        status,
+                        done,
+                    } => {
+                        let result = if state.last_oplog_idx == expected_watermark
+                            && state.last_committed_idx == expected_committed
+                        {
+                            if let Ok(value) = &status {
+                                state
+                                    .durable_stream_sessions
+                                    .insert(session_key, value.clone());
+                            }
+                            Some(super::RawDurableStreamSessionStatus {
+                                watermark: expected_watermark,
+                                status,
+                            })
+                        } else {
+                            None
+                        };
+                        let _ = done.send(result);
                     }
                     EphemeralJob::LastAddedNonHintEntry { done } => {
                         let _ = done.send(state.last_added_non_hint_entry);
@@ -688,11 +724,42 @@ impl Oplog for EphemeralOplog {
         &self,
         session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
     ) -> super::RawDurableStreamSessionStatus {
-        self.run_job(|done| EphemeralJob::RawDurableStreamSessionStatus {
-            session_key: session_key.clone(),
-            done,
-        })
-        .await
+        loop {
+            let snapshot = self
+                .run_job(|done| EphemeralJob::RawDurableStreamSessionStatus {
+                    session_key: session_key.clone(),
+                    done,
+                })
+                .await;
+            if let Some(status) = snapshot.cached {
+                return super::RawDurableStreamSessionStatus {
+                    watermark: snapshot.watermark,
+                    status,
+                };
+            }
+            let index = self.primary_service.stream_session_index();
+            let status = super::raw_session::RawSessionCache::reconstruct(
+                index.as_ref(),
+                &self.owned_agent_id,
+                self.agent_mode,
+                snapshot.committed,
+                &snapshot.buffer,
+                session_key,
+            )
+            .await;
+            if let Some(result) = self
+                .run_job(|done| EphemeralJob::CompleteRawDurableStreamSessionStatus {
+                    session_key: session_key.clone(),
+                    expected_watermark: snapshot.watermark,
+                    expected_committed: snapshot.committed,
+                    status,
+                    done,
+                })
+                .await
+            {
+                return result;
+            }
+        }
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {

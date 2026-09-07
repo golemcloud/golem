@@ -271,7 +271,7 @@ pub trait WorkerService: Send + Sync {
 
     async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId);
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError>;
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
 
@@ -918,8 +918,26 @@ impl WorkerService for DefaultWorkerService {
                             None,
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
-                        .await
-                        .expect("Failed to recompute worker status for existing worker");
+                        .await;
+
+                        let last_known_status = match last_known_status {
+                            Ok(Some(status)) => status,
+                            Ok(None) => return None,
+                            Err(error) => {
+                                tracing::error!(
+                                    agent_id = %owned_agent_id,
+                                    %error,
+                                    "Failed to recompute cold worker status"
+                                );
+                                // The Create entry still proves the worker exists. Leave status
+                                // unresolved so typed reconstruction callers report the failure,
+                                // rather than treating a corrupt status payload as a missing worker.
+                                return Some(GetWorkerMetadataResult {
+                                    initial_worker_metadata,
+                                    last_known_status: None,
+                                });
+                            }
+                        };
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
@@ -951,7 +969,7 @@ impl WorkerService for DefaultWorkerService {
         result
     }
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove");
 
         if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await {
@@ -961,7 +979,7 @@ impl WorkerService for DefaultWorkerService {
         self.stream_session_index
             .clear(owned_agent_id)
             .await
-            .unwrap_or_else(|err| panic!("failed to remove durable stream session index: {err}"));
+            .map_err(WorkerExecutorError::runtime)?;
 
         let shard_assignment = self
             .shard_service
@@ -980,6 +998,7 @@ impl WorkerService for DefaultWorkerService {
                     "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
                 )
             });
+        Ok(())
     }
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId) {
