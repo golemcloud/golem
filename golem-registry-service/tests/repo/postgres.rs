@@ -556,6 +556,87 @@ async fn test_account_resource_override_resolution(#[dimension(postgres_variant)
 }
 
 #[test]
+async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owner_values(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_admin_resource_grants_resolve_all_dimensions_and_preserve_owner_values(deps).await;
+}
+
+#[test]
+async fn test_replacing_admin_grant_must_raise_current_grant(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_replacing_admin_grant_must_raise_current_grant(deps).await;
+}
+
+#[test]
+async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempotent(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempotent(
+        deps,
+    )
+    .await;
+}
+
+#[test]
+async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_replacing_expired_admin_grant_records_expiry_before_new_grant(deps)
+        .await;
+}
+
+#[test]
+async fn test_admin_grant_operations_observe_time_after_locks(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_admin_grant_operations_observe_time_after_locks(deps).await;
+}
+
+#[test]
+async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(deps)
+        .await;
+}
+
+#[test]
+async fn test_plan_update_preserves_active_grants(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_plan_update_preserves_active_grants(deps).await;
+}
+
+#[test]
+async fn test_account_plan_change_preserves_active_grants(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_account_plan_change_preserves_active_grants(deps).await;
+}
+
+#[test]
+async fn test_self_service_clear_serializes_with_account_plan_change(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_self_service_clear_serializes_with_account_plan_change(deps).await;
+}
+
+#[test]
+async fn test_multi_account_expiry_cleanup_uses_deadlock_safe_lock_order(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_multi_account_expiry_cleanup_uses_deadlock_safe_lock_order(deps)
+        .await;
+}
+
+#[test]
+async fn test_admin_grant_cleanup_rejects_zero_interval(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_admin_grant_cleanup_rejects_zero_interval(deps).await;
+}
+
+#[test]
 async fn test_storage_limit_discards_out_of_range_override_after_plan_update(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {

@@ -16,12 +16,16 @@ use super::account::{AccountError, AccountService};
 use super::account_usage::error::AccountUsageError;
 use super::account_usage::{authorize_account_usage_permission, map_account_error};
 use crate::repo::account_resource_override::{
-    AccountResourceOverrideRepo, OverridePolicy, OverridePolicyViolation,
-    SetAccountResourceOverrideError,
+    AccountResourceOverrideRepo, AdminResourceGrantRepoError, OverridePolicy,
+    OverridePolicyViolation, SetAccountResourceOverrideError,
 };
 use crate::repo::model::account_resource_override::AccountResourceOverrideDimension;
 use golem_common::model::account::AccountId;
-use golem_common::model::account_usage::{MemoryLimit, StorageLimit};
+use golem_common::model::account_usage::{
+    AdminResourceGrantChange, AdminResourceGrantDimension, MemoryLimit, SetAdminResourceGrant,
+    StorageLimit,
+};
+use golem_common::model::auth::AccountRole;
 use golem_common::model::card::AccountUsageVerb;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -40,6 +44,16 @@ pub enum AccountResourceOverrideError {
     FeatureDisabled(&'static str),
     #[error("Only account owners may change per-agent resource limits")]
     OwnerOnly,
+    #[error("Only administrators may change resource grants")]
+    AdminOnly,
+    #[error("Grant value {value} does not exceed the currently resolved value {current}")]
+    GrantDoesNotIncreaseResolvedValue { value: u64, current: u64 },
+    #[error("Promotional grants require a future expiry")]
+    PromotionalExpiryRequired,
+    #[error("The grant value exceeds the supported internal range")]
+    GrantValueOverflow,
+    #[error("No active grant exists for this resource dimension")]
+    GrantNotFound,
     #[error("Account {0} not found")]
     AccountNotFound(AccountId),
     #[error(transparent)]
@@ -56,6 +70,11 @@ impl SafeDisplay for AccountResourceOverrideError {
             | Self::BelowPlanDefault(_, _)
             | Self::FeatureDisabled(_)
             | Self::OwnerOnly
+            | Self::AdminOnly
+            | Self::GrantDoesNotIncreaseResolvedValue { .. }
+            | Self::PromotionalExpiryRequired
+            | Self::GrantValueOverflow
+            | Self::GrantNotFound
             | Self::AccountNotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -99,21 +118,14 @@ impl AccountResourceOverrideService {
         auth: &AuthCtx,
     ) -> Result<StorageLimit, AccountResourceOverrideError> {
         self.authorize_owner(account_id, auth).await?;
-        let policy = self
-            .set_user_override(
-                account_id,
-                AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
-                value,
-                auth,
-            )
-            .await?;
-        Ok(StorageLimit::resolve(
-            policy.enabled,
-            policy.default,
-            Some(value),
-            policy.ceiling,
-            policy.user_configurable,
-        ))
+        self.set_user_override(
+            account_id,
+            AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            value,
+            auth,
+        )
+        .await?;
+        self.resolved_storage_limit(account_id).await
     }
 
     pub async fn get_max_disk_space_per_worker(
@@ -159,20 +171,14 @@ impl AccountResourceOverrideService {
         auth: &AuthCtx,
     ) -> Result<MemoryLimit, AccountResourceOverrideError> {
         self.authorize_owner(account_id, auth).await?;
-        let policy = self
-            .set_user_override(
-                account_id,
-                AccountResourceOverrideDimension::MaxMemoryPerWorker,
-                value,
-                auth,
-            )
-            .await?;
-        Ok(MemoryLimit::resolve(
-            policy.default,
-            Some(value),
-            policy.ceiling,
-            policy.user_configurable,
-        ))
+        self.set_user_override(
+            account_id,
+            AccountResourceOverrideDimension::MaxMemoryPerWorker,
+            value,
+            auth,
+        )
+        .await?;
+        self.resolved_memory_limit(account_id).await
     }
 
     pub async fn get_max_memory_per_worker(
@@ -236,12 +242,22 @@ impl AccountResourceOverrideService {
             )
             .await?
             .map(Into::into);
-        Ok(MemoryLimit::resolve(
+        let admin_grant = self
+            .repo
+            .get_active_admin_grants(account_id.0, &SqlDateTime::now())
+            .await?
+            .into_iter()
+            .find(|grant| grant.dimension == AdminResourceGrantDimension::MaxMemoryPerAgent);
+        let mut limit = MemoryLimit::resolve(
             plan.max_memory_per_agent,
             override_value,
             plan.max_memory_per_agent_ceiling,
             plan.max_memory_per_agent_user_configurable,
-        ))
+        );
+        if let Some(grant) = admin_grant {
+            limit.effective_value = grant.value;
+        }
+        Ok(limit)
     }
 
     async fn resolved_storage_limit(
@@ -261,13 +277,59 @@ impl AccountResourceOverrideService {
             )
             .await?
             .map(Into::into);
-        Ok(StorageLimit::resolve(
+        let admin_grant = self
+            .repo
+            .get_active_admin_grants(account_id.0, &SqlDateTime::now())
+            .await?
+            .into_iter()
+            .find(|grant| grant.dimension == AdminResourceGrantDimension::MaxStoragePerAgent);
+        let mut limit = StorageLimit::resolve(
             plan.max_storage_per_agent_enabled,
             plan.max_storage_per_agent,
             override_value,
             plan.max_storage_per_agent_ceiling,
             plan.max_storage_per_agent_user_configurable,
-        ))
+        );
+        if limit.enabled
+            && let Some(grant) = admin_grant
+        {
+            limit.effective_value = Some(grant.value);
+        }
+        Ok(limit)
+    }
+
+    pub async fn set_admin_grant(
+        &self,
+        account_id: AccountId,
+        dimension: AdminResourceGrantDimension,
+        request: SetAdminResourceGrant,
+        auth: &AuthCtx,
+    ) -> Result<AdminResourceGrantChange, AccountResourceOverrideError> {
+        ensure_admin(auth)?;
+        self.repo
+            .set_admin_grant(
+                account_id.0,
+                dimension.into(),
+                request.value,
+                request.reason,
+                request.expires_at.map(SqlDateTime::new),
+                auth.actor_account_id().0,
+            )
+            .await
+            .map_err(|error| map_admin_grant_error(account_id, error))
+    }
+
+    pub async fn clear_admin_grant(
+        &self,
+        account_id: AccountId,
+        dimension: AdminResourceGrantDimension,
+        auth: &AuthCtx,
+    ) -> Result<AdminResourceGrantChange, AccountResourceOverrideError> {
+        ensure_admin(auth)?;
+        self.repo
+            .clear_admin_grant(account_id.0, dimension.into(), auth.actor_account_id().0)
+            .await
+            .map_err(|error| map_admin_grant_error(account_id, error))
     }
 
     async fn authorize(
@@ -305,6 +367,12 @@ fn map_set_error(
     let label = match dimension {
         AccountResourceOverrideDimension::MaxDiskSpacePerWorker => "Maximum storage per agent",
         AccountResourceOverrideDimension::MaxMemoryPerWorker => "Maximum memory per agent",
+        AccountResourceOverrideDimension::MonthlyComputeGcu
+        | AccountResourceOverrideDimension::MonthlyMemoryGbSeconds
+        | AccountResourceOverrideDimension::MonthlyDurableStorageGbMonth
+        | AccountResourceOverrideDimension::MonthlyEphemeralStorageGbMonth => {
+            "Monthly resource amount"
+        }
     };
     match error {
         SetAccountResourceOverrideError::AccountNotFound(_) => {
@@ -326,6 +394,31 @@ fn map_set_error(
     }
 }
 
+fn map_admin_grant_error(
+    account_id: AccountId,
+    error: AdminResourceGrantRepoError,
+) -> AccountResourceOverrideError {
+    match error {
+        AdminResourceGrantRepoError::AccountNotFound(_) => {
+            AccountResourceOverrideError::AccountNotFound(account_id)
+        }
+        AdminResourceGrantRepoError::FeatureDisabled => {
+            AccountResourceOverrideError::FeatureDisabled("Maximum storage per agent")
+        }
+        AdminResourceGrantRepoError::DoesNotIncreaseResolvedValue { value, current } => {
+            AccountResourceOverrideError::GrantDoesNotIncreaseResolvedValue { value, current }
+        }
+        AdminResourceGrantRepoError::PromotionalExpiryRequired => {
+            AccountResourceOverrideError::PromotionalExpiryRequired
+        }
+        AdminResourceGrantRepoError::ValueOverflow => {
+            AccountResourceOverrideError::GrantValueOverflow
+        }
+        AdminResourceGrantRepoError::GrantNotFound => AccountResourceOverrideError::GrantNotFound,
+        AdminResourceGrantRepoError::Internal(error) => error.into(),
+    }
+}
+
 fn ensure_account_owner(
     account_id: AccountId,
     auth: &AuthCtx,
@@ -333,6 +426,13 @@ fn ensure_account_owner(
     match auth {
         AuthCtx::User(user) if user.account_id == account_id => Ok(()),
         _ => Err(AccountResourceOverrideError::OwnerOnly),
+    }
+}
+
+fn ensure_admin(auth: &AuthCtx) -> Result<(), AccountResourceOverrideError> {
+    match auth {
+        AuthCtx::User(user) if user.account_roles.contains(&AccountRole::Admin) => Ok(()),
+        _ => Err(AccountResourceOverrideError::AdminOnly),
     }
 }
 
@@ -366,6 +466,50 @@ mod tests {
         assert!(matches!(
             ensure_account_owner(owner_id, &AuthCtx::System),
             Err(AccountResourceOverrideError::OwnerOnly)
+        ));
+    }
+
+    #[test]
+    fn only_administrators_can_mutate_resource_grants() {
+        let admin_id = AccountId::new();
+        let target_id = AccountId::new();
+        let admin = AuthCtx::User(UserAuthCtx {
+            account_id: admin_id,
+            account_email: AccountEmail::new("admin@example.com"),
+            account_plan_id: PlanId::new(),
+            account_roles: BTreeSet::from([AccountRole::Admin]),
+            effective_surface: EffectiveSurface::default(),
+            delegation_surface: None,
+        });
+        let user = AuthCtx::User(UserAuthCtx {
+            account_id: target_id,
+            account_email: AccountEmail::new("user@example.com"),
+            account_plan_id: PlanId::new(),
+            account_roles: BTreeSet::new(),
+            effective_surface: EffectiveSurface::default(),
+            delegation_surface: None,
+        });
+        let impersonation = AuthCtx::admin_impersonation(
+            admin_id,
+            target_id,
+            AccountEmail::new("user@example.com"),
+            BTreeSet::new(),
+            PlanId::new(),
+            EffectiveSurface::default(),
+        );
+
+        assert!(ensure_admin(&admin).is_ok());
+        assert!(matches!(
+            ensure_admin(&user),
+            Err(AccountResourceOverrideError::AdminOnly)
+        ));
+        assert!(matches!(
+            ensure_admin(&AuthCtx::System),
+            Err(AccountResourceOverrideError::AdminOnly)
+        ));
+        assert!(matches!(
+            ensure_admin(&impersonation),
+            Err(AccountResourceOverrideError::AdminOnly)
         ));
     }
 

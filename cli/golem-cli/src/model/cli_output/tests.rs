@@ -3255,6 +3255,18 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
             any::<bool>(),
             arb_uuid(),
             prop_oneof![
+                Just(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyComputeGcu),
+                Just(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyMemoryGbSeconds),
+                Just(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyDurableStorageGbMonth),
+                Just(golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyEphemeralStorageGbMonth),
+                Just(golem_common::model::account_usage::AdminResourceGrantDimension::MaxMemoryPerAgent),
+                Just(golem_common::model::account_usage::AdminResourceGrantDimension::MaxStoragePerAgent),
+            ],
+            prop_oneof![
+                Just(golem_common::model::account_usage::AdminResourceGrantReason::Promotional),
+                Just(golem_common::model::account_usage::AdminResourceGrantReason::Support),
+            ],
+            prop_oneof![
                 Just(golem_common::model::account_usage::MeteringStatus::Enabled),
                 Just(golem_common::model::account_usage::MeteringStatus::Disabled),
                 Just(golem_common::model::account_usage::MeteringStatus::Unknown),
@@ -3269,6 +3281,8 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                     user_configurable,
                     storage_enabled,
                     account_id,
+                    grant_dimension,
+                    grant_reason,
                     metering,
                 )| {
                     let storage = if storage_enabled {
@@ -3329,6 +3343,23 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                                     new_mode: golem_common::model::account_usage::MonthlyUsageMode::AllowOverage,
                                 },
                             ),
+                            admin_grants: vec![
+                                golem_common::model::account_usage::AdminResourceGrant {
+                                    dimension: grant_dimension,
+                                    value: effective_value,
+                                    reason: grant_reason,
+                                    actor_account_id:
+                                        golem_common::model::account::AccountId(account_id),
+                                    granted_at: chrono::DateTime::from_timestamp(
+                                        1_700_000_000,
+                                        0,
+                                    )
+                                    .unwrap(),
+                                    expires_at: Some(
+                                        chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+                                    ),
+                                },
+                            ],
                             monthly: golem_common::model::account_usage::MonthlyResourceLimits {
                                 compute_gcu: golem_common::model::account_usage::MonthlyComputeLimit {
                                     metering,

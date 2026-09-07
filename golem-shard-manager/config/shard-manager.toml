@@ -139,7 +139,6 @@ type = "Disabled"
 
 [worker_executors.tls.config]
 
-
 ## Generated from example config: with k8s healthcheck
 # http_port = 8081
 # number_of_shards = 1024

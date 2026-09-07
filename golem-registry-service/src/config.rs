@@ -51,6 +51,8 @@ pub struct RegistryServiceConfig {
     #[serde(default)]
     pub deployment_events: DeploymentEventsConfig,
     #[serde(default)]
+    pub resource_grants: ResourceGrantsConfig,
+    #[serde(default)]
     pub security_scheme: SecuritySchemeConfig,
 }
 
@@ -77,6 +79,12 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "{}",
             self.blob_storage.to_safe_string_indented()
+        );
+
+        let _ = writeln!(
+            &mut result,
+            "resource grant cleanup interval: {:?}",
+            self.resource_grants.cleanup_interval
         );
 
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
@@ -218,6 +226,7 @@ impl Default for RegistryServiceConfig {
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
+            resource_grants: ResourceGrantsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
         }
     }
@@ -481,6 +490,20 @@ impl Default for DeploymentEventsConfig {
         Self {
             retention: std::time::Duration::from_secs(24 * 3600), // 24 hours
             cleanup_interval: std::time::Duration::from_secs(3600), // 1 hour
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResourceGrantsConfig {
+    #[serde(with = "humantime_serde")]
+    pub cleanup_interval: std::time::Duration,
+}
+
+impl Default for ResourceGrantsConfig {
+    fn default() -> Self {
+        Self {
+            cleanup_interval: std::time::Duration::from_secs(60),
         }
     }
 }

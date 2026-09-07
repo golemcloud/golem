@@ -99,7 +99,6 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-
 ## Generated from example config: with s3 blob storage and disabled compiled component service
 # http_host = "0.0.0.0"
 # http_port = 8084

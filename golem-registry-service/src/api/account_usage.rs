@@ -17,11 +17,14 @@ use crate::api::error::ApiError;
 use crate::services::account_resource_override::AccountResourceOverrideService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::auth::AuthService;
+use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountResourcePolicy, AccountUsage, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit,
-    MonthlyUsageModeTransition, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
+    AccountResourcePolicy, AccountUsage, AdminResourceGrantChange, AdminResourceGrantDimension,
+    AdminResourceGrantEventType, AdminResourceGrantReason, DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS,
+    MemoryLimit, MonthlyUsageModeTransition, SetAdminResourceGrant, SetMemoryLimit,
+    SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -36,6 +39,55 @@ pub struct AccountUsageApi {
     account_usage_service: Arc<AccountUsageService>,
     account_resource_override_service: Arc<AccountResourceOverrideService>,
     auth_service: Arc<AuthService>,
+}
+
+// Poem attaches response examples to schemas, so DELETE needs its own response schema to show the
+// cleared transition rather than the granted transition used by PUT.
+#[derive(Object)]
+#[oai(example, rename_all = "camelCase", skip_serializing_if_is_none)]
+struct ClearedAdminResourceGrantChange {
+    account_id: AccountId,
+    dimension: AdminResourceGrantDimension,
+    event_type: AdminResourceGrantEventType,
+    reason: AdminResourceGrantReason,
+    actor_account_id: AccountId,
+    changed_at: DateTime<Utc>,
+    old_value: u64,
+    new_value: u64,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+impl poem_openapi::types::Example for ClearedAdminResourceGrantChange {
+    fn example() -> Self {
+        Self {
+            account_id: AccountId(uuid::Uuid::from_u128(1)),
+            dimension: AdminResourceGrantDimension::MonthlyComputeGcu,
+            event_type: AdminResourceGrantEventType::OverrideCleared,
+            reason: AdminResourceGrantReason::Support,
+            actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
+            changed_at: DateTime::from_timestamp(1_700_000_000, 0)
+                .expect("example timestamp is valid"),
+            old_value: 10,
+            new_value: 5,
+            expires_at: None,
+        }
+    }
+}
+
+impl From<AdminResourceGrantChange> for ClearedAdminResourceGrantChange {
+    fn from(value: AdminResourceGrantChange) -> Self {
+        Self {
+            account_id: value.account_id,
+            dimension: value.dimension,
+            event_type: value.event_type,
+            reason: value.reason,
+            actor_account_id: value.actor_account_id,
+            changed_at: value.changed_at,
+            old_value: value.old_value,
+            new_value: value.new_value,
+            expires_at: value.expires_at,
+        }
+    }
 }
 
 #[OpenApi(
@@ -300,5 +352,88 @@ impl AccountUsageApi {
             .map(Json)
             .map_err(ApiError::from);
         record.result(response)
+    }
+
+    /// Grant an account additional resources.
+    ///
+    /// This operation requires an administrator token. Promotional grants require a future
+    /// expiry. Grants do not change the account's paid-overage consent.
+    #[oai(
+        path = "/:account_id/resource-grants/:dimension",
+        method = "put",
+        operation_id = "set_account_admin_resource_grant"
+    )]
+    async fn set_admin_resource_grant(
+        &self,
+        account_id: Path<AccountId>,
+        dimension: Path<AdminResourceGrantDimension>,
+        request: Json<SetAdminResourceGrant>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<AdminResourceGrantChange>> {
+        let record = recorded_http_api_request!(
+            "set_account_admin_resource_grant",
+            account_id = account_id.0.to_string(),
+            dimension = dimension.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .account_resource_override_service
+            .set_admin_grant(account_id.0, dimension.0, request.0, &auth)
+            .instrument(record.span.clone())
+            .await
+            .map(Json)
+            .map_err(ApiError::from);
+        record.result(response)
+    }
+
+    /// Clear an active admin resource grant.
+    #[oai(
+        path = "/:account_id/resource-grants/:dimension",
+        method = "delete",
+        operation_id = "clear_account_admin_resource_grant"
+    )]
+    async fn clear_admin_resource_grant(
+        &self,
+        account_id: Path<AccountId>,
+        dimension: Path<AdminResourceGrantDimension>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<ClearedAdminResourceGrantChange>> {
+        let record = recorded_http_api_request!(
+            "clear_account_admin_resource_grant",
+            account_id = account_id.0.to_string(),
+            dimension = dimension.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .account_resource_override_service
+            .clear_admin_grant(account_id.0, dimension.0, &auth)
+            .instrument(record.span.clone())
+            .await
+            .map(ClearedAdminResourceGrantChange::from)
+            .map(Json)
+            .map_err(ApiError::from);
+        record.result(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClearedAdminResourceGrantChange;
+    use golem_common::model::account_usage::{
+        AdminResourceGrantChange, AdminResourceGrantEventType,
+    };
+    use poem_openapi::types::Example;
+    use test_r::test;
+
+    #[test]
+    fn admin_resource_grant_response_examples_match_the_operation() {
+        assert_eq!(
+            AdminResourceGrantChange::example().event_type,
+            AdminResourceGrantEventType::OverrideGranted
+        );
+        assert_eq!(
+            ClearedAdminResourceGrantChange::example().event_type,
+            AdminResourceGrantEventType::OverrideCleared
+        );
     }
 }

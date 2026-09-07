@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::account_resource_override::persisted_admin_reason;
 use crate::repo::model::plan::PlanRecord;
 use chrono::{DateTime, Utc};
+use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, MonthlyUsageMode, MonthlyUsageModeTransition,
-    MonthlyUsageModeTransitionSource, StorageLimit,
+    AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension, MonthlyUsageMode,
+    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, StorageLimit,
 };
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::ResourceLimits;
 use golem_service_base::repo::NumericU64;
-use golem_service_base::repo::{RepoError, RepoResult};
+use golem_service_base::repo::{RepoError, RepoResult, SqlDateTime};
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum_macros::EnumIter;
@@ -115,6 +117,8 @@ pub struct AccountUsage {
     pub plan: PlanRecord,
     pub storage_limit: StorageLimit,
     pub max_memory_per_worker: golem_common::model::account_usage::MemoryLimit,
+    pub admin_grant_values: AdminResourceGrantValues,
+    pub admin_grants: Vec<AdminResourceGrant>,
     pub metering: Option<ResourceUsageMetering>,
     pub monthly_usage_mode_revision: u64,
     pub monthly_usage_attribution: Option<MonthlyUsageAttribution>,
@@ -135,7 +139,148 @@ pub struct AccountUsagePlan {
     pub plan: PlanRecord,
     pub storage_override_value: Option<NumericU64>,
     pub max_memory_override_value: Option<NumericU64>,
+    pub monthly_compute_grant_value: Option<NumericU64>,
+    pub monthly_compute_grant_reason: Option<String>,
+    pub monthly_compute_grant_expires_at: Option<SqlDateTime>,
+    pub monthly_compute_grant_created_by: Option<Uuid>,
+    pub monthly_compute_grant_created_at: Option<SqlDateTime>,
+    pub monthly_memory_grant_value: Option<NumericU64>,
+    pub monthly_memory_grant_reason: Option<String>,
+    pub monthly_memory_grant_expires_at: Option<SqlDateTime>,
+    pub monthly_memory_grant_created_by: Option<Uuid>,
+    pub monthly_memory_grant_created_at: Option<SqlDateTime>,
+    pub monthly_durable_storage_grant_value: Option<NumericU64>,
+    pub monthly_durable_storage_grant_reason: Option<String>,
+    pub monthly_durable_storage_grant_expires_at: Option<SqlDateTime>,
+    pub monthly_durable_storage_grant_created_by: Option<Uuid>,
+    pub monthly_durable_storage_grant_created_at: Option<SqlDateTime>,
+    pub monthly_ephemeral_storage_grant_value: Option<NumericU64>,
+    pub monthly_ephemeral_storage_grant_reason: Option<String>,
+    pub monthly_ephemeral_storage_grant_expires_at: Option<SqlDateTime>,
+    pub monthly_ephemeral_storage_grant_created_by: Option<Uuid>,
+    pub monthly_ephemeral_storage_grant_created_at: Option<SqlDateTime>,
+    pub max_memory_grant_value: Option<NumericU64>,
+    pub max_memory_grant_reason: Option<String>,
+    pub max_memory_grant_expires_at: Option<SqlDateTime>,
+    pub max_memory_grant_created_by: Option<Uuid>,
+    pub max_memory_grant_created_at: Option<SqlDateTime>,
+    pub storage_grant_value: Option<NumericU64>,
+    pub storage_grant_reason: Option<String>,
+    pub storage_grant_expires_at: Option<SqlDateTime>,
+    pub storage_grant_created_by: Option<Uuid>,
+    pub storage_grant_created_at: Option<SqlDateTime>,
     pub monthly_usage_mode_revision: NumericU64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AdminResourceGrantValues {
+    pub monthly_compute_gcu: Option<u64>,
+    pub monthly_memory_gb_seconds: Option<u64>,
+    pub monthly_durable_storage_gb_month: Option<u64>,
+    pub monthly_ephemeral_storage_gb_month: Option<u64>,
+    pub max_memory_per_worker: Option<u64>,
+    pub max_disk_space_per_worker: Option<u64>,
+}
+
+impl AccountUsagePlan {
+    pub fn admin_grant_values(&self) -> AdminResourceGrantValues {
+        AdminResourceGrantValues {
+            monthly_compute_gcu: self
+                .monthly_compute_grant_value
+                .as_ref()
+                .map(NumericU64::get),
+            monthly_memory_gb_seconds: self
+                .monthly_memory_grant_value
+                .as_ref()
+                .map(NumericU64::get),
+            monthly_durable_storage_gb_month: self
+                .monthly_durable_storage_grant_value
+                .as_ref()
+                .map(NumericU64::get),
+            monthly_ephemeral_storage_gb_month: self
+                .monthly_ephemeral_storage_grant_value
+                .as_ref()
+                .map(NumericU64::get),
+            max_memory_per_worker: self.max_memory_grant_value.as_ref().map(NumericU64::get),
+            max_disk_space_per_worker: self.storage_grant_value.as_ref().map(NumericU64::get),
+        }
+    }
+
+    pub fn admin_grants(&self) -> RepoResult<Vec<AdminResourceGrant>> {
+        let candidates = [
+            (
+                AdminResourceGrantDimension::MonthlyComputeGcu,
+                self.monthly_compute_grant_value.as_ref(),
+                self.monthly_compute_grant_reason.as_deref(),
+                self.monthly_compute_grant_expires_at.as_ref(),
+                self.monthly_compute_grant_created_by,
+                self.monthly_compute_grant_created_at.as_ref(),
+            ),
+            (
+                AdminResourceGrantDimension::MonthlyMemoryGbSeconds,
+                self.monthly_memory_grant_value.as_ref(),
+                self.monthly_memory_grant_reason.as_deref(),
+                self.monthly_memory_grant_expires_at.as_ref(),
+                self.monthly_memory_grant_created_by,
+                self.monthly_memory_grant_created_at.as_ref(),
+            ),
+            (
+                AdminResourceGrantDimension::MonthlyDurableStorageGbMonth,
+                self.monthly_durable_storage_grant_value.as_ref(),
+                self.monthly_durable_storage_grant_reason.as_deref(),
+                self.monthly_durable_storage_grant_expires_at.as_ref(),
+                self.monthly_durable_storage_grant_created_by,
+                self.monthly_durable_storage_grant_created_at.as_ref(),
+            ),
+            (
+                AdminResourceGrantDimension::MonthlyEphemeralStorageGbMonth,
+                self.monthly_ephemeral_storage_grant_value.as_ref(),
+                self.monthly_ephemeral_storage_grant_reason.as_deref(),
+                self.monthly_ephemeral_storage_grant_expires_at.as_ref(),
+                self.monthly_ephemeral_storage_grant_created_by,
+                self.monthly_ephemeral_storage_grant_created_at.as_ref(),
+            ),
+            (
+                AdminResourceGrantDimension::MaxMemoryPerAgent,
+                self.max_memory_grant_value.as_ref(),
+                self.max_memory_grant_reason.as_deref(),
+                self.max_memory_grant_expires_at.as_ref(),
+                self.max_memory_grant_created_by,
+                self.max_memory_grant_created_at.as_ref(),
+            ),
+            (
+                AdminResourceGrantDimension::MaxStoragePerAgent,
+                self.storage_grant_value.as_ref(),
+                self.storage_grant_reason.as_deref(),
+                self.storage_grant_expires_at.as_ref(),
+                self.storage_grant_created_by,
+                self.storage_grant_created_at.as_ref(),
+            ),
+        ];
+        let mut grants = Vec::new();
+        for (dimension, value, reason, expires_at, created_by, created_at) in candidates {
+            let Some(value) = value else {
+                continue;
+            };
+            let missing = |field| {
+                RepoError::InternalError(anyhow::anyhow!(
+                    "Active {dimension} admin grant is missing {field}"
+                ))
+            };
+            grants.push(AdminResourceGrant {
+                dimension,
+                value: value.get(),
+                reason: persisted_admin_reason(reason.ok_or_else(|| missing("reason"))?)?,
+                actor_account_id: AccountId(created_by.ok_or_else(|| missing("created_by"))?),
+                granted_at: created_at
+                    .ok_or_else(|| missing("created_at"))?
+                    .clone()
+                    .into_utc(),
+                expires_at: expires_at.cloned().map(SqlDateTime::into_utc),
+            });
+        }
+        Ok(grants)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

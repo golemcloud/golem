@@ -360,6 +360,7 @@
         "accountId",
         "monthlyUsageMode",
         "overageAllowedByPlan",
+        "adminGrants",
         "monthly",
         "maxStoragePerAgent",
         "maxMemoryPerAgent"
@@ -379,6 +380,12 @@
         },
         "latestOwnerTransition": {
           "$ref": "#/definitions/MonthlyUsageModeTransition"
+        },
+        "adminGrants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AdminResourceGrant"
+          }
         },
         "monthly": {
           "$ref": "#/definitions/MonthlyResourceLimits"
@@ -919,6 +926,58 @@
     "MonthlyLimitBehavior": {
       "type": "string",
       "enum": ["hardLimit", "includedAllowance"]
+    },
+    "AdminResourceGrant": {
+      "type": "object",
+      "required": [
+        "dimension",
+        "value",
+        "reason",
+        "actorAccountId",
+        "grantedAt"
+      ],
+      "properties": {
+        "dimension": {
+          "$ref": "#/definitions/AdminResourceGrantDimension"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "$ref": "#/definitions/AdminResourceGrantReason"
+        },
+        "actorAccountId": {
+          "type": "string"
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdminResourceGrantDimension": {
+      "type": "string",
+      "enum": [
+        "monthlyComputeGcu",
+        "monthlyMemoryGbSeconds",
+        "monthlyDurableStorageGbMonth",
+        "monthlyEphemeralStorageGbMonth",
+        "maxMemoryPerAgent",
+        "maxStoragePerAgent"
+      ]
+    },
+    "AdminResourceGrantReason": {
+      "type": "string",
+      "enum": [
+        "promotional",
+        "support"
+      ]
     },
     "MonthlyUsageMode": {
       "type": "string",

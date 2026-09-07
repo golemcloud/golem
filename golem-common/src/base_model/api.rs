@@ -29,6 +29,8 @@ pub mod error_code {
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
     pub const RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE: &str =
         "RESOURCE_OVERRIDE_NOT_USER_CONFIGURABLE";
+    pub const RESOURCE_GRANT_NOT_FOUND: &str = "RESOURCE_GRANT_NOT_FOUND";
+    pub const RESOURCE_GRANT_INVALID: &str = "RESOURCE_GRANT_INVALID";
 
     // --- CLI ---
     pub const CLI_UPDATE_REQUIRED: &str = "CLI_UPDATE_REQUIRED";

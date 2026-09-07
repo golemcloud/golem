@@ -336,7 +336,10 @@ impl AccountUsageService {
         auth: &AuthCtx,
     ) -> Result<AccountResourcePolicy, AccountUsageError> {
         self.authorize_usage(account_id, auth).await?;
-        let account_usage = self.get_account_usage(account_id, None).await?;
+        let now = SqlDateTime::now();
+        let account_usage = self
+            .get_account_usage_at(account_id, None, AccountUsagePeriod::current(), &now)
+            .await?;
         let report = self
             .account_usage_repo
             .get_usage_report(account_id.0, AccountUsagePeriod::current())
@@ -493,13 +496,25 @@ impl AccountUsageService {
         report: AccountUsageRecord,
         monthly_usage_mode: AccountMonthlyUsageMode,
     ) -> Result<AccountResourcePolicy, AccountUsageError> {
-        let plan_amounts = MonthlyPlanAmounts {
-            compute_gcu: account_usage.plan.monthly_compute_gcu.get(),
-            memory_gb_seconds: account_usage.plan.monthly_memory_gb_seconds.get(),
-            durable_storage_gb_month: account_usage.plan.monthly_durable_storage_gb_month.get(),
-            ephemeral_storage_gb_month: account_usage.plan.monthly_ephemeral_storage_gb_month.get(),
+        let monthly_amounts = MonthlyPlanAmounts {
+            compute_gcu: account_usage
+                .admin_grant_values
+                .monthly_compute_gcu
+                .unwrap_or_else(|| account_usage.plan.monthly_compute_gcu.get()),
+            memory_gb_seconds: account_usage
+                .admin_grant_values
+                .monthly_memory_gb_seconds
+                .unwrap_or_else(|| account_usage.plan.monthly_memory_gb_seconds.get()),
+            durable_storage_gb_month: account_usage
+                .admin_grant_values
+                .monthly_durable_storage_gb_month
+                .unwrap_or_else(|| account_usage.plan.monthly_durable_storage_gb_month.get()),
+            ephemeral_storage_gb_month: account_usage
+                .admin_grant_values
+                .monthly_ephemeral_storage_gb_month
+                .unwrap_or_else(|| account_usage.plan.monthly_ephemeral_storage_gb_month.get()),
         };
-        let resolved = plan_amounts
+        let resolved = monthly_amounts
             .resolve()
             .map_err(|error| AccountUsageError::InternalError(error.into()))?;
         let metering = report.metering.map_or_else(
@@ -525,30 +540,31 @@ impl AccountUsageService {
             monthly_usage_mode: monthly_usage_mode.mode,
             overage_allowed_by_plan: monthly_usage_mode.overage_eligible,
             latest_owner_transition: monthly_usage_mode.latest_owner_transition,
+            admin_grants: account_usage.admin_grants,
             monthly: MonthlyResourceLimits {
                 compute_gcu: compute_limit(
                     metering.compute,
-                    plan_amounts.compute_gcu,
+                    monthly_amounts.compute_gcu,
                     resolved.compute_fuel,
                     report.compute_fuel,
                     monthly_usage_mode.mode,
                 ),
                 memory_gb_seconds: memory_limit(
                     metering.memory,
-                    plan_amounts.memory_gb_seconds,
+                    monthly_amounts.memory_gb_seconds,
                     report.memory_gb_seconds,
                     monthly_usage_mode.mode,
                 ),
                 durable_storage_gb_month: storage_limit_policy(
                     metering.durable_storage,
-                    plan_amounts.durable_storage_gb_month,
+                    monthly_amounts.durable_storage_gb_month,
                     resolved.durable_storage_byte_seconds,
                     report.durable_storage_byte_seconds,
                     monthly_usage_mode.mode,
                 ),
                 ephemeral_storage_gb_month: storage_limit_policy(
                     metering.ephemeral_storage,
-                    plan_amounts.ephemeral_storage_gb_month,
+                    monthly_amounts.ephemeral_storage_gb_month,
                     resolved.ephemeral_storage_byte_seconds,
                     report.ephemeral_storage_byte_seconds,
                     monthly_usage_mode.mode,
@@ -564,7 +580,8 @@ impl AccountUsageService {
         account_id: AccountId,
         usage_type: Option<UsageType>,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
-        self.get_account_usage_at(account_id, usage_type, AccountUsagePeriod::current())
+        let now = SqlDateTime::now();
+        self.get_account_usage_at(account_id, usage_type, AccountUsagePeriod::current(), &now)
             .await
     }
 
@@ -573,6 +590,7 @@ impl AccountUsageService {
         account_id: AccountId,
         usage_type: Option<UsageType>,
         period: AccountUsagePeriod,
+        active_at: &SqlDateTime,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
         let date = SqlDateTime::new(
             Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
@@ -585,7 +603,11 @@ impl AccountUsageService {
                     .get_for_type(account_id.0, &date, usage_type)
                     .await?
             }
-            None => self.account_usage_repo.get(account_id.0, &date).await?,
+            None => {
+                self.account_usage_repo
+                    .get_with_active_overrides_at(account_id.0, &date, active_at)
+                    .await?
+            }
         };
 
         match usage {
@@ -768,10 +790,10 @@ fn account_usage_permission_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo::model::account_usage::{AccountUsage, UsageType};
+    use crate::repo::model::account_usage::{AccountUsage, AdminResourceGrantValues, UsageType};
     use crate::repo::model::plan::PlanRecord;
     use golem_common::model::account_usage::{
-        BYTE_SECONDS_PER_GB_MONTH, FUEL_PER_GCU, MemoryLimit, StorageLimit,
+        AdminResourceGrant, BYTE_SECONDS_PER_GB_MONTH, FUEL_PER_GCU, MemoryLimit, StorageLimit,
     };
     use golem_service_base::repo::NumericU64;
     use std::collections::BTreeMap;
@@ -836,6 +858,8 @@ mod tests {
                 ceiling: u64::MAX,
                 user_configurable: false,
             },
+            admin_grant_values: Default::default(),
+            admin_grants: Vec::new(),
             metering: None,
             monthly_usage_mode_revision: 0,
             monthly_usage_attribution: None,
@@ -929,6 +953,49 @@ mod tests {
         );
         assert_eq!(policy.max_storage_per_agent, expected_storage_limit);
         assert_eq!(policy.max_memory_per_agent, expected_memory_limit);
+    }
+
+    #[test]
+    fn resource_policy_uses_admin_grants_for_monthly_amounts() {
+        let mut usage = make_policy_usage();
+        usage.admin_grant_values = AdminResourceGrantValues {
+            monthly_compute_gcu: Some(8),
+            monthly_memory_gb_seconds: Some(70),
+            monthly_durable_storage_gb_month: Some(9),
+            monthly_ephemeral_storage_gb_month: Some(12),
+            max_memory_per_worker: None,
+            max_disk_space_per_worker: None,
+        };
+        let account_id = AccountId(usage.account_id);
+        let grant = AdminResourceGrant {
+            dimension:
+                golem_common::model::account_usage::AdminResourceGrantDimension::MonthlyComputeGcu,
+            value: 8,
+            reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
+            actor_account_id: AccountId::SYSTEM,
+            granted_at: Utc::now(),
+            expires_at: None,
+        };
+        usage.admin_grants = vec![grant.clone()];
+        let policy = AccountUsageService::resource_policy(
+            account_id,
+            usage,
+            make_policy_report(Some(ResourceUsageMetering::all_enabled())),
+            hard_limit_mode(),
+        )
+        .unwrap();
+
+        assert_eq!(policy.admin_grants, vec![grant]);
+        assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(8));
+        assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(70));
+        assert_eq!(
+            policy.monthly.durable_storage_gb_month.monthly_amount,
+            Some(9)
+        );
+        assert_eq!(
+            policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+            Some(12)
+        );
     }
 
     #[test]

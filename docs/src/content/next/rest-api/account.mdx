@@ -367,6 +367,7 @@ GB-month, and per-agent limits use bytes. Monthly behavior is `hardLimit` or
 ```json copy
 {
   "accountId": "00000000-0000-0000-0000-000000000001",
+  "adminGrants": [],
   "maxMemoryPerAgent": {
     "ceiling": 10737418240,
     "effectiveValue": 1073741824,
@@ -550,6 +551,65 @@ Path|Method|Protected
   "overrideValue": 0,
   "ceiling": 0,
   "userConfigurable": true
+}
+```
+
+## Grant an account additional resources.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/resource-grants/{dimension}`|PUT|Yes
+
+This operation requires an administrator token. Promotional grants require a future
+expiry. Grants do not change the account's paid-overage consent.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "reason": "support",
+  "value": 10
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "actorAccountId": "00000000-0000-0000-0000-000000000002",
+  "changedAt": "2023-11-14T22:13:20+00:00",
+  "dimension": "monthlyComputeGcu",
+  "eventType": "override_granted",
+  "newValue": 10,
+  "oldValue": 5,
+  "reason": "support"
+}
+```
+
+## Clear an active admin resource grant.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/resource-grants/{dimension}`|DELETE|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "actorAccountId": "00000000-0000-0000-0000-000000000002",
+  "changedAt": "2023-11-14T22:13:20+00:00",
+  "dimension": "monthlyComputeGcu",
+  "eventType": "override_cleared",
+  "newValue": 5,
+  "oldValue": 10,
+  "reason": "support"
 }
 ```
 

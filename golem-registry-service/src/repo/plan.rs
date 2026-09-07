@@ -20,20 +20,19 @@ use crate::repo::model::plan::PlanRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
-use futures::future::BoxFuture;
 use golem_common::model::account_usage::MonthlyUsageModeTransitionSource;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
-use golem_service_base::repo::RepoResult;
+use golem_service_base::db::{Pool, PoolApi};
+use golem_service_base::repo::{RepoError, RepoResult};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 #[async_trait]
 pub trait PlanRepo: Send + Sync {
-    /// Upserts the Plan Row and reconciles active per-agent overrides for accounts assigned to it
-    /// in the same transaction.
+    /// Upserts the Plan Row and reconciles active resource overrides and grants for assigned
+    /// accounts in the same transaction.
     async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()>;
 
     async fn get_by_id(&self, plan_id: Uuid) -> RepoResult<Option<PlanRecord>>;
@@ -81,6 +80,19 @@ pub struct DbPlanRepo<DBP: Pool> {
 }
 
 static METRICS_SVC_NAME: &str = "plan";
+const MAX_PLAN_UPDATE_ATTEMPTS: usize = 8;
+
+#[derive(Debug)]
+enum PlanUpdateAttemptError {
+    MembershipChanged,
+    Repo(RepoError),
+}
+
+impl From<RepoError> for PlanUpdateAttemptError {
+    fn from(error: RepoError) -> Self {
+        Self::Repo(error)
+    }
+}
 
 impl<DBP: Pool> DbPlanRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
@@ -97,31 +109,25 @@ impl<DBP: Pool> DbPlanRepo<DBP> {
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
-
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
-    where
-        R: Send,
-        F: for<'f> FnOnce(
-                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, RepoResult<R>>
-            + Send,
-    {
-        self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
-    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl PlanRepo for DbPlanRepo<PostgresPool> {
     async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()> {
-        self.with_tx("create_or_update", |tx| {
-            async move {
+        for attempt in 1..=MAX_PLAN_UPDATE_ATTEMPTS {
+            let plan = plan.clone();
+            let result = self
+                .db_pool
+                .with_tx_err(METRICS_SVC_NAME, "create_or_update", |tx| {
+                    async move {
                 let plan_id = plan.plan_id;
                 // Existing members are locked before the Plan row to match account-side writes.
-                DbAccountResourceOverrideRepo::<PostgresPool>::lock_accounts_for_plan_in_tx(
-                    tx, plan_id,
-                )
-                .await?;
+                let locked_account_ids =
+                    DbAccountResourceOverrideRepo::<PostgresPool>::lock_accounts_for_plan_in_tx(
+                        tx, plan_id,
+                    )
+                    .await?;
                 let override_policies = OverridePolicy::for_plan(&plan);
                 let overage_eligible = plan.overage_eligible;
                 tx.execute(
@@ -203,15 +209,19 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                 )
                 .await?;
 
-                // An assignment may have committed while this transaction waited for the Plan row.
-                let account_ids =
-                    DbAccountResourceOverrideRepo::<PostgresPool>::lock_accounts_for_plan_in_tx(
+                // Retry if an assignment committed while this transaction waited for the Plan row.
+                // Reconciliation must not touch an account that was not locked before the Plan.
+                let current_account_ids =
+                    DbAccountResourceOverrideRepo::<PostgresPool>::account_ids_for_plan_in_tx(
                         tx, plan_id,
                     )
                     .await?;
+                if current_account_ids != locked_account_ids {
+                    return Err(PlanUpdateAttemptError::MembershipChanged);
+                }
 
                 if !overage_eligible {
-                    for account_id in account_ids {
+                    for account_id in locked_account_ids {
                         DbAccountUsageRepo::<PostgresPool>::force_hard_limit_in_tx(
                             tx,
                             account_id,
@@ -232,8 +242,25 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                 Ok(())
             }
             .boxed()
-        })
-        .await
+                })
+                .await;
+
+            match result {
+                Ok(()) => return Ok(()),
+                Err(PlanUpdateAttemptError::MembershipChanged)
+                    if attempt < MAX_PLAN_UPDATE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(PlanUpdateAttemptError::MembershipChanged) => {
+                    return Err(RepoError::InternalError(anyhow::anyhow!(
+                        "Plan membership kept changing during {MAX_PLAN_UPDATE_ATTEMPTS} update attempts"
+                    )));
+                }
+                Err(PlanUpdateAttemptError::Repo(error)) => return Err(error),
+            }
+        }
+        unreachable!("the bounded Plan update loop always returns")
     }
 
     async fn get_by_id(&self, plan_id: Uuid) -> RepoResult<Option<PlanRecord>> {

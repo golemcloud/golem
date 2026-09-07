@@ -15,16 +15,18 @@
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use golem_client::api::{
+    RegistryServiceClearAccountAdminResourceGrantError,
     RegistryServiceClearAccountStorageOverrideError, RegistryServiceClient,
-    RegistryServiceGetAccountLimitsError, RegistryServiceSetAccountMonthlyUsageModeError,
-    RegistryServiceSetAccountStorageOverrideError,
+    RegistryServiceGetAccountLimitsError, RegistryServiceSetAccountAdminResourceGrantError,
+    RegistryServiceSetAccountMonthlyUsageModeError, RegistryServiceSetAccountStorageOverrideError,
 };
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, BYTE_SECONDS_PER_GB_MONTH, MemoryLimit, MeteringStatus, MonthlyComputeUnit,
-    MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyStorageUnit, MonthlyUsageMode,
-    MonthlyUsageModeTransitionSource, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit,
-    StorageLimit,
+    AccountUsagePeriod, AdminResourceGrantDimension, AdminResourceGrantEventType,
+    AdminResourceGrantReason, BYTE_SECONDS_PER_GB_MONTH, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+    MemoryLimit, MeteringStatus, MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit,
+    MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransitionSource, SetAdminResourceGrant,
+    SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
 };
 use golem_common::model::auth::TokenCreation;
 use golem_service_base::clients::registry::{
@@ -876,6 +878,183 @@ async fn account_storage_override_endpoints_validate_capability_and_plan_range(
     assert_eq!(
         body.errors,
         ["Maximum storage per agent is below plan default 5"]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let user_client = deps.registry_service().client(&user.token).await;
+    let dimension = AdminResourceGrantDimension::MonthlyComputeGcu;
+    let request = SetAdminResourceGrant {
+        value: 9,
+        reason: AdminResourceGrantReason::Support,
+        expires_at: None,
+    };
+
+    let error = user_client
+        .set_account_admin_resource_grant(&user.account_id.0, &dimension, &request)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error403(body)) =
+        error
+    else {
+        panic!("expected admin-only error, got {error:?}")
+    };
+    assert_eq!(body.code, "AUTH_FORBIDDEN");
+    assert_eq!(body.error, "Only administrators may change resource grants");
+
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+    let impersonation = admin_client
+        .create_impersonation_token(
+            &user.account_id.0,
+            &TokenCreation {
+                expires_at: Utc::now() + chrono::Duration::minutes(5),
+            },
+        )
+        .await?;
+    let impersonated_client = deps.registry_service().client(&impersonation.secret).await;
+    let error = impersonated_client
+        .set_account_admin_resource_grant(&user.account_id.0, &dimension, &request)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error403(body)) =
+        error
+    else {
+        panic!("expected admin-only error, got {error:?}")
+    };
+    assert_eq!(body.code, "AUTH_FORBIDDEN");
+
+    let granted = admin_client
+        .set_account_admin_resource_grant(&user.account_id.0, &dimension, &request)
+        .await?;
+    assert_eq!(granted.account_id, user.account_id);
+    assert_eq!(granted.dimension, dimension);
+    assert_eq!(
+        granted.event_type,
+        AdminResourceGrantEventType::OverrideGranted
+    );
+    assert_eq!(granted.reason, AdminResourceGrantReason::Support);
+    assert_eq!(granted.actor_account_id, admin.account_id);
+    assert_eq!(granted.old_value, 5);
+    assert_eq!(granted.new_value, 9);
+    assert_eq!(granted.expires_at, None);
+
+    let granted_limits = user_client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(
+        granted_limits.monthly_usage_mode,
+        MonthlyUsageMode::HardLimit
+    );
+    assert_eq!(granted_limits.monthly.compute_gcu.monthly_amount, Some(9));
+    assert_eq!(granted_limits.admin_grants.len(), 1);
+    assert_eq!(granted_limits.admin_grants[0].dimension, dimension);
+    assert_eq!(granted_limits.admin_grants[0].value, 9);
+
+    let cleared = admin_client
+        .clear_account_admin_resource_grant(&user.account_id.0, &dimension)
+        .await?;
+    assert_eq!(
+        cleared.event_type,
+        AdminResourceGrantEventType::OverrideCleared
+    );
+    assert_eq!(cleared.actor_account_id, admin.account_id);
+    assert_eq!(cleared.old_value, 9);
+    assert_eq!(cleared.new_value, 5);
+
+    let cleared_limits = user_client.get_account_limits(&user.account_id.0).await?;
+    assert_eq!(
+        cleared_limits.monthly_usage_mode,
+        MonthlyUsageMode::HardLimit
+    );
+    assert_eq!(cleared_limits.monthly.compute_gcu.monthly_amount, Some(5));
+    assert!(cleared_limits.admin_grants.is_empty());
+
+    let error = admin_client
+        .clear_account_admin_resource_grant(&user.account_id.0, &dimension)
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceClearAccountAdminResourceGrantError::Error404(
+        body,
+    )) = error
+    else {
+        panic!("expected missing-grant error, got {error:?}")
+    };
+    assert_eq!(body.code, "RESOURCE_GRANT_NOT_FOUND");
+
+    let error = admin_client
+        .set_account_admin_resource_grant(
+            &user.account_id.0,
+            &dimension,
+            &SetAdminResourceGrant {
+                value: 9,
+                reason: AdminResourceGrantReason::Promotional,
+                expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error400(body)) =
+        error
+    else {
+        panic!("expected promotional-expiry error, got {error:?}")
+    };
+    assert_eq!(body.code, "RESOURCE_GRANT_INVALID");
+
+    let error = admin_client
+        .set_account_admin_resource_grant(
+            &user.account_id.0,
+            &AdminResourceGrantDimension::MaxStoragePerAgent,
+            &SetAdminResourceGrant {
+                value: 1,
+                reason: AdminResourceGrantReason::Support,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error400(body)) =
+        error
+    else {
+        panic!("expected disabled-storage error, got {error:?}")
+    };
+    assert_eq!(body.code, "FEATURE_DISABLED");
+
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_disk_space_plan(),
+            },
+        )
+        .await?;
+    let error = admin_client
+        .set_account_admin_resource_grant(
+            &user.account_id.0,
+            &AdminResourceGrantDimension::MaxStoragePerAgent,
+            &SetAdminResourceGrant {
+                value: EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+                reason: AdminResourceGrantReason::Support,
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    let golem_client::Error::Item(RegistryServiceSetAccountAdminResourceGrantError::Error400(body)) =
+        error
+    else {
+        panic!("expected finite-storage validation error, got {error:?}")
+    };
+    assert_eq!(body.code, "RESOURCE_GRANT_INVALID");
+    assert_eq!(
+        body.errors,
+        ["The grant value exceeds the supported internal range"]
     );
 
     Ok(())

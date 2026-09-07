@@ -67,6 +67,34 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account_usage::AccountResourcePolicy",
             ),
             (
+                "AdminResourceGrant",
+                "golem_common::model::account_usage::AdminResourceGrant",
+            ),
+            (
+                "AdminResourceGrantChange",
+                "golem_common::model::account_usage::AdminResourceGrantChange",
+            ),
+            (
+                "ClearedAdminResourceGrantChange",
+                "golem_common::model::account_usage::AdminResourceGrantChange",
+            ),
+            (
+                "AdminResourceGrantDimension",
+                "golem_common::model::account_usage::AdminResourceGrantDimension",
+            ),
+            (
+                "AdminResourceGrantEventType",
+                "golem_common::model::account_usage::AdminResourceGrantEventType",
+            ),
+            (
+                "AdminResourceGrantReason",
+                "golem_common::model::account_usage::AdminResourceGrantReason",
+            ),
+            (
+                "SetAdminResourceGrant",
+                "golem_common::model::account_usage::SetAdminResourceGrant",
+            ),
+            (
                 "MonthlyResourceLimits",
                 "golem_common::model::account_usage::MonthlyResourceLimits",
             ),

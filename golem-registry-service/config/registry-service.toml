@@ -126,6 +126,9 @@ allowed_redirect_domains = ["localhost", "golem.cloud"]
 cli_redirect = "https://golem.cloud/"
 webflow_state_expiry = "5m"
 
+[resource_grants]
+cleanup_interval = "1m"
+
 [security_scheme]
 strict_issuer_url_validation = true
 

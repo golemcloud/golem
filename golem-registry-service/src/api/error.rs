@@ -379,6 +379,17 @@ impl From<AccountResourceOverrideError> for ApiError {
             AccountResourceOverrideError::OwnerOnly => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
+            AccountResourceOverrideError::AdminOnly => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            AccountResourceOverrideError::GrantDoesNotIncreaseResolvedValue { .. }
+            | AccountResourceOverrideError::PromotionalExpiryRequired
+            | AccountResourceOverrideError::GrantValueOverflow => {
+                Self::bad_request(api::error_code::RESOURCE_GRANT_INVALID, error)
+            }
+            AccountResourceOverrideError::GrantNotFound => {
+                Self::not_found(api::error_code::RESOURCE_GRANT_NOT_FOUND, error)
+            }
             AccountResourceOverrideError::AccountNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }

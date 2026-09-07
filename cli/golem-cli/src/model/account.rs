@@ -679,6 +679,7 @@ mod tests {
             monthly_usage_mode: MonthlyUsageMode::HardLimit,
             overage_allowed_by_plan: false,
             latest_owner_transition: None,
+            admin_grants: Vec::new(),
             monthly: MonthlyResourceLimits {
                 compute_gcu: MonthlyComputeLimit {
                     metering: MeteringStatus::Enabled,

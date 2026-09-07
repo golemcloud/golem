@@ -67,6 +67,47 @@ pub enum MonthlyUsageModeTransitionSource {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[display(rename_all = "camelCase")]
+pub enum AdminResourceGrantDimension {
+    MonthlyComputeGcu,
+    MonthlyMemoryGbSeconds,
+    MonthlyDurableStorageGbMonth,
+    MonthlyEphemeralStorageGbMonth,
+    MaxMemoryPerAgent,
+    MaxStoragePerAgent,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, derive_more::Display,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
+pub enum AdminResourceGrantReason {
+    Promotional,
+    Support,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, derive_more::Display,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "snake_case"))]
+#[serde(rename_all = "snake_case")]
+#[display(rename_all = "snake_case")]
+pub enum AdminResourceGrantEventType {
+    OverrideGranted,
+    OverrideCleared,
+    OverrideExpired,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, derive_more::Display,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
 pub enum StorageLimitDisabledReason {
     ManagedFilesystemUnavailable,
 }
@@ -224,6 +265,7 @@ declare_structs! {
         pub overage_allowed_by_plan: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub latest_owner_transition: Option<MonthlyUsageModeTransition>,
+        pub admin_grants: Vec<AdminResourceGrant>,
         pub monthly: MonthlyResourceLimits,
         pub max_memory_per_agent: MemoryLimit,
         pub max_storage_per_agent: StorageLimit,
@@ -261,6 +303,39 @@ declare_structs! {
 
     pub struct SetMemoryLimit {
         pub value: u64,
+    }
+
+    #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
+    pub struct AdminResourceGrant {
+        pub dimension: AdminResourceGrantDimension,
+        pub value: u64,
+        pub reason: AdminResourceGrantReason,
+        pub actor_account_id: AccountId,
+        pub granted_at: DateTime<Utc>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub expires_at: Option<DateTime<Utc>>,
+    }
+
+    #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
+    pub struct SetAdminResourceGrant {
+        pub value: u64,
+        pub reason: AdminResourceGrantReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub expires_at: Option<DateTime<Utc>>,
+    }
+
+    #[cfg_attr(feature = "full", oai(example, skip_serializing_if_is_none))]
+    pub struct AdminResourceGrantChange {
+        pub account_id: AccountId,
+        pub dimension: AdminResourceGrantDimension,
+        pub event_type: AdminResourceGrantEventType,
+        pub reason: AdminResourceGrantReason,
+        pub actor_account_id: AccountId,
+        pub changed_at: DateTime<Utc>,
+        pub old_value: u64,
+        pub new_value: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub expires_at: Option<DateTime<Utc>>,
     }
 }
 
@@ -388,6 +463,7 @@ impl poem_openapi::types::Example for AccountResourcePolicy {
             monthly_usage_mode: MonthlyUsageMode::HardLimit,
             overage_allowed_by_plan: false,
             latest_owner_transition: None,
+            admin_grants: Vec::new(),
             monthly: MonthlyResourceLimits {
                 compute_gcu: MonthlyComputeLimit {
                     metering: MeteringStatus::Enabled,
@@ -429,6 +505,35 @@ impl poem_openapi::types::Example for AccountResourcePolicy {
                 true,
             ),
             max_storage_per_agent: <StorageLimit as poem_openapi::types::Example>::example(),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Example for SetAdminResourceGrant {
+    fn example() -> Self {
+        Self {
+            value: 10,
+            reason: AdminResourceGrantReason::Support,
+            expires_at: None,
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::Example for AdminResourceGrantChange {
+    fn example() -> Self {
+        Self {
+            account_id: AccountId(uuid::Uuid::from_u128(1)),
+            dimension: AdminResourceGrantDimension::MonthlyComputeGcu,
+            event_type: AdminResourceGrantEventType::OverrideGranted,
+            reason: AdminResourceGrantReason::Support,
+            actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
+            changed_at: DateTime::from_timestamp(1_700_000_000, 0)
+                .expect("example timestamp is valid"),
+            old_value: 5,
+            new_value: 10,
+            expires_at: None,
         }
     }
 }
@@ -535,12 +640,13 @@ fn format_metered(value: impl Display, unit: &str, status: MeteringStatus) -> St
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, BYTE_SECONDS_PER_GB_MONTH,
-        EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit, MeteringStatus,
-        MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit, MonthlyPlanAmountError,
-        MonthlyPlanAmounts, MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
-        PERIOD_FORMAT_ERROR, ResolvedMonthlyPlanAmounts, StorageLimit, StorageLimitDisabledReason,
-        byte_seconds_to_gb_month, fuel_to_gcu,
+        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, AdminResourceGrantReason,
+        BYTE_SECONDS_PER_GB_MONTH, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, FUEL_PER_GCU, MemoryLimit,
+        MeteringStatus, MonthlyComputeUnit, MonthlyLimitBehavior, MonthlyMemoryUnit,
+        MonthlyPlanAmountError, MonthlyPlanAmounts, MonthlyStorageUnit, MonthlyUsageMode,
+        MonthlyUsageModeTransitionSource, PERIOD_FORMAT_ERROR, ResolvedMonthlyPlanAmounts,
+        SetAdminResourceGrant, StorageLimit, StorageLimitDisabledReason, byte_seconds_to_gb_month,
+        fuel_to_gcu,
     };
     use chrono::Utc;
     use std::str::FromStr;
@@ -689,6 +795,15 @@ mod tests {
             Some(expected.clone())
         );
         assert_eq!(serde_json::to_value(disabled).unwrap(), expected);
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn admin_resource_grant_request_example_is_always_valid() {
+        let example = <SetAdminResourceGrant as poem_openapi::types::Example>::example();
+
+        assert_eq!(example.reason, AdminResourceGrantReason::Support);
+        assert_eq!(example.expires_at, None);
     }
 
     #[test]

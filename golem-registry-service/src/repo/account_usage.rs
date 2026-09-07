@@ -97,7 +97,17 @@ impl AccountUsageReportRow {
 
 #[async_trait]
 pub trait AccountUsageRepo: Send + Sync {
-    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>>;
+    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
+        self.get_with_active_overrides_at(account_id, date, &SqlDateTime::now())
+            .await
+    }
+
+    async fn get_with_active_overrides_at(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>>;
 
     async fn get_for_type(
         &self,
@@ -161,6 +171,18 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         self.repo
             .get(account_id, date)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
+
+    async fn get_with_active_overrides_at(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>> {
+        self.repo
+            .get_with_active_overrides_at(account_id, date, active_at)
             .instrument(Self::span_account_id(account_id))
             .await
     }
@@ -441,8 +463,13 @@ impl DbAccountUsageRepo<PostgresPool> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
-    async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
-        let Some(account_plan) = self.get_plan(account_id).await? else {
+    async fn get_with_active_overrides_at(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>> {
+        let Some(account_plan) = self.get_plan(account_id, active_at).await? else {
             return Ok(None);
         };
 
@@ -504,6 +531,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             );
         }
 
+        let admin_grant_values = account_plan.admin_grant_values();
+        let admin_grants = account_plan.admin_grants()?;
         Ok(Some(AccountUsage {
             account_id,
             year: date.as_utc().year(),
@@ -511,6 +540,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             usage,
             storage_limit: storage_limit(&account_plan),
             max_memory_per_worker: max_memory_per_worker(&account_plan),
+            admin_grant_values,
+            admin_grants,
             metering: None,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
             monthly_usage_attribution: None,
@@ -525,7 +556,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
-        let Some(account_plan) = self.get_plan(account_id).await? else {
+        let Some(account_plan) = self.get_plan(account_id, &SqlDateTime::now()).await? else {
             return Ok(None);
         };
 
@@ -639,6 +670,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             );
         }
 
+        let admin_grant_values = account_plan.admin_grant_values();
+        let admin_grants = account_plan.admin_grants()?;
         Ok(Some(AccountUsage {
             account_id,
             year: date.as_utc().year(),
@@ -646,6 +679,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             usage,
             storage_limit: storage_limit(&account_plan),
             max_memory_per_worker: max_memory_per_worker(&account_plan),
+            admin_grant_values,
+            admin_grants,
             metering: None,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
             monthly_usage_attribution: None,
@@ -1110,7 +1145,11 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<AccountUsagePlan>>;
+    async fn get_plan(
+        &self,
+        account_id: Uuid,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsagePlan>>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -1119,7 +1158,11 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_plan(&self, account_id: Uuid) -> RepoResult<Option<AccountUsagePlan>> {
+    async fn get_plan(
+        &self,
+        account_id: Uuid,
+        active_at: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsagePlan>> {
         let plan: Option<AccountUsagePlan> = self
             .with_ro("get_plan - plan")
             .fetch_optional_as(
@@ -1136,6 +1179,36 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                     p.max_disk_space_per_worker,
                     storage_override.override_value AS storage_override_value,
                     memory_override.override_value AS max_memory_override_value,
+                    compute_grant.override_value AS monthly_compute_grant_value,
+                    compute_grant.reason AS monthly_compute_grant_reason,
+                    compute_grant.expires_at AS monthly_compute_grant_expires_at,
+                    compute_grant.created_by AS monthly_compute_grant_created_by,
+                    compute_grant.created_at AS monthly_compute_grant_created_at,
+                    monthly_memory_grant.override_value AS monthly_memory_grant_value,
+                    monthly_memory_grant.reason AS monthly_memory_grant_reason,
+                    monthly_memory_grant.expires_at AS monthly_memory_grant_expires_at,
+                    monthly_memory_grant.created_by AS monthly_memory_grant_created_by,
+                    monthly_memory_grant.created_at AS monthly_memory_grant_created_at,
+                    durable_storage_grant.override_value AS monthly_durable_storage_grant_value,
+                    durable_storage_grant.reason AS monthly_durable_storage_grant_reason,
+                    durable_storage_grant.expires_at AS monthly_durable_storage_grant_expires_at,
+                    durable_storage_grant.created_by AS monthly_durable_storage_grant_created_by,
+                    durable_storage_grant.created_at AS monthly_durable_storage_grant_created_at,
+                    ephemeral_storage_grant.override_value AS monthly_ephemeral_storage_grant_value,
+                    ephemeral_storage_grant.reason AS monthly_ephemeral_storage_grant_reason,
+                    ephemeral_storage_grant.expires_at AS monthly_ephemeral_storage_grant_expires_at,
+                    ephemeral_storage_grant.created_by AS monthly_ephemeral_storage_grant_created_by,
+                    ephemeral_storage_grant.created_at AS monthly_ephemeral_storage_grant_created_at,
+                    memory_grant.override_value AS max_memory_grant_value,
+                    memory_grant.reason AS max_memory_grant_reason,
+                    memory_grant.expires_at AS max_memory_grant_expires_at,
+                    memory_grant.created_by AS max_memory_grant_created_by,
+                    memory_grant.created_at AS max_memory_grant_created_at,
+                    storage_grant.override_value AS storage_grant_value,
+                    storage_grant.reason AS storage_grant_reason,
+                    storage_grant.expires_at AS storage_grant_expires_at,
+                    storage_grant.created_by AS storage_grant_created_by,
+                    storage_grant.created_at AS storage_grant_created_at,
                     p.max_disk_space_per_worker_ceiling, p.max_disk_space_per_worker_user_configurable,
                     p.max_concurrent_agents_per_executor,
                     p.total_app_count,
@@ -1150,11 +1223,37 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                 LEFT JOIN account_resource_overrides storage_override
                     ON storage_override.account_id = a.account_id
                     AND storage_override.dimension = $2
+                    AND storage_override.source = $5
                     AND (storage_override.expires_at IS NULL OR storage_override.expires_at > $4)
                 LEFT JOIN account_resource_overrides memory_override
                     ON memory_override.account_id = a.account_id
                     AND memory_override.dimension = $3
+                    AND memory_override.source = $5
                     AND (memory_override.expires_at IS NULL OR memory_override.expires_at > $4)
+                LEFT JOIN account_resource_overrides compute_grant
+                    ON compute_grant.account_id = a.account_id
+                    AND compute_grant.dimension = $7 AND compute_grant.source = $6
+                    AND (compute_grant.expires_at IS NULL OR compute_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides monthly_memory_grant
+                    ON monthly_memory_grant.account_id = a.account_id
+                    AND monthly_memory_grant.dimension = $8 AND monthly_memory_grant.source = $6
+                    AND (monthly_memory_grant.expires_at IS NULL OR monthly_memory_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides durable_storage_grant
+                    ON durable_storage_grant.account_id = a.account_id
+                    AND durable_storage_grant.dimension = $9 AND durable_storage_grant.source = $6
+                    AND (durable_storage_grant.expires_at IS NULL OR durable_storage_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides ephemeral_storage_grant
+                    ON ephemeral_storage_grant.account_id = a.account_id
+                    AND ephemeral_storage_grant.dimension = $10 AND ephemeral_storage_grant.source = $6
+                    AND (ephemeral_storage_grant.expires_at IS NULL OR ephemeral_storage_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides memory_grant
+                    ON memory_grant.account_id = a.account_id
+                    AND memory_grant.dimension = $11 AND memory_grant.source = $6
+                    AND (memory_grant.expires_at IS NULL OR memory_grant.expires_at > $4)
+                LEFT JOIN account_resource_overrides storage_grant
+                    ON storage_grant.account_id = a.account_id
+                    AND storage_grant.dimension = $12 AND storage_grant.source = $6
+                    AND (storage_grant.expires_at IS NULL OR storage_grant.expires_at > $4)
                 LEFT JOIN account_monthly_usage_modes mode
                     ON mode.account_id = a.account_id
                 WHERE a.account_id = $1 AND a.deleted_at IS NULL
@@ -1162,7 +1261,15 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                 .bind(account_id)
                 .bind(AccountResourceOverrideDimension::MaxDiskSpacePerWorker.as_str())
                 .bind(AccountResourceOverrideDimension::MaxMemoryPerWorker.as_str())
-                .bind(SqlDateTime::now()),
+                .bind(active_at)
+                .bind(crate::repo::model::account_resource_override::AccountResourceOverrideSource::SelfService.as_str())
+                .bind(crate::repo::model::account_resource_override::AccountResourceOverrideSource::AdminGrant.as_str())
+                .bind(AccountResourceOverrideDimension::MonthlyComputeGcu.as_str())
+                .bind(AccountResourceOverrideDimension::MonthlyMemoryGbSeconds.as_str())
+                .bind(AccountResourceOverrideDimension::MonthlyDurableStorageGbMonth.as_str())
+                .bind(AccountResourceOverrideDimension::MonthlyEphemeralStorageGbMonth.as_str())
+                .bind(AccountResourceOverrideDimension::MaxMemoryPerWorker.as_str())
+                .bind(AccountResourceOverrideDimension::MaxDiskSpacePerWorker.as_str()),
             )
             .await?;
 
@@ -1179,7 +1286,7 @@ fn storage_limit(account_plan: &AccountUsagePlan) -> StorageLimit {
         .storage_override_value
         .as_ref()
         .map(NumericU64::get);
-    StorageLimit::resolve(
+    let mut limit = StorageLimit::resolve(
         account_plan.plan.max_disk_space_per_worker_enabled,
         plan_default,
         override_value,
@@ -1187,11 +1294,20 @@ fn storage_limit(account_plan: &AccountUsagePlan) -> StorageLimit {
         account_plan
             .plan
             .max_disk_space_per_worker_user_configurable,
-    )
+    );
+    if limit.enabled
+        && let Some(value) = account_plan
+            .storage_grant_value
+            .as_ref()
+            .map(NumericU64::get)
+    {
+        limit.effective_value = Some(value);
+    }
+    limit
 }
 
 fn max_memory_per_worker(account_plan: &AccountUsagePlan) -> MemoryLimit {
-    MemoryLimit::resolve(
+    let mut limit = MemoryLimit::resolve(
         account_plan.plan.max_memory_per_worker.get(),
         account_plan
             .max_memory_override_value
@@ -1199,7 +1315,15 @@ fn max_memory_per_worker(account_plan: &AccountUsagePlan) -> MemoryLimit {
             .map(NumericU64::get),
         account_plan.plan.max_memory_per_worker_ceiling.get(),
         account_plan.plan.max_memory_per_worker_user_configurable,
-    )
+    );
+    if let Some(value) = account_plan
+        .max_memory_grant_value
+        .as_ref()
+        .map(NumericU64::get)
+    {
+        limit.effective_value = value;
+    }
+    limit
 }
 
 fn date_to_usage_key(date: &SqlDateTime) -> String {

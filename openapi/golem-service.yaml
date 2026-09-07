@@ -3324,6 +3324,168 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/accounts/{account_id}/resource-grants/{dimension}:
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Grant an account additional resources.
+      description: |-
+        This operation requires an administrator token. Promotional grants require a future
+        expiry. Grants do not change the account's paid-overage consent.
+      operationId: set_account_admin_resource_grant
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: dimension
+        required: true
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/AdminResourceGrantDimension'
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SetAdminResourceGrant'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AdminResourceGrantChange'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Account
+      summary: Clear an active admin resource grant.
+      operationId: clear_account_admin_resource_grant
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: dimension
+        required: true
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/AdminResourceGrantDimension'
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ClearedAdminResourceGrantChange'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/agent-secrets:
     get:
       tags:
@@ -17623,6 +17785,7 @@ components:
     AccountResourcePolicy:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
+        adminGrants: []
         maxMemoryPerAgent:
           ceiling: 10737418240
           effectiveValue: 1073741824
@@ -17678,6 +17841,10 @@ components:
           type: boolean
         latestOwnerTransition:
           $ref: '#/components/schemas/MonthlyUsageModeTransition'
+        adminGrants:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminResourceGrant'
         monthly:
           $ref: '#/components/schemas/MonthlyResourceLimits'
         maxMemoryPerAgent:
@@ -17688,6 +17855,7 @@ components:
       - accountId
       - monthlyUsageMode
       - overageAllowedByPlan
+      - adminGrants
       - monthly
       - maxMemoryPerAgent
       - maxStoragePerAgent
@@ -17838,6 +18006,98 @@ components:
       required:
       - year
       - month
+    AdminResourceGrant:
+      title: AdminResourceGrant
+      type: object
+      properties:
+        dimension:
+          $ref: '#/components/schemas/AdminResourceGrantDimension'
+        value:
+          type: integer
+          format: uint64
+        reason:
+          $ref: '#/components/schemas/AdminResourceGrantReason'
+        actorAccountId:
+          type: string
+          format: uuid
+        grantedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - dimension
+      - value
+      - reason
+      - actorAccountId
+      - grantedAt
+    AdminResourceGrantChange:
+      example:
+        accountId: 00000000-0000-0000-0000-000000000001
+        actorAccountId: 00000000-0000-0000-0000-000000000002
+        changedAt: 2023-11-14T22:13:20+00:00
+        dimension: monthlyComputeGcu
+        eventType: override_granted
+        newValue: 10
+        oldValue: 5
+        reason: support
+      title: AdminResourceGrantChange
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        dimension:
+          $ref: '#/components/schemas/AdminResourceGrantDimension'
+        eventType:
+          $ref: '#/components/schemas/AdminResourceGrantEventType'
+        reason:
+          $ref: '#/components/schemas/AdminResourceGrantReason'
+        actorAccountId:
+          type: string
+          format: uuid
+        changedAt:
+          type: string
+          format: date-time
+        oldValue:
+          type: integer
+          format: uint64
+        newValue:
+          type: integer
+          format: uint64
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - accountId
+      - dimension
+      - eventType
+      - reason
+      - actorAccountId
+      - changedAt
+      - oldValue
+      - newValue
+    AdminResourceGrantDimension:
+      type: string
+      enum:
+      - monthlyComputeGcu
+      - monthlyMemoryGbSeconds
+      - monthlyDurableStorageGbMonth
+      - monthlyEphemeralStorageGbMonth
+      - maxMemoryPerAgent
+      - maxStoragePerAgent
+    AdminResourceGrantEventType:
+      type: string
+      enum:
+      - override_granted
+      - override_cleared
+      - override_expired
+    AdminResourceGrantReason:
+      type: string
+      enum:
+      - promotional
+      - support
     AgentConfigDeclarationSchema:
       type: object
       properties:
@@ -18287,6 +18547,52 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    ClearedAdminResourceGrantChange:
+      example:
+        accountId: 00000000-0000-0000-0000-000000000001
+        actorAccountId: 00000000-0000-0000-0000-000000000002
+        changedAt: 2023-11-14T22:13:20+00:00
+        dimension: monthlyComputeGcu
+        eventType: override_cleared
+        newValue: 5
+        oldValue: 10
+        reason: support
+      title: ClearedAdminResourceGrantChange
+      type: object
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        dimension:
+          $ref: '#/components/schemas/AdminResourceGrantDimension'
+        eventType:
+          $ref: '#/components/schemas/AdminResourceGrantEventType'
+        reason:
+          $ref: '#/components/schemas/AdminResourceGrantReason'
+        actorAccountId:
+          type: string
+          format: uuid
+        changedAt:
+          type: string
+          format: date-time
+        oldValue:
+          type: integer
+          format: uint64
+        newValue:
+          type: integer
+          format: uint64
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - accountId
+      - dimension
+      - eventType
+      - reason
+      - actorAccountId
+      - changedAt
+      - oldValue
+      - newValue
     CommandAnnotations:
       type: object
       properties:
@@ -21523,6 +21829,24 @@ components:
             type: string
       required:
       - currentRevision
+    SetAdminResourceGrant:
+      example:
+        reason: support
+        value: 10
+      title: SetAdminResourceGrant
+      type: object
+      properties:
+        value:
+          type: integer
+          format: uint64
+        reason:
+          $ref: '#/components/schemas/AdminResourceGrantReason'
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+      - value
+      - reason
     SetMemoryLimit:
       title: SetMemoryLimit
       type: object
