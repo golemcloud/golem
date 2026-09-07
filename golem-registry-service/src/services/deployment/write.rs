@@ -21,6 +21,9 @@ use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::environment_tool_grant::{
+    EnvironmentToolGrantError, EnvironmentToolGrantService,
+};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
 use crate::services::registry_change_notifier::{
@@ -29,6 +32,7 @@ use crate::services::registry_change_notifier::{
 use crate::services::resource_definition::{ResourceDefinitionError, ResourceDefinitionService};
 use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
+use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::card::EnvironmentVerb;
@@ -69,6 +73,10 @@ pub enum DeploymentWriteError {
         requested_hash: diff::Hash,
         actual_hash: diff::Hash,
     },
+    #[error("Tool release coordinate exists with different immutable metadata")]
+    ToolReleaseImmutableConflict,
+    #[error("A de-published tool release must be restored explicitly before publication")]
+    ToolReleaseDePublishedConflict,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -86,6 +94,8 @@ impl SafeDisplay for DeploymentWriteError {
             Self::ConcurrentDeployment => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
+            Self::ToolReleaseImmutableConflict => self.to_string(),
+            Self::ToolReleaseDePublishedConflict => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -102,7 +112,9 @@ error_forwarding!(
     McpDeploymentError,
     AgentSecretError,
     ResourceDefinitionError,
-    RetryPolicyError
+    RetryPolicyError,
+    EnvironmentToolGrantError,
+    ToolReleaseError
 );
 
 pub struct DeploymentWriteService {
@@ -116,6 +128,8 @@ pub struct DeploymentWriteService {
     security_scheme_service: Arc<SecuritySchemeService>,
     resource_definition_service: Arc<ResourceDefinitionService>,
     retry_policy_service: Arc<RetryPolicyService>,
+    environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+    tool_release_service: Arc<ToolReleaseService>,
 }
 
 impl DeploymentWriteService {
@@ -130,6 +144,8 @@ impl DeploymentWriteService {
         security_scheme_service: Arc<SecuritySchemeService>,
         resource_definition_service: Arc<ResourceDefinitionService>,
         retry_policy_service: Arc<RetryPolicyService>,
+        environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+        tool_release_service: Arc<ToolReleaseService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -142,6 +158,8 @@ impl DeploymentWriteService {
             security_scheme_service,
             resource_definition_service,
             retry_policy_service,
+            environment_tool_grant_service,
+            tool_release_service,
         }
     }
 
@@ -234,22 +252,27 @@ impl DeploymentWriteService {
         );
 
         let account_id = environment.owner_account_id;
+        let remote_tool_references = data
+            .remote_tools
+            .iter()
+            .map(|deployment| deployment.release.clone())
+            .collect::<Vec<_>>();
+        let resolved_remote_tools = self
+            .environment_tool_grant_service
+            .resolve_active_references_partial(&environment, &remote_tool_references, auth)
+            .await?;
+        let remote_tools = data
+            .remote_tools
+            .iter()
+            .cloned()
+            .zip(resolved_remote_tools)
+            .collect::<Vec<_>>();
         let deployment_context = DeploymentContext::new(
             environment,
             components,
             http_api_deployments,
             mcp_deployments,
         )?;
-
-        {
-            let actual_hash = deployment_context.hash().map_err(anyhow::Error::new)?;
-            if data.expected_deployment_hash != actual_hash {
-                return Err(DeploymentWriteError::DeploymentHashMismatch {
-                    requested_hash: data.expected_deployment_hash,
-                    actual_hash,
-                });
-            }
-        }
 
         let mut errors = Vec::new();
         let mut warnings: Vec<super::DeployValidationWarning> = Vec::new();
@@ -293,8 +316,56 @@ impl DeploymentWriteService {
             &mut errors,
         );
 
-        let compiled_tools =
-            deployment_context.compile_tools(next_deployment_revision, &mut errors, &mut warnings);
+        let mut compiled_tools = deployment_context.compile_tools_with_remote(
+            next_deployment_revision,
+            &remote_tools,
+            &mut errors,
+            &mut warnings,
+        );
+
+        let registered_tools_by_name = compiled_tools
+            .registered_tools
+            .iter()
+            .filter_map(|tool| {
+                tool.definition
+                    .name()
+                    .and_then(|name| golem_common::model::tool::ToolName::try_from(name).ok())
+                    .map(|name| (name, tool.clone()))
+            })
+            .collect();
+        let mut tool_releases = self.tool_release_service.prepare_publications(
+            &deployment_context.environment,
+            &registered_tools_by_name,
+            &data.publish_tools,
+            auth,
+        )?;
+        let publications_need_change = self
+            .tool_release_service
+            .publications_need_change(&mut tool_releases)
+            .await?;
+        let published_release_ids = tool_releases
+            .iter()
+            .map(|release| {
+                (
+                    release.tool_name.as_str(),
+                    golem_common::model::tool_release::ToolReleaseId(release.tool_release_id),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for tool in &mut compiled_tools.registered_tools {
+            if let Some(release_id) = tool
+                .definition
+                .name()
+                .and_then(|name| published_release_ids.get(name))
+            {
+                tool.release_id = Some(*release_id);
+            }
+        }
+        for binding in &mut compiled_tools.agent_tool_bindings {
+            if let Some(release_id) = published_release_ids.get(binding.tool_name.as_str()) {
+                binding.release_id = Some(*release_id);
+            }
+        }
 
         let (new_agent_secrets, updated_agent_secrets, replaced_agent_secrets) = deployment_context
             .deployment_agent_secret_creations_and_updates(
@@ -321,12 +392,23 @@ impl DeploymentWriteService {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         }
 
+        let actual_hash = deployment_context
+            .hash_with_tools(&compiled_tools, &data.publish_tools)
+            .map_err(anyhow::Error::new)?;
+        if data.expected_deployment_hash != actual_hash {
+            return Err(DeploymentWriteError::DeploymentHashMismatch {
+                requested_hash: data.expected_deployment_hash,
+                actual_hash,
+            });
+        }
+
         if deployment_hash_unchanged
             && new_agent_secrets.is_empty()
             && updated_agent_secrets.is_empty()
             && replaced_agent_secrets.is_empty()
             && new_resource_definitions.is_empty()
             && new_retry_policies.is_empty()
+            && !publications_need_change
         {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
@@ -351,6 +433,7 @@ impl DeploymentWriteService {
                 .collect(),
             compiled_tools.registered_tools,
             compiled_tools.agent_tool_bindings,
+            tool_releases,
             new_agent_secrets,
             updated_agent_secrets,
             replaced_agent_secrets,
@@ -383,6 +466,12 @@ impl DeploymentWriteService {
                 }
                 DeployRepoError::VersionAlreadyExists { version } => {
                     DeploymentWriteError::VersionAlreadyExists { version }
+                }
+                DeployRepoError::ToolReleaseImmutableConflict => {
+                    DeploymentWriteError::ToolReleaseImmutableConflict
+                }
+                DeployRepoError::ToolReleaseDePublishedConflict => {
+                    DeploymentWriteError::ToolReleaseDePublishedConflict
                 }
                 other => other.into(),
             })?

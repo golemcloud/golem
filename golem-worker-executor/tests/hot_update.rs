@@ -496,7 +496,6 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
         None,
         None,
         None,
-        None,
         Some(oplog_config.clone()),
     )
     .await?;
@@ -509,6 +508,12 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+
+    // Complete construction on the original revision before admitting the automatic update.
+    let initial_revision = executor
+        .invoke_and_await_agent(&component, &agent_id, "replay_revision", data_value!())
+        .await?;
+    assert_eq!(initial_revision.into_typed::<u32>()?, 0);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -543,17 +548,8 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
         .expect("Expected an automatic snapshot after the post-update invocation");
 
     drop(executor);
-    let executor = start_customized(
-        deps,
-        &context,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(oplog_config),
-    )
-    .await?;
+    let executor =
+        start_customized(deps, &context, None, None, None, None, Some(oplog_config)).await?;
 
     let expected_error = match failure {
         AutomaticSnapshotLoadFailure::InvalidEntry => {

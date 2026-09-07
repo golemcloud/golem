@@ -44,7 +44,10 @@ pub use conversion::{
     Quantity, QuantityUnit, SchemaBuilder, merge_agent_graphs, try_into_schema_graph,
     try_into_typed_schema_value,
 };
-pub use fingerprint::{SchemaFingerprintError, SchemaFingerprintV1, schema_fingerprint_v1};
+pub use fingerprint::{
+    SchemaFingerprintError, SchemaFingerprintV1, resolve_stream_element_schema_v1,
+    schema_fingerprint_v1,
+};
 #[cfg(feature = "derive")]
 pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};

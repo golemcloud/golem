@@ -113,6 +113,23 @@ pub(super) fn output_stream_pair(
     ))
 }
 
+#[cfg(test)]
+pub(crate) fn test_output_stream_pair(
+    capacity: usize,
+) -> Result<(LiveStreamPublisher<SchemaValue>, LiveStreamEndpoint), String> {
+    let cancellation = CancellationToken::new();
+    let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
+    let (publisher, primary) = live_output_stream_bus(capacity, cancellation)
+        .map_err(|error| format!("failed to create test output stream bus: {error:?}"))?;
+    Ok((
+        publisher,
+        LiveStreamEndpoint {
+            primary: Some(primary),
+            lifecycle,
+        },
+    ))
+}
+
 type PublicationFuture =
     Pin<Box<dyn Future<Output = Result<u64, LiveStreamPublishError>> + Send + 'static>>;
 

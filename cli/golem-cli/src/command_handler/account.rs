@@ -33,7 +33,7 @@ use golem_client::model::{
     PermissionShareUpdate,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::account_usage::{SetMemoryLimit, SetStorageLimit, StorageUsagePeriod};
+use golem_common::model::account_usage::{AccountUsagePeriod, SetMemoryLimit, SetStorageLimit};
 use golem_common::model::permission_share::{
     PermissionShareData, PermissionShareId, PermissionShareName,
 };
@@ -238,7 +238,7 @@ impl AccountCommandHandler {
     async fn cmd_usage_show(
         &self,
         account: AccountScopeArgs,
-        period: Option<StorageUsagePeriod>,
+        period: Option<AccountUsagePeriod>,
     ) -> anyhow::Result<()> {
         let account_id = self.select_account_id_or_err(account).await?;
         let period = period.map(|period| period.to_string());
@@ -247,7 +247,7 @@ impl AccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .get_account_storage_usage(&account_id.0, period.as_deref())
+            .get_account_usage(&account_id.0, period.as_deref())
             .await
             .map_service_error()?;
         self.ctx
@@ -268,7 +268,7 @@ impl AccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .get_account_storage_usage_history(&account_id.0, Some(last))
+            .get_account_usage_history(&account_id.0, Some(last))
             .await
             .map_service_error()?
             .into_iter()

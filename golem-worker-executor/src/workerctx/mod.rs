@@ -18,6 +18,7 @@ use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_agents::ActiveAgents;
+use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -49,11 +50,15 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+use golem_common::model::entity::{
+    EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
+};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
+use golem_common::model::oplog::{
+    AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
+};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
     OwnedAgentId,
@@ -71,6 +76,20 @@ use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
 
+pub struct WorkerFilesystemContext {
+    pub(crate) generation_handle: FilesystemGenerationHandle,
+    pub(crate) preopen: OpenNode,
+}
+
+impl WorkerFilesystemContext {
+    pub(crate) fn new(generation_handle: FilesystemGenerationHandle, preopen: OpenNode) -> Self {
+        Self {
+            generation_handle,
+            preopen,
+        }
+    }
+}
+
 /// Test-harness coordination for a P3 HTTP body reply that is ready before a
 /// guest cancels the matching stream read.
 #[doc(hidden)]
@@ -78,6 +97,28 @@ pub trait P3HttpBodyProducerHook: Send + Sync {
     fn should_defer_ready_reply(&self) -> bool;
 
     fn ready_reply_deferred(&self);
+}
+
+/// Test-harness coordination after an entity body returns but before its completion is published.
+#[doc(hidden)]
+#[async_trait]
+pub trait EntityInvocationBodyHook: Send + Sync {
+    async fn before_invocation(&self, _execution_mode: InvocationExecutionMode) {}
+
+    async fn before_completion(&self, execution_mode: InvocationExecutionMode);
+
+    fn mutate_completed_reconstruction_response(
+        &self,
+        _response: &mut HostResponseEntityInvocation,
+    ) {
+    }
+}
+
+/// Test-harness coordination immediately after a historical entity `Start` is claimed.
+#[doc(hidden)]
+#[async_trait]
+pub trait EntityReconstructionClaimHook: Send + Sync {
+    async fn after_claim(&self, start_index: OplogIndex);
 }
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
@@ -138,6 +179,12 @@ pub trait WorkerCtx:
         None
     }
 
+    /// Supplies optional test-harness coordination for entity body execution.
+    #[doc(hidden)]
+    fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        None
+    }
+
     /// Creates a new worker context
     ///
     /// Arguments:
@@ -185,6 +232,8 @@ pub trait WorkerCtx:
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
+        filesystem: WorkerFilesystemContext,
+        linear_memory: crate::services::linear_memory::LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -199,9 +248,10 @@ pub trait WorkerCtx:
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
-        filesystem: FilesystemCapability,
+        filesystem_capability: FilesystemCapability,
         executable_component: Component,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
@@ -286,6 +336,9 @@ pub trait EntityInvocationManagement {
 ///passed to these functions.
 #[async_trait]
 pub trait FuelManagement {
+    /// Whether this deployment measures compute usage. Disabled metering is explicitly unlimited.
+    fn fuel_metering_enabled(&self) -> bool;
+
     /// Ensures fuel is available for continued execution, borrowing a new batch
     /// from the account pool if the current pre-paid batch is exhausted.
     /// Returns an error if the account has no remaining fuel.

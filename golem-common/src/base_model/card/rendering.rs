@@ -627,9 +627,11 @@ render_verb!(AccountVerb { View => "view", Update => "update", Delete => "delete
 render_verb!(AccountUsageVerb { View => "view", Update => "update" });
 render_verb!(AccountTokenVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(AccountPluginVerb { View => "view", Register => "register", Delete => "delete", Restore => "restore" });
+render_verb!(AccountToolReleaseVerb { View => "view", Publish => "publish", DePublish => "de-publish", Restore => "restore" });
 render_verb!(ApplicationVerb { View => "view", Create => "create", Update => "update", Delete => "delete" });
 render_verb!(EnvironmentVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Deploy => "deploy", Rollback => "rollback", ViewDeployment => "view-deployment", ViewDeploymentPlan => "view-deployment-plan", ViewAgentTypes => "view-agent-types", ViewTools => "view-tools", WriteDeploymentRecord => "write-deployment-record" });
 render_verb!(EnvironmentPluginGrantVerb { View => "view", Create => "create", Delete => "delete" });
+render_verb!(EnvironmentToolGrantVerb { View => "view", Create => "create", Delete => "delete", Restore => "restore" });
 render_verb!(EnvironmentDomainRegistrationVerb { View => "view", Create => "create", Delete => "delete" });
 render_verb!(EnvironmentSecuritySchemeVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Restore => "restore" });
 render_verb!(EnvironmentHttpApiDeploymentVerb { View => "view", Create => "create", Update => "update", Delete => "delete", Restore => "restore" });
@@ -895,6 +897,14 @@ impl RenderFragment for AccountPluginResourcePattern {
         })
     }
 }
+impl RenderFragment for AccountToolReleaseResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
 impl RenderFragment for AccountPermissionShareResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {
         Ok(match self {
@@ -942,6 +952,15 @@ render_environment_named_resource!(
     EnvironmentKvBucketResourcePattern,
     EnvironmentBlobBucketResourcePattern,
 );
+
+impl RenderFragment for EnvironmentToolGrantResourcePattern {
+    fn render_fragment(&self) -> Result<String, String> {
+        Ok(match self {
+            Self::Any => "*".to_string(),
+            Self::Name(name) => name.to_string(),
+        })
+    }
+}
 
 impl RenderFragment for EnvironmentDomainRegistrationResourcePattern {
     fn render_fragment(&self) -> Result<String, String> {

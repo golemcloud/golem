@@ -16,24 +16,17 @@ pub mod admission;
 pub mod component_charge;
 pub mod concurrent_agents_scheduler;
 pub mod concurrent_agents_semaphore;
-pub mod fs_semaphore;
 pub mod memory_probe;
 #[cfg(test)]
 mod tests;
-
-pub use concurrent_agents_scheduler::{ConcurrentAgentPermit, ConcurrentAgentsScheduler};
-pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
-pub use fs_semaphore::{
-    FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStoragePermit, FilesystemStorageSemaphore,
-    bytes_to_filesystem_storage_permits, filesystem_storage_bytes_rounded_up,
-    filesystem_storage_permits_to_bytes, filesystem_storage_pool_bytes_to_permits,
-};
 
 pub(crate) use admission::MemoryGrant;
 use admission::{AdmissionController, EvictionPriority, EvictionSource};
 use async_trait::async_trait;
 pub use component_charge::HeldComponentCharge;
 use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegistry};
+pub use concurrent_agents_scheduler::{ConcurrentAgentPermit, ConcurrentAgentsScheduler};
+pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 use memory_probe::{MemoryProbe, default_probe};
 use std::collections::HashMap;
 use std::future::Future;
@@ -41,11 +34,15 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use tracing::{Instrument, debug};
 
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
+use crate::services::agent_filesystem::{AgentFilesystems, FilesystemStorageError};
 use crate::services::card_interest::{
     CardAuthorityRecoveryEpoch, CardAuthorityRecoveryFinalize, CardInterestIndex,
 };
@@ -54,12 +51,19 @@ use crate::services::golem_config::{
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
-use crate::worker::entity_invocation::{EntityInvocationHandle, start_entity_invocation};
+use crate::worker::entity_invocation::{
+    EntityInvocationHandle, start_entity_invocation, start_pre_acquired_entity_invocation,
+};
 use crate::worker::entity_slot::ActiveEntityInvocationMetadata;
 use crate::worker::entity_slot::EntitySlot;
-use crate::worker::instance::{InstanceHost, OwnerExecution, OwnerRuntimeResources};
+use crate::worker::instance::{
+    EntityInvocationBody, InstanceHost, OwnerExecution, OwnerRuntimeResources,
+};
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
+use crate::worker::{
+    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -72,7 +76,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
+use golem_common::model::{AgentId, OplogIndex, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -132,6 +136,9 @@ pub struct ActiveAgentEntityMetadata {
     pub owner_id: OwnedAgentId,
     pub accepting_entities: bool,
     pub slots: Vec<ActiveEntitySlotMetadata>,
+    pub lane: crate::worker::owner_lane::OwnerLaneMetadata,
+    pub tool_operations: crate::durable_host::tool::ToolOperationSetMetadata,
+    pub reached_oplog_marker: Option<OplogIndex>,
 }
 
 impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
@@ -218,6 +225,9 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             owner_id: self.owner_id.clone(),
             accepting_entities: self.accepting_entities.load(Ordering::Acquire),
             slots,
+            lane: self.execution.lane().metadata(),
+            tool_operations: self.execution.tool_operation_metadata(),
+            reached_oplog_marker: self.execution.reached_oplog_marker(),
         }
     }
 
@@ -241,15 +251,49 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             })
     }
 
-    pub(crate) fn fence_entity_bodies(&self) {
-        let entities = self.entities.lock().unwrap();
-        self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);
-        self.accepting_entities.store(false, Ordering::Release);
-        for slot in entities.values() {
-            slot.fence();
+    pub(crate) async fn begin_fence_entity_bodies(&self, failure: OwnerFailureWinner) {
+        let tool_operations = self.execution.tool_operations();
+        debug!(
+            owner_id = %self.owner_id,
+            failure_kind = failure.kind_label(),
+            "Selecting owner failure for entity fence"
+        );
+        tool_operations.select_owner_failure(failure).await;
+        tool_operations.close_failed_attachments();
+        {
+            let entities = self.entities.lock().unwrap();
+            self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);
+            self.accepting_entities.store(false, Ordering::Release);
+            for slot in entities.values() {
+                slot.fence();
+            }
         }
-        drop(entities);
-        self.resources.filesystem().fence();
+        self.resources.fence_filesystem_generation();
+        debug!(owner_id = %self.owner_id, "Entity fence selected and resources closed");
+    }
+
+    pub(crate) async fn drain_fenced_entity_bodies(&self) {
+        let entities = self
+            .entities
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        debug!(owner_id = %self.owner_id, entity_slot_count = entities.len(), "Draining fenced entity bodies");
+        for slot in entities {
+            slot.wait_drained().await;
+        }
+        self.execution
+            .tool_operations()
+            .drain_owner_failure_lanes()
+            .await;
+        debug!(owner_id = %self.owner_id, "Fenced entity bodies drained");
+    }
+
+    pub(crate) async fn fence_entity_bodies(&self, failure: OwnerFailureWinner) {
+        self.begin_fence_entity_bodies(failure).await;
+        self.drain_fenced_entity_bodies().await;
     }
 
     /// Closes admission for an eviction decision if no entity invocation is active.
@@ -261,9 +305,10 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
     /// lifecycle fence.
     pub(crate) fn try_fence_idle_entity_bodies(&self) -> Option<Option<u64>> {
         let entities = self.entities.lock().unwrap();
-        if entities
-            .values()
-            .any(|slot| slot.active_invocation_count() != 0)
+        if self.execution.tool_operations().has_active_operations()
+            || entities
+                .values()
+                .any(|slot| slot.active_invocation_count() != 0)
         {
             return None;
         }
@@ -358,13 +403,116 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             finalize,
         )
     }
+
+    /// Starts a sidecar after its operation has already registered and acquired the existing owner
+    /// lane node. The operation retains that permit until its durable terminal is committed.
+    pub(crate) fn start_pre_acquired_entity_invocation<R, F, Finalize, Finalized>(
+        &self,
+        scope: EntityInvocationScope,
+        owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+        mode: EntityCallMode,
+        invoke: F,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: EntityInvocationBody<Ctx, R>,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        if !self.accepting_entities.load(Ordering::Acquire) {
+            return Err(WorkerExecutorError::runtime(
+                "Entity admission is fenced by owner lifecycle",
+            ));
+        }
+        if scope.owner_id() != &self.owner_id {
+            return Err(WorkerExecutorError::runtime(
+                "Entity invocation scope does not belong to the active owner",
+            ));
+        }
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        let host = InstanceHost::new_entity(
+            &self.primary,
+            scope.activation(),
+            slot.clone(),
+            owner_component_metadata,
+        )?;
+        start_pre_acquired_entity_invocation(
+            host,
+            slot,
+            self.execution.lane(),
+            scope,
+            mode,
+            invoke,
+            finalize,
+        )
+    }
+}
+
+const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// The worker invocation loops spawned by one executor.
+///
+/// Every loop is bound to the executor's lifetime: when the executor's shutdown token is
+/// cancelled, the loop task is abandoned at its next await point, which stops the worker from
+/// touching storage exactly as if the executor process had died there. The oplog is designed to
+/// be reopened after such an interruption. Cloning shares the same set of loops; a clone does not
+/// keep any task alive.
+#[derive(Clone, Debug)]
+pub struct InvocationLoops {
+    shutdown_token: CancellationToken,
+    tracker: TaskTracker,
+}
+
+impl InvocationLoops {
+    pub fn new(shutdown_token: CancellationToken) -> Self {
+        Self {
+            shutdown_token,
+            tracker: TaskTracker::new(),
+        }
+    }
+
+    pub(crate) fn spawn(
+        &self,
+        invocation_loop: impl Future<Output = ()> + Send + 'static,
+    ) -> JoinHandle<()> {
+        let shutdown_token = self.shutdown_token.clone();
+        self.tracker.spawn(async move {
+            let mut invocation_loop = Box::pin(invocation_loop);
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {
+                    // Suspended Wasmtime calls form a deeply nested future tree whose destructor
+                    // can exhaust Tokio's default worker-thread stack.
+                    stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(invocation_loop));
+                }
+                _ = crate::worker::invocation::with_invocation_stack(&mut invocation_loop) => {}
+            }
+        })
+    }
+
+    /// Whether the owning executor has been shut down. Once true, no new loop makes progress and
+    /// [`Self::wait_for_exit`] resolves as soon as the already running ones have exited.
+    pub fn is_shut_down(&self) -> bool {
+        self.shutdown_token.is_cancelled()
+    }
+
+    /// Resolves once every invocation loop of the executor has exited. Only meaningful after the
+    /// executor was shut down; a loop of a live executor runs until its worker is unloaded.
+    ///
+    /// A loop that is executing guest code without reaching an await point cannot be cancelled
+    /// once the executor's epoch ticker stopped, so callers should bound this wait.
+    pub async fn wait_for_exit(&self) {
+        self.tracker.close();
+        self.tracker.wait().await;
+    }
 }
 
 /// Holds owner-keyed active agent groups.
 pub struct ActiveAgents<Ctx: WorkerCtx> {
     agents: Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
     card_interest_index: Arc<CardInterestIndex>,
-    worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
+    agent_filesystems: Arc<AgentFilesystems>,
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     acquire_retry_delay: Duration,
     /// Authoritative measured-headroom admission gate, and the sole admission
@@ -381,6 +529,7 @@ pub struct ActiveAgents<Ctx: WorkerCtx> {
     /// module charge.
     component_size_coefficient: f64,
     status_flush_queue: Arc<AgentStatusFlushQueue>,
+    invocation_loops: InvocationLoops,
 }
 
 /// Identifies a compiled component for module-charge accounting.
@@ -395,7 +544,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self, FilesystemStorageError> {
         // Build the probe once and hand it to the measured-headroom gate, which
         // bases its decision on the pod's cgroup limit when constrained (not host
         // RAM).
@@ -419,7 +568,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self, FilesystemStorageError> {
+        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config)?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
@@ -438,10 +588,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let active_agents = Self {
             agents,
             card_interest_index: Arc::new(CardInterestIndex::new()),
-            worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
-                storage_config.worker_filesystem_storage(),
-                storage_config.acquire_retry_delay,
-            )),
+            agent_filesystems,
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             admission,
@@ -450,16 +597,26 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             status_flush_queue: AgentStatusFlushQueue::new(
                 agent_status_flush_config.interval,
                 agent_status_flush_config.max_concurrency,
-                shutdown_token,
+                shutdown_token.clone(),
             ),
+            invocation_loops: InvocationLoops::new(shutdown_token),
         };
         active_agents.initialize_metrics();
-        active_agents
+        Ok(active_agents)
     }
 
     /// The per-executor queue used to batch cached agent status blob writes in the background.
     pub fn status_flush_queue(&self) -> Arc<AgentStatusFlushQueue> {
         self.status_flush_queue.clone()
+    }
+
+    /// The invocation loops of this executor's workers, bound to the executor's shutdown token.
+    pub fn invocation_loops(&self) -> InvocationLoops {
+        self.invocation_loops.clone()
+    }
+
+    pub(crate) fn agent_filesystems(&self) -> Arc<AgentFilesystems> {
+        Arc::clone(&self.agent_filesystems)
     }
 
     /// Acquire (or share) the per-component module charge for a worker of the
@@ -593,7 +750,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
     pub async fn remove(&self, owned_agent_id: &OwnedAgentId) {
         if let Some(active_agent) = self.agents.get(owned_agent_id).await {
-            active_agent.fence_entity_bodies();
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
+                    Timestamp::now_utc(),
+                )))
+                .await;
             let worker = active_agent.primary();
             self.card_interest_index
                 .set_card_interest(worker.owned_agent_id().clone(), &[])
@@ -764,36 +925,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         }
     }
 
-    /// Blocking acquire of storage semaphore permits. Loops until the requested
-    /// number of bytes is available, evicting idle workers as needed.
-    pub async fn acquire_filesystem_storage(&self, storage_bytes: u64) -> FilesystemStoragePermit {
-        let agents = self.agents.clone();
-        self.worker_filesystem_storage
-            .acquire(storage_bytes, || {
-                let agents = agents.clone();
-                async move { Self::try_free_up_filesystem_storage(&agents, storage_bytes).await }
-            })
-            .await
-    }
-
-    /// Non-blocking, priority storage acquire. Grabs the allocation lock to
-    /// interrupt any ongoing blocking `acquire_storage` loops, then attempts once.
-    ///
-    /// Returns `None` if the requested storage is not available even after
-    /// interrupting waiting acquires.
-    pub async fn try_acquire_filesystem_storage(
-        &self,
-        storage_bytes: u64,
-    ) -> Option<FilesystemStoragePermit> {
-        self.worker_filesystem_storage
-            .try_acquire(storage_bytes)
-            .await
-    }
-
-    pub fn filesystem_storage_semaphore(&self) -> Arc<FilesystemStorageSemaphore> {
-        self.worker_filesystem_storage.clone()
-    }
-
     /// Register an account with the per-account concurrent agent semaphore.
     ///
     /// Must be called (from `Worker::new`) before any concurrent-agent permit
@@ -813,77 +944,79 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         }
     }
 
-    async fn try_free_up_filesystem_storage(
-        agents: &Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
-        storage_bytes: u64,
-    ) -> bool {
-        let mut idle_candidates = Vec::new();
-        let mut warm_candidates = Vec::new();
-
-        debug!("Collecting storage eviction candidates");
-        for (owned_agent_id, active_agent) in agents.iter().await {
-            let worker = active_agent.primary();
-            if let Some(class) = worker.eviction_class().await
-                && let Ok(storage) = worker.filesystem_storage_requirement().await
-            {
-                let last_changed = worker.last_execution_state_change();
-                let entry = (owned_agent_id, worker, storage, last_changed);
-                match class {
-                    crate::worker::EvictionClass::LoadedIdle => idle_candidates.push(entry),
-                    crate::worker::EvictionClass::WarmRunnable => warm_candidates.push(entry),
-                }
-            }
-        }
-
-        // Sort each bucket — newest first so we pop oldest
-        idle_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
-        idle_candidates.reverse();
-        warm_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
-        warm_candidates.reverse();
-
-        let mut freed: u64 = 0;
-
-        // First evict LoadedIdle workers
-        while freed < storage_bytes && !idle_candidates.is_empty() {
-            let (agent_id, worker, storage, _) = idle_candidates.pop().unwrap();
-            debug!("Trying to stop idle {agent_id} to free up storage");
-            if worker
-                .stop_if_evictable(crate::worker::EvictionClass::LoadedIdle)
-                .await
-            {
-                debug!("Stopped idle {agent_id}, freed {storage} bytes of storage");
-                crate::metrics::workers::record_worker_eviction("LoadedIdle");
-                freed += storage;
-            }
-        }
-
-        // Then evict WarmRunnable workers if still under pressure
-        while freed < storage_bytes && !warm_candidates.is_empty() {
-            let (agent_id, worker, storage, _) = warm_candidates.pop().unwrap();
-            debug!("Trying to stop warm-runnable {agent_id} to free up storage");
-            if worker
-                .stop_if_evictable(crate::worker::EvictionClass::WarmRunnable)
-                .await
-            {
-                debug!("Stopped warm-runnable {agent_id}, freed {storage} bytes of storage");
-                crate::metrics::workers::record_worker_eviction("WarmRunnable");
-                freed += storage;
-            }
-        }
-
-        if freed > 0 {
-            debug!("Freed {freed} bytes by evicting worker(s); re-checking availability");
-        }
-        freed >= storage_bytes
-    }
-
     /// Initializes worker gauges. Subsequent changes are recorded inline at the mutation sites.
     fn initialize_metrics(&self) {
         crate::metrics::workers::initialize_worker_metrics();
-        crate::metrics::workers::set_filesystem_semaphore_available(
-            self.worker_filesystem_storage.available_bytes(),
-        );
     }
+}
+
+pub(crate) struct FilesystemPressureVictim<Ctx: WorkerCtx> {
+    stable_agent_id: String,
+    eligible_since: u64,
+    worker: Arc<Worker<Ctx>>,
+    eligibility: FilesystemPressureEligibility,
+}
+
+impl<Ctx: WorkerCtx> FilesystemPressureVictim<Ctx> {
+    pub(crate) fn stable_agent_id(&self) -> &str {
+        &self.stable_agent_id
+    }
+
+    pub(crate) fn eligible_since(&self) -> u64 {
+        self.eligible_since
+    }
+}
+
+pub(crate) async fn eligible_loaded_idle_filesystem_pressure_victims<Ctx: WorkerCtx>(
+    active_agents: &ActiveAgents<Ctx>,
+) -> Vec<FilesystemPressureVictim<Ctx>> {
+    let mut candidates = Vec::new();
+    for (agent_id, active_agent) in active_agents.agents.iter().await {
+        let worker = active_agent.primary();
+        if is_loaded_idle_filesystem_pressure_candidate(worker.eviction_class().await) {
+            let Some(eligibility) = worker.filesystem_pressure_eligibility().await else {
+                continue;
+            };
+            candidates.push(FilesystemPressureVictim {
+                stable_agent_id: agent_id.to_string(),
+                eligible_since: Worker::<Ctx>::filesystem_pressure_eligible_since(eligibility),
+                worker,
+                eligibility,
+            });
+        }
+    }
+    candidates
+}
+
+fn is_loaded_idle_filesystem_pressure_candidate(class: Option<EvictionClass>) -> bool {
+    class == Some(EvictionClass::LoadedIdle)
+}
+
+pub(crate) fn request_loaded_idle_filesystem_unload<Ctx: WorkerCtx>(
+    candidate: FilesystemPressureVictim<Ctx>,
+    unload_request: UnloadRequest,
+) -> tokio::task::JoinHandle<EvictionStopOutcome> {
+    tokio::spawn(async move {
+        stop_loaded_idle_if_eligible(
+            candidate.eligibility,
+            unload_request,
+            move |target_class, eligibility, unload_request| async move {
+                candidate
+                    .worker
+                    .stop_if_evictable_with_outcome(target_class, eligibility, unload_request)
+                    .await
+            },
+        )
+        .await
+    })
+}
+
+pub(crate) async fn stop_loaded_idle_if_eligible<T>(
+    eligibility: FilesystemPressureEligibility,
+    unload_request: UnloadRequest,
+    stop: impl AsyncFnOnce(EvictionClass, Option<FilesystemPressureEligibility>, UnloadRequest) -> T,
+) -> T {
+    stop(EvictionClass::LoadedIdle, Some(eligibility), unload_request).await
 }
 
 impl From<EvictionPriority> for crate::worker::EvictionClass {

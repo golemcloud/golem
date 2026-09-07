@@ -135,7 +135,8 @@ async fn quota_token_capability_round_trips_and_is_redacted(
     )
     .await?;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    crate::quota::wait_for_http_request_count(received.as_ref(), 4, Duration::from_secs(60))
+        .await?;
 
     user.wait_for_statuses(
         &sender_sys,
@@ -154,6 +155,14 @@ async fn quota_token_capability_round_trips_and_is_redacted(
         Duration::from_secs(60),
     )
     .await?;
+
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while received.load(Ordering::SeqCst) < 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("timed out waiting for all quota-token HTTP calls"))?;
 
     http_server.abort();
 

@@ -50,15 +50,12 @@ object AgentConstructor {
       override val info: ConstructorMetadata = ctorInfo
 
       override def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
-        SchemaPayload
-          .decode[A](input)(inputCodec)
-          .fold(
-            err =>
-              js.Promise
-                .reject(JsAgentError.invalidInput(err.toString).asInstanceOf[Any])
-                .asInstanceOf[js.Promise[Instance]],
-            value => FutureInterop.toPromise(build(value, principal))
-          )
+        FutureInterop.toPromise(
+          SchemaPayload.withDecodedInput[A, Instance](input) {
+            case Left(err)    => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
+            case Right(value) => build(value, principal)
+          }(inputCodec)
+        )
     }
   }
 }

@@ -159,6 +159,14 @@ pub fn as_duration(v : SchemaValue) -> Int64 raise {
 }
 
 ///|
+pub fn as_binary(v : SchemaValue) -> (Bytes, String?) raise {
+  match v {
+    BinaryValue(bytes, mime_type) => (bytes, mime_type)
+    o => mismatch("binary", o)
+  }
+}
+
+///|
 pub fn as_record(v : SchemaValue) -> Array[SchemaValue] raise {
   match v {
     RecordValue(fields) => fields

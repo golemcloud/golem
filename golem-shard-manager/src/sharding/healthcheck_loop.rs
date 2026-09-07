@@ -15,7 +15,7 @@
 use super::healthcheck::HealthCheck;
 use super::shard_management::ShardManagement;
 use crate::config::HealthCheckConfig;
-use crate::sharding::healthcheck::get_unhealthy_pods;
+use crate::sharding::healthcheck::get_unhealthy_executors;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, warn};
@@ -44,20 +44,26 @@ async fn run_health_check(
     health_check: &Arc<dyn HealthCheck>,
 ) {
     debug!("Scheduled to conduct health check");
-    let routing_table = shard_management.current_snapshot().await;
-    debug!("Checking health of registered pods...");
-    let failed_pods = get_unhealthy_pods(health_check, &routing_table.get_pods_with_names()).await;
-    if failed_pods.is_empty() {
-        debug!("All registered pods are healthy")
+    let shard_state = shard_management.current_snapshot().await;
+    debug!("Checking health of registered executors...");
+    let executors = shard_state.get_executors_with_addrs();
+    let failed_executors = get_unhealthy_executors(health_check, &executors).await;
+    if failed_executors.is_empty() {
+        debug!("All registered executors are healthy")
     } else {
-        warn!(
-            "The following pods were found to be unhealthy: {:?}",
-            failed_pods
-        );
-        for failed_pod in failed_pods {
-            shard_management.unregister_pod(failed_pod).await;
+        for (executor_id, addr, pod_name) in executors
+            .into_iter()
+            .filter(|(id, _, _)| failed_executors.contains(id))
+        {
+            warn!(
+                executor_id = %executor_id,
+                addr = %addr,
+                pod_name = pod_name.as_deref().unwrap_or(""),
+                "Executor was found to be unhealthy; unregistering"
+            );
+            shard_management.unregister_executor(executor_id).await;
         }
     }
 
-    debug!("Finished checking health of registered pods");
+    debug!("Finished checking health of registered executors");
 }

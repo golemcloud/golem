@@ -14,7 +14,7 @@ import {MultiPlatformCommand} from "@/components/multi-platform-command"
 
 ## JSON schema
 
-For the application manifest format we also publish _JSON schemas_. The current version (1.5.0) is available [here](https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json).
+For the application manifest format we also publish _JSON schemas_. The current version (1.6.0-dev.9) is available [here](https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json).
 
 The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
 
@@ -24,12 +24,12 @@ Use the following _YAML comments_ at the start of your `golem.yaml` documents to
   commands={[
     {
       label: "IntelliJ IDEA based products",
-      command: "# $schema: https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json",
+      command: "# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
     },
     {
       label: "VSCode with YAML Language Support plugin",
       command:
-        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0/golem.schema.json",
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json",
     },
   ]}
   language={"yaml"}
@@ -113,45 +113,95 @@ tools:
 
 In this example, `build/assistant.wasm` must export both `SupportAgent` and the `search` tool.
 
-### Environment and agent bindings
+### Agent bindings
 
-Tool bindings select which deployed tools are available and provide invocation parameters. Environment bindings apply generally. An agent binding is layered on top and can narrow or replace individual fields. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
+Tool bindings select which deployed tools are available to an agent and provide invocation parameters. Use the automatically selected `app-env:<environment>` agent preset to vary bindings by environment. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
 
 ```yaml
 environments:
   production:
     server: cloud
+
+agents:
+  SupportAgent:
     tools:
       search:
         version: "1.0.0"
         parameters:
           index: documentation
           limit: 20
-
-agents:
-  SupportAgent:
-    tools:
-      search:
-        parametersMergeMode: upsert
-        parameters:
-          limit: 5
+    presets:
+      app-env:production:
+        tools:
+          search:
+            parametersMergeMode: upsert
+            parameters:
+              limit: 5
 ```
 
 For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
 
 ### Secret policy
 
-`secretKeysReadable` and `secretKeysRevealable` accept either `"*"` or a list of secret paths. Policies are narrowing-only: environment and agent scopes are intersected, and revealable keys outside the effective readable scope are dropped with a deployment warning. The only supported secret merge mode is `intersect`, which is also the default.
+`secretKeysReadable` and `secretKeysRevealable` accept either `"*"` or a list of secret paths. Policies are narrowing-only across an agent's binding layers, and revealable keys outside the effective readable scope are dropped with a deployment warning. The only supported secret merge mode is `intersect`, which is also the default.
 
 ```yaml
 environments:
   production:
     server: cloud
+
+agents:
+  SupportAgent:
     tools:
       search:
         secretKeysReadable: "*"
         secretKeysRevealable:
           - credentials.search.token
+    presets:
+      app-env:production:
+        tools:
+          search:
+            secretKeysReadable:
+              - credentials.search.token
+              - credentials.search.endpoint
+            secretKeysRevealable:
+              - credentials.search.token
+```
+
+### Publishing and consuming exact releases
+
+A publisher opts a local tool into the registry for each environment. A successful deployment of this environment publishes a grantable release that records the component revision, tool version, metadata version, and metadata digest:
+
+```yaml
+tools:
+  search: {}
+
+toolReleases:
+  production:
+    search: {}
+
+environments:
+  production:
+    server: cloud
+```
+
+A release is not globally visible. A consumer selects an exact release once with `tools.<name>.release` and owns the provision configuration and bindings used by its deployment. Golem derives an automatically managed environment grant from this manifest declaration. The grant is an authorization checkpoint for adding tools to the environment, allows the deployment to read the selected release, and provides a revocation handle:
+
+```yaml
+tools:
+  search:
+    release:
+      account: publisher@example.com
+      name: search
+      version: "1.2.0"
+    config:
+      index: consumer-documents
+    env:
+      LOG_LEVEL: info
+
+environments:
+  production:
+    server: cloud
 
 agents:
   SupportAgent:
@@ -159,16 +209,21 @@ agents:
       search:
         secretKeysReadable:
           - credentials.search.token
-          - credentials.search.endpoint
-        secretKeysRevealable:
-          - credentials.search.token
 ```
 
-### Current scope
+Registry subjects can use `releaseId` instead of the `account`, `name`, and `version` coordinate. A release ID remains pinned to that release. A coordinate-following grant moves to a replacement release published at the same coordinate when the publisher environment has `versionCheck` disabled; an ID-pinned grant stays on the previous release. Environments with `versionCheck` enabled accept only immutable releases and prevent mutable coordinate replacement while an active coordinate-following grant exists. Deployment planning shows the automatic grant changes implied by registry-backed tool declarations. Deployment creates missing grants before reading registry metadata or building bridge clients, and removes obsolete automatically managed grants. Protected system grants and grants created separately by an administrator are retained. The deploy actor must have permission to make the planned grant changes.
 
-This manifest support deploys component-implemented tools, compiles their effective bindings, and preserves the resulting metadata with the deployment. It does not yet provide runtime tool discovery or invocation. Host-implemented tools, imported MCP tools, middleware chains, capability validation, cross-environment or cross-account registrations and grants, tool child-instance execution, and runtime enforcement of the compiled secret policy are separate capabilities.
+`toolReleases` is additive. Removing a name from the manifest does not de-publish its release, and rolling a deployment back does not undo publication. Manage lifecycle explicitly with `golem tool release list`, `get`, `de-publish`, and `restore`. De-publishing makes a release unavailable to new deployments but retains its grants; those grants become available again when the same release is restored. A deployment cannot restore or replace a de-published coordinate—you must restore it explicitly first. Superseded releases cannot be de-published or restored.
 
-Bridge generation continues to use tools discovered from components in the local application:
+Tool publication changes are planned separately from staged deployment state. The CLI's staged/current `SAME` or `DIFFERENT` comparison excludes tool publications; check the tool publication section of the deployment plan for those changes.
+
+Publishing a new version does not move an existing consumer deployment. Selecting it creates a new deployment snapshot and reconciles its grant. Existing deployment snapshots and historical replay continue to use their pinned source. When loose publication replaces an existing coordinate, coordinate-following grants move to the replacement while ID-pinned grants continue to resolve the superseded release.
+
+Runtime discovery and admission use the consumer deployment snapshot and the caller's environment policy. GOL-28 stops at the admitted component dispatch boundary; actual component-sidecar invocation is not implemented by this work. Executor-native Host tool dispatch is owned separately by GOL-24.
+
+### Bridge generation
+
+Local bridge generation continues to accept tool aliases:
 
 ```yaml
 bridge:
@@ -177,7 +232,16 @@ bridge:
       tools: [search]
 ```
 
-There is no `local | registry` bridge source selector or registry fallback. Registry-backed bridge generation requires the cross-environment registration and grant model; the future source-selection design must also remain consistent with agent/RPC clients.
+Registry-backed bridge generation refers to the logical name. The exact source is resolved from the canonical declaration under `tools`:
+
+```yaml
+bridge:
+  rust:
+    internal:
+      tools: [search]
+```
+
+The generator reads only the release's safe tool definition and metadata digest. It does not require the publisher's WASM or permission to inspect the publisher component. Release identity and metadata digest are included in generation cache markers, so changing the selected release invalidates generated output. A missing grant is planned and created before metadata access; planning fails clearly when the deploy actor lacks permission to reconcile the grant.
 
 <Fields>
   ## Field reference
@@ -505,7 +569,7 @@ There is no `local | registry` bridge source selector or registry fallback. Regi
     path: "environments.<environment-name>.deployment.versionCheck",
     since: Release.R_1_4_0
   }}>
-    ***Optional boolean*** to enable version checks during deployment.
+    ***Optional boolean*** to enable strict version checks during deployment. Published tool releases are immutable when enabled. When disabled, publishing changed content at an existing coordinate creates a replacement release, marks the previous release as superseded, and moves active coordinate-following grants to the replacement. Strict environments cannot use mutable releases.
   </Field>
 
   <Field meta={{
@@ -513,6 +577,12 @@ There is no `local | registry` bridge source selector or registry fallback. Regi
     since: Release.R_1_4_0
   }}>
     ***Optional boolean*** to allow security overrides during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "toolReleases.<environment-name>",
+  }}>
+    ***Optional additive map of local tool names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication records the exact source and metadata of the deployed local tool and follows the environment's `deployment.versionCheck` policy. Removing a name does not de-publish an existing release; use `golem tool release de-publish <release-id>` for that explicit lifecycle action.
   </Field>
 
   <Field meta={{
@@ -1521,6 +1591,24 @@ There is no `local | registry` bridge source selector or registry fallback. Regi
   </Field>
 
   <Field meta={{
+    path: "tools",
+  }}>
+    ***Optional map of canonical tool declarations*** indexed by the tool's lower-kebab-case logical name. A declaration either matches a locally discovered implementation, selects one with `component`, or selects an exact published release with `release`. Release coordinates are specified only here; agents, component dependencies, bridge generation, and other consumers refer to the logical name. Provision fields such as `config`, `env`, `plugins`, and `files` belong to the consuming deployment.
+  </Field>
+
+  <Field meta={{
+    path: "tools.<tool-name>.release",
+  }}>
+    ***Optional exact published release reference***. Specify either `releaseId` or all of `account`, `name`, and `version`. Golem derives and reconciles an automatically managed environment grant from this declaration; planned changes remain visible during deployment. Omit `release` for a locally implemented tool.
+  </Field>
+
+  <Field meta={{
+    path: "tools.<tool-name>.component",
+  }}>
+    ***Optional local implementing component name***. Use it to disambiguate components that export the same tool name and to let a name-only `dependencies.tools` entry resolve to its local build dependency.
+  </Field>
+
+  <Field meta={{
     path: "bridge",
     since: Release.R_1_5_0
   }}>
@@ -1567,6 +1655,12 @@ There is no `local | registry` bridge source selector or registry fallback. Regi
     since: Release.R_1_5_0
   }}>
     ***Optional custom output directory*** for the generated Rust SDK.
+  </Field>
+
+  <Field meta={{
+    path: "bridge.<language>.internal.tools",
+  }}>
+    ***Optional logical tool names, local component matchers, or `"*"`*** for generated guest bridge clients. Registry release coordinates are resolved from the corresponding declaration under `tools` and cannot be repeated here.
   </Field>
 
   <Field meta={{

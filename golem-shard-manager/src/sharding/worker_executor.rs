@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use super::error::{HealthCheckError, ShardManagerError};
-use super::model::{Assignments, Unassignments, pod_shard_assignments_to_string};
+use super::model::{
+    Assignments, ExecutorAddrs, ExecutorId, Unassignments, shard_assignments_to_string,
+};
 use crate::config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::Pod;
@@ -23,7 +26,7 @@ use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
@@ -34,7 +37,7 @@ use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::info;
+use tracing::{info, warn};
 
 #[async_trait]
 pub trait WorkerExecutorService: Send + Sync {
@@ -62,74 +65,94 @@ pub trait WorkerExecutorService: Send + Sync {
 
 /// Sends revoke requests to all worker executors based on an `Unassignments` plan
 pub async fn revoke_shards(
-    worker_executors: Arc<dyn WorkerExecutorService>,
+    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     unassignments: &Unassignments,
-) -> Vec<(Pod, BTreeSet<ShardId>)> {
-    let futures: Vec<_> = unassignments
-        .unassignments
-        .iter()
-        .map(|(pod, shard_ids)| {
+    addrs: &ExecutorAddrs,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+    fan_out(
+        &unassignments.unassignments,
+        addrs,
+        "revoke_shards",
+        |pod, shard_ids| {
             let worker_executors = worker_executors.clone();
-            Box::pin(async move {
-                match worker_executors.revoke_shards(pod, shard_ids).await {
-                    Ok(_) => None,
-                    Err(_) => Some((*pod, shard_ids.clone())),
-                }
-            })
-        })
-        .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
+            Box::pin(async move { worker_executors.revoke_shards(&pod, shard_ids).await })
+        },
+    )
+    .await
 }
 
-/// Sends assign requests to all worker executors based on an `Assignments` plan
+/// Sends assign requests to all worker executors based on an `Assignments` plan.
 pub async fn assign_shards(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     assignments: &Assignments,
-) -> Vec<(Pod, BTreeSet<ShardId>)> {
-    let futures: Vec<_> = assignments
-        .assignments
-        .iter()
-        .map(|(pod, shard_ids)| {
+    addrs: &ExecutorAddrs,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+    fan_out(
+        &assignments.assignments,
+        addrs,
+        "assign_shards",
+        |pod, shard_ids| {
             let worker_executors = worker_executors.clone();
-            Box::pin(async move {
-                match worker_executors.assign_shards(pod, shard_ids).await {
-                    Ok(_) => None,
-                    Err(_) => Some((*pod, shard_ids.clone())),
-                }
-            })
-        })
-        .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
+            Box::pin(async move { worker_executors.assign_shards(&pod, shard_ids).await })
+        },
+    )
+    .await
 }
 
-/// Reconciles executors to the routing-table shard assignments.
+/// Reconciles executors to the authoritative shard assignments.
 pub async fn set_shard_assignments(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     number_of_shards: usize,
     assignments: &Assignments,
-) -> Vec<(Pod, BTreeSet<ShardId>)> {
-    let futures: Vec<_> = assignments
-        .assignments
-        .iter()
-        .map(|(pod, shard_ids)| {
+    addrs: &ExecutorAddrs,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+    fan_out(
+        &assignments.assignments,
+        addrs,
+        "set_shard_assignment",
+        |pod, shard_ids| {
             let worker_executors = worker_executors.clone();
             Box::pin(async move {
-                match worker_executors
-                    .set_shard_assignment(pod, number_of_shards, shard_ids)
+                worker_executors
+                    .set_shard_assignment(&pod, number_of_shards, shard_ids)
                     .await
-                {
-                    Ok(_) => None,
-                    Err(_) => Some((*pod, shard_ids.clone())),
-                }
             })
+        },
+    )
+    .await
+}
+
+async fn fan_out<'a, F>(
+    plan: &'a BTreeMap<ExecutorId, BTreeSet<ShardId>>,
+    addrs: &ExecutorAddrs,
+    operation: &'static str,
+    call: F,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)>
+where
+    F: Fn(Pod, &'a BTreeSet<ShardId>) -> BoxFuture<'a, Result<(), ShardManagerError>>,
+{
+    let futures: Vec<_> = plan
+        .iter()
+        .map(|(executor_id, shard_ids)| {
+            let call = addrs
+                .get(executor_id)
+                .map(|addr| call(Pod::from(*addr), shard_ids));
+            async move {
+                match call {
+                    None => {
+                        warn!(
+                            executor_id = %executor_id,
+                            operation,
+                            "Executor has no known address; reporting the operation as failed"
+                        );
+                        Some((*executor_id, shard_ids.clone()))
+                    }
+                    Some(call) => match call.await {
+                        Ok(_) => None,
+                        Err(_) => Some((*executor_id, shard_ids.clone())),
+                    },
+                }
+            }
         })
         .collect();
     futures::future::join_all(futures)
@@ -152,7 +175,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            assigned_shards = pod_shard_assignments_to_string(pod, None, shard_ids.iter()),
+            assigned_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
             "Assigning shards",
         );
 
@@ -199,7 +222,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            revoked_shards = pod_shard_assignments_to_string(pod, None, shard_ids.iter()),
+            revoked_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
             "Revoking shards",
         );
 
@@ -221,7 +244,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            assigned_shards = pod_shard_assignments_to_string(pod, None, shard_ids.iter()),
+            assigned_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
             number_of_shards, "Setting authoritative shard assignment",
         );
 

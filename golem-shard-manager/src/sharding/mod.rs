@@ -21,4 +21,7 @@ pub mod rebalancing;
 pub mod shard_management;
 pub mod worker_executor;
 
-pub use model::{PodState, RoutingTable, RoutingTableEntry};
+pub use model::{
+    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, ShardAssignmentEntry,
+    ShardEpoch, ShardLeaseRevision, ShardLeaseState,
+};

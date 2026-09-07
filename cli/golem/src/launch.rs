@@ -41,8 +41,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, SchedulerStorageConfig,
-    WorkerServiceGrpcConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
+    SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -69,6 +69,7 @@ pub struct LaunchArgs {
     pub ports_file: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub agent_filesystem_root: Option<PathBuf>,
+    pub resource_usage_metering: ResourceUsageMeteringConfig,
 }
 
 impl LaunchArgs {
@@ -281,11 +282,22 @@ fn registry_service_config(
                 },
             );
             accounts.insert(
-                "builtin-plugin-owner".to_string(),
+                "builtin_plugin_owner".to_string(),
                 PrecreatedAccount {
                     id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
                     name: "Builtin Plugin Owner".to_string(),
                     email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                    token: None,
+                    plan_id,
+                    role: AccountRole::BuiltinPluginOwner,
+                },
+            );
+            accounts.insert(
+                "builtin_tool_owner".to_string(),
+                PrecreatedAccount {
+                    id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
+                    name: "Builtin Tool Owner".to_string(),
+                    email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
                     token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,
@@ -313,7 +325,7 @@ fn shard_manager_config(
             port: 0,
             ..Default::default()
         },
-        db: DbConfig::Sqlite(DbSqliteConfig {
+        persistence: golem_shard_manager::config::PersistenceConfig::Sqlite(DbSqliteConfig {
             database: args
                 .data_dir
                 .join("shard_manager.db")
@@ -398,6 +410,7 @@ fn worker_executor_config(
             ..Default::default()
         },
         resource_limits: ResourceLimitsConfig::default(),
+        resource_usage_metering: args.resource_usage_metering,
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
                 ..Default::default()

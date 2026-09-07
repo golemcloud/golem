@@ -20,7 +20,7 @@ export function isAsyncIterable(value: unknown): value is AsyncIterable<number> 
   );
 }
 
-export async function closeAsyncIterable(value: AsyncIterable<number> | undefined): Promise<void> {
+export async function closeAsyncIterable(value: AsyncIterable<unknown> | undefined): Promise<void> {
   try {
     await value?.[Symbol.asyncIterator]().return?.();
   } catch {

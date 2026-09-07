@@ -23,6 +23,7 @@ const exceptionTag = new WebAssembly.Tag({ parameters: [] })
 let instance
 let componentContext = 0
 let nextWaitableSet = 1
+let schemaValueStreamHostMode = 0
 const resourceDrops = {
   secret: 0,
   "quota-token": 0,
@@ -43,6 +44,11 @@ const rootImports = new Proxy(
           }
         case "[waitable-set-new]":
           return () => nextWaitableSet++
+        case "[subtask-cancel]":
+          return () =>
+            schemaValueStreamHostMode === 3 || schemaValueStreamHostMode === 4
+              ? 3
+              : 0
         case "[stream-new-unit]":
           return () => 0n
         default:
@@ -110,14 +116,31 @@ const importObject = {
           return resourceDrops["quota-token"]
         case 2:
           return resourceDrops["permission-card"]
+        case 3:
+          return resourceDrops["schema-value-stream"]
         default:
           throw new Error(`unknown resource kind requested by test: ${kind}`)
       }
+    },
+    "set-schema-value-stream-host-mode"(mode) {
+      schemaValueStreamHostMode = mode
     },
   },
 }
 
 for (const imported of WebAssembly.Module.imports(module)) {
+  if (
+    imported.kind === "function" &&
+    imported.module === "golem:tool/host@0.1.0"
+  ) {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] = () => {
+      throw new Error(
+        `cancelled tool input unexpectedly reached the host: ${imported.name}`,
+      )
+    }
+    continue
+  }
   if (
     imported.kind === "function" &&
     imported.module === "golem:core/types@2.0.0" &&
@@ -133,7 +156,57 @@ for (const imported of WebAssembly.Module.imports(module)) {
     }
     continue
   }
-  if (importObject[imported.module]) {
+  if (
+    imported.kind === "function" &&
+    imported.module === "golem:core/types@2.0.0" &&
+    imported.name.includes("schema-value-stream")
+  ) {
+    importObject[imported.module] ??= {}
+    switch (imported.name) {
+      case "[stream-new-0][static]schema-value-stream.wrap":
+        importObject[imported.module][imported.name] = () =>
+          (12n << 32n) | 11n
+        break
+      case "[async-lower][static]schema-value-stream.wrap":
+        importObject[imported.module][imported.name] = (_reader, resultPtr) => {
+          if (schemaValueStreamHostMode === 3) {
+            return (1 << 4) | 0
+          }
+          new DataView(instance.exports.memory.buffer).setInt32(
+            resultPtr,
+            901,
+            true,
+          )
+          return 2
+        }
+        break
+      case "[async-lower][static]schema-value-stream.unwrap":
+        importObject[imported.module][imported.name] = (_stream, resultPtr) => {
+          if (schemaValueStreamHostMode === 4) {
+            return (1 << 4) | 0
+          }
+          if (schemaValueStreamHostMode === 1) {
+            return 4
+          }
+          new DataView(instance.exports.memory.buffer).setInt32(
+            resultPtr,
+            701,
+            true,
+          )
+          return 2
+        }
+        break
+      case "[async-lower][stream-read-0][static]schema-value-stream.unwrap":
+        importObject[imported.module][imported.name] = () =>
+          schemaValueStreamHostMode === 2 ? 2 : 1
+        break
+      default:
+        importObject[imported.module][imported.name] = () => 0
+        break
+    }
+    continue
+  }
+  if (importObject[imported.module]?.[imported.name] !== undefined) {
     continue
   }
   throw new Error(

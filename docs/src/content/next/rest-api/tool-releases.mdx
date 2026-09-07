@@ -1,0 +1,1917 @@
+# Tool Releases API
+
+## List tool releases owned by an account
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/tool-releases`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+      "name": "string",
+      "version": "string",
+      "source": {
+        "kind": "component",
+        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+        "componentRevision": 0,
+        "componentName": "string"
+      },
+      "definition": {
+        "version": "string",
+        "commands": {
+          "nodes": [
+            {
+              "name": "string",
+              "aliases": [
+                "string"
+              ],
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "globals": {
+                "options": [
+                  {
+                    "long": "string",
+                    "short": null,
+                    "aliases": [
+                      "string"
+                    ],
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "value_name": "string",
+                    "shape": {
+                      "kind": "scalar",
+                      "value": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      }
+                    },
+                    "default": {
+                      "kind": "bool",
+                      "value": true
+                    },
+                    "required": true,
+                    "env_var": "string"
+                  }
+                ],
+                "flags": [
+                  {
+                    "long": "string",
+                    "short": null,
+                    "aliases": [
+                      "string"
+                    ],
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "shape": {
+                      "kind": "bool-flag",
+                      "value": {
+                        "default": true,
+                        "negatable": true
+                      }
+                    },
+                    "env_var": "string"
+                  }
+                ]
+              },
+              "subcommands": [
+                0
+              ],
+              "body": {
+                "positionals": {
+                  "fixed": [
+                    {
+                      "name": "string",
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "value_name": "string",
+                      "type_": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      },
+                      "default": {
+                        "kind": "bool",
+                        "value": true
+                      },
+                      "required": true,
+                      "accepts_stdio": true
+                    }
+                  ],
+                  "tail": {
+                    "name": "string",
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "value_name": "string",
+                    "item_type": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    },
+                    "min": 0,
+                    "max": 0,
+                    "separator": "string",
+                    "verbatim": true,
+                    "accepts_stdio": true
+                  }
+                },
+                "options": [
+                  {
+                    "long": "string",
+                    "short": null,
+                    "aliases": [
+                      "string"
+                    ],
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "value_name": "string",
+                    "shape": {
+                      "kind": "scalar",
+                      "value": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      }
+                    },
+                    "default": {
+                      "kind": "bool",
+                      "value": true
+                    },
+                    "required": true,
+                    "env_var": "string"
+                  }
+                ],
+                "flags": [
+                  {
+                    "long": "string",
+                    "short": null,
+                    "aliases": [
+                      "string"
+                    ],
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "shape": {
+                      "kind": "bool-flag",
+                      "value": {
+                        "default": true,
+                        "negatable": true
+                      }
+                    },
+                    "env_var": "string"
+                  }
+                ],
+                "constraints": [
+                  {
+                    "kind": "requires-all",
+                    "value": [
+                      {
+                        "kind": "present",
+                        "value": "string"
+                      }
+                    ]
+                  }
+                ],
+                "stdin": {
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "mime": [
+                    "string"
+                  ],
+                  "required": true
+                },
+                "stdout": {
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "mime": [
+                    "string"
+                  ],
+                  "required": true
+                },
+                "result": {
+                  "type_": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  },
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "formatters": [
+                    {
+                      "name": "string",
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "default_formatter": "string"
+                },
+                "errors": [
+                  {
+                    "name": "string",
+                    "doc": {
+                      "summary": "string",
+                      "description": "string",
+                      "examples": [
+                        {
+                          "title": "string",
+                          "body": "string"
+                        }
+                      ]
+                    },
+                    "kind": "usage-error",
+                    "exit_code": 0,
+                    "payload": {
+                      "kind": "ref",
+                      "value": {
+                        "id": "string",
+                        "metadata": {
+                          "doc": "string",
+                          "aliases": [
+                            "string"
+                          ],
+                          "examples": [
+                            "string"
+                          ],
+                          "deprecated": "string",
+                          "role": {
+                            "tag": "multimodal"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ],
+                "annotations": {
+                  "read_only": true,
+                  "destructive": true,
+                  "idempotent": true,
+                  "open_world": true
+                }
+              }
+            }
+          ]
+        },
+        "schema": {
+          "defs": [
+            {
+              "id": "string",
+              "name": "string",
+              "body": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "root": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "metadataVersion": "string",
+      "metadataDigest": "string",
+      "immutable": true,
+      "lifecycle": "published",
+      "origin": "ordinary",
+      "systemAvailability": "grantable",
+      "createdAt": "2019-08-24T14:15:22Z",
+      "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+      "stateChangedAt": "2019-08-24T14:15:22Z",
+      "stateChangedBy": "2b961163-2f23-4eaa-a259-05736f8f6815"
+    }
+  ]
+}
+```
+
+## Get an account-owned tool release by ID
+Path|Method|Protected
+---|---|---
+`/v1/tool-releases/{release_id}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+  "name": "string",
+  "version": "string",
+  "source": {
+    "kind": "component",
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "componentRevision": 0,
+    "componentName": "string"
+  },
+  "definition": {
+    "version": "string",
+    "commands": {
+      "nodes": [
+        {
+          "name": "string",
+          "aliases": [
+            "string"
+          ],
+          "doc": {
+            "summary": "string",
+            "description": "string",
+            "examples": [
+              {
+                "title": "string",
+                "body": "string"
+              }
+            ]
+          },
+          "globals": {
+            "options": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "shape": {
+                  "kind": "scalar",
+                  "value": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "default": {
+                  "kind": "bool",
+                  "value": true
+                },
+                "required": true,
+                "env_var": "string"
+              }
+            ],
+            "flags": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "shape": {
+                  "kind": "bool-flag",
+                  "value": {
+                    "default": true,
+                    "negatable": true
+                  }
+                },
+                "env_var": "string"
+              }
+            ]
+          },
+          "subcommands": [
+            0
+          ],
+          "body": {
+            "positionals": {
+              "fixed": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "type_": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "kind": "bool",
+                    "value": true
+                  },
+                  "required": true,
+                  "accepts_stdio": true
+                }
+              ],
+              "tail": {
+                "name": "string",
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "item_type": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                },
+                "min": 0,
+                "max": 0,
+                "separator": "string",
+                "verbatim": true,
+                "accepts_stdio": true
+              }
+            },
+            "options": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "shape": {
+                  "kind": "scalar",
+                  "value": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "default": {
+                  "kind": "bool",
+                  "value": true
+                },
+                "required": true,
+                "env_var": "string"
+              }
+            ],
+            "flags": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "shape": {
+                  "kind": "bool-flag",
+                  "value": {
+                    "default": true,
+                    "negatable": true
+                  }
+                },
+                "env_var": "string"
+              }
+            ],
+            "constraints": [
+              {
+                "kind": "requires-all",
+                "value": [
+                  {
+                    "kind": "present",
+                    "value": "string"
+                  }
+                ]
+              }
+            ],
+            "stdin": {
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "mime": [
+                "string"
+              ],
+              "required": true
+            },
+            "stdout": {
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "mime": [
+                "string"
+              ],
+              "required": true
+            },
+            "result": {
+              "type_": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              },
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "formatters": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "default_formatter": "string"
+            },
+            "errors": [
+              {
+                "name": "string",
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "kind": "usage-error",
+                "exit_code": 0,
+                "payload": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "annotations": {
+              "read_only": true,
+              "destructive": true,
+              "idempotent": true,
+              "open_world": true
+            }
+          }
+        }
+      ]
+    },
+    "schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
+    }
+  },
+  "metadataVersion": "string",
+  "metadataDigest": "string",
+  "immutable": true,
+  "lifecycle": "published",
+  "origin": "ordinary",
+  "systemAvailability": "grantable",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+  "stateChangedAt": "2019-08-24T14:15:22Z",
+  "stateChangedBy": "2b961163-2f23-4eaa-a259-05736f8f6815"
+}
+```
+
+## De-publish an account-owned tool release
+Path|Method|Protected
+---|---|---
+`/v1/tool-releases/{release_id}`|DELETE|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+  "name": "string",
+  "version": "string",
+  "source": {
+    "kind": "component",
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "componentRevision": 0,
+    "componentName": "string"
+  },
+  "definition": {
+    "version": "string",
+    "commands": {
+      "nodes": [
+        {
+          "name": "string",
+          "aliases": [
+            "string"
+          ],
+          "doc": {
+            "summary": "string",
+            "description": "string",
+            "examples": [
+              {
+                "title": "string",
+                "body": "string"
+              }
+            ]
+          },
+          "globals": {
+            "options": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "shape": {
+                  "kind": "scalar",
+                  "value": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "default": {
+                  "kind": "bool",
+                  "value": true
+                },
+                "required": true,
+                "env_var": "string"
+              }
+            ],
+            "flags": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "shape": {
+                  "kind": "bool-flag",
+                  "value": {
+                    "default": true,
+                    "negatable": true
+                  }
+                },
+                "env_var": "string"
+              }
+            ]
+          },
+          "subcommands": [
+            0
+          ],
+          "body": {
+            "positionals": {
+              "fixed": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "type_": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "kind": "bool",
+                    "value": true
+                  },
+                  "required": true,
+                  "accepts_stdio": true
+                }
+              ],
+              "tail": {
+                "name": "string",
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "item_type": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                },
+                "min": 0,
+                "max": 0,
+                "separator": "string",
+                "verbatim": true,
+                "accepts_stdio": true
+              }
+            },
+            "options": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "shape": {
+                  "kind": "scalar",
+                  "value": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "default": {
+                  "kind": "bool",
+                  "value": true
+                },
+                "required": true,
+                "env_var": "string"
+              }
+            ],
+            "flags": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "shape": {
+                  "kind": "bool-flag",
+                  "value": {
+                    "default": true,
+                    "negatable": true
+                  }
+                },
+                "env_var": "string"
+              }
+            ],
+            "constraints": [
+              {
+                "kind": "requires-all",
+                "value": [
+                  {
+                    "kind": "present",
+                    "value": "string"
+                  }
+                ]
+              }
+            ],
+            "stdin": {
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "mime": [
+                "string"
+              ],
+              "required": true
+            },
+            "stdout": {
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "mime": [
+                "string"
+              ],
+              "required": true
+            },
+            "result": {
+              "type_": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              },
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "formatters": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "default_formatter": "string"
+            },
+            "errors": [
+              {
+                "name": "string",
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "kind": "usage-error",
+                "exit_code": 0,
+                "payload": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "annotations": {
+              "read_only": true,
+              "destructive": true,
+              "idempotent": true,
+              "open_world": true
+            }
+          }
+        }
+      ]
+    },
+    "schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
+    }
+  },
+  "metadataVersion": "string",
+  "metadataDigest": "string",
+  "immutable": true,
+  "lifecycle": "published",
+  "origin": "ordinary",
+  "systemAvailability": "grantable",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+  "stateChangedAt": "2019-08-24T14:15:22Z",
+  "stateChangedBy": "2b961163-2f23-4eaa-a259-05736f8f6815"
+}
+```
+
+## Restore a de-published account-owned tool release
+Path|Method|Protected
+---|---|---
+`/v1/tool-releases/{release_id}/restore`|POST|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
+  "name": "string",
+  "version": "string",
+  "source": {
+    "kind": "component",
+    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+    "componentRevision": 0,
+    "componentName": "string"
+  },
+  "definition": {
+    "version": "string",
+    "commands": {
+      "nodes": [
+        {
+          "name": "string",
+          "aliases": [
+            "string"
+          ],
+          "doc": {
+            "summary": "string",
+            "description": "string",
+            "examples": [
+              {
+                "title": "string",
+                "body": "string"
+              }
+            ]
+          },
+          "globals": {
+            "options": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "shape": {
+                  "kind": "scalar",
+                  "value": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "default": {
+                  "kind": "bool",
+                  "value": true
+                },
+                "required": true,
+                "env_var": "string"
+              }
+            ],
+            "flags": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "shape": {
+                  "kind": "bool-flag",
+                  "value": {
+                    "default": true,
+                    "negatable": true
+                  }
+                },
+                "env_var": "string"
+              }
+            ]
+          },
+          "subcommands": [
+            0
+          ],
+          "body": {
+            "positionals": {
+              "fixed": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  },
+                  "value_name": "string",
+                  "type_": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  },
+                  "default": {
+                    "kind": "bool",
+                    "value": true
+                  },
+                  "required": true,
+                  "accepts_stdio": true
+                }
+              ],
+              "tail": {
+                "name": "string",
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "item_type": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                },
+                "min": 0,
+                "max": 0,
+                "separator": "string",
+                "verbatim": true,
+                "accepts_stdio": true
+              }
+            },
+            "options": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "value_name": "string",
+                "shape": {
+                  "kind": "scalar",
+                  "value": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "default": {
+                  "kind": "bool",
+                  "value": true
+                },
+                "required": true,
+                "env_var": "string"
+              }
+            ],
+            "flags": [
+              {
+                "long": "string",
+                "short": null,
+                "aliases": [
+                  "string"
+                ],
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "shape": {
+                  "kind": "bool-flag",
+                  "value": {
+                    "default": true,
+                    "negatable": true
+                  }
+                },
+                "env_var": "string"
+              }
+            ],
+            "constraints": [
+              {
+                "kind": "requires-all",
+                "value": [
+                  {
+                    "kind": "present",
+                    "value": "string"
+                  }
+                ]
+              }
+            ],
+            "stdin": {
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "mime": [
+                "string"
+              ],
+              "required": true
+            },
+            "stdout": {
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "mime": [
+                "string"
+              ],
+              "required": true
+            },
+            "result": {
+              "type_": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              },
+              "doc": {
+                "summary": "string",
+                "description": "string",
+                "examples": [
+                  {
+                    "title": "string",
+                    "body": "string"
+                  }
+                ]
+              },
+              "formatters": [
+                {
+                  "name": "string",
+                  "doc": {
+                    "summary": "string",
+                    "description": "string",
+                    "examples": [
+                      {
+                        "title": "string",
+                        "body": "string"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "default_formatter": "string"
+            },
+            "errors": [
+              {
+                "name": "string",
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "kind": "usage-error",
+                "exit_code": 0,
+                "payload": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "annotations": {
+              "read_only": true,
+              "destructive": true,
+              "idempotent": true,
+              "open_world": true
+            }
+          }
+        }
+      ]
+    },
+    "schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
+    }
+  },
+  "metadataVersion": "string",
+  "metadataDigest": "string",
+  "immutable": true,
+  "lifecycle": "published",
+  "origin": "ordinary",
+  "systemAvailability": "grantable",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+  "stateChangedAt": "2019-08-24T14:15:22Z",
+  "stateChangedBy": "2b961163-2f23-4eaa-a259-05736f8f6815"
+}
+```
+## Tool Releases API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"code":"string","errors":["string"]}`
+401|Unauthorized request|`{"code":"string","error":"string"}`
+403|Forbidden Request|`{"code":"string","error":"string"}`
+404|Entity not found|`{"code":"string","error":"string"}`
+409||`{"code":"string","error":"string"}`
+422|Limits of the plan exceeded|`{"code":"string","error":"string"}`
+500|Internal server error|`{"code":"string","error":"string"}`

@@ -57,14 +57,14 @@ use crate::model::oplog::public_oplog_entry::{
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
     CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
-    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    SuccessfulUpdateParams, SuspendParams,
+    ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
@@ -520,10 +520,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::ExceededTableLimit(_) => Ok(Self::ExceededTableLimit),
             Error::ExceededHttpCallLimit(_) => Ok(Self::ExceededHttpCallLimit),
             Error::ExceededRpcCallLimit(_) => Ok(Self::ExceededRpcCallLimit),
-            Error::NodeOutOfFilesystemStorage(_) => Ok(Self::NodeOutOfFilesystemStorage),
-            Error::AgentExceededFilesystemStorageLimit(_) => {
-                Ok(Self::AgentExceededFilesystemStorageLimit)
-            }
             Error::AgentTerminatedByQuota(inner) => {
                 Ok(Self::AgentTerminatedByQuota(AgentTerminatedByQuotaError {
                     environment_id: inner
@@ -596,14 +592,6 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             }
             AgentError::ExceededRpcCallLimit => {
                 Error::ExceededRpcCallLimit(grpc_worker::ExceededRpcCallLimit {})
-            }
-            AgentError::NodeOutOfFilesystemStorage => {
-                Error::NodeOutOfFilesystemStorage(grpc_worker::NodeOutOfFilesystemStorage {})
-            }
-            AgentError::AgentExceededFilesystemStorageLimit => {
-                Error::AgentExceededFilesystemStorageLimit(
-                    grpc_worker::AgentExceededFilesystemStorageLimit {},
-                )
             }
             AgentError::AgentTerminatedByQuota(details) => {
                 Error::AgentTerminatedByQuota(grpc_worker::AgentTerminatedByQuota {
@@ -972,17 +960,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     delta: grow_memory.delta,
                 }))
-            }
-            oplog_entry::Entry::FilesystemStorageUsageUpdate(filesystem_storage_usage_update) => {
-                Ok(PublicOplogEntry::FilesystemStorageUsageUpdate(
-                    FilesystemStorageUsageUpdateParams {
-                        timestamp: filesystem_storage_usage_update
-                            .timestamp
-                            .ok_or("Missing timestamp field")?
-                            .into(),
-                        delta: filesystem_storage_usage_update.delta,
-                    },
-                ))
             }
             oplog_entry::Entry::CreateResource(create_resource) => {
                 Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
@@ -1386,8 +1363,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         agent_id: Some(create.agent_id.into()),
                         agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(
                             create.agent_mode,
-                        )
-                            as i32,
+                        ) as i32,
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
                         config: create
@@ -1410,23 +1386,19 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::Start(start) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::Start(
-                        golem_api_grpc::proto::golem::worker::StartParameters {
-                            timestamp: Some(start.timestamp.into()),
-                            parent_start_index: start.parent_start_index.map(|id| id.as_u64()),
-                            function_name: start.function_name.clone(),
-                            invocation_id: start.invocation_id.map(Into::into),
-                            observational_owner: start
-                                .observational_owner
-                                .map(|id| id.as_u64()),
-                            request: start.request.map(TryInto::try_into).transpose()?,
-                            durable_function_type: Some(start.durable_function_type.into()),
-                        },
-                    )),
-                }
-            }
+            PublicOplogEntry::Start(start) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                entry: Some(oplog_entry::Entry::Start(
+                    golem_api_grpc::proto::golem::worker::StartParameters {
+                        timestamp: Some(start.timestamp.into()),
+                        parent_start_index: start.parent_start_index.map(|id| id.as_u64()),
+                        function_name: start.function_name.clone(),
+                        invocation_id: start.invocation_id.map(Into::into),
+                        observational_owner: start.observational_owner.map(|id| id.as_u64()),
+                        request: start.request.map(TryInto::try_into).transpose()?,
+                        durable_function_type: Some(start.durable_function_type.into()),
+                    },
+                )),
+            },
             PublicOplogEntry::End(end) => golem_api_grpc::proto::golem::worker::OplogEntry {
                 entry: Some(oplog_entry::Entry::End(
                     golem_api_grpc::proto::golem::worker::EndParameters {
@@ -1620,16 +1592,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
                             timestamp: Some(grow_memory.timestamp.into()),
                             delta: grow_memory.delta,
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::FilesystemStorageUsageUpdate(filesystem_storage_usage_update) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::FilesystemStorageUsageUpdate(
-                        golem_api_grpc::proto::golem::worker::FilesystemStorageUsageUpdateParameters {
-                            timestamp: Some(filesystem_storage_usage_update.timestamp.into()),
-                            delta: filesystem_storage_usage_update.delta,
                         },
                     )),
                 }
@@ -3102,12 +3064,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 timestamp: p.timestamp,
                 delta: p.delta,
             }),
-            PublicOplogEntry::FilesystemStorageUsageUpdate(p) => {
-                Ok(OplogEntry::FilesystemStorageUsageUpdate {
-                    timestamp: p.timestamp,
-                    delta: p.delta,
-                })
-            }
             PublicOplogEntry::CreateResource(p) => Ok(OplogEntry::CreateResource {
                 timestamp: p.timestamp,
                 id: p.id,
@@ -3740,8 +3696,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
             RawDeactivatePluginParameters, RawDropResourceParameters,
             RawDurableStreamRecordParameters, RawEndAtomicRegionParameters, RawEndParameters,
-            RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
-            RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
+            RawEnvVar, RawErrorParameters, RawFailedUpdateParameters, RawFinishSpanParameters,
             RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
             RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
             RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
@@ -3945,11 +3900,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
-            }
-            OplogEntry::FilesystemStorageUsageUpdate { delta, .. } => {
-                Entry::FilesystemStorageUsageUpdate(RawFilesystemStorageUsageUpdateParameters {
-                    delta,
-                })
             }
             OplogEntry::CreateResource {
                 id,
@@ -4525,12 +4475,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 timestamp,
                 delta: p.delta,
             }),
-            Entry::FilesystemStorageUsageUpdate(p) => {
-                Ok(OplogEntry::FilesystemStorageUsageUpdate {
-                    timestamp,
-                    delta: p.delta,
-                })
-            }
             Entry::CreateResource(p) => {
                 let rt = p.resource_type_id.ok_or("Missing resource_type_id")?;
                 Ok(OplogEntry::CreateResource {

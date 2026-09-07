@@ -22,8 +22,8 @@ import "golem/schema/schema.proto";
 // removed and replaced by `Start`, `End`, `Cancelled`. Their tag numbers are reserved to
 // prevent accidental reuse should we ever need rolling-version compatibility in the future.
 message OplogEntry {
-  reserved 2, 14, 15;
-  reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite";
+  reserved 2, 14, 15, 41;
+  reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite", "FilesystemStorageUsageUpdate";
 
   oneof entry {
     CreateParameters Create = 1;
@@ -60,7 +60,6 @@ message OplogEntry {
     RemoteTransactionParameters RolledBackRemoteTransaction = 38;
     SnapshotDataParameters Snapshot = 39;
     OplogProcessorCheckpointParameters OplogProcessorCheckpoint = 40;
-    FilesystemStorageUsageUpdateParameters FilesystemStorageUsageUpdate = 41;
     SetRetryPolicyParameters SetRetryPolicy = 42;
     RemoveRetryPolicyParameters RemoveRetryPolicy = 43;
     StartParameters Start = 44;
@@ -506,11 +505,6 @@ message FailedUpdateParameters {
 message GrowMemoryParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 delta = 2;
-}
-
-message FilesystemStorageUsageUpdateParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  int64 delta = 2;
 }
 
 message CreateResourceParameters {

@@ -29,7 +29,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
-use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::recipient::{RecipientMonomorphizationContext, RecipientPattern};
 use golem_common::model::card::{
     PolymorphicCard, PolymorphicManifestPermissionPattern,
@@ -47,6 +47,7 @@ use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName};
 use golem_common::model::worker::TypedAgentConfigEntry;
+use golem_common::model::{diff, tool};
 use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema, OutputSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
@@ -58,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -345,6 +347,27 @@ pub struct ComponentDeployProperties {
     pub tools: Vec<Tool>,
     pub agent_type_configs: BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,
     pub tool_deployment_configs: BTreeMap<ToolName, ToolManifestDeploymentConfig>,
+}
+
+#[derive(Debug)]
+pub struct ResolvedManifestComponentsAndTools {
+    pub components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub remote_tools: RemoteToolDeploymentPlan,
+    pub tools_to_publish: BTreeSet<ToolName>,
+}
+
+#[derive(Debug, Default)]
+pub struct RemoteToolDeploymentPlan {
+    pub deployments: BTreeMap<ToolName, tool::RemoteToolDeployment>,
+    pub diffable_deployments: BTreeMap<String, diff::HashOf<diff::RemoteToolDeployment>>,
+    pub pending_initial_files: Vec<PendingRemoteInitialFile>,
+}
+
+#[derive(Debug)]
+pub struct PendingRemoteInitialFile {
+    pub content: Arc<tempfile::NamedTempFile>,
+    pub content_hash: AgentFileContentHash,
+    pub size: u64,
 }
 
 #[derive(Clone, Debug)]

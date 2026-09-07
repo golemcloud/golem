@@ -486,6 +486,219 @@ fn __golem_tool_append_prepared(
 
 ///|
 ///
+fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
+  try {
+    let def : @tool.ToolDef = {
+      version: "1.0.0",
+      commands: [
+        {
+          name: "moonbit-streaming",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
+          subcommands: [1],
+          body: None,
+        },
+        {
+          name: "stream",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [], },
+          globals: { options: [], flags: [], },
+          subcommands: [],
+          body: Some({
+            positionals: {
+              fixed: [
+                {
+                  name: "mode",
+                  doc: { summary: "", description: "", examples: [], },
+                  value_name: None,
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                  ),
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: Some({
+              doc: { summary: "", description: "", examples: [], },
+              mime: [],
+              required: true,
+            }),
+            stdout: Some({
+              doc: { summary: "", description: "", examples: [], },
+              mime: [],
+              required: true,
+            }),
+            result: Some({
+              type_: @schema.into_schema_graph(
+                (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+              ),
+              doc: { summary: "", description: "", examples: [], },
+              formatters: [
+                {
+                  name: "default",
+                  doc: { summary: "", description: "", examples: [], },
+                },
+              ],
+              default_formatter: "default",
+            }),
+            errors: [],
+            annotations: Some({
+              read_only: false,
+              destructive: true,
+              idempotent: false,
+              open_world: true,
+            }),
+          }),
+        },
+      ],
+    }
+    def
+  } catch {
+    error => abort("invalid generated raw tool definition: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_def_prepare_MoonBitStreaming(
+  strict_ancestors : @tool.GlobalsDef,
+  parent_globals : @tool.GlobalsDef,
+  override_name : String?,
+  override_doc : @toolCommon.Doc?,
+  override_aliases : Array[String]?,
+) -> @tool.ToolDef {
+  try {
+    let carrier : @tool.ToolDef = {
+      version: "1.0.0",
+      commands: [
+        {
+          name: "__golem_ancestry",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [], },
+          globals: strict_ancestors,
+          subcommands: [],
+          body: None,
+        },
+      ],
+    }
+    let prepared = __golem_tool_extract_prepared(
+      carrier.graft_subtree(
+        __golem_tool_def_raw_MoonBitStreaming(),
+        "moonbit-streaming",
+        parent_globals,
+        override_name,
+        override_doc,
+        override_aliases,
+      ),
+    )
+    let def = prepared
+    def
+  } catch {
+    error => abort("invalid generated prepared tool definition: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_def_MoonBitStreaming() -> @tool.ToolDef {
+  __golem_tool_def_prepare_MoonBitStreaming(
+    { options: [], flags: [], },
+    { options: [], flags: [], },
+    None,
+    None,
+    None,
+  ).normalize_inherited_globals() catch {
+    error => abort("invalid generated tool definition: " + repr(error))
+  }
+}
+
+///|
+///
+#warnings("-alert_wit_bindgen")
+async fn __golem_tool_invoke_MoonBitStreaming(
+  __golem_command_path : Array[String],
+  __golem_input : @types.TypedSchemaValue,
+  __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
+  __golem_principal : @tool.Principal,
+) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  let __golem_def = __golem_tool_def_MoonBitStreaming()
+  let __golem_index = match
+    __golem_def.command_index_by_path(__golem_command_path) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return @tool.reject_wire_invocation(
+        __golem_input,
+        __golem_stdin,
+        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+      )
+  }
+  let __golem_decoded = @tool.decode_canonical_input(
+    __golem_def, __golem_index, __golem_input, "tool moonbit-streaming invocation",
+  ) catch {
+    __golem_error =>
+      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+  }
+  match __golem_index {
+    1 => {
+      let mode : String = @tool.decode_canonical_field(
+        __golem_decoded, "mode", "tool moonbit-streaming command stream",
+      ) catch {
+        __golem_error =>
+          return @tool.reject_decoded_invocation(
+            __golem_decoded, __golem_stdin, __golem_error,
+          )
+      }
+      let stdin = match __golem_stdin {
+        Some(__golem_stream) => __golem_stream
+        None =>
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            @toolCommon.ToolError::InvalidInput(
+              "required stdin stream is missing",
+            ),
+          )
+      }
+      let stdout = match __golem_stdout {
+        Some(__golem_output) => __golem_output
+        None =>
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            @toolCommon.ToolError::InvalidInput(
+              "required stdout stream is missing",
+            ),
+          )
+      }
+      let __golem_value = MoonBitStreaming::stream(mode, stdin, stdout)
+      Ok(
+        @tool.invocation_result_value(__golem_value) catch {
+          @asyncCore.Cancelled::Cancelled as error => raise error
+          @toolCommon.ToolError::InvalidResult(message) =>
+            return Err(@toolCommon.ToolError::InvalidResult(message))
+          error => raise error
+        },
+      )
+    }
+    _ =>
+      @tool.reject_decoded_invocation(
+        __golem_decoded,
+        __golem_stdin,
+        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+      )
+  }
+}
+
+///|
+///
 fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
@@ -877,6 +1090,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
@@ -957,7 +1171,17 @@ async fn __golem_tool_invoke_CanonicalGrep(
             ),
           )
       }
-      let (__golem_stdout, stdout) = @tool.new_stdout()
+      let stdout = match __golem_stdout {
+        Some(__golem_output) => __golem_output
+        None =>
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            @toolCommon.ToolError::InvalidInput(
+              "required stdout stream is missing",
+            ),
+          )
+      }
       match
         CanonicalGrep::canonical_grep(
           case_sensitive, color, pattern, extra_patterns, max_count, files, stdin,
@@ -965,14 +1189,14 @@ async fn __golem_tool_invoke_CanonicalGrep(
         ) {
         Ok(__golem_value) =>
           Ok(
-            @tool.invocation_result_value_with_stdout(
-              __golem_value, __golem_stdout,
-            ) catch {
-              error => return Err(error)
+            @tool.invocation_result_value(__golem_value) catch {
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
-          __golem_stdout.drop_sync()
           let payload = match
             CanonicalGrepError::to_error_payload_value(error) {
             Ok(payload) => payload
@@ -984,7 +1208,10 @@ async fn __golem_tool_invoke_CanonicalGrep(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -1047,7 +1274,10 @@ async fn __golem_tool_invoke_CanonicalGrep(
         Ok(__golem_value) =>
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
-              error => return Err(error)
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
@@ -1062,7 +1292,10 @@ async fn __golem_tool_invoke_CanonicalGrep(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -1758,6 +1991,7 @@ async fn __golem_tool_invoke_CanonicalGit(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGit()
@@ -1784,6 +2018,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       __golem_command_path[1:].to_owned(),
       __golem_decoded,
       __golem_stdin,
+      __golem_stdout,
       __golem_principal,
     )
   }
@@ -1794,6 +2029,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       __golem_command_path[1:].to_owned(),
       __golem_decoded,
       __golem_stdin,
+      __golem_stdout,
       __golem_principal,
     )
   }
@@ -1896,7 +2132,10 @@ async fn __golem_tool_invoke_CanonicalGit(
         Ok(__golem_value) =>
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
-              error => return Err(error)
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
@@ -1911,7 +2150,10 @@ async fn __golem_tool_invoke_CanonicalGit(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2015,7 +2257,10 @@ async fn __golem_tool_invoke_CanonicalGit(
         Ok(__golem_value) =>
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
-              error => return Err(error)
+              @asyncCore.Cancelled::Cancelled as error => raise error
+              @toolCommon.ToolError::InvalidResult(message) =>
+                return Err(@toolCommon.ToolError::InvalidResult(message))
+              error => raise error
             },
           )
         Err(error) => {
@@ -2029,7 +2274,10 @@ async fn __golem_tool_invoke_CanonicalGit(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2417,6 +2665,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalRemote()
@@ -2518,7 +2767,10 @@ async fn __golem_tool_invoke_CanonicalRemote(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2556,7 +2808,10 @@ async fn __golem_tool_invoke_CanonicalRemote(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2634,7 +2889,10 @@ async fn __golem_tool_invoke_CanonicalRemote(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -2917,6 +3175,7 @@ async fn __golem_tool_invoke_CanonicalStash(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalStash()
@@ -2985,7 +3244,10 @@ async fn __golem_tool_invoke_CanonicalStash(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3031,7 +3293,10 @@ async fn __golem_tool_invoke_CanonicalStash(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3077,7 +3342,10 @@ async fn __golem_tool_invoke_CanonicalStash(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3219,6 +3487,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
+  __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalBigBound()
@@ -3271,7 +3540,10 @@ async fn __golem_tool_invoke_CanonicalBigBound(
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
-            encode_error => return Err(encode_error)
+            @asyncCore.Cancelled::Cancelled as error => raise error
+            @toolCommon.ToolError::InvalidResult(message) =>
+              return Err(@toolCommon.ToolError::InvalidResult(message))
+            error => raise error
           }
           Err(@toolCommon.ToolError::CustomError(payload))
         }
@@ -3290,6 +3562,10 @@ async fn __golem_tool_invoke_CanonicalBigBound(
 ///
 fn init {
   try {
+    @tool.register_tool_def_invoker(
+      __golem_tool_def_MoonBitStreaming(),
+      __golem_tool_invoke_MoonBitStreaming,
+    )
     @tool.register_tool_def_invoker(
       __golem_tool_def_CanonicalGrep(),
       __golem_tool_invoke_CanonicalGrep,

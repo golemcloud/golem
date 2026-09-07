@@ -33,6 +33,7 @@ pub mod schema;
 #[cfg(not(feature = "full"))]
 pub mod model {
     pub use crate::base_model::*;
+    pub mod invocation_session_public;
 }
 
 #[cfg(feature = "full")]

@@ -151,7 +151,6 @@ impl OplogEntry {
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
-            | OplogEntry::FilesystemStorageUsageUpdate { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
@@ -239,7 +238,6 @@ impl OplogEntry {
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
-            | OplogEntry::FilesystemStorageUsageUpdate { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
@@ -393,7 +391,6 @@ impl OplogScopeProjection {
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
-            | OplogEntry::FilesystemStorageUsageUpdate { .. }
             | OplogEntry::CreateResource { .. }
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log {

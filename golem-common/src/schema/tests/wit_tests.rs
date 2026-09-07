@@ -886,6 +886,61 @@ fn typed_reject_decoder_drains_handle_before_decoding_invalid_graph() {
 }
 
 #[test]
+fn tool_wit_uses_directional_started_stream_contract() {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("golem-common is a workspace member");
+    let tool_wit = workspace_root.join("wit/deps/golem-tool");
+    let common = std::fs::read_to_string(tool_wit.join("common.wit"))
+        .expect("failed to read canonical tool common WIT");
+    let host = std::fs::read_to_string(tool_wit.join("host.wit"))
+        .expect("failed to read canonical tool host WIT");
+    let guest = std::fs::read_to_string(tool_wit.join("guest.wit"))
+        .expect("failed to read canonical tool guest WIT");
+    let rpc_error = host
+        .split_once("variant rpc-error {")
+        .and_then(|(_, rest)| rest.split_once("\n  }").map(|(body, _)| body))
+        .expect("host WIT must define rpc-error");
+
+    assert!(common.contains(
+        "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n  }"
+    ));
+
+    for required in [
+        "type byte-stream-item = result<list<u8>, byte-stream-failure>;",
+        "create-stdin: func() -> tuple<\n    own<tool-stdin-writer>,\n    own<tool-stdin>,\n    own<tool-stdin-closed>\n  >;",
+        "create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;",
+        "write: async func(bytes: list<u8>) -> result<_, stream-write-error>;",
+        "invoke-and-await: async func(",
+        "stdin:        option<own<tool-stdin>>",
+        "stdout:       option<own<tool-stdout>>",
+        "invoke: func(",
+        "async-invoke-and-await: func(",
+        "get: async func() -> result<invocation-result, rpc-error>;",
+        "get-invoke-results: async func(\n    futures: list<borrow<future-invoke-result>>,\n  ) -> list<result<invocation-result, rpc-error>>;",
+    ] {
+        assert!(
+            host.contains(required),
+            "missing host WIT contract: {required}"
+        );
+    }
+    assert!(rpc_error.contains("cancelled,"));
+    assert!(rpc_error.contains("resource-exhausted(string)"));
+    assert!(!host.contains("option<stream<u8>>"));
+
+    for required in [
+        "use host.{byte-stream-item, tool-stdout-writer};",
+        "stdin:        option<stream<byte-stream-item>>",
+        "stdout:       option<own<tool-stdout-writer>>",
+    ] {
+        assert!(
+            guest.contains(required),
+            "missing guest WIT contract: {required}"
+        );
+    }
+}
+
+#[test]
 fn secrets_types_and_reveal_interfaces_are_imported_by_host_and_sdk_worlds() {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

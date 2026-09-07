@@ -1036,8 +1036,6 @@ mod test {
                 cli: None,
                 deployment: None,
                 version: None,
-                tools_merge_mode: None,
-                tools: None,
             },
         }
     }

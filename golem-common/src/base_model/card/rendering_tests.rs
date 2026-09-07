@@ -22,6 +22,7 @@ use crate::model::card::recipient::RecipientPattern;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
 use crate::model::permission_share::PermissionShareName;
+use crate::model::tool::ToolName;
 use proptest::collection::vec;
 use proptest::prelude::*;
 use std::str::FromStr;
@@ -701,6 +702,22 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
             ]
             .boxed()
         ),
+        class_permission::<AccountToolReleaseClass>(
+            account_owner(),
+            option_verb(vec![
+                AccountToolReleaseVerb::View,
+                AccountToolReleaseVerb::Publish,
+                AccountToolReleaseVerb::DePublish,
+                AccountToolReleaseVerb::Restore
+            ]),
+            prop_oneof![
+                Just(AccountToolReleaseResourcePattern::Any),
+                ident()
+                    .prop_map(|name| ToolName::try_from(name).unwrap())
+                    .prop_map(AccountToolReleaseResourcePattern::Name)
+            ]
+            .boxed()
+        ),
         class_permission::<ApplicationClass>(
             application_owner(),
             option_verb(vec![
@@ -744,6 +761,22 @@ fn permission_strategy() -> BoxedStrategy<PolymorphicPermissionPattern> {
                 ident()
                     .prop_map(EnvironmentPluginGrantName)
                     .prop_map(EnvironmentPluginGrantResourcePattern::Name)
+            ]
+            .boxed()
+        ),
+        class_permission::<EnvironmentToolGrantClass>(
+            environment_owner(),
+            option_verb(vec![
+                EnvironmentToolGrantVerb::View,
+                EnvironmentToolGrantVerb::Create,
+                EnvironmentToolGrantVerb::Delete,
+                EnvironmentToolGrantVerb::Restore
+            ]),
+            prop_oneof![
+                Just(EnvironmentToolGrantResourcePattern::Any),
+                ident()
+                    .prop_map(|name| ToolName::try_from(name).unwrap())
+                    .prop_map(EnvironmentToolGrantResourcePattern::Name)
             ]
             .boxed()
         ),

@@ -14,7 +14,7 @@
 
 use crate::bridge_gen::fixtures::{
     agent, code_first_snippets_agent_type, def, field, local_config, method,
-    multi_agent_wrapper_2_types, ref_to, single_agent_wrapper_types,
+    multi_agent_wrapper_2_types, named_field, ref_to, single_agent_wrapper_types,
 };
 use crate::bridge_gen::scala::grep_tool;
 use crate::bridge_gen::type_naming::test_type_naming;
@@ -29,8 +29,8 @@ use golem_cli::bridge_gen::{
 use golem_cli::model::language::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, ResultSpec,
-    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, QuantitySpec,
+    ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
 };
 use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
 use golem_common::schema::tool::StreamSpec;
@@ -851,6 +851,142 @@ fn external_generation_keeps_rest_runtime_and_name() {
 }
 
 #[test]
+fn external_streaming_generation_compiles_recursive_streams() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "StreamingAgent",
+        "typescript",
+        vec![field(
+            "tenant",
+            SchemaType::U32 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::Unsigned(7)),
+                    max: Some(NumericBound::Unsigned(4_294_967_295)),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+        )],
+        vec![
+            method(
+                "exchange",
+                vec![field(
+                    "input",
+                    SchemaType::record(vec![
+                        named_field(
+                            "chunks",
+                            SchemaType::list(SchemaType::stream(Some(SchemaType::binary(
+                                BinaryRestrictions::default(),
+                            )))),
+                        ),
+                        named_field("exact-count", SchemaType::u64()),
+                        named_field(
+                            "amount",
+                            SchemaType::Quantity {
+                                spec: QuantitySpec {
+                                    base_unit: "kg".to_string(),
+                                    allowed_suffixes: Vec::new(),
+                                    min: None,
+                                    max: None,
+                                },
+                                metadata: MetadataEnvelope::default(),
+                            },
+                        ),
+                    ]),
+                )],
+                Some(SchemaType::option(SchemaType::stream(Some(
+                    SchemaType::u8(),
+                )))),
+            ),
+            method("status", vec![], Some(SchemaType::string())),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        SchemaType::U64 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(9_007_199_254_740_993)),
+                max: Some(NumericBound::Unsigned(u64::MAX)),
+                unit: None,
+            }),
+            metadata: MetadataEnvelope::default(),
+        },
+    )];
+    generate_and_compile(agent_type, target_dir);
+    let source = std::fs::read_to_string(
+        generated_package_dir(target_dir, "streaming-agent").join("streaming-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(source.contains("createStreamingRemoteMethod"));
+    assert!(source.contains("AgentStream<base.AgentBinary>"));
+    assert!(source.contains("AgentStream<number>"));
+    assert!(source.contains(": bigint;"));
+    assert!(source.contains("amount: base.QuantityValue"));
+    assert!(source.contains("configLimitsMaximum?: bigint"));
+    assert!(source.contains("base.publicValueCodec"));
+    assert!(source.contains(".validate(") && source.contains("'none'"));
+    assert!(source.contains("'provisional'"));
+    assert!(source.contains("\"stable\""));
+    assert!(source.contains("config: this.publicConfig"));
+    assert!(source.contains("path: [\"limits\",\"maximum\"]"));
+    assert!(source.contains("val: 9007199254740993n"));
+    assert!(source.contains("val: 18446744073709551615n"));
+    assert!(!source.contains("triggerExchange"));
+    assert!(!source.contains("scheduleExchange"));
+    for line in source.lines().filter(|line| {
+        line.starts_with("function encodePublic") || line.starts_with("function decodePublic")
+    }) {
+        let name = line
+            .split_once('(')
+            .map(|(signature, _)| signature.trim_start_matches("function "))
+            .unwrap();
+        assert!(
+            !line.contains(&format!("return {name}(value, stream)")),
+            "generated public codec helper calls itself recursively: {line}"
+        );
+    }
+}
+
+// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+#[test]
+fn external_streaming_generation_uses_binary_lane_for_referenced_u8() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "ReferencedByteStreamAgent",
+        "typescript",
+        vec![],
+        vec![method(
+            "copy",
+            vec![field(
+                "input",
+                SchemaType::stream(Some(ref_to("ByteAlias"))),
+            )],
+            Some(SchemaType::stream(Some(ref_to("ByteAlias")))),
+        )],
+        vec![
+            def("ByteAlias", ref_to("Byte")),
+            def("Byte", SchemaType::u8()),
+        ],
+        AgentMode::Durable,
+    );
+
+    generate_and_compile(agent_type, target_dir);
+    let source = std::fs::read_to_string(
+        generated_package_dir(target_dir, "referenced-byte-stream-agent")
+            .join("referenced-byte-stream-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(
+        source.contains(", \"u8\")") && source.contains(", \"u8\"));"),
+        "stream<ref ByteAlias -> ref Byte -> u8> must use the direct packed-u8 lane:\n{source}"
+    );
+}
+
+#[test]
 fn test_type_naming_ts_foo_agent() {
     test_type_naming::<TypeScriptTypeName>(GuestLanguage::TypeScript, "FooAgent");
 }
@@ -882,8 +1018,11 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
 
     let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
     assert!(source.contains("base.createToolClientRuntime(\"grep\")"));
-    assert!(source.contains("invokeAndAwait([], typedInput, stdin)"));
-    assert!(source.contains("invokeAndAwait([\"replace\"], typedInput, undefined)"));
+    assert!(source.contains("type ToolInputStream = base.ToolInputStream;"));
+    assert!(source.contains("grep(") && source.contains("base.StartedToolInvocation<string[]>"));
+    assert!(source.contains("replace(") && source.contains("base.StartedToolInvocation<void>"));
+    assert!(source.contains("this.runtime.start([], typedInput, stdin, true)"));
+    assert!(source.contains("this.runtime.start([\"replace\"], typedInput, undefined, true)"));
     assert!(source.contains("[...this.inherited"));
     assert!(source.contains("{ tag: 'record', fields }"));
     assert!(source.contains("const __golemSchemaGraphs = {"));
@@ -892,17 +1031,31 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(!source.contains("schemaGraphFromJson"));
     assert!(source.contains("base.splitToolRpcError(error, decodeGrepError)"));
     assert!(
-        source.contains("base.typedSchemaValueConforms(expectedResultGraph, invocation.result)")
+        source.contains(
+            "base.typedSchemaValueConforms(expectedResultGraph, invocationResult.result)"
+        )
     );
     assert!(source.contains("base.typedSchemaValueConforms(expectedGraph, typed)"));
-    assert!(source.contains("base.disposeToolStdout(invocation.stdout)"));
+    assert!(source.contains(
+        "base.startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel())"
+    ));
+    assert!(source.contains("invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream')"));
     assert!(source.contains("tool result did not contain a value"));
     assert!(source.contains("tool result unexpectedly contained a value"));
-    assert!(source.contains("stdout?: ToolOutputStream"));
+    assert!(source.contains(
+        "const settledResult = base.mapSettledToolResult(invocation.settledResult, (invocationResult)"
+    ));
     assert!(source.contains("export type ColorMode"));
     assert!(!source.contains("golem-ts-bridge"));
     assert!(!source.contains("kind: 'record'"));
     assert!(!source.contains("legacy"));
+    std::fs::write(
+        package_dir.join(format!("{package_name}.ts")),
+        format!(
+            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<{{ result: string[]; stdout: Uint8Array }}> = started.collect();\nvoid stdout; void result; void collected;\n"
+        ),
+    )
+    .unwrap();
     install_and_build(&package_dir);
 }
 
@@ -927,6 +1080,8 @@ fn guest_tool_with_unstructured_result_compiles() {
         .unwrap()
         .generate()
         .unwrap();
+    let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
+    assert!(source.contains("const invocationOutcome = await invocation.settledResult"));
     install_and_build(&package_dir);
 }
 

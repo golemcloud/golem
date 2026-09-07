@@ -70,7 +70,7 @@ The Scala.js core exposes the current schema-based host surface. Useful authorit
 
 Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
-After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.2, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
+After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.3, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
 
 ## Example and end-to-end work
 

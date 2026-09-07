@@ -26,7 +26,6 @@ pub mod durability;
 pub(crate) mod durable_session;
 pub(crate) mod durable_stream;
 pub mod entity;
-mod filesystem;
 pub mod golem;
 pub mod http;
 pub mod io;
@@ -51,14 +50,21 @@ pub mod tool;
 pub mod wasm_rpc;
 pub mod websocket;
 
+tokio::task_local! {
+    static ENTITY_CANCELLATION_MASKED: ();
+}
+
+pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Output {
+    ENTITY_CANCELLATION_MASKED.scope((), future).await
+}
+
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
-use crate::metrics::ephemeral::record_non_suspending_failure;
-use crate::metrics::storage::{
-    STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
+use crate::durable_host::replay_state::{
+    OplogEntryLookupResult, ReplayState, ReplayToLiveOutcome, ReplayToLiveRole,
 };
+use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -66,7 +72,7 @@ use crate::model::{
     TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
-use crate::services::agent_storage_meter::AgentStorageMeter;
+use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -74,7 +80,7 @@ use crate::services::card::{CardService, CardState};
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::component::ComponentService;
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::file_loader::{FileLoader, FileUseToken};
+use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::linear_memory::{
@@ -96,11 +102,10 @@ use crate::services::{
     HasActiveAgents, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
 };
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
+use crate::wasi_filesystem::AgentDescriptor;
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
-use crate::worker::instance::{
-    OwnerExecution, OwnerFilesystemAttachment, OwnerProvisionedFile, OwnerRuntimeResources,
-};
+use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -115,24 +120,26 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+pub(crate) use concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable,
+    authorize_live_permissions_at_serialized_access,
+};
 pub use durability::*;
-use futures::TryFutureExt;
-use futures::TryStreamExt;
-use futures::future::try_join_all;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, AgentPrincipal, ParsedAgentId, Principal};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
 };
-use golem_common::model::component::{
-    AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
+use golem_common::model::component::{CanonicalFilePath, ComponentId, ComponentRevision};
+use golem_common::model::entity::{
+    AgentEntity, EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
+#[cfg(test)]
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -168,27 +175,22 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tokio::sync::RwLock as TRwLock;
 
-type PreparedFilesystemStorageReservation<Ctx> = (Arc<Worker<Ctx>>, u64);
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut, MemoryKind, Store};
-use wasmtime_wasi::p2::FsResult;
-use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
-    I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
-    WasiView,
+    I32Exit, IoCtx, IoData, IoView, ResourceTable, WasiCtx, WasiCtxView, WasiView,
 };
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
 use wasmtime_wasi_http::p2::types::{HostFutureIncomingResponse, OutgoingRequestConfig};
@@ -371,22 +373,26 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     runtime: OwnerRuntime,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
+    entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
+    entity_cancellation: Option<tokio_util::sync::CancellationToken>,
     primary_invocation_start_index: Option<OplogIndex>,
+    invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
-    owner_resources: Arc<OwnerRuntimeResources>,
+    _owner_resources: Arc<OwnerRuntimeResources>,
+    entity_reconstruction_claim_hook:
+        Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    owner_filesystem: OwnerFilesystemAttachment,
+    filesystem_generation_handle: FilesystemGenerationHandle,
+    filesystem_preopen: AgentDescriptor,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     stream_runtime_teardown: Arc<AtomicBool>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
-    storage_meter: AgentStorageMeter,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
-    registered_resource_meters: bool,
     _store_alive_guard: StoreAliveGuard,
 }
 
@@ -394,10 +400,20 @@ pub(crate) struct PrimaryInvocationBody {
     permit: Option<OwnerInvocationPermit>,
 }
 
+impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
+    fn drop(&mut self) {
+        self.linear_memory.clear_limit_exceeded_callback();
+    }
+}
+
 impl PrimaryInvocationBody {
-    pub(crate) async fn complete(mut self) {
+    pub(crate) fn invocation(&self) -> Option<&crate::worker::owner_lane::OwnerInvocationId> {
+        self.permit.as_ref().map(OwnerInvocationPermit::invocation)
+    }
+
+    pub(crate) fn complete(mut self) {
         if let Some(permit) = self.permit.take() {
-            permit.complete_and_wait().await;
+            permit.complete();
         }
     }
 }
@@ -452,20 +468,6 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
             self.durable_worker_ctx().unshared_memory_growth_failed();
         }
         Ok(())
-    }
-}
-
-impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
-    fn drop(&mut self) {
-        self.linear_memory.clear_limit_exceeded_callback();
-        self.linear_memory.stop(Instant::now());
-        self.storage_meter.flush(Instant::now());
-        if self.registered_resource_meters {
-            self.resource_limits
-                .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
-            self.resource_limits
-                .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
-        }
     }
 }
 
@@ -624,6 +626,51 @@ fn validate_unshared_memory_growth(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
+        self.owner_execution
+            .test_should_skip_monotonic_clock_now_durability()
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
+        self.owner_execution
+            .test_should_skip_wall_clock_now_durability()
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub async fn test_commit_pending_oplog_entries(&self) {
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await;
+    }
+
+    pub(crate) fn entity_reconstruction_claim_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>> {
+        self.entity_reconstruction_claim_hook.clone()
+    }
+
+    pub(crate) fn is_live(&self) -> bool {
+        self.state.is_live()
+    }
+
+    pub(crate) fn filesystem_generation_handle(&self) -> FilesystemGenerationHandle {
+        self.filesystem_generation_handle.clone()
+    }
+
+    pub(crate) fn activate_resident_generation_handle(
+        &mut self,
+        generation_handle: FilesystemGenerationHandle,
+    ) {
+        self.filesystem_generation_handle = generation_handle;
+    }
+
+    pub(crate) fn filesystem_preopen(&self) -> AgentDescriptor {
+        self.filesystem_preopen.clone()
+    }
+
     pub(crate) fn derive_card_id(
         &self,
         invocation_key: &IdempotencyKey,
@@ -720,7 +767,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
-        mut worker_config: AgentConfig,
+        filesystem: crate::workerctx::WorkerFilesystemContext,
+        linear_memory: LinearMemoryTracker,
+        worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -735,38 +784,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
-        filesystem: FilesystemCapability,
+        entity_reconstruction_claim_hook: Option<
+            Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
+        >,
+        filesystem_capability: FilesystemCapability,
         executable_component: Component,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
-        if runtime == OwnerRuntime::Agent && filesystem != FilesystemCapability::Capable {
+        let crate::workerctx::WorkerFilesystemContext {
+            generation_handle: filesystem_generation_handle,
+            preopen: filesystem_preopen,
+        } = filesystem;
+        if matches!(runtime, OwnerRuntime::Agent) != entity_execution_mode.is_none() {
+            return Err(WorkerExecutorError::runtime(
+                "Entity execution mode must be supplied exactly for entity Stores",
+            ));
+        }
+        if runtime == OwnerRuntime::Agent && filesystem_capability != FilesystemCapability::Capable
+        {
             return Err(WorkerExecutorError::runtime(
                 "The primary Store must be filesystem-capable",
             ));
         }
-        let filesystem_root = owner_resources.filesystem();
-        let owner_filesystem = match &runtime {
-            OwnerRuntime::Agent => {
-                let attachment = filesystem_root
-                    .begin_primary_generation(
-                        &owner_execution.lane(),
-                        config.filesystem_storage.deterministic_root_dir.as_deref(),
-                        &owned_agent_id,
-                    )
-                    .await?;
-                owner_resources
-                    .reset_filesystem_storage_usage(worker_config.current_filesystem_storage_usage);
-                attachment
-            }
-            OwnerRuntime::Entity(_) => filesystem_root.attach_entity()?,
-        };
-        debug!(
-            generation = owner_filesystem.generation(),
-            "Attached Store to owner file system root at {:?}",
-            owner_filesystem.path()
-        );
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -853,71 +895,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }),
             OwnerRuntime::Entity(_) => None,
         };
-        let provisioned_files = match (&runtime, entity_activation.as_deref()) {
-            (OwnerRuntime::Agent, _) => agent_type_provision_configs
-                .as_ref()
-                .map(|config| config.files.as_slice())
-                .unwrap_or_default(),
-            (OwnerRuntime::Entity(_), Some(activation)) => {
-                activation.policy().provision().files.as_slice()
-            }
-            (OwnerRuntime::Entity(_), None) => unreachable!("validated above"),
-        };
-        let initial_read_write_file_bytes = filesystem_root
-            .preflight_provisioning(&owner_filesystem, provisioned_files)
-            .await?;
-        let initial_filesystem_storage_usage = owner_resources
-            .filesystem_storage_usage()
-            .saturating_add(initial_read_write_file_bytes);
-        if initial_filesystem_storage_usage > resource_limits.max_disk_space_limit() {
-            return Err(WorkerExecutorError::worker_creation_failed(
-                owned_agent_id.agent_id.clone(),
-                format!(
-                    "Provisioned read-write files require {initial_filesystem_storage_usage} bytes, exceeding the per-agent disk limit of {} bytes",
-                    resource_limits.max_disk_space_limit()
-                ),
-            ));
-        }
-
-        // Acquire storage semaphore permits for read-write initial component files.
-        //
-        // Read-only files are hardlinked from the FileLoader shared cache, so
-        // they occupy disk space only once per unique content hash regardless of
-        // how many workers reference them. FileLoader acquires the semaphore
-        // permit on the first cache miss and releases it when the last
-        // FileUseToken for that entry is dropped — no per-worker charge here.
-        //
-        // Read-write files are copied per-worker (each worker gets its own
-        // private inode and data blocks), so they must be charged individually.
-        if let Some(worker) = invocation_queue.upgrade()
-            && initial_read_write_file_bytes > 0
-        {
-            worker
-                .acquire_initial_filesystem_storage(initial_read_write_file_bytes)
-                .await
-                .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
-        }
-
-        let (files, provisioned_read_write_file_bytes) = prepare_filesystem(
-            &filesystem_root,
-            &owner_filesystem,
-            &file_loader,
-            owned_agent_id.environment_id,
-            provisioned_files,
-        )
-        .await?;
-        debug_assert_eq!(
-            provisioned_read_write_file_bytes,
-            initial_read_write_file_bytes
-        );
-        if provisioned_read_write_file_bytes > 0 {
-            owner_resources.acquire_filesystem_storage(provisioned_read_write_file_bytes);
-            owner_resources
-                .storage_meter()
-                .on_acquire(provisioned_read_write_file_bytes, Instant::now());
-        }
-        worker_config.current_filesystem_storage_usage = initial_filesystem_storage_usage;
-
         let agent_config = if agent_id.is_some() {
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
@@ -939,8 +916,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            owner_filesystem.path().to_path_buf(),
-            filesystem == FilesystemCapability::Capable,
             stdin.clone(),
             stdout,
             stderr,
@@ -954,7 +929,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let storage_meter = owner_resources.storage_meter();
         let deleted_regions = if let Some(snapshot_idx) = worker_config.last_snapshot_index {
             let mut regions = worker_config.deleted_regions.clone();
             let snapshot_skip =
@@ -975,50 +949,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             OwnerRuntime::Entity(_) => owner_execution.replay().await?,
         };
-        let registered_resource_meters = runtime == OwnerRuntime::Agent;
-        if registered_resource_meters {
-            resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
-        }
         let worker = invocation_queue
             .upgrade()
             .expect("worker must remain alive while creating its context");
-        let (retained_memory_grant, canonical_startup_bytes) = match &runtime {
-            OwnerRuntime::Agent => (
-                worker.linear_memory_grant(),
-                worker.startup_linear_memory_bytes(),
-            ),
-            OwnerRuntime::Entity(_) => (
-                Arc::new(Mutex::new(
-                    worker
-                        .active_agents()
-                        .acquire_memory(initial_linear_memory)
-                        .await,
-                )),
-                initial_linear_memory,
-            ),
-        };
         let card_event_boundary_lock = worker.card_event_boundary_lock();
         let published_authority_generation = worker.published_authority_generation();
-        let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
-        let linear_memory = LinearMemoryTracker::new(
-            canonical_startup_bytes,
-            admitted_startup_bytes,
-            execution_status.read().unwrap().agent_mode(),
-            match &runtime {
-                OwnerRuntime::Agent => true,
-                OwnerRuntime::Entity(_) => !replay_state.is_live(),
-            },
-            resource_limits.clone(),
-            retained_memory_grant,
-            Instant::now(),
-        );
-        let weak_worker = Arc::downgrade(&worker);
-        let memory_meter = linear_memory.meter().clone();
-        linear_memory.set_limit_exceeded_callback(Arc::new(move || {
-            if let Some(worker) = weak_worker.upgrade() {
-                worker.request_memory_limit_interrupt(memory_meter.clone());
-            }
-        }));
+        let tail_work = match &runtime {
+            OwnerRuntime::Agent => owner_execution.primary_tail_work_tracker(),
+            OwnerRuntime::Entity(_) => tail_work::TailWorkTracker::new(),
+        };
         let state = PrivateDurableWorkerState::new(
             agent_id,
             oplog_service,
@@ -1043,13 +982,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_proxy,
             replay_state,
             runtime.clone(),
+            entity_execution_mode,
+            tail_work,
             component_metadata,
             worker_config.owner_component_metadata,
-            worker_config.current_filesystem_storage_usage,
             worker_config.agent_effective_surface,
             worker_fork,
-            RwLock::new(compute_read_only_paths(&files)),
-            TRwLock::new(files),
             file_loader,
             worker_config.created_by,
             worker_config.created_by_email,
@@ -1070,10 +1008,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if state.is_live() {
             linear_memory.switch_to_live();
         }
-        if registered_resource_meters {
-            resource_limits
-                .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
-        }
+        let weak_worker = Arc::downgrade(&worker);
+        let memory_limits = linear_memory.clone();
+        linear_memory.set_limit_exceeded_callback(Arc::new(move || {
+            if let Some(worker) = weak_worker.upgrade() {
+                worker.request_memory_limit_interrupt(memory_limits.clone());
+            }
+        }));
         let store_alive_guard = StoreAliveGuard::new(&runtime);
 
         Ok(DurableWorkerCtx {
@@ -1085,11 +1026,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             runtime,
-            filesystem,
+            filesystem: filesystem_capability,
             entity_invocation_scope: None,
+            entity_tool_operation: None,
+            entity_cancellation: None,
             primary_invocation_start_index: None,
+            invocation_principal: None,
             owner_execution,
-            owner_resources,
+            _owner_resources: owner_resources,
+            entity_reconstruction_claim_hook,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -1098,23 +1043,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state,
-            owner_filesystem,
+            filesystem_generation_handle,
+            filesystem_preopen: AgentDescriptor::new(filesystem_preopen, PathBuf::new()),
             execution_status,
             stream_runtime_teardown: Arc::new(AtomicBool::new(false)),
             resource_limits,
             linear_memory,
-            storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
-            registered_resource_meters,
             _store_alive_guard: store_alive_guard,
         })
     }
 
-    fn table(&mut self) -> &mut ResourceTable {
+    pub(crate) fn table(&mut self) -> &mut ResourceTable {
         Arc::get_mut(&mut self.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail")
+    }
+
+    pub(crate) fn register_filesystem_input_stream(&mut self, rep: u32) {
+        self.state.open_filesystem_input_streams.insert(rep);
+    }
+
+    pub(crate) fn register_filesystem_output_stream(&mut self, rep: u32) {
+        self.state
+            .open_filesystem_output_streams
+            .insert(rep, FilesystemOutputStreamState);
     }
 
     /// Resets the per-invocation HTTP and RPC call counters to zero.
@@ -1127,9 +1081,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Records one outgoing HTTP call against the monthly account quota.
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
-    /// is exhausted. This trap maps to `RetryDecision::TryStop` — the worker is
-    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` -> `ReacquirePermits`),
-    /// and will be resumed when the registry replenishes the budget.
+    /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
+    /// suspended and resumed when the registry replenishes the budget.
     pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
         if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
             Err(anyhow!(
@@ -1149,33 +1102,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
             ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn check_if_file_is_readonly(
-        &mut self,
-        fd: &Resource<Descriptor>,
-    ) -> Result<bool, ResourceTableError> {
-        let table = Arc::get_mut(&mut self.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-
-        match table.get(fd)? {
-            Descriptor::File(f) => {
-                let read_only = self.state.read_only_paths.read().unwrap().contains(&f.path);
-
-                Ok(read_only)
-            }
-            Descriptor::Dir(_) => Ok(false),
-        }
-    }
-
-    fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
-        if self.check_if_file_is_readonly(fd)? {
-            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
         } else {
             Ok(())
         }
@@ -1245,10 +1171,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn acquire_owner_filesystem_inspection(
         &self,
     ) -> Result<crate::worker::owner_lane::OwnerLaneExclusiveGuard, WorkerExecutorError> {
-        self.owner_resources
-            .filesystem()
-            .acquire_inspection(&self.owner_execution.lane(), &self.owner_filesystem)
-            .await
+        Ok(self.owner_execution.lane().acquire_exclusive().await)
     }
 
     pub fn set_entity_invocation_scope(
@@ -1274,6 +1197,65 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
         self.entity_invocation_scope.as_ref()
+    }
+
+    pub(crate) fn set_entity_tool_operation(
+        &mut self,
+        operation: tool::operation::OwnerToolOperation,
+    ) -> Result<(), WorkerExecutorError> {
+        if !matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))) {
+            return Err(WorkerExecutorError::runtime(
+                "Tool operation can only be installed in a tool entity Store",
+            ));
+        }
+        if self.entity_tool_operation.replace(operation).is_some() {
+            return Err(WorkerExecutorError::runtime(
+                "Tool operation is already installed in the entity Store",
+            ));
+        }
+        Ok(())
+    }
+
+    fn entity_tool_operation(&self) -> Option<tool::operation::OwnerToolOperation> {
+        self.entity_tool_operation.clone()
+    }
+
+    pub(crate) fn set_invocation_principal(&mut self, principal: Option<Principal>) {
+        self.invocation_principal = principal;
+    }
+
+    pub(crate) fn invocation_principal(&self) -> Principal {
+        self.invocation_principal.clone().unwrap_or_else(|| {
+            Principal::Agent(AgentPrincipal {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+            })
+        })
+    }
+
+    pub(crate) fn set_entity_cancellation(
+        &mut self,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<(), WorkerExecutorError> {
+        if !matches!(self.runtime, OwnerRuntime::Entity(_)) {
+            return Err(WorkerExecutorError::runtime(
+                "Cannot install entity cancellation in the primary Store",
+            ));
+        }
+        if self.entity_cancellation.is_some() {
+            return Err(WorkerExecutorError::runtime(
+                "Entity cancellation is already installed",
+            ));
+        }
+        self.entity_cancellation = Some(cancellation);
+        Ok(())
+    }
+
+    fn entity_cancellation(&self) -> Option<tokio_util::sync::CancellationToken> {
+        if ENTITY_CANCELLATION_MASKED.try_with(|()| ()).is_ok() {
+            None
+        } else {
+            self.entity_cancellation.clone()
+        }
     }
 
     pub(crate) fn child_parent_start_index(
@@ -1928,7 +1910,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let status = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .get_attached_last_known_status()
             .await;
         let status_idx = status.oplog_idx;
         let status_pending = status.pending_card_events;
@@ -2216,6 +2198,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    pub(crate) fn selected_tool_owner_failure(
+        &self,
+    ) -> Option<crate::durable_host::tool::operation::OwnerFailureWinner> {
+        self.owner_execution
+            .tool_operations()
+            .selected_owner_failure()
+    }
+
     pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
         self.state.agent_id.as_ref().and_then(|agent_id| {
             self.owner_component_metadata()
@@ -2312,17 +2302,66 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.clone()
     }
 
-    async fn switch_to_live(&self) {
-        self.state.replay_state.switch_to_live().await;
-        if self.runtime == OwnerRuntime::Agent {
-            // Incomplete concurrent calls must be woken first so their reconstruction tasks can
-            // repair the original Starts. The primary remains fenced at this await and cannot
-            // admit live guest execution until every historical entity coordinator exits.
-            self.owner_execution
-                .wait_for_historical_reconstructions()
-                .await;
+    async fn begin_switch_to_live(&self) -> Result<BeginReplayToLive, WorkerExecutorError> {
+        begin_replay_to_live(
+            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            self.entity_tool_operation(),
+            &self.public_state,
+            &self.linear_memory,
+            &self.state.replay_state,
+            if self.runtime == OwnerRuntime::Agent {
+                ReplayToLiveRole::PrimaryAgent
+            } else {
+                ReplayToLiveRole::NonPrimary
+            },
+            self.state.local_live_tail(),
+        )
+        .await
+    }
+
+    async fn begin_local_live_continuation(
+        &self,
+    ) -> Result<PendingReplayToLive, WorkerExecutorError> {
+        begin_local_live_continuation(
+            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
+            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            self.entity_tool_operation(),
+            &self.public_state,
+            &self.linear_memory,
+            if self.runtime == OwnerRuntime::Agent {
+                ReplayToLiveRole::PrimaryAgent
+            } else {
+                ReplayToLiveRole::NonPrimary
+            },
+            self.state.local_live_tail(),
+            self.state.replay_state.replay_target(),
+        )
+        .await
+    }
+
+    async fn finish_switch_to_live(
+        &mut self,
+        pending: PendingReplayToLive,
+    ) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        let role = pending.role();
+        let outcome = pending.finish().await?;
+        if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
+            self.process_pending_replay_events().await?;
         }
-        self.linear_memory.switch_to_live();
+        Ok(outcome)
+    }
+
+    async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
+        let pending = match self.begin_switch_to_live().await? {
+            BeginReplayToLive::ReplayResumed => {
+                return Err(WorkerExecutorError::runtime(
+                    "replay target grew while the primary runtime was settling",
+                ));
+            }
+            BeginReplayToLive::Pending(pending) => pending,
+        };
+        self.finish_switch_to_live(pending).await?.require_live()
     }
 
     fn cleanup_custom_durability_state(&mut self) {
@@ -2339,194 +2378,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         self.state.active_custom_invocations.clear();
     }
-
-    pub fn current_filesystem_storage_usage(&self) -> u64 {
-        self.owner_resources.filesystem_storage_usage()
-    }
-
-    pub fn max_disk_space(&self) -> u64 {
-        self.resource_limits.max_disk_space_limit()
-    }
-
-    /// Check whether acquiring `new_bytes` would breach the per-plan storage
-    /// limit. Returns `WorkerAgentExceededFilesystemStorageLimit` (permanent) if so.
-    /// Does NOT check the executor semaphore pool — that is done by
-    /// `acquire_filesystem_space`.
-    ///
-    /// No-op during replay.
-    pub fn check_filesystem_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
-        if self.state.is_replay() {
-            return Ok(());
-        }
-        let after = self
-            .owner_resources
-            .filesystem_storage_usage()
-            .saturating_add(new_bytes);
-        if after > self.resource_limits.max_disk_space_limit() {
-            Err(anyhow!(
-                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Acquire `new_bytes` of storage from the executor semaphore pool.
-    ///
-    /// - During replay: no-op (permits were pre-acquired at startup).
-    /// - During live execution: calls `Worker::acquire_filesystem_space`, which
-    ///   tries the semaphore non-blockingly. On failure returns
-    ///   `NodeOutOfFilesystemStorage` (retriable via `ReacquirePermits`).
-    ///
-    /// Call `check_filesystem_quota` before calling this to enforce the per-plan
-    /// limit (`WorkerAgentExceededFilesystemStorageLimit`). This method only checks the
-    /// executor-wide semaphore pool (`NodeOutOfFilesystemStorage`).
-    pub async fn acquire_filesystem_storage_space(&mut self, new_bytes: u64) -> anyhow::Result<()> {
-        if self.state.is_replay() {
-            return Ok(());
-        }
-        // Acquire the semaphore permit first (non-blocking try). Writing the
-        // oplog entry after a confirmed acquire ensures the oplog accurately
-        // reflects only committed storage changes — a failed acquire leaves no
-        // phantom delta that would inflate `current_filesystem_storage_usage` on restart.
-        self.public_state
-            .worker()
-            .acquire_filesystem_storage_space(new_bytes)
-            .await?;
-        self.public_state
-            .worker()
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                new_bytes as i64,
-            ))
-            .await;
-        self.storage_meter.on_acquire(new_bytes, Instant::now());
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.acquire_filesystem_storage(new_bytes);
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            new_bytes,
-        );
-        Ok(())
-    }
-
-    /// Release `freed_bytes` back to the executor semaphore pool.
-    /// Called when files are deleted or truncated.
-    /// During replay this is a no-op.
-    pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
-        if self.state.is_replay() {
-            return;
-        }
-        let freed_bytes = self.owner_resources.release_filesystem_storage(freed_bytes);
-        if freed_bytes == 0 {
-            return;
-        }
-        self.public_state
-            .worker()
-            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
-                -(freed_bytes as i64),
-            ))
-            .await;
-        self.public_state
-            .worker()
-            .release_filesystem_storage_space(freed_bytes)
-            .await;
-        self.storage_meter.on_release(freed_bytes, Instant::now());
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.filesystem_storage_usage();
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            freed_bytes,
-        );
-    }
-
-    /// Check the per-agent storage quota and acquire permits from the
-    /// executor-wide semaphore pool in a single step.
-    ///
-    /// This combines `check_filesystem_storage_quota` (per-plan limit) and
-    /// `acquire_filesystem_storage_space` (executor semaphore) — the two must
-    /// always be called together in this order.
-    pub async fn reserve_filesystem_storage(&mut self, new_bytes: u64) -> anyhow::Result<()> {
-        self.check_filesystem_storage_quota(new_bytes)?;
-        self.acquire_filesystem_storage_space(new_bytes).await
-    }
-
-    pub(crate) fn prepare_filesystem_storage_reservation(
-        &mut self,
-        new_bytes: u64,
-    ) -> anyhow::Result<Option<PreparedFilesystemStorageReservation<Ctx>>> {
-        if new_bytes == 0 || self.state.is_replay() {
-            return Ok(None);
-        }
-        self.check_filesystem_storage_quota(new_bytes)?;
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.acquire_filesystem_storage(new_bytes);
-        Ok(Some((self.public_state.worker(), new_bytes)))
-    }
-
-    pub(crate) fn rollback_filesystem_storage_reservation(&mut self, new_bytes: u64) {
-        if new_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.owner_resources.release_filesystem_storage(new_bytes);
-        self.state.current_filesystem_storage_usage =
-            self.owner_resources.filesystem_storage_usage();
-    }
-
-    pub(crate) fn finish_filesystem_storage_reservation(&mut self, new_bytes: u64) {
-        if new_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.storage_meter.on_acquire(new_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_written(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            new_bytes,
-        );
-    }
-
-    pub(crate) fn prepare_filesystem_storage_release(
-        &mut self,
-        freed_bytes: u64,
-    ) -> Option<(Arc<Worker<Ctx>>, u64)> {
-        if freed_bytes == 0 || self.state.is_replay() {
-            return None;
-        }
-        let freed_bytes = self.owner_resources.release_filesystem_storage(freed_bytes);
-        if freed_bytes == 0 {
-            None
-        } else {
-            self.state.current_filesystem_storage_usage =
-                self.owner_resources.filesystem_storage_usage();
-            Some((self.public_state.worker(), freed_bytes))
-        }
-    }
-
-    pub(crate) fn finish_filesystem_storage_release(&mut self, freed_bytes: u64) {
-        if freed_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        self.storage_meter.on_release(freed_bytes, Instant::now());
-        let account_id = self.created_by().to_string();
-        let environment_id = self.state.owned_agent_id.environment_id().to_string();
-        record_storage_bytes_deleted(
-            STORAGE_TYPE_FILESYSTEM,
-            &account_id,
-            &environment_id,
-            freed_bytes,
-        );
-    }
-
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
         if self.runtime == OwnerRuntime::Agent && self.state.is_live() && !reconciling {
@@ -2590,7 +2441,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// the caller falls through to policy-based resolution.
     pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => Some(RetryDecision::TryStop(*ts)),
+            TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(RetryDecision::None),
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
             TrapType::Interrupt(InterruptKind::Jump) => Some(RetryDecision::Immediate),
@@ -2617,14 +2468,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::ExceededTableLimit,
-                ..
-            } => Some(RetryDecision::None),
-            TrapType::Error {
-                error: AgentError::NodeOutOfFilesystemStorage,
-                ..
-            } => Some(RetryDecision::ReacquirePermits),
-            TrapType::Error {
-                error: AgentError::AgentExceededFilesystemStorageLimit,
                 ..
             } => Some(RetryDecision::None),
             TrapType::Error {
@@ -2687,10 +2530,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::ExceededTableLimit => "exceeded-table-limit",
             AgentError::ExceededHttpCallLimit => "exceeded-http-call-limit",
             AgentError::ExceededRpcCallLimit => "exceeded-rpc-call-limit",
-            AgentError::NodeOutOfFilesystemStorage => "node-out-of-filesystem-storage",
-            AgentError::AgentExceededFilesystemStorageLimit => {
-                "agent-exceeded-filesystem-storage-limit"
-            }
             AgentError::InternalError(_) => "internal-error",
             AgentError::DeterministicTrap(_) => "deterministic-trap",
             AgentError::PermanentError(_) => "permanent-error",
@@ -2938,7 +2777,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
-                        self.switch_to_live().await;
+                        self.switch_to_live().await?;
                         Err(WorkerExecutorError::runtime(
                             "Non-idempotent remote write operation was not completed, cannot retry",
                         ))
@@ -2973,7 +2812,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await;
+                            self.switch_to_live().await?;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -2981,15 +2820,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
                         } if self.state.assume_idempotence => {
-                            // We need to jump to the end of the oplog
-                            self.switch_to_live().await;
+                            let pending = match self.begin_switch_to_live().await? {
+                                BeginReplayToLive::ReplayResumed => {
+                                    return Err(WorkerExecutorError::runtime(
+                                        "replay target grew while a batched write was settling",
+                                    ));
+                                }
+                                BeginReplayToLive::Pending(pending) => pending,
+                            };
 
                             // But this is not enough, because if the retried batched write operation succeeds,
                             // and later we replay it, we need to skip the first attempt and only replay the second.
                             // Se we add a Jump entry to the oplog that registers a deleted region.
                             let deleted_region = OplogRegion {
                                 start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
-                                end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                                end: pending.replay_target().next(), // skipping the Jump entry too
                             };
 
                             self.public_state
@@ -2999,6 +2844,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                             // TODO: this recomputation should not be necessary.
                             self.public_state.worker().reattach_worker_status().await;
+
+                            self.finish_switch_to_live(pending).await?.require_live()?;
                             // Switched to live and re-running the body: the scope `End` will be
                             // appended live by `end_function`, so do not store the (now incomplete)
                             // replay handle.
@@ -3007,7 +2854,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound { .. } => {
                             // assume_idempotence is false and the operation was not completed —
                             // we cannot safely retry a non-idempotent batched write.
-                            self.switch_to_live().await;
+                            self.switch_to_live().await?;
                             Err(WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
                             ))
@@ -3045,7 +2892,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // set the current retry point to the index of the begin entry.
             // The returned index, however, is going to be the current / last replayed index.
 
-            let begin_index = if self.state.replay_state.is_live() {
+            let begin_index = if self.state.is_live() {
                 self.state.oplog.current_oplog_index().await
             } else {
                 self.state.replay_state.last_replayed_non_hint_index()
@@ -3339,7 +3186,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             violates_for_all: true,
                         } => {
                             // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await;
+                            self.switch_to_live().await?;
                             return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
@@ -3355,7 +3202,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     violates_for_all: true,
                 } => {
                     // Must switch to live mode before failing to be able to commit an Error entry
-                    self.switch_to_live().await;
+                    self.switch_to_live().await?;
                     return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
@@ -3363,10 +3210,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
 
             let (result, tx) = if should_restart {
-                // We need to jump to the end of the oplog
-                self.switch_to_live().await;
+                let pending = match self.begin_switch_to_live().await? {
+                    BeginReplayToLive::ReplayResumed => {
+                        return Err(WorkerExecutorError::runtime(
+                            "replay target grew while a remote transaction was settling",
+                        )
+                        .into());
+                    }
+                    BeginReplayToLive::Pending(pending) => pending,
+                };
 
                 if !assume_idempotence {
+                    self.finish_switch_to_live(pending).await?.require_live()?;
                     Err(WorkerExecutorError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
                     ))
@@ -3379,7 +3234,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         // because we'll get a new tx id. The transaction scope `Start` lives at
                         // `scope_start_index < begin_index`, so it is preserved.
                         start: begin_index,
-                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                        end: pending.replay_target().next(), // skipping the Jump entry too
                     };
 
                     self.public_state
@@ -3389,6 +3244,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                     // TODO: this recomputation should not be necessary.
                     self.public_state.worker().reattach_worker_status().await;
+
+                    self.finish_switch_to_live(pending).await?.require_live()?;
 
                     let (tx_id, tx) = handler.create_new().await?;
                     let _ = self
@@ -3487,41 +3344,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
-            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
-            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
-            // The final marker and the scope `End` are appended as an atomic pair so they can never
-            // be split across a crash boundary (which would leave a marker without its `End`).
-            self.state
-                .oplog
-                .fallible_add_pair(
-                    OplogEntry::committed_remote_transaction(begin_index),
-                    OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: begin_index,
-                        response: None,
-                        forced_commit: true,
-                    },
-                )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
-            // The transaction scope opened in `begin_transaction_function` is now closed: the
-            // `CommittedRemoteTransaction` marker and the scope `End` have been durably committed,
-            // so the tip is no longer inside a jumpable scope on its account.
-            self.state.remove_durable_scope(begin_index)?;
+            self.persist_transaction_terminal(
+                begin_index,
+                OplogEntry::committed_remote_transaction(begin_index),
+            )
+            .await?;
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::CommittedRemoteTransaction
-            )?;
-            // The scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). If a crash split the marker/`End` pair, the
-            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
-            self.close_durable_scope_replay(begin_index).await?;
+            let marker = self
+                .state
+                .replay_state
+                .try_get_oplog_entry(|entry| entry.is_committed_remote_transaction(begin_index))
+                .await?;
+            if marker.is_some() {
+                // The scope `End` was folded into the resolver at scope-open, so await it (the
+                // terminal marker stays positional). Also closes the in-memory scope.
+                self.close_durable_scope_replay(begin_index).await?;
+            } else if self.state.replay_state.is_live() {
+                // The external commit succeeded, but the process crashed before persisting the
+                // marker pair. The preceding pre-commit marker exhausted replay, so repair the
+                // missing local transaction terminal without issuing the commit again.
+                self.switch_to_live().await?;
+                self.persist_transaction_terminal(
+                    begin_index,
+                    OplogEntry::committed_remote_transaction(begin_index),
+                )
+                .await?;
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.state.replay_state,
+                    OplogEntry::CommittedRemoteTransaction
+                )?;
+                unreachable!("the speculative marker read left a matching entry unconsumed");
+            }
         }
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
@@ -3538,47 +3392,72 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
-            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
-            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
-            // The final marker and the scope `End` are appended as an atomic pair so they can never
-            // be split across a crash boundary (which would leave a marker without its `End`).
-            self.state
-                .oplog
-                .fallible_add_pair(
-                    OplogEntry::rolled_back_remote_transaction(begin_index),
-                    OplogEntry::End {
-                        timestamp: Timestamp::now_utc(),
-                        start_index: begin_index,
-                        response: None,
-                        forced_commit: true,
-                    },
-                )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
-            // The transaction scope opened in `begin_transaction_function` is now closed: the
-            // `RolledBackRemoteTransaction` marker and the scope `End` have been durably committed,
-            // so the tip is no longer inside a jumpable scope on its account.
-            self.state.remove_durable_scope(begin_index)?;
+            self.persist_transaction_terminal(
+                begin_index,
+                OplogEntry::rolled_back_remote_transaction(begin_index),
+            )
+            .await?;
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::RolledBackRemoteTransaction
-            )?;
-            // The scope `End` was folded into the resolver at scope-open, so await it (the
-            // terminal marker stays positional). If a crash split the marker/`End` pair, the
-            // `End` resolves as `Incomplete` and is repaired live. Also closes the in-memory scope.
-            self.close_durable_scope_replay(begin_index).await?;
+            let marker = self
+                .state
+                .replay_state
+                .try_get_oplog_entry(|entry| entry.is_rolled_back_remote_transaction(begin_index))
+                .await?;
+            if marker.is_some() {
+                // The scope `End` was folded into the resolver at scope-open, so await it (the
+                // terminal marker stays positional). Also closes the in-memory scope.
+                self.close_durable_scope_replay(begin_index).await?;
+            } else if self.state.replay_state.is_live() {
+                // The external rollback succeeded, but the process crashed before persisting the
+                // marker pair. Repair the missing local terminal without issuing the rollback again.
+                self.switch_to_live().await?;
+                self.persist_transaction_terminal(
+                    begin_index,
+                    OplogEntry::rolled_back_remote_transaction(begin_index),
+                )
+                .await?;
+            } else {
+                let (_, _) = crate::get_oplog_entry!(
+                    self.state.replay_state,
+                    OplogEntry::RolledBackRemoteTransaction
+                )?;
+                unreachable!("the speculative marker read left a matching entry unconsumed");
+            }
         }
         // The live branch above just committed/updated the status, so this is a clean boundary at
         // the committed tip (the helper is a no-op during replay and while any other region is
         // open) — a good place to advance the mid-invocation checkpoint for transaction-heavy
         // invocations.
         self.maybe_mid_invocation_checkpoint().await;
+        Ok(())
+    }
+
+    async fn persist_transaction_terminal(
+        &mut self,
+        begin_index: OplogIndex,
+        marker: OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        // Tests can inject failures into the worker's local oplog handle, so write through it while
+        // committing through the public worker state. The marker and scope `End` are atomic: a
+        // successful append can never leave one without the other.
+        self.state
+            .oplog
+            .fallible_add_pair(
+                marker,
+                OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: begin_index,
+                    response: None,
+                    forced_commit: true,
+                },
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await;
+        self.state.remove_durable_scope(begin_index)?;
         Ok(())
     }
 }
@@ -4005,8 +3884,46 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
+            if snapshot_source == Some(SnapshotSource::Automatic) {
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replaying_automatic_snapshot_tail = true;
+            }
             SnapshotRecoveryResult::Success
         }
+    }
+
+    /// Abandons an automatic snapshot whose replayed tail diverged from the recorded oplog: the
+    /// worker is recreated with automatic snapshot recovery disabled so it replays the full oplog.
+    fn abandon_diverged_automatic_snapshot(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        full_function_name: &str,
+        error: &AgentError,
+    ) -> RetryDecision {
+        let snapshot_index = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index
+            .expect("an automatic snapshot tail is only replayed after loading a snapshot");
+        let error = format!(
+            "Replaying {full_function_name} after loading the snapshot diverged from the recorded oplog: {}; falling back to full replay",
+            error.message()
+        );
+        warn!("{error}");
+        Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+        store
+            .as_context()
+            .data()
+            .get_public_state()
+            .worker()
+            .snapshot_recovery_disabled
+            .store(true, Ordering::Release);
+        RetryDecision::Immediate
     }
 
     fn emit_snapshot_recovery_event(
@@ -4177,6 +4094,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
     }
 
+    pub(crate) fn invocation_deadline_exceeded(&self) -> bool {
+        self.state
+            .invocation_deadline_exceeded
+            .load(Ordering::Acquire)
+    }
+
     pub(crate) fn end_call_snapshotting_function_if_active(&mut self) {
         if self.state.snapshotting_mode {
             self.end_call_snapshotting_function();
@@ -4247,13 +4170,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 url: state.url.clone(),
                 headers: state.headers.clone(),
             })
-    }
-
-    /// Whether some task currently holds an open replay-cursor transaction. See
-    /// [`ReplayState::has_open_cursor_transaction`]; used by the invocation completion path to
-    /// keep the store's event loop alive until no store-spawned task holds the cursor lock.
-    pub fn has_open_replay_cursor_transaction(&self) -> bool {
-        self.state.replay_state.has_open_cursor_transaction()
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
@@ -4436,7 +4352,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
-                    self.linear_memory.switch_to_live();
                     let pending_update = self.state.pending_update.lock().await.take();
                     if let Some(pending_update) = pending_update {
                         match pending_update.description {
@@ -4516,6 +4431,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .into_iter()
             .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
             .collect::<Vec<_>>();
+        if !revoked_card_ids.is_empty() {
+            self.state.authority_initialized = false;
+        }
         self.public_state
             .worker()
             .queue_card_revocations_locked(&revoked_card_ids)
@@ -4585,23 +4503,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             None
         };
 
-        {
-            let mut current_files = self.state.files.write().await;
-            update_filesystem(
-                &mut current_files,
-                &self.state.file_loader,
-                self.owned_agent_id.environment_id,
-                self.owner_filesystem.path(),
-                new_agent_type_provision_configs
-                    .as_ref()
-                    .map(|c| c.files.as_slice())
-                    .unwrap_or_default(),
-            )
-            .await?;
-
-            let mut read_only_paths = self.state.read_only_paths.write().unwrap();
-            *read_only_paths = compute_read_only_paths(&current_files);
-        }
+        update_initial_files(
+            &self.filesystem_generation_handle,
+            Arc::clone(&self.state.file_loader),
+            self.owned_agent_id.environment_id,
+            new_agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.files.clone())
+                .unwrap_or_default(),
+        )
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
         self.state.component_metadata = new_metadata;
 
@@ -4671,6 +4584,21 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             if let ExecutionStatus::Interrupting { interrupt_kind, .. } = &*execution_status {
                 return Some(*interrupt_kind);
             }
+        }
+        if self
+            .owner_execution
+            .tool_operations()
+            .interruptible_owner_failure()
+            .is_some()
+        {
+            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+        }
+        if self
+            .entity_cancellation
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
         }
         // An exceeded invocation or tail-work deadline surfaces as a synthetic interrupt so work
         // traps at the next epoch check. The corresponding invocation boundary converts the
@@ -5022,7 +4950,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
-        let is_live = self.state.is_live();
+        let mut is_live = self.state.is_live();
         if is_live && !self.state.snapshotting_mode {
             concurrent::drain_queued_dropped_call_events(self)
                 .await
@@ -5037,105 +4965,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             ));
         }
 
-        if is_live {
-            if !self.state.durability_is_suppressed() {
-                let component_revision = output.component_revision.ok_or_else(|| {
-                    WorkerExecutorError::runtime(
-                        "component_revision missing in AgentInvocationOutput during replay",
-                    )
-                })?;
-
-                // Classify the just-completed invocation up front so we can
-                // bump the read-only cache epoch on successful mutating
-                // completion. For non-AgentMethod results
-                // (initialization, manual update, snapshot
-                // load/save, oplog processing) we always invalidate — these
-                // are all state-changing. For AgentMethod results we ask the
-                // worker whether the method is `read_only`.
-                let invalidates_read_only_cache = match &output.result {
-                    AgentInvocationResult::AgentMethod { .. } => self
-                        .public_state
-                        .worker()
-                        .agent_method_invalidates_read_only_cache(full_function_name),
-                    AgentInvocationResult::AgentInitialization
-                    | AgentInvocationResult::ManualUpdate
-                    | AgentInvocationResult::LoadSnapshot { .. }
-                    | AgentInvocationResult::SaveSnapshot { .. }
-                    | AgentInvocationResult::ProcessOplogEntries { .. } => true,
-                };
-
-                // Only `AgentMethod` results need the method name persisted so the
-                // public oplog renderer can resolve the correct output schema.
-                let method_name = match &output.result {
-                    AgentInvocationResult::AgentMethod { .. } => {
-                        Some(full_function_name.to_string())
-                    }
-                    _ => None,
-                };
-
-                self.public_state
-                    .worker()
-                    .oplog()
-                    .add_agent_invocation_finished(
-                        &output.result,
-                        method_name,
-                        consumed_fuel,
-                        component_revision,
-                    )
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("could not encode function result for {full_function_name}: {err}")
-                    });
-
-                self.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await;
-
-                // Bump the read-only cache epoch after the
-                // `AgentInvocationFinished` entry is committed, but *before*
-                // we publish `InvocationCompleted` to waiters via
-                // `store_invocation_success`. Ordering matters: any client
-                // that observes the completion event must also see an
-                // invalidated cache, otherwise it could read a stale cached
-                // result for the now-mutated state.
-                if invalidates_read_only_cache {
-                    self.public_state.worker().bump_read_only_cache_epoch();
-                }
-
-                // Capture the agent's oplog index right after
-                // `AgentInvocationFinished` was committed, together with the
-                // worker's per-instance fingerprint, so the response carries
-                // an unambiguous identification of the agent state it was
-                // produced from.
-                output.oplog_index = Some(
-                    self.public_state
-                        .worker()
-                        .oplog()
-                        .current_oplog_index()
-                        .await,
-                );
-                output.agent_fingerprint = Some(
-                    self.public_state
-                        .worker()
-                        .get_initial_worker_metadata()
-                        .fingerprint,
-                );
-
-                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                    self.public_state
-                        .worker()
-                        .store_invocation_success(&idempotency_key, output.clone())
-                        .await;
-
-                    self.public_state.event_service().emit_invocation_finished(
-                        full_function_name,
-                        &idempotency_key,
-                        is_live,
-                    );
-                }
-            }
-        } else {
+        if !is_live {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
             // (e.g. `DropEvent::FinishSpan` for a p3 HTTP response dropped unconsumed) must consume
             // their positional entries (recorded by the live drain at this same point) before the
@@ -5149,19 +4979,123 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .replay_state
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
-            if let Some(recorded_result) = response
-                && !recorded_result.replay_equivalent(&output.result)
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!(
-                        "{full_function_name} => {:?}",
-                        recorded_result.redacted_debug()
-                    ),
-                    format!(
-                        "{full_function_name} => {:?}",
-                        output.result.redacted_debug()
-                    ),
-                ));
+            if let Some(recorded_result) = response {
+                if !recorded_result.replay_equivalent(&output.result) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!(
+                            "{full_function_name} => {:?}",
+                            recorded_result.redacted_debug()
+                        ),
+                        format!(
+                            "{full_function_name} => {:?}",
+                            output.result.redacted_debug()
+                        ),
+                    ));
+                }
+                debug!("Function {full_function_name} finished");
+                return Ok(());
+            }
+
+            // An incomplete historical invocation can finish after a non-primary entity repair
+            // has moved the shared cursor into Settling. Complete the primary transition before
+            // publishing this newly repaired invocation as a live success.
+            self.switch_to_live().await?;
+            is_live = true;
+        }
+
+        if is_live && !self.state.durability_is_suppressed() {
+            let component_revision = output.component_revision.ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "component_revision missing in AgentInvocationOutput during replay",
+                )
+            })?;
+
+            // Classify the just-completed invocation up front so we can
+            // bump the read-only cache epoch on successful mutating
+            // completion. For non-AgentMethod results
+            // (initialization, manual update, snapshot
+            // load/save, oplog processing) we always invalidate — these
+            // are all state-changing. For AgentMethod results we ask the
+            // worker whether the method is `read_only`.
+            let invalidates_read_only_cache = match &output.result {
+                AgentInvocationResult::AgentMethod { .. } => self
+                    .public_state
+                    .worker()
+                    .agent_method_invalidates_read_only_cache(full_function_name),
+                AgentInvocationResult::AgentInitialization
+                | AgentInvocationResult::ManualUpdate
+                | AgentInvocationResult::LoadSnapshot { .. }
+                | AgentInvocationResult::SaveSnapshot { .. }
+                | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+            };
+
+            // Only `AgentMethod` results need the method name persisted so the
+            // public oplog renderer can resolve the correct output schema.
+            let method_name = match &output.result {
+                AgentInvocationResult::AgentMethod { .. } => Some(full_function_name.to_string()),
+                _ => None,
+            };
+
+            self.public_state
+                .worker()
+                .oplog()
+                .add_agent_invocation_finished(
+                    &output.result,
+                    method_name,
+                    consumed_fuel,
+                    component_revision,
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    panic!("could not encode function result for {full_function_name}: {err}")
+                });
+
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+
+            // Bump the read-only cache epoch after the
+            // `AgentInvocationFinished` entry is committed, but *before*
+            // we publish `InvocationCompleted` to waiters via
+            // `store_invocation_success`. Ordering matters: any client
+            // that observes the completion event must also see an
+            // invalidated cache, otherwise it could read a stale cached
+            // result for the now-mutated state.
+            if invalidates_read_only_cache {
+                self.public_state.worker().bump_read_only_cache_epoch();
+            }
+
+            // Capture the agent's oplog index right after
+            // `AgentInvocationFinished` was committed, together with the
+            // worker's per-instance fingerprint, so the response carries
+            // an unambiguous identification of the agent state it was
+            // produced from.
+            output.oplog_index = Some(
+                self.public_state
+                    .worker()
+                    .oplog()
+                    .current_oplog_index()
+                    .await,
+            );
+            output.agent_fingerprint = Some(
+                self.public_state
+                    .worker()
+                    .get_initial_worker_metadata()
+                    .fingerprint,
+            );
+
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .worker()
+                    .store_invocation_success(&idempotency_key, output.clone())
+                    .await;
+
+                self.public_state.event_service().emit_invocation_finished(
+                    full_function_name,
+                    &idempotency_key,
+                    is_live,
+                );
             }
         }
         debug!("Function {full_function_name} finished");
@@ -5536,12 +5470,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 match oplog_entry {
                     Err(error) => break Err(error),
                     Ok(None) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .process_pending_replay_events()
-                            .await?;
+                        let mut store_context = store.as_context_mut();
+                        let durable_ctx = store_context.data_mut().durable_ctx_mut();
+                        durable_ctx.switch_to_live().await?;
                         break Ok(None);
                     }
                     Ok(Some(replay_state::AgentInvocationStartedEntry {
@@ -5738,10 +5669,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 {
                                     break Err(err);
                                 }
+                                // An invocation that was interrupted by a crash reaches its end
+                                // here, in live mode, instead of in the invocation loop, so its
+                                // durable Stream Session must be finished here as well;
+                                // otherwise resumed session clients never observe completion.
+                                if store.as_context().data().durable_ctx().is_live()
+                                    && let Err(error) = worker
+                                        .complete_durable_streaming_session(&idempotency_key)
+                                        .await
+                                {
+                                    error!(%error, "Failed to complete durable streaming session");
+                                    break Err(error);
+                                }
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
                             _ => {
+                                let details = format!("{invoke_result:?}");
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
@@ -5755,6 +5699,32 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     }
                                 };
                                 let decision = match trap_type {
+                                    // A recorded invocation that fails while its entries are still
+                                    // being replayed after an automatic snapshot load most likely
+                                    // diverged from the recorded execution because the guest state
+                                    // restored from the snapshot differs from the original one. The
+                                    // recorded oplog is authoritative, so instead of committing the
+                                    // failure the snapshot is abandoned and the worker replays from
+                                    // the beginning, which reproduces the recorded outcome.
+                                    Some(TrapType::Error { error, .. })
+                                        if store
+                                            .as_context()
+                                            .data()
+                                            .durable_ctx()
+                                            .state
+                                            .replaying_automatic_snapshot_tail
+                                            && !store
+                                                .as_context()
+                                                .data()
+                                                .durable_ctx()
+                                                .is_live() =>
+                                    {
+                                        Some(Self::abandon_diverged_automatic_snapshot(
+                                            store,
+                                            &full_function_name,
+                                            &error,
+                                        ))
+                                    }
                                     Some(trap_type) => {
                                         let decision = store
                                             .as_context_mut()
@@ -5763,6 +5733,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             .await;
 
                                         if decision == RetryDecision::None {
+                                            // Like the invocation loop, permanently fail the
+                                            // durable Stream Session of an invocation that was
+                                            // interrupted by a crash and cannot be retried.
+                                            if store.as_context().data().durable_ctx().is_live() {
+                                                let _ = worker
+                                                    .fail_durable_streaming_session(
+                                                        &idempotency_key,
+                                                        details,
+                                                    )
+                                                    .await;
+                                            }
                                             // Cannot retry so we need to fail
                                             match trap_type {
                                                 TrapType::Interrupt(_interrupt_kind) => {
@@ -5814,6 +5795,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         record_number_of_replayed_functions(number_of_replayed_functions);
 
+        if matches!(resume_result, Ok(None)) {
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .replaying_automatic_snapshot_tail = false;
+        }
+
         resume_result
     }
 
@@ -5839,10 +5829,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
-                    .state
-                    .replay_state
                     .switch_to_live()
-                    .await;
+                    .await?;
 
                 // Appending a Restart marker
                 store
@@ -6412,6 +6400,227 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
     ) || status.has_pending_work()
 }
 
+fn store_is_live(
+    entity_execution_mode: Option<InvocationExecutionMode>,
+    local_live_tail: bool,
+    shared_live_published: bool,
+) -> bool {
+    match entity_execution_mode {
+        Some(InvocationExecutionMode::ReplayingCompleted) => false,
+        Some(InvocationExecutionMode::ReplayingIncomplete | InvocationExecutionMode::Live) => {
+            local_live_tail
+        }
+        None => shared_live_published,
+    }
+}
+
+pub(crate) enum BeginReplayToLive {
+    ReplayResumed,
+    Pending(PendingReplayToLive),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FinishReplayToLive {
+    Live,
+    AttachmentAdmissionRejected,
+    Cancelled,
+}
+
+impl FinishReplayToLive {
+    pub(crate) fn require_live(self) -> Result<(), WorkerExecutorError> {
+        match self {
+            Self::Live => Ok(()),
+            Self::AttachmentAdmissionRejected => {
+                Err(tool_attachment_live_admission_rejected_error())
+            }
+            Self::Cancelled => Err(tool_attachment_live_admission_cancelled_error()),
+        }
+    }
+}
+
+#[must_use = "replay cleanup must finish before live attachment admission is finalized"]
+pub(crate) struct PendingReplayToLive {
+    replay_target: OplogIndex,
+    role: ReplayToLiveRole,
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    local_live_tail: Arc<AtomicBool>,
+}
+
+impl PendingReplayToLive {
+    pub(crate) fn replay_target(&self) -> OplogIndex {
+        self.replay_target
+    }
+
+    fn role(&self) -> ReplayToLiveRole {
+        self.role
+    }
+
+    pub(crate) async fn finish(self) -> Result<FinishReplayToLive, WorkerExecutorError> {
+        if self.replaying_incomplete_entity && self.tool_entity {
+            let operation = self.tool_operation.ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "Incomplete tool entity has no live-admission operation installed",
+                )
+            })?;
+            match operation.activate_live_attachment_memory_accounting().await {
+                tool::operation::ToolLiveAdmissionOutcome::Admitted => {}
+                tool::operation::ToolLiveAdmissionOutcome::ResourceExhausted => {
+                    return Ok(FinishReplayToLive::AttachmentAdmissionRejected);
+                }
+                tool::operation::ToolLiveAdmissionOutcome::Cancelled => {
+                    return Ok(FinishReplayToLive::Cancelled);
+                }
+                tool::operation::ToolLiveAdmissionOutcome::Fenced => {
+                    return Err(WorkerExecutorError::runtime(
+                        "Tool operation was fenced during live-memory admission",
+                    ));
+                }
+            }
+        }
+
+        if self.role == ReplayToLiveRole::NonPrimary {
+            self.local_live_tail.store(true, Ordering::Release);
+        }
+        Ok(FinishReplayToLive::Live)
+    }
+}
+
+const TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED: &str =
+    "Tool attachment live-memory admission was exhausted";
+
+pub(crate) fn tool_attachment_live_admission_rejected_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED)
+}
+
+pub(crate) fn is_tool_attachment_live_admission_rejection(error: &WorkerExecutorError) -> bool {
+    matches!(
+        error,
+        WorkerExecutorError::Runtime { details }
+            if details == TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED
+    )
+}
+
+const TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED: &str =
+    "Tool attachment live-memory admission was cancelled";
+
+pub(crate) fn tool_attachment_live_admission_cancelled_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED)
+}
+
+async fn activate_incomplete_entity_linear_memory<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+) -> Result<(), WorkerExecutorError> {
+    if !replaying_incomplete_entity {
+        return Ok(());
+    }
+
+    let active_agents = public_state.worker().active_agents();
+    linear_memory
+        .activate_live_reservation(move |bytes| {
+            let active_agents = active_agents.clone();
+            async move { active_agents.acquire_memory(bytes).await }
+        })
+        .await;
+    Ok(())
+}
+
+async fn begin_replay_to_live<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    replay_state: &ReplayState,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+) -> Result<BeginReplayToLive, WorkerExecutorError> {
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    match replay_state.switch_to_live(linear_memory, role).await? {
+        ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
+        ReplayToLiveOutcome::Live { replay_target } => {
+            Ok(BeginReplayToLive::Pending(PendingReplayToLive {
+                replay_target,
+                role,
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                local_live_tail,
+            }))
+        }
+    }
+}
+
+async fn finish_replay_to_live_from_settling<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    replay_state: &ReplayState,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+    replay_target: OplogIndex,
+) -> Result<BeginReplayToLive, WorkerExecutorError> {
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    match replay_state
+        .finish_settling_to_live(linear_memory, role, replay_target)
+        .await?
+    {
+        ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
+        ReplayToLiveOutcome::Live { replay_target } => {
+            Ok(BeginReplayToLive::Pending(PendingReplayToLive {
+                replay_target,
+                role,
+                replaying_incomplete_entity,
+                tool_entity,
+                tool_operation,
+                local_live_tail,
+            }))
+        }
+    }
+}
+
+async fn begin_local_live_continuation<Ctx: WorkerCtx>(
+    replaying_incomplete_entity: bool,
+    tool_entity: bool,
+    tool_operation: Option<tool::operation::OwnerToolOperation>,
+    public_state: &PublicDurableWorkerState<Ctx>,
+    linear_memory: &LinearMemoryTracker,
+    role: ReplayToLiveRole,
+    local_live_tail: Arc<AtomicBool>,
+    replay_target: OplogIndex,
+) -> Result<PendingReplayToLive, WorkerExecutorError> {
+    activate_incomplete_entity_linear_memory(
+        replaying_incomplete_entity,
+        public_state,
+        linear_memory,
+    )
+    .await?;
+    linear_memory.switch_to_live();
+    Ok(PendingReplayToLive {
+        replay_target,
+        role,
+        replaying_incomplete_entity,
+        tool_entity,
+        tool_operation,
+        local_live_tail,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6434,6 +6643,56 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
+
+    #[test]
+    fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
+        assert!(!store_is_live(None, false, false));
+        assert!(store_is_live(None, false, true));
+
+        let completed = Some(InvocationExecutionMode::ReplayingCompleted);
+        assert!(!store_is_live(completed, false, false));
+        assert!(!store_is_live(completed, false, true));
+        assert!(!store_is_live(completed, true, true));
+
+        let incomplete = Some(InvocationExecutionMode::ReplayingIncomplete);
+        assert!(!store_is_live(incomplete, false, false));
+        assert!(!store_is_live(incomplete, false, true));
+        assert!(store_is_live(incomplete, true, true));
+        assert!(store_is_live(
+            Some(InvocationExecutionMode::Live),
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    async fn pending_replay_to_live_is_fail_closed_until_finished() {
+        let local_live_tail = Arc::new(AtomicBool::new(false));
+        let pending = PendingReplayToLive {
+            replay_target: OplogIndex::from_u64(42),
+            role: ReplayToLiveRole::NonPrimary,
+            replaying_incomplete_entity: false,
+            tool_entity: false,
+            tool_operation: None,
+            local_live_tail: local_live_tail.clone(),
+        };
+
+        assert_eq!(pending.replay_target(), OplogIndex::from_u64(42));
+        assert!(!local_live_tail.load(Ordering::Acquire));
+        assert_eq!(pending.finish().await.unwrap(), FinishReplayToLive::Live);
+        assert!(local_live_tail.load(Ordering::Acquire));
+
+        let dropped_tail = Arc::new(AtomicBool::new(false));
+        drop(PendingReplayToLive {
+            replay_target: OplogIndex::from_u64(43),
+            role: ReplayToLiveRole::NonPrimary,
+            replaying_incomplete_entity: false,
+            tool_entity: false,
+            tool_operation: None,
+            local_live_tail: dropped_tail.clone(),
+        });
+        assert!(!dropped_tail.load(Ordering::Acquire));
+    }
 
     #[test]
     fn operator_authorized_invocation_guard_clears_mode_when_dropped() {
@@ -6723,7 +6982,7 @@ mod tests {
             Arc::new(Mutex::new(MemoryGrant::inert(60))),
             now,
         );
-        tracker.reconcile(60, now);
+        tracker.reconcile_at(60, now);
 
         let second_memory_growth = tracker.prepare_unshared_growth(0, 60);
 
@@ -8330,109 +8589,74 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = self.owner_filesystem.path();
-        let target = root.join(PathBuf::from(path.to_rel_string()));
+        use crate::services::agent_filesystem as agent_fs;
 
+        let generation_handle = self.filesystem_generation_handle();
+        let relative = PathBuf::from(path.to_rel_string());
+        let target = agent_fs::PathTarget::at_root(&generation_handle, relative.clone())
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let attributes = match agent_fs::attributes(
+            &generation_handle,
+            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
         {
-            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to check whether file exists: {e}"),
-                }
-            })?;
-            if !exists {
+            Ok(attributes) => attributes,
+            Err(error) if filesystem_error_is_not_found(&error) => {
                 return Ok(GetFileSystemNodeResult::NotFound);
-            };
+            }
+            Err(error) => return Err(filesystem_read_error(path, error)),
+        };
+
+        if attributes.kind == agent_fs::ObjectKind::File {
+            return Ok(GetFileSystemNodeResult::File(component_file_node(
+                &generation_handle,
+                relative,
+                attributes,
+            )?));
+        }
+        if attributes.kind != agent_fs::ObjectKind::Directory {
+            return Ok(GetFileSystemNodeResult::NotFound);
         }
 
-        let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-            WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: format!("Failed to get metadata: {e}"),
-            }
-        })?;
-
-        if metadata.is_file() {
-            let is_readonly_by_host = metadata.permissions().readonly();
-            let is_readonly_by_us = self.state.read_only_paths.read().unwrap().contains(&target);
-
-            let permissions = if is_readonly_by_host || is_readonly_by_us {
-                AgentFilePermissions::ReadOnly
-            } else {
-                AgentFilePermissions::ReadWrite
-            };
-
-            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
-            let file_name = target
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let file_node = ComponentFileSystemNode {
-                name: file_name,
-                last_modified,
-                details: ComponentFileSystemNodeDetails::File {
-                    size: metadata.len(),
-                    permissions,
-                },
-            };
-
-            return Ok(GetFileSystemNodeResult::File(file_node));
-        }
-
-        let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
-            WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: format!("Failed to list directory: {e}"),
-            }
-        })?;
-
-        let mut result = Vec::new();
-        while let Some(entry) = entries.next_entry().await? {
-            let metadata =
-                entry
-                    .metadata()
-                    .await
-                    .map_err(|e| WorkerExecutorError::FileSystemError {
-                        path: path.to_string(),
-                        reason: format!("Failed to get file metadata {e}"),
-                    })?;
-
-            let entry_name = entry.file_name().to_string_lossy().to_string();
-
-            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
-
-            if metadata.is_file() {
-                let is_readonly_by_host = metadata.permissions().readonly();
-                // additionally consider permissions we maintain ourselves
-                let is_readonly_by_us = self
-                    .state
-                    .read_only_paths
-                    .read()
-                    .unwrap()
-                    .contains(&entry.path());
-
-                let permissions = if is_readonly_by_host || is_readonly_by_us {
-                    AgentFilePermissions::ReadOnly
-                } else {
-                    AgentFilePermissions::ReadWrite
-                };
-
-                result.push(ComponentFileSystemNode {
-                    name: entry_name,
-                    last_modified,
-                    details: ComponentFileSystemNodeDetails::File {
-                        size: metadata.len(),
-                        permissions,
-                    },
-                });
-            } else {
-                result.push(ComponentFileSystemNode {
-                    name: entry_name,
-                    last_modified,
-                    details: ComponentFileSystemNodeDetails::Directory,
-                });
-            };
+        let opened = agent_fs::open(
+            &generation_handle,
+            target,
+            agent_fs::OpenOptions::Existing {
+                expected: agent_fs::ObjectKind::Directory,
+                access: agent_fs::AccessMode::Read,
+                follow: agent_fs::Follow::Yes,
+            },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let agent_fs::OpenNode::Directory(directory) = opened.node else {
+            unreachable!("directory open returned a non-directory node")
+        };
+        let entries = agent_fs::list_directory(&generation_handle, &directory)
+            .map_err(|error| filesystem_read_error(path, error))?
+            .await
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let mut result = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let entry_relative = relative.join(&entry.name);
+            let entry_target =
+                agent_fs::PathTarget::at_root(&generation_handle, entry_relative.clone())
+                    .map_err(|error| filesystem_read_error(path, error))?;
+            let attributes = agent_fs::attributes(
+                &generation_handle,
+                agent_fs::Target::Path(&entry_target, agent_fs::Follow::Yes),
+            )
+            .map_err(|error| filesystem_read_error(path, error))?
+            .await
+            .map_err(|error| filesystem_read_error(path, error))?;
+            result.push(component_file_node(
+                &generation_handle,
+                entry_relative,
+                attributes,
+            )?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
     }
@@ -8441,45 +8665,103 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = self.owner_filesystem.path();
-        let target = root.join(PathBuf::from(path.to_rel_string()));
+        use crate::services::agent_filesystem as agent_fs;
 
+        let generation_handle = self.filesystem_generation_handle();
+        let relative = PathBuf::from(path.to_rel_string());
+        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
+            .map_err(|error| filesystem_read_error(path, error))?;
+        let attributes = match agent_fs::attributes(
+            &generation_handle,
+            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
         {
-            let exists = tokio::fs::try_exists(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to check whether file exists: {e}"),
-                }
-            })?;
-            if !exists {
+            Ok(attributes) => attributes,
+            Err(error) if filesystem_error_is_not_found(&error) => {
                 return Ok(ReadFileResult::NotFound);
-            };
+            }
+            Err(error) => return Err(filesystem_read_error(path, error)),
+        };
+        if attributes.kind != agent_fs::ObjectKind::File {
+            return Ok(ReadFileResult::NotAFile);
         }
-
-        {
-            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to get metadata: {e}"),
-                }
+        let opened = agent_fs::open(
+            &generation_handle,
+            target,
+            agent_fs::OpenOptions::Existing {
+                expected: agent_fs::ObjectKind::File,
+                access: agent_fs::AccessMode::Read,
+                follow: agent_fs::Follow::Yes,
+            },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let agent_fs::OpenNode::File(file) = opened.node else {
+            unreachable!("file open returned a non-file node")
+        };
+        let length =
+            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
+                path: path.to_string(),
+                reason: "File is too large to read on this executor".to_string(),
             })?;
-            if !metadata.is_file() {
-                return Ok(ReadFileResult::NotAFile);
-            };
-        }
-
-        let path_clone = path.clone();
-
-        let stream = tokio::fs::File::open(target)
-            .map_ok(|file| FramedRead::new(file, BytesCodec::new()).map_ok(BytesMut::freeze))
-            .try_flatten_stream()
-            .map_err(move |e| WorkerExecutorError::FileSystemError {
-                path: path_clone.to_string(),
-                reason: format!("Failed to open file: {e}"),
-            });
-
+        let bytes = agent_fs::read_file(
+            &generation_handle,
+            &file,
+            agent_fs::ReadRange { offset: 0, length },
+        )
+        .map_err(|error| filesystem_read_error(path, error))?
+        .await
+        .map_err(|error| filesystem_read_error(path, error))?;
+        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
         Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
+}
+
+fn filesystem_error_is_not_found(error: &crate::services::agent_filesystem::Error) -> bool {
+    matches!(
+        error,
+        crate::services::agent_filesystem::Error::Sandbox(source)
+            if source.io_error().is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    )
+}
+
+fn filesystem_read_error(path: &CanonicalFilePath, error: impl Display) -> WorkerExecutorError {
+    WorkerExecutorError::FileSystemError {
+        path: path.to_string(),
+        reason: error.to_string(),
+    }
+}
+
+fn component_file_node(
+    generation_handle: &FilesystemGenerationHandle,
+    relative: PathBuf,
+    attributes: crate::services::agent_filesystem::Attributes,
+) -> Result<ComponentFileSystemNode, WorkerExecutorError> {
+    use crate::services::agent_filesystem as agent_fs;
+
+    let name = relative
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let last_modified = attributes.modified.unwrap_or(SystemTime::UNIX_EPOCH);
+    let details = match attributes.kind {
+        agent_fs::ObjectKind::File => ComponentFileSystemNodeDetails::File {
+            size: attributes.size,
+            permissions: agent_fs::path_permissions(generation_handle, &relative)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+        },
+        agent_fs::ObjectKind::Directory | agent_fs::ObjectKind::Symlink => {
+            ComponentFileSystemNodeDetails::Directory
+        }
+    };
+    Ok(ComponentFileSystemNode {
+        name,
+        last_modified,
+        details,
+    })
 }
 
 /// Number of oplog entries read per backward-scan window. Sized to match the compressed oplog
@@ -9165,18 +9447,8 @@ struct ActiveDurableScope {
     replay_end: Option<concurrent::ReplayCallHandle>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct FilesystemOutputStreamState {
-    pub descriptor_rep: u32,
-    pub position: Option<u64>,
-    pub pending_reservation: Option<PendingFilesystemReservation>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PendingFilesystemReservation {
-    pub base_size: u64,
-    pub reserved_growth: u64,
-}
+#[derive(Debug)]
+pub(crate) struct FilesystemOutputStreamState;
 
 /// Direction of a P3 TCP one-shot stream acquisition (`send` vs `receive`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9276,6 +9548,12 @@ struct PrivateDurableWorkerState {
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
+    /// The invocation's fixed initial mode for entity Stores. Primary Stores follow the shared
+    /// published replay state instead.
+    entity_execution_mode: Option<InvocationExecutionMode>,
+    /// Per-Store live continuation after this entity's matching historical call was removed by a
+    /// replay jump while sibling Stores still have owner-oplog reconstruction work.
+    local_live_tail: Arc<AtomicBool>,
     assume_idempotence: bool,
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
@@ -9283,6 +9561,8 @@ struct PrivateDurableWorkerState {
     /// Next custom invocation ordinal in each logical parent namespace for the current top-level
     /// agent invocation. `None` is the root namespace.
     custom_invocation_ordinals: HashMap<Option<uuid::Uuid>, u64>,
+    /// Next tool invocation attempt ordinal in each durable parent namespace.
+    tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
     custom_invocation_scopes: HashMap<u64, OpenCustomInvocationScope>,
     next_custom_invocation_scope_id: u64,
@@ -9384,11 +9664,6 @@ struct PrivateDurableWorkerState {
     authority_initialized: bool,
     next_authority_expiration: Option<DateTime<Utc>>,
 
-    /// Running total of storage bytes acquired from the executor semaphore pool
-    /// by this worker since it last started. Incremented on every successful
-    /// write; decremented when files are deleted or truncated.
-    current_filesystem_storage_usage: u64,
-
     invocation_context: InvocationContext,
     current_span_id: SpanId,
     forward_trace_context_headers: bool,
@@ -9396,8 +9671,6 @@ struct PrivateDurableWorkerState {
 
     worker_fork: Arc<dyn WorkerForkService>,
 
-    read_only_paths: RwLock<HashSet<PathBuf>>,
-    files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
 
     shard_service: Arc<dyn ShardService>,
@@ -9516,6 +9789,12 @@ struct PrivateDurableWorkerState {
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
     last_snapshot_source: Option<SnapshotSource>,
+    /// Set while the recorded invocations following a loaded automatic snapshot are being
+    /// replayed. The snapshot restores the agent's own state but not every implementation detail
+    /// of the guest (for example caches of an embedded database), so the replayed tail can issue a
+    /// host-call sequence different from the recorded one. Such a divergence is a snapshot recovery
+    /// failure: the snapshot is abandoned and the worker replays the full oplog instead.
+    replaying_automatic_snapshot_tail: bool,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -9603,13 +9882,12 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         replay_state: ReplayState,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
+        tail_work: tail_work::TailWorkTracker,
         component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
-        current_filesystem_storage_usage: u64,
         configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
-        read_only_paths: RwLock<HashSet<PathBuf>>,
-        files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
         created_by_email: AccountEmail,
@@ -9683,6 +9961,7 @@ impl PrivateDurableWorkerState {
             (OwnerRuntime::Agent, None) => golem_common::model::card::EffectiveSurface::default(),
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
+        let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
         Ok(Self {
             oplog_service,
             oplog,
@@ -9713,9 +9992,12 @@ impl PrivateDurableWorkerState {
             worker_proxy,
             resources: HashMap::new(),
             last_resource_id: AgentResourceId::INITIAL,
+            entity_execution_mode,
+            local_live_tail: Arc::new(AtomicBool::new(local_live_tail)),
             assume_idempotence: true,
             active_custom_invocations: HashMap::new(),
             custom_invocation_ordinals: HashMap::new(),
+            tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
             open_http_requests: HashMap::new(),
@@ -9748,15 +10030,12 @@ impl PrivateDurableWorkerState {
             processed_authority_generation: 0,
             authority_initialized: false,
             next_authority_expiration: None,
-            current_filesystem_storage_usage,
             replay_state,
             invocation_context,
             current_span_id,
             forward_trace_context_headers: true,
             set_outgoing_http_idempotency_key: true,
             worker_fork,
-            read_only_paths,
-            files,
             file_loader,
             created_by,
             created_by_email,
@@ -9773,7 +10052,7 @@ impl PrivateDurableWorkerState {
             active_atomic_regions: Vec::new(),
             active_durable_scopes: Vec::new(),
             live_host_calls: Arc::new(AtomicUsize::new(0)),
-            tail_work: tail_work::TailWorkTracker::new(),
+            tail_work,
             suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
             next_suspendable_wait_id: AtomicU64::new(1),
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
@@ -9784,6 +10063,7 @@ impl PrivateDurableWorkerState {
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
             last_snapshot_source,
+            replaying_automatic_snapshot_tail: false,
             resource_limit_entry,
         })
     }
@@ -10234,6 +10514,7 @@ impl PrivateDurableWorkerState {
         self.http_call_count = 0;
         self.rpc_call_count = 0;
         self.scope_card_mint_ordinal = 0;
+        self.tool_invocation_attempt_ordinals.clear();
         // The `get_oplog_index` marker watermark is per-invocation: a marker captured in a previous
         // invocation only costs a graceful checkpoint fallback if jumped to, never correctness.
         self.min_exposed_marker = None;
@@ -10241,7 +10522,15 @@ impl PrivateDurableWorkerState {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.replay_state.is_live()
+        store_is_live(
+            self.entity_execution_mode,
+            self.local_live_tail.load(Ordering::Acquire),
+            self.replay_state.is_live_published(),
+        )
+    }
+
+    pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
+        self.local_live_tail.clone()
     }
 
     fn durability_is_suppressed(&self) -> bool {
@@ -10575,217 +10864,6 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         self.as_wasi_http_view()
     }
-}
-
-/// File that was provisioned due to metadata. There might be additional files that the
-/// worker created itself.
-/// Ro files are symlinked to the proper location and might be garbage collected when the token is dropped.
-/// Rw files are directly copied to the target location.
-enum IFSWorkerFile {
-    Ro {
-        file: InitialAgentFile,
-        _token: FileUseToken,
-    },
-    Rw,
-}
-
-async fn prepare_filesystem(
-    owner_filesystem: &crate::worker::instance::OwnerFilesystem,
-    attachment: &OwnerFilesystemAttachment,
-    file_loader: &Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    files: &[InitialAgentFile],
-) -> Result<(HashMap<PathBuf, IFSWorkerFile>, u64), WorkerExecutorError> {
-    let provisioning = owner_filesystem
-        .provision(attachment, file_loader, environment_id, files)
-        .await?;
-    let files = provisioning
-        .files
-        .into_iter()
-        .map(|(path, file)| {
-            let file = match file {
-                OwnerProvisionedFile::ReadOnly { file, token } => IFSWorkerFile::Ro {
-                    file,
-                    _token: token,
-                },
-                OwnerProvisionedFile::ReadWrite { .. } => IFSWorkerFile::Rw,
-            };
-            (path, file)
-        })
-        .collect();
-    Ok((files, provisioning.new_read_write_bytes))
-}
-
-async fn update_filesystem(
-    current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
-    file_loader: &Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    root: &Path,
-    files: &[InitialAgentFile],
-) -> Result<(), WorkerExecutorError> {
-    enum UpdateFileSystemResult {
-        NoChanges,
-        Remove(PathBuf),
-        Replace { path: PathBuf, value: IFSWorkerFile },
-    }
-
-    let desired_paths: HashSet<PathBuf> = HashSet::from_iter(
-        files
-            .iter()
-            .map(|f| root.join(PathBuf::from(f.path.to_rel_string()))),
-    );
-
-    // We do this in two phases to make errors less likely. First, delete all files that are no longer needed and then create
-    // new ones.
-    let futures_phase_1 = current_state.iter().map(|(path, file)| {
-        let path = path.clone();
-        let should_keep = desired_paths.contains(&path);
-        async move {
-            match file {
-                IFSWorkerFile::Ro { file, .. } if !should_keep => {
-                    tokio::fs::remove_dir(&path).await.map_err(|e| {
-                        WorkerExecutorError::FileSystemError {
-                            path: file.path.to_rel_string(),
-                            reason: format!("Failed deleting file during update: {e}"),
-                        }
-                    })?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Remove(path))
-                }
-                _ => Ok(UpdateFileSystemResult::NoChanges),
-            }
-        }
-    });
-
-    let futures_phase_2 = files.iter().map(|file| {
-        let path = root.join(PathBuf::from(file.path.to_rel_string()));
-        let file = file.clone();
-        let permissions = file.permissions;
-        let file_loader = file_loader.clone();
-
-        let existing = current_state.get(&path);
-
-        async move {
-            match (permissions, existing) {
-                (AgentFilePermissions::ReadOnly, None) => {
-                    debug!("Loading read-only file {}", path.display());
-
-                    let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
-
-                    if exists {
-                        // Try removing it if it's an empty directory; this will fail otherwise, and we can report the error.
-                        tokio::fs::remove_dir(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}"),
-                            }
-                        )?;
-                    };
-
-                    let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
-                        .await?;
-
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
-                }
-                (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
-                    if existing_file.content_hash == file.content_hash {
-                        Ok(UpdateFileSystemResult::NoChanges)
-                    } else {
-                        debug!("updating ro file {}", path.display());
-                        tokio::fs::remove_file(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Failed deleting file during update: {e}"),
-                            }
-                        )?;
-                        let token = file_loader
-                            .get_read_only_to(environment_id, file.content_hash, &path, file.size)
-                            .await?;
-                        Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
-                    }
-                }
-                (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
-                    Err(WorkerExecutorError::FileSystemError {
-                        path: file.path.to_rel_string(),
-                        reason: "Tried updating rw file to ro during update".to_string(),
-                    })
-                }
-                (AgentFilePermissions::ReadWrite, None) => {
-                    debug!("Loading rw file {}", path.display());
-
-                    let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
-
-                    if exists {
-                        let metadata = tokio::fs::metadata(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Failed getting metadata of path: {e}"),
-                            }
-                        )?;
-
-                        if metadata.is_file() {
-                            return Ok(UpdateFileSystemResult::NoChanges);
-                        }
-
-                        // Try removing it if it's an empty directory, this will fail otherwise, and we can report the error.
-                        tokio::fs::remove_dir(&path).await.map_err(|e|
-                            WorkerExecutorError::FileSystemError {
-                                path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
-                            }
-                        )?;
-                    }
-
-                    file_loader
-                        .get_read_write_to(environment_id, file.content_hash, &path)
-                        .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
-                }
-                (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
-                    debug!("Updating ro file to rw {}", path.display());
-                    tokio::fs::remove_file(&path).await.map_err(|e|
-                        WorkerExecutorError::FileSystemError {
-                            path: file.path.to_rel_string(),
-                            reason: format!("Failed deleting file during update: {e}"),
-                        }
-                    )?;
-                    file_loader
-                        .get_read_write_to(environment_id, file.content_hash, &path)
-                        .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
-                }
-                (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
-                    debug!("Updating rw file {}", path.display());
-                    Ok(UpdateFileSystemResult::NoChanges)
-                }
-            }
-        }
-    });
-
-    let mut results = try_join_all(futures_phase_1).await?;
-    results.extend(try_join_all(futures_phase_2).await?);
-
-    for result in results {
-        match result {
-            UpdateFileSystemResult::NoChanges => {}
-            UpdateFileSystemResult::Remove(path) => {
-                current_state.remove(&path);
-            }
-            UpdateFileSystemResult::Replace { path, value } => {
-                current_state.insert(path, value);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<PathBuf> {
-    let ro_paths = files.iter().filter_map(|(p, f)| match f {
-        IFSWorkerFile::Ro { .. } => Some(p.clone()),
-        _ => None,
-    });
-    HashSet::from_iter(ro_paths)
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

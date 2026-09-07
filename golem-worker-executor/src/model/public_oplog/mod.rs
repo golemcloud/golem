@@ -35,23 +35,22 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
-    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex, OplogScopeProjection,
-    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
+    OplogScopeProjection, PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicTypedAgentConfigEntry,
     PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
@@ -260,6 +259,17 @@ pub trait PublicOplogEntryOps: Sized {
     ) -> Result<Self, String>;
 }
 
+fn host_response_to_public_value(response: HostResponse) -> Result<TypedSchemaValue, String> {
+    match response {
+        HostResponse::EntityInvocation(HostResponseEntityInvocation { result: Ok(value) }) => {
+            Ok(value)
+        }
+        response => response
+            .into_typed_schema_value()
+            .map_err(|error| error.to_string()),
+    }
+}
+
 #[async_trait]
 impl PublicOplogEntryOps for PublicOplogEntry {
     async fn from_oplog_entry(
@@ -389,11 +399,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, response_payload)
                         .await?;
-                    Some(
-                        host_response
-                            .into_typed_schema_value()
-                            .map_err(|e| e.to_string())?,
-                    )
+                    Some(host_response_to_public_value(host_response)?)
                 } else {
                     None
                 };
@@ -414,11 +420,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, partial_payload)
                         .await?;
-                    Some(
-                        host_response
-                            .into_typed_schema_value()
-                            .map_err(|e| e.to_string())?,
-                    )
+                    Some(host_response_to_public_value(host_response)?)
                 } else {
                     None
                 };
@@ -665,11 +667,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     delta,
                 }))
-            }
-            OplogEntry::FilesystemStorageUsageUpdate { timestamp, delta } => {
-                Ok(PublicOplogEntry::FilesystemStorageUsageUpdate(
-                    FilesystemStorageUsageUpdateParams { timestamp, delta },
-                ))
             }
             OplogEntry::CreateResource {
                 timestamp,

@@ -104,7 +104,10 @@ Path|Method|Protected
 ---|---|---
 `/v1/agents/invoke-agent-session`|GET|Yes
 
-
+Upgrades to a WebSocket using the required `golem.agent-invocation.v1`
+subprotocol. Text frames carry public v1 JSON lifecycle messages, while
+binary frames carry the public v1 binary envelope. The bearer token is
+authenticated before the upgrade and authorizes both start and resume.
 
 
 

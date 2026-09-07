@@ -3,4 +3,5 @@ members = [
   "./golem_sdk_tools",
   "./golem_sdk_example1",
   "./scripts",
+  "../../test-components/agent-rpc/golem-it-agent-rpc-moonbit",
 ]

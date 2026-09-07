@@ -14,6 +14,8 @@
 
 /// Helper types for generated bridge crates
 pub mod bridge;
+/// Public v1 transport and affine stream types for streaming agent invocations.
+pub mod invocation_session;
 
 use crate::model::MultipartField;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};

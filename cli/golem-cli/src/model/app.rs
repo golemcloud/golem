@@ -286,29 +286,68 @@ pub enum AppBuildStep {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum SubjectSource {
+    Local { component_name: ComponentName },
+    RemoteRelease,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum ComponentDependency {
     Agent {
         component_name: ComponentName,
         agent_type_name: AgentTypeName,
     },
     Tool {
-        component_name: ComponentName,
+        source: SubjectSource,
         tool_name: ToolName,
     },
 }
 
 impl ComponentDependency {
-    pub fn component_name(&self) -> &ComponentName {
+    pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
-            ComponentDependency::Agent { component_name, .. }
-            | ComponentDependency::Tool { component_name, .. } => component_name,
+            ComponentDependency::Agent { component_name, .. } => Some(component_name),
+            ComponentDependency::Tool { source, .. } => match source {
+                SubjectSource::Local { component_name } => Some(component_name),
+                SubjectSource::RemoteRelease => None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BridgeSdkTargetSource {
+    Local {
+        component_name: ComponentName,
+    },
+    RemoteRelease {
+        release_id: golem_common::model::tool_release::ToolReleaseId,
+        version: String,
+        metadata_version: String,
+        metadata_digest: golem_common::model::diff::Hash,
+        source_digest: golem_common::model::diff::Hash,
+        #[serde(skip)]
+        manifest_source: PathBuf,
+    },
+}
+
+impl BridgeSdkTargetSource {
+    pub fn local(component_name: ComponentName) -> Self {
+        Self::Local { component_name }
+    }
+
+    pub fn component_name(&self) -> Option<&ComponentName> {
+        match self {
+            Self::Local { component_name } => Some(component_name),
+            Self::RemoteRelease { .. } => None,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct BridgeSdkTarget {
-    pub component_name: ComponentName,
+    pub source: BridgeSdkTargetSource,
     pub subject: BridgeSdkTargetSubject,
     pub target_language: GuestLanguage,
     pub bridge_mode: BridgeMode,
@@ -345,7 +384,7 @@ impl BridgeSdkTargetSubject {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum BridgeSdkTargetKind {
     Agent,
     Tool,
@@ -540,6 +579,7 @@ pub struct Application {
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+    tool_releases: BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
     component_layer_store: Store<ComponentLayer>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
@@ -725,6 +765,71 @@ impl Application {
         self.environments
             .get(self.environment_name())
             .expect("selected environment must exist")
+    }
+
+    pub fn selected_published_tools(&self) -> impl Iterator<Item = &str> {
+        self.tool_releases
+            .get(self.environment_name())
+            .into_iter()
+            .flat_map(|releases| releases.value.keys())
+            .map(String::as_str)
+    }
+
+    pub fn selected_published_tools_source(&self) -> Option<&Path> {
+        self.tool_releases
+            .get(self.environment_name())
+            .map(|releases| releases.source.as_path())
+    }
+
+    pub fn remote_release_references(
+        &self,
+    ) -> impl Iterator<Item = (&ToolName, &app_raw::RegistrySubject)> {
+        self.tool_declarations
+            .iter()
+            .filter_map(|(name, declaration)| {
+                declaration
+                    .value
+                    .release
+                    .as_ref()
+                    .map(|release| (name, release))
+            })
+    }
+
+    pub fn remote_release_reference(&self, name: &ToolName) -> Option<&app_raw::RegistrySubject> {
+        self.tool_declarations
+            .get(name)
+            .and_then(|declaration| declaration.value.release.as_ref())
+    }
+
+    pub fn requires_remote_release_bridge_metadata(&self) -> bool {
+        let remote_release_names = self
+            .remote_release_references()
+            .map(|(name, _)| name.as_str())
+            .collect::<BTreeSet<_>>();
+        self.bridge_sdks()
+            .for_all_used_modes()
+            .into_iter()
+            .any(|(_, _, targets)| {
+                let matchers = targets
+                    .tools
+                    .map(|tools| tools.clone().into_set())
+                    .unwrap_or_default();
+                (matchers.contains("*") && !remote_release_names.is_empty())
+                    || matchers
+                        .iter()
+                        .any(|matcher| remote_release_names.contains(matcher.as_str()))
+            })
+            || self.components.values().any(|component| {
+                component.value.0.dependencies.iter().any(|dependency| {
+                    matches!(
+                        dependency,
+                        ComponentDependency::Tool {
+                            source: SubjectSource::RemoteRelease,
+                            ..
+                        }
+                    )
+                })
+            })
     }
 
     pub fn selected_environment_source(&self) -> Option<&Path> {
@@ -932,35 +1037,67 @@ impl Application {
         tool_name: &ToolName,
         component_name: &ComponentName,
     ) -> anyhow::Result<ResolvedToolProvision> {
+        self.resolve_tool_provision_with_component(tool_name, Some(component_name))
+    }
+
+    pub fn resolve_remote_tool_provision(
+        &self,
+        tool_name: &ToolName,
+    ) -> anyhow::Result<ResolvedToolProvision> {
+        self.resolve_tool_provision_with_component(tool_name, None)
+    }
+
+    fn resolve_tool_provision_with_component(
+        &self,
+        tool_name: &ToolName,
+        component_name: Option<&ComponentName>,
+    ) -> anyhow::Result<ResolvedToolProvision> {
         let declaration = self
             .tool_declarations
             .get(tool_name)
             .with_context(|| format!("Tool '{}' is not declared", tool_name))?;
-        let component = self.component(component_name);
         let mut store = Store::new();
 
-        let component_id = ToolLayerId::Component(component_name.clone());
-        store
-            .add_layer(ToolLayer {
-                id: component_id.clone(),
-                parents: Vec::new(),
-                properties: ToolLayerPropertiesKind::Common(Box::new(component.tool_base_layer())),
-            })
-            .map_err(|error| anyhow!(error.to_string()))?;
+        let (mut latest_parent, template_apply_context) = match component_name {
+            Some(component_name) => {
+                let component = self.component(component_name);
+                let component_id = ToolLayerId::Component(component_name.clone());
+                store
+                    .add_layer(ToolLayer {
+                        id: component_id.clone(),
+                        parents: Vec::new(),
+                        properties: ToolLayerPropertiesKind::Common(Box::new(
+                            component.tool_base_layer(),
+                        )),
+                    })
+                    .map_err(|error| anyhow!(error.to_string()))?;
+                (
+                    Some(component_id),
+                    ComponentLayerApplyContext::new(
+                        Some(component_name.clone()),
+                        Some(self.app_root_dir_str.clone()),
+                        Some(self.golem_temp_dir_str.clone()),
+                        fs::path_to_str(component.component_dir())
+                            .ok()
+                            .map(str::to_string),
+                        fs::path_to_str(component.component_dir())
+                            .ok()
+                            .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
+                    ),
+                )
+            }
+            None => (
+                None,
+                ComponentLayerApplyContext::new(
+                    None,
+                    Some(self.app_root_dir_str.clone()),
+                    Some(self.golem_temp_dir_str.clone()),
+                    None,
+                    None,
+                ),
+            ),
+        };
 
-        let template_apply_context = ComponentLayerApplyContext::new(
-            Some(component_name.clone()),
-            Some(self.app_root_dir_str.clone()),
-            Some(self.golem_temp_dir_str.clone()),
-            fs::path_to_str(component.component_dir())
-                .ok()
-                .map(str::to_string),
-            fs::path_to_str(component.component_dir())
-                .ok()
-                .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
-        );
-
-        let mut latest_parent = component_id;
         for template_name in declaration.value.templates.clone().into_vec() {
             let component_template_id =
                 ComponentLayerId::TemplateCustomPresets(template_name.clone());
@@ -982,20 +1119,20 @@ impl Application {
             store
                 .add_layer(ToolLayer {
                     id: id.clone(),
-                    parents: vec![latest_parent],
+                    parents: latest_parent.into_iter().collect(),
                     properties: ToolLayerPropertiesKind::Common(Box::new(
                         ToolLayerInput::from_component_properties(&template),
                     )),
                 })
                 .map_err(|error| anyhow!(error.to_string()))?;
-            latest_parent = id;
+            latest_parent = Some(id);
         }
 
         let common_id = ToolLayerId::ToolCommon(tool_name.clone());
         store
             .add_layer(ToolLayer {
                 id: common_id.clone(),
-                parents: vec![latest_parent],
+                parents: latest_parent.into_iter().collect(),
                 properties: ToolLayerPropertiesKind::Common(Box::new(ToolLayerInput::from_raw(
                     declaration.value.tool_layer_properties(),
                     &declaration.source,
@@ -1557,7 +1694,7 @@ impl ComponentLayerApplyContext {
         // for portability (uses unix-style separators on Windows, avoids
         // canonicalization, and compares paths in their normalized form so that
         // surface differences like `./` or trailing slashes do not change the
-        // outcome). Falls back to an empty string if either path is missing or the
+        // outcome). The value is unavailable if either path is missing or the
         // component directory is not actually under the app root.
         let component_dir_rel = match (app_root_dir.as_deref(), component_dir.as_deref()) {
             (Some(app_root), Some(comp_dir)) => {
@@ -1605,6 +1742,7 @@ impl ComponentLayerApplyContext {
 
     fn new_template_env() -> minijinja::Environment<'static> {
         let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
 
         env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
 
@@ -1632,12 +1770,12 @@ impl ComponentLayerApplyContext {
     fn template_context(&self) -> minijinja::Value {
         minijinja::Value::from_object(ComponentLayerTemplateContext {
             component_name: self.component_name.as_ref().map(|name| name.0.clone()),
-            app_root_dir: self.app_root_dir.clone().unwrap_or_default(),
-            golem_temp_dir: self.golem_temp_dir.clone().unwrap_or_default(),
-            component_dir: self.component_dir.clone().unwrap_or_default(),
-            component_dir_rel: self.component_dir_rel.clone().unwrap_or_default(),
+            app_root_dir: self.app_root_dir.clone(),
+            golem_temp_dir: self.golem_temp_dir.clone(),
+            component_dir: self.component_dir.clone(),
+            component_dir_rel: self.component_dir_rel.clone(),
             cargo_manifest_dir: self.cargo_manifest_dir.clone(),
-            moonbit_build_package_path: self.moonbit_build_package_path.clone().unwrap_or_default(),
+            moonbit_build_package_path: self.moonbit_build_package_path.clone(),
         })
     }
 }
@@ -1651,36 +1789,35 @@ impl ComponentLayerApplyContext {
 #[derive(Debug)]
 struct ComponentLayerTemplateContext {
     component_name: Option<String>,
-    app_root_dir: String,
-    golem_temp_dir: String,
-    component_dir: String,
-    component_dir_rel: String,
+    app_root_dir: Option<String>,
+    golem_temp_dir: Option<String>,
+    component_dir: Option<String>,
+    component_dir_rel: Option<String>,
     cargo_manifest_dir: Option<String>,
-    moonbit_build_package_path: String,
+    moonbit_build_package_path: Option<String>,
 }
 
 impl minijinja::value::Object for ComponentLayerTemplateContext {
     fn get_value(self: &std::sync::Arc<Self>, key: &minijinja::Value) -> Option<minijinja::Value> {
         match key.as_str()? {
-            "componentName" | "component_name" => Some(
-                self.component_name
-                    .as_deref()
-                    .map(minijinja::Value::from)
-                    .unwrap_or_else(|| minijinja::Value::from(())),
-            ),
-            "appRootDir" => Some(minijinja::Value::from(self.app_root_dir.as_str())),
-            "golemTempDir" => Some(minijinja::Value::from(self.golem_temp_dir.as_str())),
-            "componentDir" => Some(minijinja::Value::from(self.component_dir.as_str())),
-            "componentDirRel" => Some(minijinja::Value::from(self.component_dir_rel.as_str())),
-            "cargoTarget" => Some(minijinja::Value::from(
-                self.cargo_manifest_dir
-                    .as_deref()
-                    .map(resolve_cargo_target_dir)
-                    .unwrap_or_default(),
-            )),
-            "moonbitBuildPackagePath" => Some(minijinja::Value::from(
-                self.moonbit_build_package_path.as_str(),
-            )),
+            "componentName" | "component_name" => {
+                self.component_name.as_deref().map(minijinja::Value::from)
+            }
+            "appRootDir" => self.app_root_dir.as_deref().map(minijinja::Value::from),
+            "golemTempDir" => self.golem_temp_dir.as_deref().map(minijinja::Value::from),
+            "componentDir" => self.component_dir.as_deref().map(minijinja::Value::from),
+            "componentDirRel" => self
+                .component_dir_rel
+                .as_deref()
+                .map(minijinja::Value::from),
+            "cargoTarget" => self
+                .cargo_manifest_dir
+                .as_deref()
+                .map(|manifest_dir| minijinja::Value::from(resolve_cargo_target_dir(manifest_dir))),
+            "moonbitBuildPackagePath" => self
+                .moonbit_build_package_path
+                .as_deref()
+                .map(minijinja::Value::from),
             _ => None,
         }
     }
@@ -2893,7 +3030,7 @@ impl ComponentProperties {
         let agents = agent_dependencies
             .iter()
             .filter_map(|dependency| {
-                parse_component_dependency_reference(validation, "agent", dependency).map(
+                parse_local_component_dependency_reference(validation, "agent", dependency).map(
                     |(component_name, name)| ComponentDependency::Agent {
                         component_name,
                         agent_type_name: AgentTypeName(name),
@@ -2902,13 +3039,25 @@ impl ComponentProperties {
             })
             .collect::<Vec<_>>();
         let tools = tool_dependencies.iter().filter_map(|dependency| {
-            let (component_name, name) =
-                parse_component_dependency_reference(validation, "tool", dependency)?;
+            let (source, name) = match dependency {
+                app_raw::ComponentDependencyReference::Shortcut(shortcut) => {
+                    if shortcut.contains('/') {
+                        let (component_name, name) = parse_local_component_dependency_reference(
+                            validation, "tool", dependency,
+                        )?;
+                        (SubjectSource::Local { component_name }, name)
+                    } else {
+                        (SubjectSource::RemoteRelease, shortcut.clone())
+                    }
+                }
+                app_raw::ComponentDependencyReference::Structured(_) => {
+                    let (component_name, name) =
+                        parse_local_component_dependency_reference(validation, "tool", dependency)?;
+                    (SubjectSource::Local { component_name }, name)
+                }
+            };
             match ToolName::try_from(name.as_str()) {
-                Ok(tool_name) => Some(ComponentDependency::Tool {
-                    component_name,
-                    tool_name,
-                }),
+                Ok(tool_name) => Some(ComponentDependency::Tool { source, tool_name }),
                 Err(err) => {
                     validation.add_error(format!(
                         "Invalid tool dependency name: {}. {}",
@@ -2954,7 +3103,7 @@ impl ComponentProperties {
     }
 }
 
-fn parse_component_dependency_reference(
+fn parse_local_component_dependency_reference(
     validation: &mut ValidationBuilder,
     kind: &str,
     dependency: &app_raw::ComponentDependencyReference,
@@ -2968,13 +3117,22 @@ fn parse_component_dependency_reference(
                 ));
                 return None;
             };
-            (component.to_string(), name.to_string())
+            (component, name)
         }
         app_raw::ComponentDependencyReference::Structured(structured) => {
-            (structured.component.clone(), structured.name.clone())
+            (structured.component.as_str(), structured.name.as_str())
         }
     };
+    let component_name = parse_dependency_component(validation, kind, component, name)?;
+    Some((component_name, name.to_string()))
+}
 
+fn parse_dependency_component(
+    validation: &mut ValidationBuilder,
+    kind: &str,
+    component: &str,
+    name: &str,
+) -> Option<ComponentName> {
     if name.is_empty() {
         validation.add_error(format!(
             "Invalid {kind} dependency for component {}. Dependency name must not be empty",
@@ -2983,8 +3141,8 @@ fn parse_component_dependency_reference(
         return None;
     }
 
-    match ComponentName::try_from(component.as_str()) {
-        Ok(component_name) => Some((component_name, name)),
+    match ComponentName::try_from(component) {
+        Ok(component_name) => Some(component_name),
         Err(err) => {
             validation.add_error(format!(
                 "Invalid {kind} dependency component {}. {}",
@@ -3151,7 +3309,7 @@ mod app_builder {
         APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdkTargetKind,
         ComponentDependency, ComponentLayer, ComponentLayerApplyContext, ComponentLayerId,
         ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetSelector,
-        ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
+        ComponentProperties, PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -3212,6 +3370,7 @@ mod app_builder {
         Agent(AgentTypeName),
         Tool(ToolName),
         Environment(EnvironmentName),
+        ToolReleases(EnvironmentName),
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
         ResourceDefaults(EnvironmentName),
@@ -3232,6 +3391,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Agent(_) => "Agent",
                 UniqueSourceCheckedEntityKey::Tool(_) => "Tool",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
+                UniqueSourceCheckedEntityKey::ToolReleases(_) => property,
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
@@ -3264,6 +3424,13 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::ToolReleases(environment_name) => {
+                    format!(
+                        "{}.{}",
+                        "toolReleases".log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
                 }
                 UniqueSourceCheckedEntityKey::SecretDefaults(environment_name) => {
                     format!(
@@ -3488,6 +3655,8 @@ mod app_builder {
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
         agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
         tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+        tool_releases:
+            BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
 
         http_api_deployments: BTreeMap<
             EnvironmentName,
@@ -3564,6 +3733,7 @@ mod app_builder {
             builder.validate_selected_preset_references(&mut validation, &component_presets);
             builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_unique_sources(&mut validation);
+            builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
 
             validation.build(Application {
@@ -3579,6 +3749,7 @@ mod app_builder {
                 components: builder.components,
                 agents: builder.agents,
                 tool_declarations: builder.tool_declarations,
+                tool_releases: builder.tool_releases,
                 component_layer_store: builder.component_layer_store,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
@@ -3893,6 +4064,18 @@ mod app_builder {
                         }
                     }
 
+                    for (environment, tool_releases) in app.application.tool_releases {
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::ToolReleases(environment.clone()),
+                            &app.source,
+                        ) {
+                            self.tool_releases.insert(
+                                environment,
+                                WithSource::new(app.source.to_path_buf(), tool_releases),
+                            );
+                        }
+                    }
+
                     for (environment, environment_secret_defaults) in app.application.secret_defaults {
                         if self.add_entity_source(
                             UniqueSourceCheckedEntityKey::SecretDefaults(environment.clone()),
@@ -4017,6 +4200,7 @@ mod app_builder {
                                         {
                                             validation.add_error(error);
                                         }
+
                                     },
                                 );
                             }
@@ -4370,6 +4554,155 @@ mod app_builder {
                 })
         }
 
+        fn validate_tool_release_configuration(&mut self, validation: &mut ValidationBuilder) {
+            let mut issues = Vec::new();
+            for (tool_name, declaration) in &self.tool_declarations {
+                if declaration.value.component.is_some() && declaration.value.release.is_some() {
+                    issues.push(ToolValidationIssue::error(
+                        ToolValidationPhase::LocalResolution,
+                        ToolValidationCode::InvalidProvision,
+                        ToolEntityPath::tool(tool_name, "tools.component"),
+                        Some(declaration.source.clone()),
+                        "Registry tool cannot specify `component` or inherit component-scoped provision",
+                    ));
+                }
+
+                if let Some(component_name) = &declaration.value.component
+                    && !self.components.contains_key(component_name)
+                {
+                    issues.push(ToolValidationIssue::error(
+                        ToolValidationPhase::DeclarationDiscoveryIdentity,
+                        ToolValidationCode::MissingImplementation,
+                        ToolEntityPath::tool(tool_name, "tools.component"),
+                        Some(declaration.source.clone()),
+                        format!(
+                            "Local tool declaration references unknown component {component_name}"
+                        ),
+                    ));
+                }
+
+                if let Some(release) = &declaration.value.release {
+                    if let app_raw::RegistrySubject::ByCoordinates(reference) = release
+                        && reference.name != tool_name.as_str()
+                    {
+                        issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::DeclarationDiscoveryIdentity,
+                            ToolValidationCode::InvalidName,
+                            ToolEntityPath::tool(tool_name, "tools.release.name"),
+                            Some(declaration.source.clone()),
+                            format!(
+                                "Remote tool declaration references published tool {}, but the declaration key must match the published tool name",
+                                reference.name
+                            ),
+                        ));
+                    }
+                    if let Err(error) = release.to_release_reference() {
+                        issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::DeclarationDiscoveryIdentity,
+                            ToolValidationCode::InvalidDeclaration,
+                            ToolEntityPath::tool(tool_name, "tools.release"),
+                            Some(declaration.source.clone()),
+                            format!("Invalid release reference: {error}"),
+                        ));
+                    }
+                }
+            }
+
+            for (component_name, component) in &mut self.components {
+                for dependency in &mut component.value.0.dependencies {
+                    let ComponentDependency::Tool { source, tool_name } = dependency else {
+                        continue;
+                    };
+
+                    if !matches!(source, SubjectSource::RemoteRelease) {
+                        continue;
+                    }
+
+                    match self.tool_declarations.get(tool_name) {
+                        None => issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::BindingReferences,
+                            ToolValidationCode::MissingDeclaration,
+                            ToolEntityPath::tool(tool_name, "components.dependencies.tools"),
+                            Some(component.source.clone()),
+                            format!("Component {component_name} depends on undeclared tool"),
+                        )),
+                        Some(declaration) if declaration.value.release.is_none() => {
+                            if let Some(dependency_component) = &declaration.value.component {
+                                if dependency_component == component_name {
+                                    issues.push(ToolValidationIssue::error(
+                                        ToolValidationPhase::BindingReferences,
+                                        ToolValidationCode::InvalidDeclaration,
+                                        ToolEntityPath::tool(
+                                            tool_name,
+                                            "components.dependencies.tools",
+                                        ),
+                                        Some(component.source.clone()),
+                                        format!(
+                                            "Component {component_name} cannot depend on its own guest bridge SDK"
+                                        ),
+                                    ));
+                                }
+                                *source = SubjectSource::Local {
+                                    component_name: dependency_component.clone(),
+                                };
+                            } else {
+                                issues.push(ToolValidationIssue::error(
+                                    ToolValidationPhase::BindingReferences,
+                                    ToolValidationCode::InvalidDeclaration,
+                                    ToolEntityPath::tool(
+                                        &*tool_name,
+                                        "components.dependencies.tools",
+                                    ),
+                                    Some(component.source.clone()),
+                                    format!(
+                                        "Component {component_name} uses a name-only dependency for an implicit local tool; set tools.{tool_name}.component or use component/name to identify its build dependency"
+                                    ),
+                                ));
+                            }
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+
+            for (environment_name, releases) in &self.tool_releases {
+                for published_name in releases.value.keys() {
+                    let Ok(tool_name) = ToolName::try_from(published_name.as_str()) else {
+                        issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::DeclarationDiscoveryIdentity,
+                            ToolValidationCode::InvalidName,
+                            ToolEntityPath::tool(published_name, "toolReleases"),
+                            Some(releases.source.clone()),
+                            format!("Environment {environment_name} publishes invalid tool name"),
+                        ));
+                        continue;
+                    };
+                    match self.tool_declarations.get(&tool_name) {
+                        None => issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::BindingReferences,
+                            ToolValidationCode::MissingDeclaration,
+                            ToolEntityPath::tool(&tool_name, "toolReleases"),
+                            Some(releases.source.clone()),
+                            format!("Environment {environment_name} publishes undeclared tool"),
+                        )),
+                        Some(declaration) if declaration.value.release.is_some() => {
+                            issues.push(ToolValidationIssue::error(
+                                ToolValidationPhase::DeclarationDiscoveryIdentity,
+                                ToolValidationCode::InvalidDeclaration,
+                                ToolEntityPath::tool(&tool_name, "toolReleases"),
+                                Some(releases.source.clone()),
+                                format!(
+                                    "Environment {environment_name} cannot publish remote tool"
+                                ),
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            add_tool_issues(validation, issues);
+        }
+
         /// Records preset names (from a component, template, agent, or tool) that an
         /// environment can select into [`Self::custom_preset_names`]. Env-scoped
         /// `app-env:` presets are applied automatically rather than selected by
@@ -4582,7 +4915,10 @@ mod app_builder {
             dependencies: &[ComponentDependency],
         ) {
             for dependency in dependencies {
-                if dependency.component_name() == component_name {
+                let Some(dependency_component_name) = dependency.component_name() else {
+                    continue;
+                };
+                if dependency_component_name == component_name {
                     validation.add_error(format!(
                         "Component {} cannot depend on its own guest bridge SDK",
                         component_name.as_str().log_color_highlight(),
@@ -4590,13 +4926,12 @@ mod app_builder {
                 }
                 if !self
                     .component_names_to_source_and_dir
-                    .contains_key(dependency.component_name())
+                    .contains_key(dependency_component_name)
                 {
                     validation.add_error(format!(
                         "Component {} depends on unknown component {}",
                         component_name.as_str().log_color_highlight(),
-                        dependency
-                            .component_name()
+                        dependency_component_name
                             .as_str()
                             .log_color_error_highlight(),
                     ));
@@ -4780,8 +5115,8 @@ mod test {
     use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
     use crate::fs;
     use crate::model::app::{
-        Application, ApplicationPreload, ComponentDependency, ComponentPresetSelector, ToolName,
-        includes_from_yaml_file,
+        Application, ApplicationPreload, ComponentDependency, ComponentPresetSelector,
+        SubjectSource, ToolName, includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use golem_common::model::agent::AgentTypeName;
@@ -5718,11 +6053,231 @@ mod test {
                     agent_type_name: parse_agent_type_name("ShoppingCart"),
                 },
                 ComponentDependency::Tool {
-                    component_name: parse_component_name("app:provider"),
+                    source: SubjectSource::Local {
+                        component_name: parse_component_name("app:provider"),
+                    },
                     tool_name: ToolName::try_from("grep").unwrap(),
                 },
             ]
         );
+    }
+
+    #[test]
+    fn remote_release_manifest_sources_parse_canonically() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            toolReleases:
+              local:
+                local-tool: {}
+
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+              app:consumer:
+                componentWasm: consumer.wasm
+                dependencies:
+                  tools:
+                    - pinned-tool
+                    - remote-tool
+
+            tools:
+              local-tool:
+                component: app:provider
+              pinned-tool:
+                release:
+                  releaseId: 00000000-0000-0000-0000-000000000001
+              remote-tool:
+                release:
+                  account: publisher@example.com
+                  name: remote-tool
+                  version: 1.2.3
+
+            bridge:
+              rust:
+                internal:
+                  tools:
+                    - local-tool
+                    - pinned-tool
+        "# };
+
+        let (app, _) = load_app_for_env(source, "local", &[]);
+        assert_eq!(
+            app.selected_published_tools().collect::<Vec<_>>(),
+            ["local-tool"]
+        );
+        assert_eq!(app.remote_release_references().count(), 2);
+        assert!(app.requires_remote_release_bridge_metadata());
+
+        let component_name = parse_component_name("app:consumer");
+        let component = app.component(&component_name);
+        let dependencies = &component.properties().dependencies;
+        assert!(matches!(
+            &dependencies[0],
+            ComponentDependency::Tool {
+                source: SubjectSource::RemoteRelease,
+                tool_name,
+            } if tool_name.as_str() == "pinned-tool"
+        ));
+        assert!(matches!(
+            &dependencies[1],
+            ComponentDependency::Tool {
+                source: SubjectSource::RemoteRelease,
+                tool_name,
+            } if tool_name.as_str() == "remote-tool"
+        ));
+    }
+
+    #[test]
+    fn remote_release_manifest_validation_reports_invalid_references() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            toolReleases:
+              local:
+                remote-tool: {}
+                missing-tool: {}
+            components:
+              app:consumer:
+                componentWasm: consumer.wasm
+                dependencies:
+                  tools:
+                    - missing-remote-release
+                    - local-tool
+            tools:
+              local-tool: {}
+              remote-tool:
+                component: app:consumer
+                release:
+                  account: publisher@example.com
+                  name: other-tool
+                  version: "1"
+        "# });
+
+        for expected in [
+            "declaration key must match",
+            "cannot publish remote tool",
+            "publishes undeclared tool",
+            "depends on undeclared tool",
+            "name-only dependency",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.contains(expected)),
+                "missing {expected:?} in {errors:#?}"
+            );
+        }
+
+        for expected_code in [
+            "InvalidName",
+            "InvalidProvision",
+            "MissingDeclaration",
+            "InvalidDeclaration",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.contains(expected_code)),
+                "missing structured issue code {expected_code:?} in {errors:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_only_tool_dependency_uses_declared_local_component() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            components:
+              app:provider-a:
+                componentWasm: provider-a.wasm
+              app:provider-b:
+                componentWasm: provider-b.wasm
+              app:consumer:
+                componentWasm: consumer.wasm
+                dependencies:
+                  tools:
+                    - search
+            tools:
+              search:
+                component: app:provider-b
+        "# };
+
+        let (app, _) = load_app_for_env(source, "local", &[]);
+        let component_name = parse_component_name("app:consumer");
+        let component = app.component(&component_name);
+        let dependencies = &component.properties().dependencies;
+
+        assert!(matches!(
+            dependencies.as_slice(),
+            [ComponentDependency::Tool {
+                source: SubjectSource::Local { component_name },
+                tool_name,
+            }] if component_name.as_str() == "app:provider-b" && tool_name.as_str() == "search"
+        ));
+    }
+
+    #[test]
+    fn name_only_tool_dependency_rejects_declared_self_dependency() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+                dependencies:
+                  tools:
+                    - search
+            tools:
+              search:
+                component: app:provider
+        "# });
+
+        assert!(errors.iter().any(|error| {
+            error.contains("app:provider")
+                && error.contains("cannot depend on its own guest bridge SDK")
+        }));
+    }
+
+    #[test]
+    fn remote_tool_template_rejects_component_bound_variables() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            componentTemplates:
+              component-build:
+                componentWasm: "{{ componentDir }}/tool.wasm"
+            tools:
+              remote-tool:
+                release:
+                  account: publisher@example.com
+                  name: remote-tool
+                  version: "1.0.0"
+                templates: component-build
+        "# };
+
+        let (app, _) = load_app_for_env(source, "local", &[]);
+        let error = format!(
+            "{:#}",
+            app.resolve_remote_tool_provision(&ToolName::try_from("remote-tool").unwrap())
+                .unwrap_err()
+        );
+
+        for expected in ["componentDir", "component-build", "remote-tool"] {
+            assert!(
+                error.contains(expected),
+                "missing {expected:?} in {error:?}"
+            );
+        }
     }
 
     #[test]

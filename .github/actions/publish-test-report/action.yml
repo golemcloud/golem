@@ -16,11 +16,14 @@ runs:
       with:
         report-path: "**/target/ctrf-*.json"
         upload-artifact: 'true'
-        artifact-name: ${{ inputs.artifact-name }}
+        artifact-name: ${{ inputs.artifact-name }}-attempt${{ github.run_attempt }}
         summary: true
         summary-report: true
         failed-report: true
-        slowest-report: true
+        # `slowest-report` (like the previous-results/flaky-rate/fail-rate/insights reports) makes
+        # the reporter crawl previous runs of this workflow, which took ~35 s per test job. Per-test
+        # durations remain available in the uploaded CTRF artifact.
+        slowest-report: false
         github-report: true
         flaky-report: true
         collapse-large-reports: true

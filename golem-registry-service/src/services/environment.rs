@@ -51,6 +51,8 @@ use tap::Pipe;
 pub enum EnvironmentError {
     #[error("Environment with this name already exists")]
     EnvironmentWithNameAlreadyExists,
+    #[error("versionCheck cannot be enabled while the environment has mutable tool grants")]
+    MutableToolGrantsInVersionCheckedEnvironment,
     #[error("Environment not found for id {0}")]
     EnvironmentNotFound(EnvironmentId),
     #[error("Environment not found for name {0}")]
@@ -71,6 +73,7 @@ impl SafeDisplay for EnvironmentError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::EnvironmentWithNameAlreadyExists => self.to_string(),
+            Self::MutableToolGrantsInVersionCheckedEnvironment => self.to_string(),
             Self::EnvironmentNotFound(_) => self.to_string(),
             Self::EnvironmentByNameNotFound(_) => self.to_string(),
             Self::ParentApplicationNotFound(_) => self.to_string(),
@@ -263,6 +266,9 @@ impl EnvironmentService {
                 }
                 EnvironmentRepoError::EnvironmentViolatesUniqueness => {
                     EnvironmentError::EnvironmentWithNameAlreadyExists
+                }
+                EnvironmentRepoError::MutableToolGrantsInVersionCheckedEnvironment => {
+                    EnvironmentError::MutableToolGrantsInVersionCheckedEnvironment
                 }
                 other => other.into(),
             })?

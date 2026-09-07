@@ -92,14 +92,14 @@ services:
       GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
 
-      GOLEM__DB__TYPE: Postgres
-      GOLEM__DB__CONFIG__DATABASE: golem_db
-      GOLEM__DB__CONFIG__SCHEMA: golem_shard_manager
-      GOLEM__DB__CONFIG__MAX_CONNECTIONS: 10
-      GOLEM__DB__CONFIG__HOST: postgres
-      GOLEM__DB__CONFIG__PORT: 5432
-      GOLEM__DB__CONFIG__USERNAME: golem_user
-      GOLEM__DB__CONFIG__PASSWORD: golem_password
+      GOLEM__PERSISTENCE__TYPE: Postgres
+      GOLEM__PERSISTENCE__CONFIG__DATABASE: golem_db
+      GOLEM__PERSISTENCE__CONFIG__SCHEMA: golem_shard_manager
+      GOLEM__PERSISTENCE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__PERSISTENCE__CONFIG__HOST: postgres
+      GOLEM__PERSISTENCE__CONFIG__PORT: 5432
+      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem_user
+      GOLEM__PERSISTENCE__CONFIG__PASSWORD: golem_password
     depends_on:
       postgres:
         condition: service_healthy

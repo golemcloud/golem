@@ -351,6 +351,7 @@ fn run_agents(
       // golem_clients.mbt
       let client_impls = @lib.generate_client_code(
         agents,
+        value_types~,
         config_types=all_config_types,
         agent_package=scan.pkg.rel_path,
       )

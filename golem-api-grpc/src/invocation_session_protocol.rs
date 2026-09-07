@@ -18,15 +18,15 @@ use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
     InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailureKind,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
-    InvocationSessionResult, PublicInvocationRequest, ResumeAttach, ResumeOperation, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamMappingRole, invocation_request,
-    invocation_response, invocation_session_completion, invocation_session_result,
-    public_invocation_request,
+    InvocationSessionResult, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
+    StreamCancelRole, StreamMappingRole, invocation_request, invocation_response,
+    invocation_session_completion, invocation_session_result,
 };
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 type StreamBinding = (u64, (u64, u64));
+const MAX_PACKED_U8_STREAM_ITEM_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPhase {
@@ -57,6 +57,7 @@ struct PendingInputRange {
 struct InputState {
     next_offset: u64,
     terminal: bool,
+    consumer_cancelled: bool,
     discard_next_offset: Option<u64>,
     pending_ranges: HashMap<u64, PendingInputRange>,
     pending_acks: VecDeque<u64>,
@@ -95,6 +96,7 @@ pub struct InvocationSessionState {
     resume_attempt_id: Option<crate::proto::golem::common::Uuid>,
     resume_callee_fingerprint: Option<crate::proto::golem::common::Uuid>,
     resume_accepted_epoch: Option<u64>,
+    terminal_resume_cursors: HashSet<(u64, u64)>,
     has_result: bool,
     inputs: HashMap<u64, InputState>,
     outputs: HashMap<u64, OutputState>,
@@ -116,6 +118,7 @@ impl Default for InvocationSessionState {
             resume_attempt_id: None,
             resume_callee_fingerprint: None,
             resume_accepted_epoch: None,
+            terminal_resume_cursors: HashSet::new(),
             has_result: false,
             inputs: HashMap::new(),
             outputs: HashMap::new(),
@@ -139,71 +142,6 @@ enum RequestMessage<'a> {
 }
 
 impl InvocationSessionState {
-    pub fn validate_public_request(
-        &mut self,
-        request: &PublicInvocationRequest,
-    ) -> Result<(), String> {
-        self.validate_public_request_with_terminal_race(request, false)
-    }
-
-    /// Validates a public request at the receiving end of a full-duplex session.
-    ///
-    /// A consumer may send an output cancellation before observing a terminal response that the
-    /// receiver has already recorded. This accepts that cancellation once while preserving strict
-    /// validation for locally generated requests.
-    pub fn validate_received_public_request(
-        &mut self,
-        request: &PublicInvocationRequest,
-    ) -> Result<(), String> {
-        self.validate_public_request_with_terminal_race(request, true)
-    }
-
-    fn validate_public_request_with_terminal_race(
-        &mut self,
-        request: &PublicInvocationRequest,
-        accept_terminal_output_cancellation: bool,
-    ) -> Result<(), String> {
-        let message =
-            match request.request.as_ref() {
-                Some(public_invocation_request::Request::Start(start)) => {
-                    if start.application_name.is_empty()
-                        || start.environment_name.is_empty()
-                        || start.agent_type_name.is_empty()
-                        || start.method_name.is_empty()
-                    {
-                        return Err("public invocation selectors must not be empty".to_string());
-                    }
-                    if start.constructor_parameters.is_none() {
-                        return Err("public invocation has no constructor parameters".to_string());
-                    }
-                    RequestMessage::Start {
-                        idempotency_key: &start.idempotency_key,
-                        input: Some(start.method_parameters.as_ref().ok_or_else(|| {
-                            "public invocation has no method parameters".to_string()
-                        })?),
-                        out_of_band_inputs: false,
-                    }
-                }
-                Some(public_invocation_request::Request::ResumeAttach(resume)) => {
-                    RequestMessage::ResumeAttach {
-                        idempotency_key: &resume.idempotency_key,
-                        resume,
-                    }
-                }
-                Some(public_invocation_request::Request::InputItem(item)) => {
-                    RequestMessage::InputItem(item)
-                }
-                Some(public_invocation_request::Request::InputEnd(end)) => {
-                    RequestMessage::InputEnd(end)
-                }
-                Some(public_invocation_request::Request::StreamCancel(cancel)) => {
-                    RequestMessage::StreamCancel(cancel)
-                }
-                None => return Err("invocation request has no payload".to_string()),
-            };
-        self.validate_request(message, accept_terminal_output_cancellation)
-    }
-
     pub fn validate_trusted_request(&mut self, request: &InvocationRequest) -> Result<(), String> {
         self.validate_trusted_request_with_terminal_race(request, false)
     }
@@ -295,10 +233,40 @@ impl InvocationSessionState {
                     &item.durable_offset,
                     item.epoch,
                 )?;
-                let value = item
-                    .value
-                    .as_ref()
-                    .ok_or_else(|| "output stream item has no value".to_string())?;
+                let discovered = match (&item.value, item.packed_u8.as_slice()) {
+                    (Some(value), []) => {
+                        if item.logical_item_count != 1 {
+                            return Err(
+                                "ordinary output stream item must contain one logical item"
+                                    .to_string(),
+                            );
+                        }
+                        stream_references(value)?
+                    }
+                    (None, bytes @ [_, ..]) => {
+                        if bytes.len() > MAX_PACKED_U8_STREAM_ITEM_SIZE {
+                            return Err("packed-u8 output item exceeds 1 MiB".to_string());
+                        }
+                        if item.logical_item_count != bytes.len() as u64 {
+                            return Err("packed-u8 output item count must equal its byte length"
+                                .to_string());
+                        }
+                        if !item.new_stream_mappings.is_empty() {
+                            return Err("packed-u8 output item cannot introduce stream mappings"
+                                .to_string());
+                        }
+                        Vec::new()
+                    }
+                    (Some(_), _) => {
+                        return Err(
+                            "output stream item contains both ordinary and packed-u8 payloads"
+                                .to_string(),
+                        );
+                    }
+                    (None, []) => {
+                        return Err("output stream item has no payload".to_string());
+                    }
+                };
                 let state = self.outputs.get(&item.transport_stream_id).ok_or_else(|| {
                     format!("output stream {} is unknown", item.transport_stream_id)
                 })?;
@@ -314,10 +282,11 @@ impl InvocationSessionState {
                         item.transport_stream_id, expected_sequence, item.producer_sequence
                     ));
                 }
-                let next_offset = expected_sequence.checked_add(1).ok_or_else(|| {
-                    format!("output stream {} offset overflow", item.transport_stream_id)
-                })?;
-                let discovered = stream_references(value)?;
+                let next_offset = expected_sequence
+                    .checked_add(item.logical_item_count)
+                    .ok_or_else(|| {
+                        format!("output stream {} offset overflow", item.transport_stream_id)
+                    })?;
                 let bindings = self.validate_new_mappings(
                     &item.new_stream_mappings,
                     &discovered,
@@ -414,6 +383,25 @@ impl InvocationSessionState {
 
     pub fn all_inputs_terminal(&self) -> bool {
         self.inputs.values().all(|state| state.terminal)
+    }
+
+    pub fn mark_terminal_resume_cursor(
+        &mut self,
+        durable_stream_id: (u64, u64),
+    ) -> Result<(), String> {
+        if !matches!(self.phase, SessionPhase::AwaitDecision { resume: true }) {
+            return Err(
+                "terminal resume cursors can only be marked before resume acceptance".to_string(),
+            );
+        }
+        match self.resume_cursors.get(&durable_stream_id) {
+            Some(Some(_)) => {
+                self.terminal_resume_cursors.insert(durable_stream_id);
+                Ok(())
+            }
+            Some(None) => Err("a stream-start resume cursor cannot be terminal".to_string()),
+            None => Err("terminal resume cursor was not requested".to_string()),
+        }
     }
 
     fn validate_request(
@@ -682,11 +670,13 @@ impl InvocationSessionState {
                         );
                     }
                     StreamMappingRole::Output => {
+                        let terminal = self.terminal_resume_cursors.contains(&durable_stream_id);
                         self.outputs.insert(
                             mapping.transport_stream_id,
                             OutputState {
-                                resume_first_frame: true,
+                                resume_first_frame: !terminal,
                                 resume_mapping_announcement_pending: true,
+                                terminal,
                                 durable_stream_id,
                                 last_durable_offset: self
                                     .resume_cursors
@@ -1190,17 +1180,28 @@ impl InvocationSessionState {
         Ok(())
     }
 
+    /// Applies an input cancellation. `by_consumer` distinguishes the consumer's cancellation
+    /// (a server response) from the producer's own cancellation request.
+    ///
+    /// The consumer decides to stop while producer frames may still be in flight, so its
+    /// cancellation races with the producer's terminal in both directions: producer events that
+    /// arrive after the consumer cancellation are discarded (`discard_next_offset`), and a
+    /// consumer cancellation that arrives after the producer already published its terminal is
+    /// accepted once, abandoning every unacknowledged producer event from `offset` onward.
     fn cancel_input(
         &mut self,
         stream_id: u64,
         offset: u64,
-        discard_in_flight: bool,
+        by_consumer: bool,
     ) -> Result<(), String> {
         let state = self
             .inputs
             .get_mut(&stream_id)
             .ok_or_else(|| format!("input stream {stream_id} is unknown"))?;
-        ensure_open(state.terminal, stream_id)?;
+        ensure_open(
+            state.consumer_cancelled || (state.terminal && !by_consumer),
+            stream_id,
+        )?;
         let accepted_offset = state
             .pending_acks
             .front()
@@ -1211,8 +1212,11 @@ impl InvocationSessionState {
                 "input stream {stream_id} expected cancellation offset {accepted_offset}, got {offset}"
             ));
         }
-        if discard_in_flight {
-            state.discard_next_offset = Some(state.next_offset);
+        if by_consumer {
+            state.consumer_cancelled = true;
+            if !state.terminal {
+                state.discard_next_offset = Some(state.next_offset);
+            }
         }
         state.next_offset = offset;
         state.pending_ranges.clear();
@@ -1930,13 +1934,48 @@ mod tests {
     use crate::proto::golem::schema::{RecordValue, SchemaValueStreamReference};
     use crate::proto::golem::worker::{
         InputStreamHighWater, InvocationFailure, InvocationRejected, InvocationStart,
-        OutputStreamEnd, OutputStreamError, OutputStreamItem, PublicInvocationStart, ResumeAttach,
-        StreamCursor, StreamInvocationIdentity,
+        OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeAttach, StreamCursor,
+        StreamInvocationIdentity,
     };
     use prost::Message;
     use test_r::test;
 
     const KEY: &str = "session-key";
+
+    type PublicInvocationRequest = InvocationRequest;
+    type PublicInvocationStart = InvocationStart;
+
+    mod public_invocation_request {
+        pub use crate::proto::golem::worker::invocation_request::Request;
+    }
+
+    trait TestRequestValidation {
+        fn validate_public_request(
+            &mut self,
+            request: &PublicInvocationRequest,
+        ) -> Result<(), String>;
+
+        fn validate_received_public_request(
+            &mut self,
+            request: &PublicInvocationRequest,
+        ) -> Result<(), String>;
+    }
+
+    impl TestRequestValidation for InvocationSessionState {
+        fn validate_public_request(
+            &mut self,
+            request: &PublicInvocationRequest,
+        ) -> Result<(), String> {
+            self.validate_trusted_request(request)
+        }
+
+        fn validate_received_public_request(
+            &mut self,
+            request: &PublicInvocationRequest,
+        ) -> Result<(), String> {
+            self.validate_received_trusted_request(request)
+        }
+    }
 
     fn key() -> Option<IdempotencyKey> {
         Some(IdempotencyKey {
@@ -1985,12 +2024,8 @@ mod tests {
     fn public_start(input: SchemaValue) -> PublicInvocationRequest {
         public_request(public_invocation_request::Request::Start(
             PublicInvocationStart {
-                application_name: "app".to_string(),
-                environment_name: "env".to_string(),
-                agent_type_name: "agent-type".to_string(),
-                constructor_parameters: Some(record(Vec::new())),
-                method_name: "run".to_string(),
-                method_parameters: Some(input),
+                method_name: Some("run".to_string()),
+                input: Some(input),
                 idempotency_key: key(),
                 ..Default::default()
             },
@@ -2221,6 +2256,22 @@ mod tests {
             durable_offset: durable_offset(sequence),
             epoch: 1,
             new_stream_mappings,
+            packed_u8: Vec::new(),
+            logical_item_count: 1,
+        }
+    }
+
+    fn packed_output_item(stream_id: u64, sequence: u64, bytes: Vec<u8>) -> OutputStreamItem {
+        OutputStreamItem {
+            transport_stream_id: stream_id,
+            producer_sequence: sequence,
+            value: None,
+            durable_stream_id: Some(uuid(100 + stream_id)),
+            durable_offset: durable_offset(sequence),
+            epoch: 1,
+            new_stream_mappings: Vec::new(),
+            logical_item_count: bytes.len() as u64,
+            packed_u8: bytes,
         }
     }
 
@@ -2313,6 +2364,79 @@ mod tests {
     }
 
     #[test]
+    fn packed_output_items_validate_payload_and_advance_by_logical_item_count() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(record(Vec::new())))
+            .unwrap();
+        state.validate_response(&accepted()).unwrap();
+        state.validate_response(&result(stream(9))).unwrap();
+
+        let mut wrong_count = packed_output_item(9, 0, vec![1, 2, 3]);
+        wrong_count.logical_item_count = 2;
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::OutputItem(
+                    wrong_count,
+                )))
+                .is_err()
+        );
+
+        let mut with_mapping = packed_output_item(9, 0, vec![1, 2, 3]);
+        with_mapping
+            .new_stream_mappings
+            .push(mapping(10, StreamMappingRole::Output));
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::OutputItem(
+                    with_mapping,
+                )))
+                .is_err()
+        );
+
+        let mut with_both_payloads = packed_output_item(9, 0, vec![1, 2, 3]);
+        with_both_payloads.value = Some(scalar(1));
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::OutputItem(
+                    with_both_payloads,
+                )))
+                .is_err()
+        );
+
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::OutputItem(
+                    packed_output_item(9, 0, Vec::new()),
+                )))
+                .is_err()
+        );
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::OutputItem(
+                    packed_output_item(9, 0, vec![0; MAX_PACKED_U8_STREAM_ITEM_SIZE + 1]),
+                )))
+                .is_err()
+        );
+
+        state
+            .validate_response(&response(invocation_response::Response::OutputItem(
+                packed_output_item(9, 0, vec![1, 2, 3]),
+            )))
+            .unwrap();
+        state
+            .validate_response(&response(invocation_response::Response::OutputItem(
+                output_item(9, 3, scalar(4), Vec::new()),
+            )))
+            .unwrap();
+        state
+            .validate_response(&response(invocation_response::Response::OutputEnd(
+                output_end(9, 4),
+            )))
+            .unwrap();
+    }
+
+    #[test]
     fn durable_stream_handle_accepts_revision_zero_but_requires_presence() {
         let mut state = InvocationSessionState::default();
         state
@@ -2352,6 +2476,7 @@ mod tests {
                         transport_stream_id: 9,
                         producer_sequence: 0,
                         value: Some(scalar(1)),
+                        logical_item_count: 1,
                         ..Default::default()
                     },
                 )))
@@ -2667,6 +2792,26 @@ mod tests {
             )]))
             .unwrap();
         assert!(!state.is_complete());
+    }
+
+    #[test]
+    fn terminal_resume_cursor_allows_completion_without_replaying_its_terminal() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&resume_attach(vec![StreamCursor {
+                stream_id: Some(uuid(107)),
+                last_observed_offset: Some(durable_offset(1)),
+            }]))
+            .unwrap();
+        state.mark_terminal_resume_cursor((0, 107)).unwrap();
+        state
+            .validate_response(&resumed_acceptance(vec![mapping(
+                7,
+                StreamMappingRole::Output,
+            )]))
+            .unwrap();
+        state.validate_response(&result(stream(7))).unwrap();
+        state.validate_response(&success()).unwrap();
     }
 
     #[test]
@@ -3188,6 +3333,55 @@ mod tests {
     }
 
     #[test]
+    fn input_consumer_cancellation_may_race_with_the_producer_terminal() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(stream(7)))
+            .unwrap();
+        state
+            .validate_response(&accepted_with_inputs(&[7]))
+            .unwrap();
+        state
+            .validate_public_request(&input_item(0, Payload::Value(scalar(1))))
+            .unwrap();
+        state
+            .validate_response(&input_ack(7, 0, durable_offset(1)))
+            .unwrap();
+        state
+            .validate_public_request(&input_item(1, Payload::Value(scalar(2))))
+            .unwrap();
+        state
+            .validate_public_request(&public_request(
+                public_invocation_request::Request::InputEnd(InputStreamEnd {
+                    transport_stream_id: 7,
+                    sequence: 2,
+                    ..Default::default()
+                }),
+            ))
+            .unwrap();
+
+        let cancellation = response(invocation_response::Response::StreamCancel(cancel(
+            7,
+            StreamCancelRole::InputConsumer,
+            1,
+        )));
+        state.validate_response(&cancellation).unwrap();
+        assert!(
+            state.validate_response(&cancellation).is_err(),
+            "an input stream must not accept the consumer cancellation more than once"
+        );
+        assert!(
+            state
+                .validate_response(&input_ack(7, 1, durable_offset(2)))
+                .is_err(),
+            "events abandoned by the consumer cancellation are never acknowledged"
+        );
+        assert!(state.all_inputs_terminal());
+        state.validate_response(&result(scalar(2))).unwrap();
+        state.validate_response(&success()).unwrap();
+    }
+
+    #[test]
     fn duplicate_input_end_after_consumer_cancellation_is_rejected() {
         let mut state = InvocationSessionState::default();
         state
@@ -3347,6 +3541,19 @@ mod tests {
                 ..Default::default()
             });
         }
+        for reason in [
+            StreamCancelReason::ConsumerDrop,
+            StreamCancelReason::InvocationFailed,
+        ] {
+            round_trip(StreamCancel {
+                transport_stream_id: 7,
+                producer_sequence: 8,
+                role: StreamCancelRole::OutputProducer as i32,
+                reason: reason as i32,
+                details: Some("cancelled".to_string()),
+                ..Default::default()
+            });
+        }
         round_trip(accepted());
         round_trip(response(invocation_response::Response::Rejected(
             InvocationRejected {
@@ -3358,6 +3565,9 @@ mod tests {
         round_trip(result(stream(9)));
         round_trip(response(invocation_response::Response::OutputItem(
             output_item(9, 0, scalar(1), Vec::new()),
+        )));
+        round_trip(response(invocation_response::Response::OutputItem(
+            packed_output_item(9, 0, vec![1, 2, 3]),
         )));
         round_trip(response(invocation_response::Response::OutputEnd(
             output_end(9, 1),

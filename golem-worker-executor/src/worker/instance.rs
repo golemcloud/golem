@@ -17,38 +17,32 @@ use super::entity_slot::{EntitySlot, EntitySlotRegistration};
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
 use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
-use crate::services::agent_storage_meter::AgentStorageMeter;
-use crate::services::file_loader::{FileLoader, FileUseToken};
+use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::oplog::{CommitLevel, Oplog};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::agent::AgentMode;
-use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
 use golem_common::model::entity::{
-    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability, OwnerRuntime,
+    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
+    InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
-use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use tempfile::TempDir;
-use tokio::sync::watch;
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
-use wasmtime::{Store, StoreMemory, UpdateDeadline};
+use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LinearMemoryEnumerationError {
@@ -68,310 +62,6 @@ pub(super) fn allocated_linear_memory_bytes<T>(
                 .ok_or(LinearMemoryEnumerationError::Overflow),
             StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
         })
-}
-
-/// Owner-scoped filesystem root shared by the primary Store and every filesystem-capable entity
-/// Store. Each Store receives separate WASI resources over this path; lifecycle generation changes
-/// only after all entity bodies have been fenced.
-pub struct OwnerFilesystem {
-    root: Mutex<Option<Arc<OwnerFilesystemRoot>>>,
-    generation: AtomicU64,
-    active: AtomicBool,
-    provisioned_files: tokio::sync::Mutex<HashMap<PathBuf, OwnerProvisionedFile>>,
-}
-
-pub struct OwnerFilesystemAttachment {
-    root: Arc<OwnerFilesystemRoot>,
-    generation: u64,
-}
-
-#[derive(Clone)]
-pub(crate) enum OwnerProvisionedFile {
-    ReadOnly {
-        file: InitialAgentFile,
-        token: FileUseToken,
-    },
-    ReadWrite {
-        file: InitialAgentFile,
-    },
-}
-
-pub(crate) struct OwnerFilesystemProvisioning {
-    pub(crate) files: HashMap<PathBuf, OwnerProvisionedFile>,
-    pub(crate) new_read_write_bytes: u64,
-}
-
-impl OwnerProvisionedFile {
-    fn declaration(&self) -> &InitialAgentFile {
-        match self {
-            Self::ReadOnly { file, .. } | Self::ReadWrite { file } => file,
-        }
-    }
-}
-
-enum OwnerFilesystemRoot {
-    Temp(TempDir),
-    Deterministic(PathBuf),
-}
-
-impl OwnerFilesystemRoot {
-    fn path(&self) -> &Path {
-        match self {
-            Self::Temp(directory) => directory.path(),
-            Self::Deterministic(directory) => directory,
-        }
-    }
-
-    fn clear(&self) -> Result<(), WorkerExecutorError> {
-        for entry in std::fs::read_dir(self.path()).map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "Failed to inspect owner filesystem {}: {error}",
-                self.path().display()
-            ))
-        })? {
-            let path = entry
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-                .path();
-            let result = if path.is_dir() {
-                std::fs::remove_dir_all(&path)
-            } else {
-                std::fs::remove_file(&path)
-            };
-            result.map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed to clear owner filesystem path {}: {error}",
-                    path.display()
-                ))
-            })?;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for OwnerFilesystemRoot {
-    fn drop(&mut self) {
-        if let Self::Deterministic(path) = self
-            && path.exists()
-        {
-            let _ = std::fs::remove_dir_all(path);
-        }
-    }
-}
-
-impl OwnerFilesystem {
-    fn new() -> Self {
-        Self {
-            root: Mutex::new(None),
-            generation: AtomicU64::new(0),
-            active: AtomicBool::new(false),
-            provisioned_files: tokio::sync::Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub async fn begin_primary_generation(
-        &self,
-        lane: &OwnerLane,
-        deterministic_root_dir: Option<&Path>,
-        owner_id: &OwnedAgentId,
-    ) -> Result<OwnerFilesystemAttachment, WorkerExecutorError> {
-        let _exclusive = lane.acquire_exclusive().await;
-        self.active.store(false, Ordering::Release);
-        self.provisioned_files.lock().await.clear();
-        let mut root = self.root.lock().unwrap();
-        let root = match root.as_mut() {
-            Some(root) => {
-                root.clear()?;
-                root.clone()
-            }
-            None => {
-                let created = Arc::new(if let Some(base) = deterministic_root_dir {
-                    let path = base
-                        .join(owner_id.environment_id.to_string())
-                        .join(owner_id.agent_id.component_id.to_string())
-                        .join(owner_id.agent_id.agent_name_encoded());
-                    std::fs::create_dir_all(&path).map_err(|error| {
-                        WorkerExecutorError::runtime(format!(
-                            "Failed to create deterministic owner directory {}: {error}",
-                            path.display()
-                        ))
-                    })?;
-                    OwnerFilesystemRoot::Deterministic(path)
-                } else {
-                    OwnerFilesystemRoot::Temp(
-                        tempfile::Builder::new()
-                            .prefix("golem")
-                            .tempdir()
-                            .map_err(|error| {
-                                WorkerExecutorError::runtime(format!(
-                                    "Failed to create owner temporary directory: {error}"
-                                ))
-                            })?,
-                    )
-                });
-                *root = Some(created.clone());
-                created
-            }
-        };
-        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        self.active.store(true, Ordering::Release);
-        Ok(OwnerFilesystemAttachment { root, generation })
-    }
-
-    pub(crate) fn attach_entity(&self) -> Result<OwnerFilesystemAttachment, WorkerExecutorError> {
-        if !self.active.load(Ordering::Acquire) {
-            return Err(WorkerExecutorError::runtime(
-                "Owner filesystem has no active primary generation",
-            ));
-        }
-        let root = self.root.lock().unwrap().clone().ok_or_else(|| {
-            WorkerExecutorError::runtime("Owner filesystem has no active primary generation")
-        })?;
-        let attachment = OwnerFilesystemAttachment {
-            root,
-            generation: self.generation.load(Ordering::Acquire),
-        };
-        self.validate(&attachment)?;
-        Ok(attachment)
-    }
-
-    pub(crate) fn fence(&self) {
-        self.active.store(false, Ordering::Release);
-        self.generation.fetch_add(1, Ordering::AcqRel);
-    }
-
-    pub(crate) async fn acquire_inspection(
-        &self,
-        lane: &OwnerLane,
-        attachment: &OwnerFilesystemAttachment,
-    ) -> Result<super::owner_lane::OwnerLaneExclusiveGuard, WorkerExecutorError> {
-        let exclusive = lane.acquire_exclusive().await;
-        self.validate(attachment)?;
-        Ok(exclusive)
-    }
-
-    pub(crate) async fn provision(
-        &self,
-        attachment: &OwnerFilesystemAttachment,
-        file_loader: &Arc<FileLoader>,
-        environment_id: EnvironmentId,
-        files: &[InitialAgentFile],
-    ) -> Result<OwnerFilesystemProvisioning, WorkerExecutorError> {
-        self.validate(attachment)?;
-        let mut provisioned_files = self.provisioned_files.lock().await;
-        self.validate(attachment)?;
-
-        let mut requested = HashMap::new();
-        let mut new_read_write_bytes = 0u64;
-        for file in files {
-            let path = attachment
-                .path()
-                .join(PathBuf::from(file.path.to_rel_string()));
-            if let Some(existing) = provisioned_files.get(&path) {
-                if existing.declaration() != file {
-                    return Err(WorkerExecutorError::FileSystemError {
-                        path: file.path.to_rel_string(),
-                        reason: "Conflicting owner filesystem provision declarations".to_string(),
-                    });
-                }
-                requested.insert(path, existing.clone());
-                continue;
-            }
-
-            let provisioned = match file.permissions {
-                AgentFilePermissions::ReadOnly => {
-                    let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
-                        .await?;
-                    OwnerProvisionedFile::ReadOnly {
-                        file: file.clone(),
-                        token,
-                    }
-                }
-                AgentFilePermissions::ReadWrite => {
-                    file_loader
-                        .get_read_write_to(environment_id, file.content_hash, &path)
-                        .await?;
-                    new_read_write_bytes = new_read_write_bytes.saturating_add(file.size);
-                    OwnerProvisionedFile::ReadWrite { file: file.clone() }
-                }
-            };
-            self.validate(attachment)?;
-            provisioned_files.insert(path.clone(), provisioned.clone());
-            requested.insert(path, provisioned);
-        }
-
-        Ok(OwnerFilesystemProvisioning {
-            files: requested,
-            new_read_write_bytes,
-        })
-    }
-
-    pub(crate) async fn preflight_provisioning(
-        &self,
-        attachment: &OwnerFilesystemAttachment,
-        files: &[InitialAgentFile],
-    ) -> Result<u64, WorkerExecutorError> {
-        self.validate(attachment)?;
-        let provisioned_files = self.provisioned_files.lock().await;
-        self.validate(attachment)?;
-        let mut requested = HashMap::<PathBuf, &InitialAgentFile>::new();
-        let mut new_read_write_bytes = 0u64;
-        for file in files {
-            let path = attachment
-                .path()
-                .join(PathBuf::from(file.path.to_rel_string()));
-            let existing_declaration = provisioned_files
-                .get(&path)
-                .map(OwnerProvisionedFile::declaration)
-                .or_else(|| requested.get(&path).copied());
-            if let Some(existing) = existing_declaration {
-                if existing != file {
-                    return Err(WorkerExecutorError::FileSystemError {
-                        path: file.path.to_rel_string(),
-                        reason: "Conflicting owner filesystem provision declarations".to_string(),
-                    });
-                }
-                continue;
-            }
-            if file.permissions == AgentFilePermissions::ReadWrite {
-                new_read_write_bytes = new_read_write_bytes.saturating_add(file.size);
-            }
-            requested.insert(path, file);
-        }
-        Ok(new_read_write_bytes)
-    }
-
-    fn validate(&self, attachment: &OwnerFilesystemAttachment) -> Result<(), WorkerExecutorError> {
-        let generation = self.generation.load(Ordering::Acquire);
-        if !self.active.load(Ordering::Acquire) || attachment.generation != generation {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Owner filesystem generation {} is fenced (active generation: {generation})",
-                attachment.generation
-            )));
-        }
-        let matches_root = self
-            .root
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|root| Arc::ptr_eq(root, &attachment.root));
-        if !matches_root {
-            return Err(WorkerExecutorError::runtime(
-                "Owner filesystem attachment belongs to a stale root",
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl OwnerFilesystemAttachment {
-    pub fn path(&self) -> &Path {
-        self.root.path()
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
 }
 
 struct StoreFuelGuard<Ctx: crate::workerctx::FuelManagement + 'static> {
@@ -427,14 +117,50 @@ pub struct OwnerExecution {
     replay: tokio::sync::RwLock<Option<ReplayState>>,
     commit: Arc<OwnerCommitController>,
     lane: OwnerLane,
-    historical_reconstructions: watch::Sender<usize>,
-    historical_reconstruction_bodies: watch::Sender<HashSet<OplogIndex>>,
+    primary_tail_work: crate::durable_host::tail_work::TailWorkTracker,
+    tool_operations: Arc<OwnerToolOperations>,
+    deferred_tool_admission: Arc<DeferredAdmissionTable>,
+    reached_oplog_marker: AtomicU64,
+    #[cfg(feature = "test-utils")]
+    monotonic_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
+    #[cfg(feature = "test-utils")]
+    wall_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
+    #[cfg(feature = "test-utils")]
+    skip_monotonic_clock_now_durability: AtomicBool,
+    #[cfg(feature = "test-utils")]
+    skip_wall_clock_now_durability: AtomicBool,
 }
 
-pub(crate) struct HistoricalReconstruction {
-    active: watch::Sender<usize>,
-    active_bodies: watch::Sender<HashSet<OplogIndex>>,
-    body: Option<OplogIndex>,
+#[cfg(feature = "test-utils")]
+struct ClockNowGate {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+#[cfg(feature = "test-utils")]
+pub struct ClockNowGateHandle {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ClockNowGate>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ClockNowGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered)
+            .await
+            .expect("clock now gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Drop for ClockNowGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
 }
 
 impl OwnerExecution {
@@ -444,16 +170,25 @@ impl OwnerExecution {
         commit: Arc<OwnerCommitController>,
     ) -> Self {
         let lane = OwnerLane::new(owner_id.clone());
-        let (historical_reconstructions, _) = watch::channel(0);
-        let (historical_reconstruction_bodies, _) = watch::channel(HashSet::new());
+        let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
         Self {
             owner_id,
             oplog,
             replay: tokio::sync::RwLock::new(None),
             commit,
             lane,
-            historical_reconstructions,
-            historical_reconstruction_bodies,
+            tool_operations: OwnerToolOperations::new(),
+            primary_tail_work,
+            deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
+            reached_oplog_marker: AtomicU64::new(OplogIndex::NONE.into()),
+            #[cfg(feature = "test-utils")]
+            monotonic_clock_now_gate: Mutex::new(None),
+            #[cfg(feature = "test-utils")]
+            wall_clock_now_gate: Mutex::new(None),
+            #[cfg(feature = "test-utils")]
+            skip_monotonic_clock_now_durability: AtomicBool::new(false),
+            #[cfg(feature = "test-utils")]
+            skip_wall_clock_now_durability: AtomicBool::new(false),
         }
     }
 
@@ -469,35 +204,32 @@ impl OwnerExecution {
         self.lane.clone()
     }
 
-    pub(crate) fn register_historical_reconstruction(
+    pub fn tool_operation_metadata(&self) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.metadata()
+    }
+
+    pub(crate) fn tool_operations(&self) -> Arc<OwnerToolOperations> {
+        self.tool_operations.clone()
+    }
+
+    pub(crate) fn primary_tail_work_tracker(
         &self,
-        start_index: OplogIndex,
-    ) -> HistoricalReconstruction {
-        self.historical_reconstructions
-            .send_modify(|active| *active += 1);
-        self.historical_reconstruction_bodies.send_modify(|active| {
-            assert!(
-                active.insert(start_index),
-                "entity body reconstruction at {start_index} was registered twice"
-            );
-        });
-        HistoricalReconstruction {
-            active: self.historical_reconstructions.clone(),
-            active_bodies: self.historical_reconstruction_bodies.clone(),
-            body: Some(start_index),
-        }
+    ) -> crate::durable_host::tail_work::TailWorkTracker {
+        self.primary_tail_work.clone()
     }
 
-    pub(crate) fn historical_reconstruction_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
-        self.historical_reconstruction_bodies.subscribe()
+    pub(crate) fn deferred_tool_admission(&self) -> Arc<DeferredAdmissionTable> {
+        self.deferred_tool_admission.clone()
     }
 
-    pub(crate) async fn wait_for_historical_reconstructions(&self) {
-        let mut active = self.historical_reconstructions.subscribe();
-        active
-            .wait_for(|active| *active == 0)
-            .await
-            .expect("owner execution retains the reconstruction tracker");
+    pub(crate) fn mark_reached_oplog_marker(&self, marker: OplogIndex) {
+        self.reached_oplog_marker
+            .store(marker.into(), Ordering::Release);
+    }
+
+    pub fn reached_oplog_marker(&self) -> Option<OplogIndex> {
+        let marker = OplogIndex::from_u64(self.reached_oplog_marker.load(Ordering::Acquire));
+        (marker != OplogIndex::NONE).then_some(marker)
     }
 
     pub(crate) async fn begin_replay_generation(
@@ -518,11 +250,19 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        let replay = ReplayState::new(
+        if let Some(replay) = self.replay.read().await.as_ref() {
+            replay.ensure_reconstruction_claims_empty()?;
+        }
+        self.tool_operations.begin_generation()?;
+        self.deferred_tool_admission.begin_generation()?;
+        self.reached_oplog_marker
+            .store(OplogIndex::NONE.into(), Ordering::Release);
+        let replay = ReplayState::new_for_owner(
             self.owner_id.clone(),
             self.oplog.clone(),
             deleted_regions,
             initial_snapshot_skip_end,
+            self.tool_operations.clone(),
         )
         .await?;
         *self.replay.write().await = Some(replay.clone());
@@ -538,6 +278,143 @@ impl OwnerExecution {
         })
     }
 
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_drain_terminal_clamp_then_reconstruction_barrier(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send + 'static>>, WorkerExecutorError> {
+        let replay = self.replay().await?;
+        replay
+            .test_drain_terminal_clamp_then_reconstruction_barrier(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_drain_reconstruction_terminal(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_drain_reconstruction_terminal(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_clamp_after_claim(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_clamp_after_claim(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.is_live_published())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_settling(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.test_is_settling())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_wait_for_tool_owner_failure(
+        &self,
+    ) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.wait_for_owner_failure().await;
+        self.tool_operation_metadata()
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_monotonic_clock_now(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        *self.monotonic_clock_now_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_wall_clock_now(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        *self.wall_clock_now_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_skip_next_monotonic_clock_now_durability(&self) {
+        self.skip_monotonic_clock_now_durability
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_skip_next_wall_clock_now_durability(&self) {
+        self.skip_wall_clock_now_durability
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
+        self.skip_monotonic_clock_now_durability
+            .swap(false, Ordering::AcqRel)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
+        self.skip_wall_clock_now_durability
+            .swap(false, Ordering::AcqRel)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_before_monotonic_clock_now(&self) {
+        let gate = self.monotonic_clock_now_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("monotonic-clock now gate was closed")
+                .forget();
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_before_wall_clock_now(&self) {
+        let gate = self.wall_clock_now_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("wall-clock now gate was closed")
+                .forget();
+        }
+    }
+
     pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
         self.commit.commit_and_update_state(level).await.0
     }
@@ -549,57 +426,24 @@ impl OwnerExecution {
     }
 }
 
-impl Drop for HistoricalReconstruction {
-    fn drop(&mut self) {
-        self.body_settled();
-        self.active.send_modify(|active| {
-            *active = active
-                .checked_sub(1)
-                .expect("historical reconstruction count underflowed");
-        });
-    }
-}
-
-impl HistoricalReconstruction {
-    pub(crate) fn body_settled(&mut self) {
-        if let Some(start_index) = self.body.take() {
-            self.active_bodies.send_modify(|active| {
-                assert!(
-                    active.remove(&start_index),
-                    "entity body reconstruction at {start_index} was not registered"
-                );
-            });
-        }
-    }
-}
-
 /// Owner-scoped runtime resources reused by primary and entity Store construction.
 pub struct OwnerRuntimeResources {
     resource_limits: Arc<AtomicResourceEntry>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    filesystem: Arc<OwnerFilesystem>,
-    filesystem_storage_usage: AtomicU64,
-    storage_meter: AgentStorageMeter,
+    // This weak lifecycle handle lets entity Stores attach during reconstruction or residence
+    // without sharing or owning the AgentFilesystem itself.
+    filesystem_generation: Mutex<Option<FilesystemGenerationHandle>>,
 }
 
 impl OwnerRuntimeResources {
     pub(crate) fn new(
         resource_limits: Arc<AtomicResourceEntry>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-        agent_mode: AgentMode,
-        filesystem_storage_usage: u64,
     ) -> Self {
         Self {
-            storage_meter: AgentStorageMeter::new(
-                agent_mode,
-                filesystem_storage_usage,
-                resource_limits.clone(),
-                std::time::Instant::now(),
-            ),
             resource_limits,
             execution_status,
-            filesystem: Arc::new(OwnerFilesystem::new()),
-            filesystem_storage_usage: AtomicU64::new(filesystem_storage_usage),
+            filesystem_generation: Mutex::new(None),
         }
     }
 
@@ -611,46 +455,24 @@ impl OwnerRuntimeResources {
         self.execution_status.clone()
     }
 
-    pub fn filesystem(&self) -> Arc<OwnerFilesystem> {
-        self.filesystem.clone()
+    pub(crate) fn activate_filesystem_generation(&self, generation: FilesystemGenerationHandle) {
+        *self.filesystem_generation.lock().unwrap() = Some(generation);
     }
 
-    pub fn storage_meter(&self) -> AgentStorageMeter {
-        self.storage_meter.clone()
-    }
-
-    pub fn filesystem_storage_usage(&self) -> u64 {
-        self.filesystem_storage_usage.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn acquire_filesystem_storage(&self, bytes: u64) -> u64 {
-        self.filesystem_storage_usage
-            .fetch_add(bytes, Ordering::AcqRel)
-            + bytes
-    }
-
-    pub(crate) fn reset_filesystem_storage_usage(&self, bytes: u64) {
-        let previous = self.filesystem_storage_usage.swap(bytes, Ordering::AcqRel);
-        match bytes.cmp(&previous) {
-            std::cmp::Ordering::Less => self
-                .storage_meter
-                .on_release(previous - bytes, std::time::Instant::now()),
-            std::cmp::Ordering::Greater => self
-                .storage_meter
-                .on_acquire(bytes - previous, std::time::Instant::now()),
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-
-    pub(crate) fn release_filesystem_storage(&self, bytes: u64) -> u64 {
-        let mut released = 0;
-        self.filesystem_storage_usage
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                released = bytes.min(current);
-                Some(current - released)
+    pub(crate) fn filesystem_generation_handle(
+        &self,
+    ) -> Result<FilesystemGenerationHandle, WorkerExecutorError> {
+        self.filesystem_generation
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("Owner filesystem has no active generation")
             })
-            .expect("filesystem usage update cannot fail");
-        released
+    }
+
+    pub(crate) fn fence_filesystem_generation(&self) {
+        self.filesystem_generation.lock().unwrap().take();
     }
 }
 
@@ -953,6 +775,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
+                scope
+                    .map(EntityInvocationScope::mode)
+                    .unwrap_or(InvocationExecutionMode::Live),
                 self.filesystem,
                 component_metadata,
                 self.activation.clone(),
@@ -1005,9 +830,54 @@ pub struct HostedInstance<Ctx: WorkerCtx> {
     _component_charge: Option<WorkerComponentCharge>,
 }
 
+pub trait EntityInvocationBody<Ctx: WorkerCtx, R>: Send + 'static {
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>;
+}
+
+pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
+
+impl<Ctx, R, F> EntityInvocationBody<Ctx, R> for ClosureEntityInvocationBody<F>
+where
+    Ctx: WorkerCtx,
+    F: Send + 'static,
+    F: for<'a> FnOnce(
+        &'a Instance,
+        &'a mut Store<Ctx>,
+    )
+        -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
+{
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>> {
+        self.0(instance, store)
+    }
+}
+
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     pub(crate) fn into_parts(self) -> (Instance, Store<Ctx>) {
         (self.instance, self.store.into_inner())
+    }
+
+    pub(crate) async fn prepare_tool_parent_end(
+        &mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::prepare_tool_parent_end(&mut self.store.as_context_mut(), parent)
+            .await
+    }
+
+    pub(crate) async fn settle_tool_children(
+        &mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::settle_tool_children(&mut self.store.as_context_mut(), parent)
+            .await
     }
 
     /// Runs one entity export with an installed invocation scope and then destroys its Store.
@@ -1034,7 +904,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .as_ref()
                 .ok_or_else(|| WorkerExecutorError::runtime("Entity instance has no slot"))?
                 .register(&scope)?;
-            self.invoke_scoped_inner(scope, &registration, invoke).await
+            self.invoke_scoped_inner(scope, &registration, ClosureEntityInvocationBody(invoke))
+                .await
         })
         .await
         .map_err(|error| {
@@ -1046,23 +917,20 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         })?
     }
 
-    pub(crate) async fn invoke_scoped_registered<R, F>(
-        self,
+    pub(crate) async fn invoke_scoped_registered_retained<R, F>(
+        mut self,
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> (Result<R, WorkerExecutorError>, Self)
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
     {
-        self.invoke_scoped_inner(scope, registration, invoke).await
+        let result = self
+            .invoke_scoped_inner_retained(scope, registration, invoke)
+            .await;
+        (result, self)
     }
 
     async fn invoke_scoped_inner<R, F>(
@@ -1073,13 +941,21 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     ) -> Result<R, WorkerExecutorError>
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
+    {
+        self.invoke_scoped_inner_retained(scope, registration, invoke)
+            .await
+    }
+
+    async fn invoke_scoped_inner_retained<R, F>(
+        &mut self,
+        scope: EntityInvocationScope,
+        registration: &EntitySlotRegistration,
+        invoke: F,
+    ) -> Result<R, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: EntityInvocationBody<Ctx, R>,
     {
         let OwnerRuntime::Entity(entity) = &self.runtime else {
             return Err(WorkerExecutorError::runtime(
@@ -1098,6 +974,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
 
         registration
             .attach_linear_memory(self.store.data().durable_ctx().linear_memory_tracker())?;
+        let execution_mode = scope.mode();
+        let body_hook = self.store.data().entity_invocation_body_hook();
 
         match self.store.data().entity_invocation_scope() {
             Some(installed) if installed != &scope => {
@@ -1111,9 +989,27 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .data_mut()
                 .set_entity_invocation_scope(Some(scope))?,
         }
-        let result = std::panic::AssertUnwindSafe(invoke(&self.instance, &mut self.store))
-            .catch_unwind()
-            .await;
+        if let Some(hook) = body_hook.as_ref() {
+            hook.before_invocation(execution_mode).await;
+        }
+        let mut result =
+            std::panic::AssertUnwindSafe(invoke.invoke(&self.instance, &mut self.store))
+                .catch_unwind()
+                .await;
+        if result.is_ok()
+            && let Some(hook) = body_hook.as_ref()
+        {
+            hook.before_completion(execution_mode).await;
+        }
+        if execution_mode == InvocationExecutionMode::ReplayingCompleted
+            && let Ok(Ok(response)) = &mut result
+            && let Some(response) = (response as &mut dyn std::any::Any)
+                .downcast_mut::<golem_common::model::oplog::HostResponseEntityInvocation>(
+            )
+            && let Some(hook) = body_hook
+        {
+            hook.mutate_completed_reconstruction_response(response);
+        }
         let cleanup = self.finish_scoped_invocation();
 
         match result {
@@ -1136,22 +1032,15 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     }
 
     fn finish_scoped_invocation(&mut self) -> Result<(), WorkerExecutorError> {
-        let scope_cleanup = self.store.data_mut().set_entity_invocation_scope(None);
-        self.store.data().set_suspended();
-        scope_cleanup
+        self.store.data_mut().set_entity_invocation_scope(None)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{OwnerFilesystem, StoreFuelGuard};
-    use crate::worker::owner_lane::OwnerLane;
+    use super::StoreFuelGuard;
     use crate::workerctx::FuelManagement;
-    use golem_common::model::component::ComponentId;
-    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError;
-    use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{AgentId, OwnedAgentId};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use test_r::test;
@@ -1163,6 +1052,10 @@ mod tests {
     }
 
     impl FuelManagement for FuelTestContext {
+        fn fuel_metering_enabled(&self) -> bool {
+            true
+        }
+
         fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
             self.borrowed = true;
             Ok(())
@@ -1201,57 +1094,6 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
-        Ok(())
-    }
-
-    #[test]
-    async fn owner_filesystem_generation_fences_stale_attachments_and_inspection_uses_lane()
-    -> anyhow::Result<()> {
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "owner-filesystem-generation-test".to_string(),
-        };
-        let owner_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
-        let lane = OwnerLane::new(owner_id.clone());
-        let filesystem = Arc::new(OwnerFilesystem::new());
-        let first = filesystem
-            .begin_primary_generation(&lane, None, &owner_id)
-            .await?;
-        std::fs::write(first.path().join("old-generation"), b"old")?;
-        let entity = filesystem.attach_entity()?;
-
-        let primary = lane.enter_primary(OplogIndex::INITIAL)?.acquire().await?;
-        let inspecting_filesystem = filesystem.clone();
-        let inspecting_lane = lane.clone();
-        let inspection = tokio::spawn(async move {
-            inspecting_filesystem
-                .acquire_inspection(&inspecting_lane, &entity)
-                .await
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(
-            !inspection.is_finished(),
-            "executor inspection must wait for the filesystem lane holder"
-        );
-        drop(primary);
-        drop(inspection.await??);
-
-        filesystem.fence();
-        assert!(filesystem.attach_entity().is_err());
-        assert!(
-            filesystem.acquire_inspection(&lane, &first).await.is_err(),
-            "a fenced Store attachment must not inspect the root"
-        );
-
-        let second = filesystem
-            .begin_primary_generation(&lane, None, &owner_id)
-            .await?;
-        assert!(second.generation() > first.generation());
-        assert!(!second.path().join("old-generation").exists());
-        assert!(
-            filesystem.acquire_inspection(&lane, &first).await.is_err(),
-            "an attachment from the previous root generation must remain stale"
-        );
         Ok(())
     }
 }

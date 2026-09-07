@@ -35,10 +35,12 @@ let rng : @random.Rand = @random.Rand::chacha8(seed=int64_to_bytes(@async.now())
 ///|
 fn int64_to_bytes(v : Int64) -> Bytes {
   let buf = Buffer()
-  let mut x = v
-  for _ in 0..<8 {
-    buf.write_byte((x & 0xFFL).to_byte())
-    x = x >> 8
+  for round in 0..<4 {
+    let mut x = v ^ (round.to_int64() << 32)
+    for _ in 0..<8 {
+      buf.write_byte((x & 0xFFL).to_byte())
+      x = x >> 8
+    }
   }
   buf.to_bytes()
 }
