@@ -4655,6 +4655,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         self.status_exact(key, None).await
     }
 
+    #[tracing::instrument(name = "durable_stream.consumer.status", level = "debug", skip_all)]
     async fn status_exact(
         &self,
         key: &StreamAttachmentKeyV1,
@@ -4798,6 +4799,11 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         }
     }
 
+    #[tracing::instrument(
+        name = "durable_stream.consumer.journal_inspection",
+        level = "debug",
+        skip_all
+    )]
     async fn journal_inspection(
         &self,
         key: &StreamAttachmentKeyV1,
@@ -5663,6 +5669,7 @@ fn attachment_lease_expiry(now_millis: u64) -> Result<u64, DurableStreamProducer
 
 #[async_trait]
 impl StreamSegmentSource for DurableStreamProducer {
+    #[tracing::instrument(name = "durable_stream.read_segment", level = "debug", skip_all)]
     async fn read_segment(
         &self,
         handle: &DurableStreamHandleV1,

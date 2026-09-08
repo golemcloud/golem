@@ -645,6 +645,7 @@ struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
 
 #[async_trait::async_trait]
 impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsumerJournal<Ctx> {
+    #[tracing::instrument(name = "durable_stream.consumer.commit", level = "debug", skip_all)]
     async fn commit(&self) -> Result<(), String> {
         let (_, changed) = self
             .state_actor
@@ -4887,6 +4888,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(replayed)
     }
 
+    #[tracing::instrument(name = "durable_stream.read_request", level = "debug", skip_all)]
     pub(crate) async fn read_durable_stream_segment(
         &self,
         request: AttachedStreamSegmentRequestV1,

@@ -812,6 +812,7 @@ impl WorkerService for DefaultWorkerService {
             .await
     }
 
+    #[tracing::instrument(name = "worker_metadata.get", level = "debug", skip_all)]
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 

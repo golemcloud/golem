@@ -110,6 +110,11 @@ impl Drop for IndexLock {
 }
 
 impl StreamSessionIndexService {
+    #[tracing::instrument(
+        name = "stream_session_index.lookup_producer",
+        level = "debug",
+        skip_all
+    )]
     pub async fn lookup_producer_metadata(
         &self,
         id: &OwnedAgentId,
@@ -571,6 +576,7 @@ impl StreamSessionIndexService {
         Ok(())
     }
 
+    #[tracing::instrument(name = "stream_session_index.catch_up", level = "debug", skip_all)]
     async fn catch_up_inner(
         &self,
         id: &OwnedAgentId,
@@ -836,6 +842,7 @@ impl StreamSessionIndexService {
         }
     }
 
+    #[tracing::instrument(name = "stream_session_index.lookup", level = "debug", skip_all)]
     async fn lookup_inner(
         &self,
         id: &OwnedAgentId,

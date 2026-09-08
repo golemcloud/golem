@@ -829,6 +829,7 @@ impl DurableStreamProducer {
             }
     }
 
+    #[tracing::instrument(name = "durable_stream.metadata.query", level = "debug", skip_all)]
     async fn index_for_query(
         &self,
         keys: Vec<ProducerMetadataKey>,
