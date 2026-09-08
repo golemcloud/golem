@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_agent};
+use crate::benchmarks::{InvokeResult, cleanup_user_state, delete_workers};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
 use golem_common::model::AgentId;
@@ -26,7 +26,7 @@ use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::Level;
 
 pub struct Streaming<const TOOL: bool> {
@@ -136,16 +136,7 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         let results = iteration
             .agent_ids
             .iter()
-            .map(|agent_id| async move {
-                invoke_and_await_agent(
-                    &iteration.user,
-                    &iteration.component,
-                    agent_id,
-                    "benchmark_producer",
-                    data_value!(iteration.chunk_count, 4096_u32),
-                )
-                .await
-            })
+            .map(|agent_id| invoke_streaming_caller(iteration, agent_id))
             .collect::<Vec<_>>()
             .join()
             .await;
@@ -164,16 +155,7 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         let results = iteration
             .agent_ids
             .iter()
-            .map(|agent_id| async move {
-                invoke_and_await_agent(
-                    &iteration.user,
-                    &iteration.component,
-                    agent_id,
-                    "benchmark_producer",
-                    data_value!(iteration.chunk_count, 4096_u32),
-                )
-                .await
-            })
+            .map(|agent_id| invoke_streaming_caller(iteration, agent_id))
             .collect::<Vec<_>>()
             .join()
             .await;
@@ -200,6 +182,35 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
             .collect::<Vec<_>>();
         delete_workers(&iteration.user, &ids).await;
         cleanup_user_state(&iteration.user, &iteration.env_id).await;
+    }
+}
+
+async fn invoke_streaming_caller(
+    iteration: &IterationContext,
+    agent_id: &ParsedAgentId,
+) -> InvokeResult {
+    // Measure the whole request, without retrying or discarding timed-out intervals.
+    let started = Instant::now();
+    let value = tokio::time::timeout(
+        Duration::from_secs(600),
+        iteration.user.invoke_and_await_agent(
+            &iteration.component,
+            agent_id,
+            "benchmark_producer",
+            data_value!(iteration.chunk_count, 4096_u32),
+        ),
+    )
+    .await
+    .expect("streaming benchmark exceeded its 10-minute deadline")
+    .expect("streaming benchmark invocation failed");
+    InvokeResult {
+        accumulated_time: started.elapsed(),
+        value: value
+            .into_return_value()
+            .map(|value| vec![value])
+            .unwrap_or_default(),
+        retries: 0,
+        timeouts: 0,
     }
 }
 
