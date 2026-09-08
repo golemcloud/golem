@@ -2081,6 +2081,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     let revoked = client
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
+            revision: 1,
         })
         .await?
         .into_inner();

@@ -1007,8 +1007,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
+        let revision = ShardLeaseRevision(request.revision);
 
-        self.shard_service().revoke_shards(&shard_ids)?;
+        if let ShardDeliveryOutcome::Stale { delivered, applied } =
+            self.shard_service().revoke_shards(&shard_ids, revision)?
+        {
+            // A newer delivery has already been applied and its set is the
+            // authority; taking shards out of it would be acting on stale news.
+            tracing::warn!(
+                %delivered,
+                %applied,
+                "Ignoring a RevokeShards older than the last delivery applied"
+            );
+            return Ok(());
+        }
 
         for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
@@ -1016,7 +1028,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .set_interrupting(InterruptKind::Restart)
                     .await
             {
-                await_interrupted.recv().await.unwrap();
+                // A closed channel means the interrupt already ran its course,
+                // which is all this waits for.
+                let _ = await_interrupted.recv().await;
             }
         }
 
@@ -1095,7 +1109,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .set_interrupting(InterruptKind::Restart)
                     .await
             {
-                await_interrupted.recv().await.unwrap();
+                // A closed channel means the interrupt already ran its course,
+                // which is all this waits for.
+                let _ = await_interrupted.recv().await;
             }
         }
 

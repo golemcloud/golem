@@ -171,6 +171,8 @@ struct TestWorkerExecutors {
     /// Every full-replace push, in order, with the epochs and expiry it carried. `commands`
     /// records only the shard ids, so this is where a test looks at what else travelled.
     pushes: Arc<Mutex<Vec<(Pod, ShardAssignmentPush)>>>,
+    /// Every revoke, in order, with the revision it carried.
+    revokes: Arc<Mutex<Vec<RecordedRevoke>>>,
     /// Every command sent to an executor, in order, whether or not it succeeded.
     ///
     /// `local_assignments` records only the net effect, so no-op commands - exactly what a leader
@@ -186,6 +188,8 @@ struct TestWorkerExecutors {
 }
 
 type Claim = BTreeMap<ShardId, ShardEpoch>;
+/// A revoke as the double received it: the pod, the shards, and the revision it carried.
+type RecordedRevoke = (Pod, BTreeSet<ShardId>, ShardLeaseRevision);
 
 impl TestWorkerExecutors {
     async fn set_local_assignment(&self, pod: Pod, shard_ids: &[i64]) {
@@ -224,6 +228,16 @@ impl TestWorkerExecutors {
 
     async fn grant_served_during_revoke(&self) -> Option<ShardLeaseGrant> {
         self.grant_during_revoke.lock().await.clone()
+    }
+
+    async fn revokes_to(&self, pod: Pod) -> Vec<(BTreeSet<ShardId>, ShardLeaseRevision)> {
+        self.revokes
+            .lock()
+            .await
+            .iter()
+            .filter(|(revoked_from, _, _)| *revoked_from == pod)
+            .map(|(_, shard_ids, revision)| (shard_ids.clone(), *revision))
+            .collect()
     }
 
     async fn pushes_to(&self, pod: Pod) -> Vec<ShardAssignmentPush> {
@@ -287,8 +301,13 @@ impl WorkerExecutorService for TestWorkerExecutors {
         &self,
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
+        revision: ShardLeaseRevision,
     ) -> Result<(), ShardManagerError> {
         self.record("revoke", *pod, shard_ids).await;
+        self.revokes
+            .lock()
+            .await
+            .push((*pod, shard_ids.clone(), revision));
 
         // Serve an executor's renewal in the middle of the fan-out, which is when a real one
         // would arrive, and keep what it was granted for the test to look at.
@@ -793,6 +812,20 @@ async fn a_renewal_served_during_the_revoke_fan_out_does_not_hand_the_shard_back
         .expect("the push must name a revision the store really held");
     assert_eq!(shards_at(&stored, new_pod), shard_ids(&[0, 1]));
 
+    // ...as does the revoke: it names the revision the move was stored under, so on the executor
+    // it outranks any grant read before the shard moved, however late that grant arrives.
+    let (revoked, revoke_revision) = worker_executors
+        .revokes_to(old_pod)
+        .await
+        .pop()
+        .expect("the losing executor should have been revoked from");
+    assert_eq!(revoked, shard_ids(&[0, 1]));
+    let stored = persistence
+        .state_at(revoke_revision)
+        .await
+        .expect("the revoke must name a revision the store really held");
+    assert_eq!(shards_at(&stored, old_pod), shard_ids(&[2, 3]));
+
     join_set.abort_all();
 }
 
@@ -983,6 +1016,13 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
         .collect()
     );
     assert!(ack.grant.expires_at > granted_at());
+    // ...stamped with the revision the state holding those epochs was stored at: the inherited
+    // shards exist only from that revision on, and the ack must not name an older one.
+    let stored = persistence
+        .state_at(ack.grant.revision)
+        .await
+        .expect("the ack must name a revision the store really held");
+    assert_eq!(claim_of(&stored, new_executor_id), ack.grant.shard_epochs);
 
     wait_for_local_assignment(&worker_executors, restarted_pod, shard_ids(&[0, 1])).await;
     assert_eq!(
@@ -1330,10 +1370,12 @@ async fn readers_cannot_observe_a_state_that_is_still_being_persisted() {
 }
 
 #[test]
-// A caller dropped mid-persist - an aborted task, a handler whose client disconnected - releases
-// the write lock through the guard's `Drop` and never runs the code after the await. Mutating a
-// clone is what keeps that harmless: there is nothing left to undo by code that will not run.
-async fn a_persist_interrupted_mid_flight_leaves_the_state_untouched() {
+// A request handler is dropped when its client goes away. A write that was already on the wire
+// lands regardless, and if nobody recorded its revision every later compare-and-swap would fail
+// against a cache one behind - the leader would stop for a conflict that never happened. So a
+// request's persist runs on a task of its own: dropping the caller cannot abandon the write, and
+// the state, the store and the cached revision all end up agreeing.
+async fn a_request_dropped_mid_persist_still_completes_its_write() {
     let existing_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -1351,12 +1393,8 @@ async fn a_persist_interrupted_mid_flight_leaves_the_state_untouched() {
         worker_executors.clone(),
     )
     .await;
-    let before = shard_management.current_snapshot().await;
-    let persisted_before = persistence.latest().await;
 
-    // `_release` is held to the end of the test: dropping it would let the write finish instead of
-    // leaving it suspended for the abort to interrupt.
-    let (entered, _release) = persistence.block_next_write().await;
+    let (entered, release) = persistence.block_next_write().await;
 
     let new_executor = executor(2);
     let registering = tokio::spawn({
@@ -1377,26 +1415,45 @@ async fn a_persist_interrupted_mid_flight_leaves_the_state_untouched() {
         .expect("the registration should have reached a write")
         .expect("the gate should have been signalled");
 
-    // The interrupted caller: `Register` writes out of the loop now, so aborting its task is the
-    // request handler dropped when its client disconnects. Draining to `None` is what makes the
-    // abort observable - the future, and with it the write guard, is only dropped once the task
-    // has actually been reaped.
+    // The dropped caller: the handler whose client disconnected. Draining to `None` is what makes
+    // the abort take effect - the future is only dropped once the task has been reaped. The write
+    // it started is suspended in the gate, not abandoned with it.
     registering.abort();
     let _ = registering.await;
-    join_set.abort_all();
-    while join_set.join_next().await.is_some() {}
+    drop(release);
 
+    // The write completes without its caller...
+    let started = Instant::now();
+    while !persistence.latest().await.has_executor(new_executor) {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the write the dropped caller started must still land"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let after = tokio::time::timeout(Duration::from_secs(5), shard_management.current_snapshot())
         .await
-        .expect("the aborted write must have released the write lock");
+        .expect("the completed write must have released the write lock");
+    assert!(after.has_executor(new_executor));
     assert_eq!(
-        after, before,
-        "the interrupted write left its mutation in the live state. Every reader now serves a \
-         registration that was never persisted, and the cached external revision still refers to \
-         the state before it, so every later compare-and-swap fails."
+        after,
+        persistence.latest().await,
+        "what the store holds is what memory serves"
     );
-    assert!(!after.has_executor(new_executor));
-    assert_eq!(persistence.latest().await, persisted_before);
+
+    // ...and the cached revision moved with it: the next write is not a conflict, and the loop is
+    // still there to serve it rather than stopped for a phantom competing writer.
+    shard_management
+        .register_executor(
+            executor(3),
+            ExecutorAddr::from(pod(3, 9002)),
+            Some("worker-executor-2".into()),
+        )
+        .await
+        .expect("a write after the one its caller abandoned must not be a revision conflict");
+    assert!(persistence.latest().await.has_executor(executor(3)));
+
+    join_set.abort_all();
 }
 
 #[test]
@@ -1941,10 +1998,10 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
 }
 
 #[test]
-// Every delivery carries the revision of the persisted state its set was read from, so the executor
-// can order a push and a renewal response that cross on the network. A renewal reads the state as
-// it is at that moment; the renewal itself is then persisted one revision on.
-async fn a_grant_carries_the_revision_of_the_state_it_was_read_from() {
+// Every delivery carries the revision of the persisted state that holds its set, so the executor
+// can order a push and a renewal response that cross on the network. The grant is read off the
+// clone the renewal persists, and stamped with the revision that clone was stored at.
+async fn a_grant_carries_the_revision_it_was_stored_at() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let (shard_management, persistence, mut join_set) =
         new_shard_management(balanced_pair(), worker_executors.clone()).await;
@@ -1955,14 +2012,16 @@ async fn a_grant_carries_the_revision_of_the_state_it_was_read_from() {
         .await
         .expect("a valid claim should have been renewed");
 
-    assert_eq!(
-        grant.revision, before.revision,
-        "the grant names the persisted revision its set was read from"
-    );
+    let latest = persistence.latest().await;
     assert!(
-        persistence.latest().await.revision > grant.revision,
-        "the renewal itself was then persisted one revision on"
+        latest.revision > before.revision,
+        "the renewal was persisted"
     );
+    assert_eq!(
+        grant.revision, latest.revision,
+        "the grant names the revision the state holding its set was stored at"
+    );
+    assert_eq!(claim_of(&latest, executor(1)), grant.shard_epochs);
 
     join_set.abort_all();
 }

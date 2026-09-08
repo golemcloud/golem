@@ -14,7 +14,8 @@
 
 use super::error::{HealthCheckError, ShardManagerError};
 use super::model::{
-    ExecutorAddrs, ExecutorId, ShardAssignmentPush, Unassignments, shard_assignments_to_string,
+    ExecutorAddrs, ExecutorId, ShardAssignmentPush, ShardLeaseRevision, Unassignments,
+    shard_assignments_to_string,
 };
 use crate::config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
@@ -54,22 +55,25 @@ pub trait WorkerExecutorService: Send + Sync {
 
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError>;
 
-    /// Takes shards away from an executor. Still a delta: an executor that only loses shards is
-    /// revoked from, and `execute_rebalance` revokes before it assigns.
+    /// Takes shards away from an executor. A delta, unlike `assign_shards`, and gated on
+    /// `revision` like one: it is only ever sent for shards the store has already moved away, at
+    /// the revision that move was stored under. `execute_rebalance` revokes before it assigns.
     async fn revoke_shards(
         &self,
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
+        revision: ShardLeaseRevision,
     ) -> Result<(), ShardManagerError>;
 }
 
-/// Sends revoke requests to all worker executors based on an `Unassignments` plan.
+/// Sends revoke requests to all worker executors based on an `Unassignments` plan, each carrying
+/// `revision`, the revision the moves were stored under.
 ///
-/// Returns the executors the revoke did not reach; the caller holds the plan those shards came
-/// from.
+/// Returns the executors the revoke did not reach.
 pub async fn revoke_shards(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     unassignments: &Unassignments,
+    revision: ShardLeaseRevision,
     addrs: &ExecutorAddrs,
 ) -> BTreeSet<ExecutorId> {
     fan_out(
@@ -78,7 +82,11 @@ pub async fn revoke_shards(
         "revoke_shards",
         |pod, shard_ids| {
             let worker_executors = worker_executors.clone();
-            Box::pin(async move { worker_executors.revoke_shards(&pod, shard_ids).await })
+            Box::pin(async move {
+                worker_executors
+                    .revoke_shards(&pod, shard_ids, revision)
+                    .await
+            })
         },
     )
     .await
@@ -210,9 +218,11 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         &self,
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
+        revision: ShardLeaseRevision,
     ) -> Result<(), ShardManagerError> {
         info!(
             revoked_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
+            revision = revision.0,
             "Revoking shards",
         );
 
@@ -221,8 +231,10 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "revoke_shards",
             Some(format!("{pod}")),
             &self.config.retries,
-            &(pod, shard_ids),
-            |(pod, shard_ids)| Box::pin(self.revoke_shards_internal(pod, shard_ids)),
+            &(pod, shard_ids, revision),
+            |(pod, shard_ids, revision)| {
+                Box::pin(self.revoke_shards_internal(pod, shard_ids, *revision))
+            },
         )
         .await
     }
@@ -300,6 +312,7 @@ impl WorkerExecutorServiceDefault {
         &self,
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
+        revision: ShardLeaseRevision,
     ) -> Result<(), ShardManagerError> {
         let revoke_shards_request = golem::workerexecutor::v1::RevokeShardsRequest {
             shard_ids: shard_ids
@@ -307,6 +320,7 @@ impl WorkerExecutorServiceDefault {
                 .into_iter()
                 .map(|shard_id| shard_id.into())
                 .collect(),
+            revision: revision.0,
         };
 
         let revoke_shards_response = timeout(

@@ -60,7 +60,15 @@ pub trait ShardService: Send + Sync {
         expires_at: Option<DateTime<Utc>>,
         revision: ShardLeaseRevision,
     ) -> ShardDeliveryOutcome;
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError>;
+    /// A revoke: the shards named are dropped, everything else stays. The one
+    /// delta among the deliveries, gated on `revision` like the rest; the
+    /// shard manager only ever sends it for shards its store has already moved
+    /// away, at the revision that move was stored under.
+    fn revoke_shards(
+        &self,
+        shard_ids: &HashSet<ShardId>,
+        revision: ShardLeaseRevision,
+    ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// A granted lease renewal: the shard manager's set for this executor, at
     /// a new expiry. Normally the set that was claimed; when it is not, it is
     /// the manager correcting a push this executor never received, and
@@ -113,9 +121,6 @@ impl ShardServiceDefault {
         F: Fn(&mut Option<ShardAssignment>) -> O,
     {
         let mut guard = self.shard_assignment.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(ShardAssignment::default())
-        }
         f(&mut guard)
     }
 }
@@ -213,18 +218,23 @@ impl ShardService for ShardServiceDefault {
         })
     }
 
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
+    fn revoke_shards(
+        &self,
+        shard_ids: &HashSet<ShardId>,
+        revision: ShardLeaseRevision,
+    ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
             Some(shard_assignment) => {
                 debug!(
+                    %revision,
                     shard_ids_current = shard_assignment.shard_ids().join(", "),
                     shard_ids_to_revoke = shard_ids.iter().join(", "),
                     "ShardService.revoke_shards"
                 );
-                shard_assignment.revoke_shards(shard_ids);
+                let outcome = shard_assignment.revoke_shards(shard_ids, revision);
                 let assigned_shard_count = shard_assignment.len();
                 record_assigned_shard_count(assigned_shard_count);
-                Ok(())
+                Ok(outcome)
             }
             None => Err(sharding_not_ready_error()),
         })
@@ -344,6 +354,32 @@ mod tests {
 
     fn live() -> Option<DateTime<Utc>> {
         Some(Utc::now() + ChronoDuration::seconds(60))
+    }
+
+    /// Nothing is installed until a registration: a push, a renewal or a
+    /// revoke that arrives first is refused, never applied to a placeholder
+    /// whose shard count of zero the routing hash would divide by.
+    #[test]
+    fn a_delivery_before_registration_is_refused() {
+        let service = ShardServiceDefault::new();
+
+        assert!(
+            service
+                .assign_shards(SHARDS, &epochs([(0, 1)]), live(), ShardLeaseRevision(1))
+                .is_err()
+        );
+        assert!(
+            service
+                .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(1))
+                .is_err()
+        );
+        assert!(
+            service
+                .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(1))
+                .is_err()
+        );
+        assert!(!service.is_ready());
+        assert!(service.try_get_current_assignment().is_none());
     }
 
     /// `AssignShards` says "your shards are exactly these". Anything

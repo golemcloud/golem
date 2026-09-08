@@ -16,7 +16,7 @@ use super::error::ShardManagerError;
 use super::healthcheck::{HealthCheck, get_unhealthy_executors};
 use super::model::{
     ExecutorAddr, ExecutorAddrs, ExecutorId, RegisterAck, ShardAssignmentPush, ShardEpoch,
-    ShardLeaseGrant, ShardLeaseState,
+    ShardLeaseGrant, ShardLeaseRevision, ShardLeaseState,
 };
 use super::persistence::{ExternalRevision, NO_REVISION, RoutingTablePersistence};
 use super::rebalancing::Rebalance;
@@ -211,8 +211,8 @@ impl ShardManagement {
         let now = Utc::now();
         let lease_ttl = self.lease_ttl;
 
-        let (already_known, replaced, ack) = self
-            .try_mutate_and_persist(move |shard_state| {
+        let ((already_known, replaced, mut ack), stored_at) = self
+            .persist_for_request(move |shard_state| {
                 let already_known = shard_state.has_executor(executor_id);
                 let replaced =
                     shard_state.add_executor(executor_id, addr, pod_name, now, lease_ttl);
@@ -231,6 +231,9 @@ impl ShardManagement {
                 ))
             })
             .await?;
+        // The grant was read off the clone before the persist bumped its revision; the ack names
+        // the revision the state holding this set was actually stored under.
+        ack.grant.revision = stored_at;
 
         if let Some(replaced) = replaced {
             // A restarted instance inherited its predecessor's shards, so it has to be told the
@@ -289,7 +292,7 @@ impl ShardManagement {
         // below cannot discard the reaping along with it. `remove_executor` puts the freed shards
         // on `pending_rebalance`. The no-op guard skips this write when nothing had lapsed, so the
         // common path still costs a single write.
-        self.mutate_and_persist(move |shard_state| {
+        self.persist_for_request(move |shard_state| {
             for (expired_id, released) in shard_state.housekeep(now) {
                 warn!(
                     executor_id = %expired_id,
@@ -297,10 +300,13 @@ impl ShardManagement {
                     "Shard lease expired; releasing its shards"
                 );
             }
+            Ok(())
         })
         .await?;
 
-        self.try_mutate_and_persist(move |shard_state| {
+        let claimed = claimed.clone();
+        let (mut grant, stored_at) = self
+            .persist_for_request(move |shard_state| {
             if !shard_state.has_executor(executor_id) {
                 return Err(ShardManagerError::ShardLeaseNotFound { executor_id });
             }
@@ -345,7 +351,11 @@ impl ShardManagement {
                 ))
             })
         })
-        .await
+        .await?;
+        // Read off the clone before its revision was bumped; stamped with the revision the state
+        // was then stored at, so the grant names exactly the persisted state it describes.
+        grant.revision = stored_at;
+        Ok(grant)
     }
 
     /// Releases `executor_id`'s shard lease on a graceful shutdown.
@@ -368,13 +378,14 @@ impl ShardManagement {
             "Deregistering executor"
         );
 
-        self.mutate_and_persist(move |shard_state| {
+        let claimed = claimed.clone();
+        self.persist_for_request(move |shard_state| {
             if !shard_state.has_executor(executor_id) {
                 debug!(
                     executor_id = %executor_id,
                     "Deregistered executor holds no lease; nothing to release"
                 );
-                return;
+                return Ok(());
             }
 
             let stale: Vec<ShardId> = claimed
@@ -404,8 +415,10 @@ impl ShardManagement {
                 released_shards = released.len(),
                 "Executor deregistered"
             );
+            Ok(())
         })
         .await
+        .map(|((), _stored_at)| ())
     }
 
     /// Marks an executor to be removed
@@ -506,12 +519,11 @@ impl ShardManagement {
             debug!(rebalance=%rebalance, "Applying rebalance plan");
 
             // The plan is applied and persisted *before* anything is sent, and every delivery
-            // below is read off the stored state. Two things rest on that order. A delivery names
-            // a revision the store already holds, so no renewal persisting meanwhile can get ahead
-            // of it. And a renewal served while the fan-out is in flight reads that same stored
-            // state, so a losing executor is handed a set that already excludes the shard being
-            // moved - a revoke is a delta with no revision of its own, so nothing else could order
-            // it against a grant.
+            // below is read off the stored state. Two things rest on that order. Every delivery
+            // names a revision the store already holds, so no renewal persisting meanwhile can get
+            // ahead of it. And a renewal served while the fan-out is in flight reads that same
+            // stored state, so a losing executor is handed a set that already excludes the shard
+            // being moved.
             self.mutate_and_persist(|current_shard_state| {
                 current_shard_state.apply_rebalance(&rebalance)
             })
@@ -584,9 +596,9 @@ impl ShardManagement {
     /// write is durable.
     ///
     /// A clone rather than mutate-in-place with rollback: a caller dropped mid-persist never runs
-    /// its rollback, but the guard's `Drop` publishes the mutation anyway - and the next write
-    /// either stores that stray mutation as though intended, or, if the abandoned write landed,
-    /// fails forever on a cached revision that is now behind.
+    /// its rollback, but the guard's `Drop` publishes the mutation anyway. The writers that run
+    /// inside a request handler - the ones a client can drop - go through
+    /// [`Self::persist_for_request`], which keeps the write itself from being dropped at all.
     ///
     /// The write lock is held across the persistence round-trip so that readers of
     /// [`Self::current_snapshot`] can never observe a state that was not durably stored and then
@@ -616,6 +628,48 @@ impl ShardManagement {
     where
         F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError>,
     {
+        self.try_mutate_and_persist_stamped(mutate)
+            .await
+            .map(|(outcome, _stored_at)| outcome)
+    }
+
+    /// [`Self::try_mutate_and_persist`] for a writer that runs inside a request handler.
+    ///
+    /// A handler's future is dropped when its client goes away, and a write that was already on
+    /// the wire then lands with nobody left to record its revision - after which every later
+    /// compare-and-swap fails against a cache that is one behind, and the leader stops for a
+    /// conflict that never happened. So the mutation runs on a task of its own and the handler
+    /// only awaits its outcome: dropping the handler cannot abandon the write.
+    ///
+    /// Also returns the revision the state was stored at, for the writers that hand an executor
+    /// a copy of the state and must label it with the revision it holds.
+    async fn persist_for_request<T, F>(
+        &self,
+        mutate: F,
+    ) -> Result<(T, ShardLeaseRevision), ShardManagerError>
+    where
+        F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let this = self.clone();
+        match tokio::spawn(async move { this.try_mutate_and_persist_stamped(mutate).await }).await {
+            Ok(outcome) => outcome,
+            Err(join_error) => Err(ShardManagerError::Internal(format!(
+                "persisting the shard lease state did not complete: {join_error}"
+            ))),
+        }
+    }
+
+    /// The persist itself: `mutate` is applied to a clone, the clone is stored compare-and-swap
+    /// style and, once durable, swapped in. Returns the outcome with the revision the state now
+    /// carries - the one just stored, or the current one when nothing needed storing.
+    async fn try_mutate_and_persist_stamped<T, F>(
+        &self,
+        mutate: F,
+    ) -> Result<(T, ShardLeaseRevision), ShardManagerError>
+    where
+        F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError>,
+    {
         let mut current_shard_state = self.shard_state.write().await;
         let mut external_revision = self.external_revision.lock().await;
 
@@ -634,7 +688,7 @@ impl ShardManagement {
         // not registered yet would have nothing for that check to disagree with. One write on first
         // boot; from then on the revision is set and an idle pass writes nothing.
         if next_shard_state == *current_shard_state && *external_revision != NO_REVISION {
-            return Ok(outcome);
+            return Ok((outcome, current_shard_state.revision));
         }
 
         let written = match next_shard_state.bump_revision() {
@@ -655,9 +709,10 @@ impl ShardManagement {
 
         match written {
             Ok(new_external_revision) => {
+                let stored_at = next_shard_state.revision;
                 *current_shard_state = next_shard_state;
                 *external_revision = new_external_revision;
-                Ok(outcome)
+                Ok((outcome, stored_at))
             }
             Err(err) => {
                 match &err {
@@ -694,12 +749,14 @@ impl ShardManagement {
     /// Revokes the shards that moved away from their old owners, then pushes every executor that
     /// needs one its complete shard set.
     ///
-    /// Both are taken from `shard_state`, the state the plan has already been persisted into. So
-    /// a push names a revision the store holds, and a revoke - which carries no revision and so
-    /// cannot be ordered against anything - only ever names a shard the store has already moved.
+    /// Both are taken from `shard_state`, the state the plan has already been persisted into, so
+    /// every delivery names a revision the store holds: a push the one its set was read at, a
+    /// revoke the one the move was stored under.
     ///
-    /// Revokes complete before any push goes out: a losing executor must have dropped a shard
-    /// before its new owner is told it holds it.
+    /// Revokes are awaited before any push goes out, so a losing executor that could be reached
+    /// has dropped a shard before its new owner is told it holds it. One that could not be
+    /// reached is reported back and repaired with a full push; until that lands the two hold the
+    /// shard at different epochs.
     async fn execute_rebalance(
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         shard_state: &ShardLeaseState,
@@ -729,6 +786,7 @@ impl ShardManagement {
             revoke_shards(
                 worker_executors.clone(),
                 rebalance.get_unassignments(),
+                shard_state.revision,
                 addrs,
             )
             .await

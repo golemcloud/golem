@@ -253,6 +253,9 @@ impl ShardLeaseState {
     }
 
     /// The lease `executor_id` currently holds, or `None` if it holds none.
+    ///
+    /// `revision` is this state's. A writer that reads the grant off a clone it is about to
+    /// persist re-stamps it with the revision the clone was stored at.
     pub fn lease_grant_for(&self, executor_id: ExecutorId) -> Option<ShardLeaseGrant> {
         let lease = self.executor_leases.get(&executor_id)?;
         Some(ShardLeaseGrant {

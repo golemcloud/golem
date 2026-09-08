@@ -172,6 +172,9 @@ message InterruptWorkerRequest {
 
 message RevokeShardsRequest {
   repeated golem.shardmanager.ShardId shard_ids = 1;
+  // The revision of the shard manager's persisted state the shards were moved
+  // away in; see golem.shardmanager.v1.RegisterSuccess.revision.
+  uint64 revision = 2;
 }
 
 message RevokeShardsResponse {

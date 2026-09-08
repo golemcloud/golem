@@ -73,9 +73,9 @@ pub trait ShardManagerService: Send + Sync {
     /// Graceful release of the shard lease. Never fails a shutdown.
     async fn deregister(&self);
 
-    /// Installs the hook fired when a re-registration replaces this executor's
-    /// shard assignment. No-op by default: an implementation that
-    /// never re-registers has nothing to announce.
+    /// Installs the hook fired when a re-registration or a corrected renewal
+    /// replaces this executor's shard assignment. No-op by default: an
+    /// implementation that never re-registers has nothing to announce.
     fn set_assignment_changed_hook(&self, _hook: &ShardAssignmentChangedHook) {}
 }
 
@@ -116,6 +116,10 @@ pub struct GrpcShardManagerService {
     /// this service, so a strong reference here would be a cycle nothing could free.
     /// `WorkerExecutorImpl` holds the strong one, so the hook lives as long as the executor.
     assignment_changed_hook: RwLock<Option<Weak<ShardAssignmentChangedHookFn>>>,
+    /// Set when the hook failed, so the next grant runs it again even if the set is unchanged.
+    /// A push that fails this way is retried by the shard manager; a renewal has nobody to
+    /// retry it, and an unchanged grant would otherwise never run it again.
+    recovery_pending: AtomicBool,
 }
 
 impl GrpcShardManagerService {
@@ -135,7 +139,15 @@ impl GrpcShardManagerService {
             retry_backoff: RwLock::new(MIN_RENEWAL_INTERVAL),
             granted_cadence: RwLock::new(None),
             assignment_changed_hook: RwLock::new(None),
+            recovery_pending: AtomicBool::new(false),
         })
+    }
+
+    /// How long one lease RPC may take: `retry_cap()`, so a manager that accepts the call and
+    /// never answers costs a bounded wait and a backoff rather than the lease. Every call from
+    /// the manager to an executor carries a deadline; this is the one in the other direction.
+    fn rpc_deadline(&self) -> Duration {
+        self.retry_cap()
     }
 
     fn executor_id(&self) -> Uuid {
@@ -171,7 +183,8 @@ impl GrpcShardManagerService {
 
     /// Tell the executor its shard assignment changed, so running
     /// agents are recovered for the new set. A failure here is logged, never
-    /// fatal — the lease itself is already installed.
+    /// fatal — the lease itself is already installed — and remembered, so the
+    /// next grant runs the recovery again.
     async fn announce_assignment_changed(&self) {
         let hook = self
             .assignment_changed_hook
@@ -179,10 +192,15 @@ impl GrpcShardManagerService {
             .unwrap()
             .as_ref()
             .and_then(Weak::upgrade);
-        if let Some(hook) = hook
-            && let Err(error) = hook().await
-        {
-            warn!(%error, "Recovering agents after a re-registration failed");
+        let Some(hook) = hook else {
+            return;
+        };
+        match hook().await {
+            Ok(()) => self.recovery_pending.store(false, Ordering::SeqCst),
+            Err(error) => {
+                self.recovery_pending.store(true, Ordering::SeqCst);
+                warn!(%error, "Recovering agents for the shard set failed; retrying on the next grant");
+            }
         }
     }
 
@@ -270,7 +288,12 @@ impl GrpcShardManagerService {
                 );
                 self.announce_assignment_changed().await
             }
-            Ok(ShardDeliveryOutcome::Applied { set_changed: false }) => {}
+            Ok(ShardDeliveryOutcome::Applied { set_changed: false }) => {
+                if self.recovery_pending.load(Ordering::SeqCst) {
+                    info!(%revision, "Retrying the agent recovery that failed on the last grant");
+                    self.announce_assignment_changed().await
+                }
+            }
             Ok(ShardDeliveryOutcome::Stale { delivered, applied }) => warn!(
                 %delivered,
                 %applied,
@@ -362,7 +385,21 @@ impl ShardManagerService for GrpcShardManagerService {
         };
 
         let executor_id = self.executor_id();
-        match self.client.renew_shard_lease(executor_id, claim).await {
+        let deadline = self.rpc_deadline();
+        let renewed =
+            match tokio::time::timeout(deadline, self.client.renew_shard_lease(executor_id, claim))
+                .await
+            {
+                Ok(renewed) => renewed,
+                Err(_elapsed) => {
+                    warn!(
+                        deadline_ms = deadline.as_millis(),
+                        "Shard lease renewal did not answer in time; backing off"
+                    );
+                    return self.next_retry_delay();
+                }
+            };
+        match renewed {
             Ok(lease) => {
                 self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision)
                     .await
@@ -428,9 +465,18 @@ impl ShardManagerService for GrpcShardManagerService {
             .unwrap_or_default();
 
         let executor_id = self.executor_id();
-        match self.client.deregister(executor_id, claim).await {
-            Ok(()) => info!(%executor_id, "Deregistered from the shard manager"),
-            Err(error) => warn!(%error, "Failed to deregister from the shard manager"),
+        match tokio::time::timeout(
+            self.rpc_deadline(),
+            self.client.deregister(executor_id, claim),
+        )
+        .await
+        {
+            Ok(Ok(())) => info!(%executor_id, "Deregistered from the shard manager"),
+            Ok(Err(error)) => warn!(%error, "Failed to deregister from the shard manager"),
+            Err(_elapsed) => warn!(
+                %executor_id,
+                "Deregistering from the shard manager did not answer in time; the lease will lapse"
+            ),
         }
         self.shard_service.clear_assignment();
     }
@@ -794,6 +840,102 @@ mod tests {
             mock.deregister_calls().len(),
             1,
             "cancellation must be observed while the renewal is still in flight, not after it"
+        );
+    }
+
+    #[test]
+    // A manager that accepts the renewal and never answers must not hold the loop: the RPC has a
+    // deadline derived from the lease, after which the pass counts as failed and backs off, so
+    // the loop keeps renewing (and can still re-register) instead of parking until the transport
+    // gives up while the lease lapses under it.
+    async fn a_renewal_that_never_answers_times_out_and_the_loop_keeps_going() {
+        let expiry = Utc::now() + ChronoDuration::seconds(3);
+        // Never released: every renewal parks in the RPC until its deadline.
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_register(move |_| Ok(registration(Some(expiry), [(0, 1)])))
+                .with_renew(move |_, claimed| {
+                    Ok(ShardLease {
+                        shard_epochs: claimed,
+                        expires_at: Some(expiry),
+                        revision: ShardLeaseRevision(1),
+                    })
+                })
+                .with_renew_gate(gate.clone()),
+        );
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
+
+        let assignment = service.register(PORT, None).await.unwrap();
+        shard_service.register(
+            assignment.number_of_shards,
+            &assignment.shard_epochs,
+            assignment.expires_at,
+            assignment.revision,
+        );
+
+        // Cadence 1 s, deadline 1 s, first backoff 1 s: a second renewal within a few seconds is
+        // only possible if the first one was given up on.
+        for _ in 0..160 {
+            if mock.renew_calls().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            mock.renew_calls().len() >= 2,
+            "a renewal that never answers must time out so the loop can try again"
+        );
+    }
+
+    #[test]
+    // A push whose recovery fails is retried by the manager; a corrected renewal has nobody to
+    // retry it, so the service remembers the failure and runs the recovery again on the next
+    // grant even though that grant changes nothing - and stops once it has succeeded.
+    async fn a_failed_recovery_is_retried_on_the_next_grant_even_if_the_set_is_unchanged() {
+        let expiry = Utc::now() + ChronoDuration::seconds(300);
+        let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
+            Ok(ShardLease {
+                shard_epochs: claim([(0, 1), (1, 1)]),
+                expires_at: Some(expiry),
+                revision: ShardLeaseRevision(2),
+            })
+        }));
+        let (service, shard_service) = make_service(mock, Shutdown::new());
+        shard_service.register(
+            SHARDS,
+            &epochs([(0, 1)]),
+            Some(expiry),
+            ShardLeaseRevision(1),
+        );
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hook_calls = calls.clone();
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let hook_calls = hook_calls.clone();
+            Box::pin(async move {
+                let call = hook_calls.fetch_add(1, Ordering::SeqCst);
+                if call == 0 {
+                    Err(anyhow::anyhow!("recovery failed"))
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        service.set_assignment_changed_hook(&hook);
+
+        // The corrected set: the hook runs and fails.
+        service.renew_shard_lease().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Unchanged grant: the failed recovery is retried, and succeeds.
+        service.renew_shard_lease().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // Unchanged grant, nothing pending: the hook stays quiet.
+        service.renew_shard_lease().await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "a recovery that succeeded must not be run again for an unchanged set"
         );
     }
 
