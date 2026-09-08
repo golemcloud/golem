@@ -29,7 +29,7 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::time::Duration;
 use tracing::Level;
 
-pub struct StreamingProducer {
+pub struct Streaming<const TOOL: bool> {
     config: RunConfig,
 }
 
@@ -46,16 +46,24 @@ pub struct IterationContext {
 }
 
 #[async_trait]
-impl Benchmark for StreamingProducer {
+impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
     type BenchmarkContext = StreamingContext;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "streaming-producer"
+        if TOOL {
+            "streaming-tool"
+        } else {
+            "streaming-rpc"
+        }
     }
 
     fn description() -> &'static str {
-        "Measures a durable streaming tool producer end-to-end and to its first chunk. size is concurrent caller agents; length is the number of 4 KiB chunks."
+        if TOOL {
+            "Warm streaming tool stdout: outer invocation and guest-observed first chunk. size is concurrent callers; length is 4 KiB chunks. No cold-load or recovery measurement."
+        } else {
+            "Warm ordinary agent-to-agent streaming RPC: outer invocation and guest-observed first chunk. size is concurrent callers; length is 4 KiB chunks. A single-executor cluster measures local RPC; no cold-load or recovery measurement."
+        }
     }
 
     async fn create_benchmark_context(
@@ -88,21 +96,32 @@ impl Benchmark for StreamingProducer {
     async fn setup_iteration(&self, context: &StreamingContext) -> IterationContext {
         let user = context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
-        let component = user
-            .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
-            .name("golem-it:tool-streaming-rust-caller")
-            .store()
-            .await
-            .unwrap();
-        user.component(&env.id, "golem_it_tool_streaming_rust_provider_release")
-            .name("golem-it:tool-streaming-rust-provider")
-            .with_tool_agent_binding("streaming", "ToolStreamingCaller")
-            .unwrap()
-            .store()
-            .await
-            .unwrap();
+        let (component, caller) = if TOOL {
+            let component = user
+                .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+                .name("golem-it:tool-streaming-rust-caller")
+                .store()
+                .await
+                .unwrap();
+            user.component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+                .name("golem-it:tool-streaming-rust-provider")
+                .with_tool_agent_binding("streaming", "ToolStreamingCaller")
+                .unwrap()
+                .store()
+                .await
+                .unwrap();
+            (component, "ToolStreamingCaller")
+        } else {
+            let component = user
+                .component(&env.id, "golem_it_agent_rpc_rust_release")
+                .name("golem-it:agent-rpc-rust")
+                .store()
+                .await
+                .unwrap();
+            (component, "StreamingRpcCaller")
+        };
         let agent_ids = (0..self.config.size)
-            .map(|index| agent_id!("ToolStreamingCaller", format!("streaming-{index}")))
+            .map(|index| agent_id!(caller, format!("streaming-{index}")))
             .collect();
         IterationContext {
             user,
@@ -160,10 +179,10 @@ impl Benchmark for StreamingProducer {
             .await;
 
         for result in results {
-            result.record(&recorder, "", "streaming");
+            result.record(&recorder, "", Self::name());
             let (first, total) = assert_stream_result(&result.value, iteration.chunk_count);
             recorder.duration(
-                &ResultKey::primary("time-to-first-chunk"),
+                &ResultKey::primary("guest-time-to-first-chunk"),
                 Duration::from_nanos(first),
             );
             recorder.duration(

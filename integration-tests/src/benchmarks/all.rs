@@ -134,10 +134,18 @@ async fn main() {
         }),
     );
     benchmarks_by_name.insert(
-        "streaming-producer",
+        "streaming-tool",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
-                integration_tests::benchmarks::streaming::StreamingProducer,
+                integration_tests::benchmarks::streaming::Streaming<true>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::streaming::Streaming<false>,
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
