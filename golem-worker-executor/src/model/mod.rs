@@ -481,6 +481,13 @@ impl TrapType {
                             Some(WorkerExecutorError::PermissionDenied { details }) => {
                                 make_error(AgentError::PermissionDenied(details.clone()))
                             }
+                            // Not a failure of the invocation: the storage refused the write
+                            // because the shard has a new owner. Classified as an interrupt so
+                            // the loop stops the agent without appending an `Error` entry to an
+                            // oplog that is no longer this executor's to write.
+                            Some(WorkerExecutorError::OplogFenced { .. }) => {
+                                TrapType::Interrupt(InterruptKind::ShardLost)
+                            }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 make_error(AgentError::InvalidRequest(details.clone()))
                             }
@@ -537,6 +544,10 @@ impl TrapType {
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(WorkerExecutorError::runtime(
                 "Interrupted via the Golem API",
             )),
+            // What a caller can act on: refresh the routing table and retry on the owner.
+            TrapType::Interrupt(InterruptKind::ShardLost) => {
+                Some(WorkerExecutorError::ShardingNotReady)
+            }
             TrapType::Error { error, .. } => match error {
                 AgentError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
@@ -982,6 +993,41 @@ mod tests {
             other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
         }
 
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap);
+        assert_eq!(decision, Some(RetryDecision::None));
+    }
+
+    #[test]
+    fn a_fenced_oplog_write_is_a_lost_shard_and_is_never_retried() {
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "fenced".to_string(),
+        };
+        let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
+            golem_service_base::error::worker_executor::WorkerExecutorError::oplog_fenced(
+                agent_id,
+                3,
+                Some(4),
+            ),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        // An interrupt, not an error: no `Error` entry may be appended to an oplog that belongs
+        // to another executor now.
+        assert!(matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)));
+
+        // Callers are told what they can act on, which is the same thing as for a lapsed lease.
+        assert!(matches!(
+            trap.as_golem_error(""),
+            Some(WorkerExecutorError::ShardingNotReady)
+        ));
+
+        // And it is never retried in place - that would reopen the oplog at the stale epoch.
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,
         >::fixed_decision_for_trap_type(&trap);

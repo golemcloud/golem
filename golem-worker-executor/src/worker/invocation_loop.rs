@@ -313,6 +313,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             self.stop_unloaded(None).await;
                             break;
                         }
+                        InterruptKind::ShardLost => {
+                            // Nothing is written: the oplog belongs to the shard's new owner
+                            // now. Whoever was waiting for this start is told to look there.
+                            self.parent.complete_startup(
+                                self.start_attempt,
+                                Err(WorkerExecutorError::ShardingNotReady),
+                            );
+                            self.stop_unloaded(None).await;
+                            break;
+                        }
                     }
                 }
                 CreateInstanceResult::Failed => {
@@ -664,6 +674,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 self.parent.add_and_commit_oplog(OplogEntry::interrupted()).await;
                                             }
                                             InterruptKind::Restart | InterruptKind::Jump => {}
+                                            // The oplog is the new owner's to write.
+                                            InterruptKind::ShardLost => {}
                                         }
                                         if matches!(kind, InterruptKind::Interrupt(_))
                                             && let Some(key) = current_idempotency_key

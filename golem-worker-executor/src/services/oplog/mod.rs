@@ -35,7 +35,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, Timestamp,
+    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::serialization::serialize;
@@ -46,7 +46,7 @@ pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveServic
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -472,6 +472,68 @@ pub type IndexedReservedStartBuilder =
 /// A single oplog append that has already been synchronously enqueued in the oplog's ordering
 /// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
 /// index after the append finishes.
+/// Why an oplog write was refused by the storage: the shard epoch this executor asserted is
+/// behind the one recorded for the oplog, because another executor owns the shard now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OplogFence {
+    pub agent_id: AgentId,
+    pub expected_epoch: ShardEpoch,
+    pub actual_epoch: Option<ShardEpoch>,
+}
+
+/// The one way an oplog write can fail without taking the executor down.
+///
+/// A `Fenced` write is not a storage failure - the storage is healthy and refused the write on
+/// purpose - so it is returned rather than retried or panicked on, and the worker that hit it is
+/// stopped and left to the shard's new owner. Every other storage failure keeps its fail-stop
+/// semantics inside the oplog implementation; `Storage` exists so that test doubles and payload
+/// helpers that already return a `String` can flow through the same `Result` without a second
+/// error type at every call site.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OplogError {
+    Fenced(OplogFence),
+    Storage(String),
+}
+
+impl From<String> for OplogError {
+    fn from(details: String) -> Self {
+        OplogError::Storage(details)
+    }
+}
+
+impl From<OplogError> for WorkerExecutorError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => WorkerExecutorError::oplog_fenced(
+                fence.agent_id,
+                fence.expected_epoch.0,
+                fence.actual_epoch.map(|epoch| epoch.0),
+            ),
+            OplogError::Storage(details) => WorkerExecutorError::runtime(details),
+        }
+    }
+}
+
+impl Display for OplogError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OplogError::Fenced(fence) => write!(
+                f,
+                "oplog write for {} fenced: asserted shard epoch {}, stored {}",
+                fence.agent_id,
+                fence.expected_epoch,
+                fence
+                    .actual_epoch
+                    .map(|epoch| epoch.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
+            OplogError::Storage(details) => write!(f, "oplog storage error: {details}"),
+        }
+    }
+}
+
+impl std::error::Error for OplogError {}
+
 pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
