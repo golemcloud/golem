@@ -18,6 +18,7 @@ use super::{
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
@@ -134,14 +135,18 @@ impl PostgresIndexedStorage {
         })
     }
 
-    fn classify_repo_error(err: RepoError, oplog_insert: bool) -> IndexedStorageError {
-        if err.is_transient() {
+    fn classify_repo_error(err: RepoError, primary_oplog_insert: bool) -> IndexedStorageError {
+        if primary_oplog_insert && err.is_pool_timeout() {
             IndexedStorageError::Transient(err.to_string())
-        } else if oplog_insert && err.is_unique_violation() {
-            IndexedStorageError::Other(format!(
+        } else if primary_oplog_insert && err.is_transient() {
+            IndexedStorageError::Indeterminate(err.to_string())
+        } else if primary_oplog_insert && err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
                 "possible shard ownership mismatch while writing oplog: {}",
                 err.to_safe_string()
             ))
+        } else if err.is_transient() {
+            IndexedStorageError::Transient(err.to_string())
         } else {
             IndexedStorageError::Other(err.to_safe_string())
         }
@@ -149,10 +154,6 @@ impl PostgresIndexedStorage {
 
     fn classify_repo_error_general(err: RepoError) -> IndexedStorageError {
         Self::classify_repo_error(err, false)
-    }
-
-    fn classify_repo_error_oplog_insert(err: RepoError) -> IndexedStorageError {
-        Self::classify_repo_error(err, true)
     }
 
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
@@ -284,6 +285,7 @@ impl IndexedStorage for PostgresIndexedStorage {
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
         let id = Self::to_i64(id, "id")?;
         let query = sqlx::query(
             "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
@@ -298,7 +300,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(Self::classify_repo_error_oplog_insert)
+            .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert))
     }
 
     async fn append_many(
@@ -306,37 +308,37 @@ impl IndexedStorage for PostgresIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: &IndexedStorageNamespace,
         key: &str,
-        pairs: Vec<(u64, Vec<u8>)>,
+        pairs: Arc<[(u64, Bytes)]>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
         }
 
         let _permit = self.acquire_permit().await;
-        let namespace = Self::namespace(namespace);
+        let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+        let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
-        let mut converted_pairs = Vec::with_capacity(pairs.len());
-        for (id, value) in pairs {
+        for (id, value) in pairs.iter() {
             record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-            converted_pairs.push((Self::to_i64(id, "id")?, value));
+            Self::to_i64(*id, "id")?;
         }
 
         self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
-                    for chunk in converted_pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
+                    for chunk in pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
                         let mut query_builder = QueryBuilder::<Postgres>::new(
                             "INSERT INTO index_storage (namespace, key, id, value) ",
                         );
 
                         query_builder.push_values(chunk.iter(), |mut builder, (id, value)| {
                             builder
-                                .push_bind(namespace.clone())
-                                .push_bind(key.clone())
-                                .push_bind(*id)
-                                .push_bind(value);
+                                .push_bind(namespace.as_str())
+                                .push_bind(key.as_str())
+                                .push_bind(i64::try_from(*id).expect("validated oplog index"))
+                                .push_bind(value.as_ref());
                         });
 
                         let query = query_builder.build();
@@ -348,7 +350,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(Self::classify_repo_error_oplog_insert)
+            .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert))
     }
 
     async fn length(
@@ -546,5 +548,51 @@ struct DBIdValue {
 impl DBIdValue {
     fn into_pair(self) -> (u64, Vec<u8>) {
         (self.id as u64, self.value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn primary_oplog_insert_classifies_pool_timeout_as_safe_to_retry() {
+        let error = RepoError::from(sqlx::Error::PoolTimedOut);
+
+        assert!(matches!(
+            PostgresIndexedStorage::classify_repo_error(error, true),
+            IndexedStorageError::Transient(_)
+        ));
+    }
+
+    #[test]
+    fn primary_oplog_insert_classifies_io_as_indeterminate() {
+        let error = RepoError::from(sqlx::Error::Io(std::io::Error::other("connection lost")));
+
+        assert!(matches!(
+            PostgresIndexedStorage::classify_repo_error(error, true),
+            IndexedStorageError::Indeterminate(_)
+        ));
+    }
+
+    #[test]
+    fn primary_oplog_insert_classifies_unique_violation_as_conflict() {
+        let error = RepoError::UniqueViolation("duplicate index".to_string());
+
+        assert!(matches!(
+            PostgresIndexedStorage::classify_repo_error(error, true),
+            IndexedStorageError::Conflict(_)
+        ));
+    }
+
+    #[test]
+    fn read_classifies_io_as_retriable() {
+        let error = RepoError::from(sqlx::Error::Io(std::io::Error::other("connection lost")));
+
+        assert!(matches!(
+            PostgresIndexedStorage::classify_repo_error(error, false),
+            IndexedStorageError::Transient(_)
+        ));
     }
 }

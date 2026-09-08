@@ -73,7 +73,9 @@ use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
-use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
+use crate::services::worker::{
+    GetWorkerMetadataResult, InvocationResultIndexLookup, WorkerService,
+};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveAgents, HasAgentTypesService, HasAgentWebhooksService, HasAll,
@@ -88,7 +90,9 @@ use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, run_invocation_loop_task,
 };
-use crate::worker::status::calculate_last_known_status_with_checkpoint;
+use crate::worker::status::{
+    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
+};
 use crate::workerctx::{WorkerCtx, WorkerFilesystemContext};
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
@@ -126,9 +130,10 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, TypedAgentConfigEntry,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
-    AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, Timestamp, TimestampedAgentInvocation,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -431,7 +436,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// [`TraceOrigin`].
     external_invocation_origins: Arc<RwLock<HashMap<IdempotencyKey, TraceOrigin>>>,
 
-    invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
+    hydrated_invocation_results: Arc<RwLock<HydratedInvocationResultCache>>,
     ephemeral_invocation: StdMutex<EphemeralInvocationState>,
     initial_worker_metadata: AgentMetadata,
     resource_entry: Arc<AtomicResourceEntry>,
@@ -464,6 +469,9 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
+    /// Prevents weak-reference background work from starting while an unloaded
+    /// worker is being conditionally removed from `ActiveAgents`.
+    cache_retirement_in_progress: AtomicBool,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -684,6 +692,24 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     fn all(&self) -> &All<Self::Ctx> {
         &self.deps
     }
+}
+
+fn into_pending_invocation_parts(
+    invocation: AgentInvocation,
+) -> (
+    Option<IdempotencyKey>,
+    IdempotencyKey,
+    AgentInvocationPayload,
+    InvocationContextStack,
+) {
+    let semantic_idempotency_key = invocation.idempotency_key().cloned();
+    let (storage_idempotency_key, payload, invocation_context) = invocation.into_parts();
+    (
+        semantic_idempotency_key,
+        storage_idempotency_key,
+        payload,
+        invocation_context,
+    )
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -960,7 +986,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let current_status_snapshot = current_status.load_full();
         let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
-        let initial_invocation_results = current_status_snapshot.invocation_results.clone();
         let last_oplog_idx = current_status_snapshot.oplog_idx;
         drop(current_status_snapshot);
 
@@ -972,16 +997,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let queue = Arc::new(RwLock::new(VecDeque::new()));
         let external_invocation_origins = Arc::new(RwLock::new(HashMap::new()));
 
-        let invocation_results = Arc::new(RwLock::new(HashMap::from_iter(
-            initial_invocation_results.iter().map(|(key, oplog_idx)| {
-                (
-                    key.clone(),
-                    InvocationResult::Lazy {
-                        oplog_idx: *oplog_idx,
-                    },
-                )
-            }),
-        )));
+        let hydrated_invocation_results =
+            Arc::new(RwLock::new(HydratedInvocationResultCache::new(
+                deps.config().invocation_results.hydrated_cache_capacity,
+            )));
 
         let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded {
             startup_failure: reconstructed_ephemeral.then(inactive_ephemeral_agent_error),
@@ -1075,13 +1094,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps: all_deps,
             queue,
             external_invocation_origins,
-            invocation_results,
+            hydrated_invocation_results,
             ephemeral_invocation: StdMutex::new(if reconstructed_ephemeral {
                 EphemeralInvocationState::Accepted(None)
             } else {
                 EphemeralInvocationState::Available
             }),
             instance,
+            cache_retirement_in_progress: AtomicBool::new(false),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
@@ -2546,25 +2566,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn invocation_results(&self) -> HashMap<IdempotencyKey, OplogIndex> {
-        self.last_known_status.load().invocation_results.clone()
-    }
-
     // should only be called from invocation loop
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
         output: AgentInvocationOutput,
     ) {
-        let mut map = self.invocation_results.write().await;
+        let mut map = self.hydrated_invocation_results.write().await;
         map.insert(
             key.clone(),
             InvocationResult::Cached {
                 result: Ok(output.clone()),
             },
+            self.last_known_status
+                .load()
+                .invocation_results
+                .revert_generation(),
+            output
+                .oplog_index
+                .unwrap_or_else(|| self.last_known_status.load().oplog_idx),
         );
         // `drop` before taking `origins`: `fail_pending_invocations` locks
-        // origins -> invocation_results, so holding `map` here would invert that
+        // origins -> hydrated_invocation_results, so holding `map` here would invert that
         // order and can deadlock. Not a scope tidy-up.
         drop(map);
         self.external_invocation_origins.write().await.remove(key);
@@ -2591,7 +2614,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_keys_to_fail(&status, Some(key), !trap_type.is_invocation_rejection());
         let stderr = self.worker_event_service.get_last_invocation_errors();
         let golem_error = trap_type.as_golem_error(&stderr);
-        let mut map = self.invocation_results.write().await;
+        let mut map = self.hydrated_invocation_results.write().await;
+        // Co-pending fail-fast results exist only in this bounded warm cache. Once evicted, a
+        // poller sees the same `Pending` state that reconstructing this status from the oplog does.
         for key in &keys_to_fail {
             map.insert(
                 key.clone(),
@@ -2601,13 +2626,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         stderr: stderr.clone(),
                     }),
                 },
+                status.invocation_results.revert_generation(),
+                status.oplog_idx,
             );
             if let Some(golem_error) = &golem_error {
                 self.publish_completion(key, Err(golem_error.clone()));
             }
         }
         // See `store_invocation_success`: origins must not be taken while
-        // `invocation_results` is held.
+        // `hydrated_invocation_results` is held.
         drop(map);
         let mut origins = self.external_invocation_origins.write().await;
         for key in &keys_to_fail {
@@ -2616,7 +2643,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(super) async fn store_invocation_resuming(&self, key: &IdempotencyKey) {
-        let mut map = self.invocation_results.write().await;
+        let mut map = self.hydrated_invocation_results.write().await;
         map.remove(key);
     }
 
@@ -2856,6 +2883,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// distinguish those two states.
     pub async fn is_loaded(&self) -> bool {
         matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
+    }
+
+    /// Starts a conditional `ActiveAgents` retirement if this worker is
+    /// exactly unloaded. The returned guard rolls the marker back unless the
+    /// cache removal commits.
+    pub(crate) async fn try_begin_cache_retirement(&self) -> Option<WorkerCacheRetirement<'_>> {
+        if self
+            .cache_retirement_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
+        }
+
+        let retirement = WorkerCacheRetirement {
+            in_progress: &self.cache_retirement_in_progress,
+            committed: false,
+        };
+        if matches!(
+            &*self.instance.lock().await,
+            WorkerInstance::Unloaded { .. }
+        ) {
+            Some(retirement)
+        } else {
+            None
+        }
+    }
+
+    fn cache_retirement_in_progress(&self) -> bool {
+        self.cache_retirement_in_progress.load(Ordering::Acquire)
     }
 
     /// Classifies the worker for eviction ordering under memory pressure.
@@ -3223,10 +3280,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Enqueue invocation, classified by the caller. Passing `ReadOnly` for a
     /// mutating method would skip cache invalidation and produce stale reads.
     ///
-    /// For `ReadOnly`, returns the epoch captured under the same instance lock
-    /// that commits the pending entry. Populating the cache later must use
-    /// this captured epoch, not the current one, to avoid storing a stale
-    /// result under a post-mutation epoch.
+    /// For `ReadOnly`, returns the epoch captured before admission. Populating
+    /// the cache later must use this captured epoch, not the current one, to
+    /// avoid storing a stale result under a post-mutation epoch.
     pub(crate) async fn enqueue_worker_invocation_with_effect(
         &self,
         invocation: AgentInvocation,
@@ -3267,34 +3323,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Err(err.clone());
             }
 
-            if let Some(idempotency_key) = invocation.idempotency_key() {
-                let has_result = self
-                    .invocation_results
-                    .read()
-                    .await
-                    .contains_key(idempotency_key);
-                let status = self.last_known_status.load();
-                let is_pending = status
-                    .pending_invocations
-                    .iter()
-                    .any(|entry| entry.has_idempotency_key(idempotency_key));
-                let is_current = status.current_idempotency_key.as_ref() == Some(idempotency_key);
-                if has_result || is_pending || is_current {
-                    return Ok(None);
-                }
+            if let Some(idempotency_key) = invocation.idempotency_key()
+                && self.lookup_invocation_result(idempotency_key).await != LookupResult::New
+            {
+                return Ok(None);
             }
 
-            let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
+            let (
+                semantic_idempotency_key,
+                idempotency_key,
+                invocation_payload,
+                invocation_context,
+            ) = into_pending_invocation_parts(invocation);
             let invocation_context = invocation_context
                 .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-            let invocation = AgentInvocation::from_parts(
-                idempotency_key.clone(),
-                invocation_payload.clone(),
-                invocation_context.clone(),
-            );
             let payload = self
                 .oplog
-                .upload_payload(&invocation_payload)
+                .upload_payload_owned(invocation_payload)
                 .await
                 .map_err(|e| {
                     WorkerExecutorError::invalid_request(format!(
@@ -3309,20 +3354,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context.trace_states,
                 invocation_context_spans,
             );
-            let timestamped_invocation = TimestampedAgentInvocation {
-                timestamp: entry.timestamp(),
-                invocation,
-            };
 
-            // Snapshot the epoch under the instance lock that commits the
-            // pending entry. Read-only captures the current epoch for later
-            // cache fill. Mutating invocations no longer bump here — the bump
-            // happens on *successful completion* in
+            // Snapshot the epoch for a later read-only cache fill. Keyed admission releases and
+            // reacquires the instance lock below; that staleness is safe because
+            // `populate_read_only_cache` rechecks the epoch before publishing the result. Mutating
+            // invocations no longer bump here — the bump happens on *successful completion* in
             // `DurableWorkerCtx::on_agent_invocation_success`, so a cached
             // read-only result stays serviceable while the mutation is queued
-            // / running. The populate-time recheck in
-            // `populate_read_only_cache` covers the race where the mutation
-            // completes before the read-only observer fills the cache.
+            // or running.
             let read_only_epoch_snapshot = match read_only_cache_effect {
                 read_only_cache::InvocationEffect::ReadOnly => {
                     Some(self.read_only_cache_epoch.load(Ordering::SeqCst))
@@ -3331,10 +3370,53 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 | read_only_cache::InvocationEffect::UnknownAssumeMutating => None,
             };
 
-            self.add_and_commit_oplog_internal(&instance_guard, entry, None)
+            let mut caller_instance_guard = Some(instance_guard);
+            if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
+                drop(caller_instance_guard.take());
+                loop {
+                    let status = self.last_known_status.load_full();
+                    if self.lookup_invocation_result(idempotency_key).await != LookupResult::New {
+                        return Ok(None);
+                    }
+                    let current = self.last_known_status.load();
+                    if current.invocation_results.change_generation()
+                        != status.invocation_results.change_generation()
+                        || current.invocation_results.revert_generation()
+                            != status.invocation_results.revert_generation()
+                    {
+                        continue;
+                    }
+                    let instance_guard = self.lock_non_stopping_worker_owned().await;
+                    if instance_guard.is_deleting() {
+                        return Err(WorkerExecutorError::invalid_request(
+                            "Cannot enqueue invocation to a deleting worker",
+                        ));
+                    }
+                    if !self
+                        .state_actor
+                        .append_invocation_if_version(
+                            entry.clone(),
+                            idempotency_key.clone(),
+                            status.invocation_results.change_generation(),
+                            status.invocation_results.revert_generation(),
+                            instance_guard,
+                        )
+                        .await
+                    {
+                        continue;
+                    }
+                    break;
+                }
+            } else {
+                self.add_and_commit_oplog_internal(
+                    caller_instance_guard.as_ref().unwrap(),
+                    entry,
+                    None,
+                )
                 .await;
+            }
 
-            if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+            if let Some(idempotency_key) = semantic_idempotency_key {
                 // Captured here, inside the producer span, because a consumer links
                 // back to the *creation context* of the work rather than to wherever
                 // the caller happened to call from.
@@ -3347,14 +3429,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.external_invocation_origins
                     .write()
                     .await
-                    .insert(idempotency_key.clone(), origin);
+                    .insert(idempotency_key, origin);
             }
 
-            if let WorkerInstance::Running(running) = &*instance_guard {
+            if let Some(instance_guard) = caller_instance_guard.as_ref()
+                && let WorkerInstance::Running(running) = &**instance_guard
+            {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
 
-            drop(instance_guard);
+            drop(caller_instance_guard);
 
             Ok(read_only_epoch_snapshot)
         }
@@ -3546,7 +3630,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
         let payload = self
             .oplog
-            .upload_payload(&invocation_payload)
+            .upload_payload_owned(invocation_payload)
             .await
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!(
@@ -4971,6 +5055,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let Some(worker) = worker.upgrade() else {
                     break;
                 };
+                if worker.cache_retirement_in_progress() {
+                    continue;
+                }
                 if let Err(error) = worker.recover_durable_stream_topologies().await {
                     warn!(
                         agent_id = %worker.agent_id(),
@@ -5398,21 +5485,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let status = self.last_known_status.load_full().as_ref().clone();
-        let maybe_result = self
-            .invocation_results
+        let cached = self
+            .hydrated_invocation_results
             .read()
             .await
-            .get(key)
-            .cloned()
-            .or_else(|| {
-                status
-                    .invocation_results
-                    .get(key)
-                    .map(|oplog_idx| InvocationResult::Lazy {
-                        oplog_idx: *oplog_idx,
-                    })
-            });
-        if let Some(mut result) = maybe_result {
+            .get_valid(key, &status)
+            .map(|(result, oplog_idx)| (result.clone(), oplog_idx));
+        let maybe_result = if cached.is_some() {
+            crate::metrics::workers::record_invocation_result_resolution("memory_exact");
+            cached
+        } else if let Some(oplog_idx) = status.invocation_results.get(key) {
+            crate::metrics::workers::record_invocation_result_resolution("memory_exact");
+            Some((
+                InvocationResult::Lazy {
+                    oplog_idx: *oplog_idx,
+                },
+                *oplog_idx,
+            ))
+        } else if status.invocation_results.is_exact_complete() {
+            crate::metrics::workers::record_invocation_result_resolution("memory_exact_miss");
+            None
+        } else if !status.invocation_results.might_contain(key) {
+            crate::metrics::workers::record_invocation_result_resolution("bloom_negative");
+            None
+        } else {
+            self.resolve_old_invocation_result_index(&status, key)
+                .await
+                .map(|oplog_idx| (InvocationResult::Lazy { oplog_idx }, oplog_idx))
+        };
+        if let Some((mut result, result_oplog_idx)) = maybe_result {
             result
                 .cache(
                     &self.owned_agent_id,
@@ -5421,6 +5522,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self,
                 )
                 .await;
+            self.hydrated_invocation_results.write().await.insert(
+                key.clone(),
+                result.clone(),
+                status.invocation_results.revert_generation(),
+                result_oplog_idx,
+            );
             lookup_result_from_cached_result(&status, key, result)
         } else {
             let is_pending = status
@@ -5434,6 +5541,87 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 LookupResult::New
             }
         }
+    }
+
+    async fn resolve_old_invocation_result_index(
+        &self,
+        status: &AgentStatusRecord,
+        key: &IdempotencyKey,
+    ) -> Option<OplogIndex> {
+        let worker_service = self.deps.worker_service();
+        let lookup = worker_service
+            .lookup_invocation_result_index(&self.owned_agent_id, status, key)
+            .await;
+        match lookup {
+            Ok(InvocationResultIndexLookup::Found(index)) => {
+                crate::metrics::workers::record_invocation_result_resolution("physical_hit");
+                return Some(index);
+            }
+            Ok(InvocationResultIndexLookup::DefinitiveMiss) => {
+                crate::metrics::workers::record_invocation_result_resolution("physical_miss");
+                return None;
+            }
+            Ok(InvocationResultIndexLookup::Incomplete) | Err(_) => {
+                crate::metrics::workers::record_invocation_result_resolution("physical_incomplete");
+            }
+        }
+
+        if worker_service
+            .catch_up_invocation_result_index(&self.owned_agent_id, self.agent_mode(), status)
+            .await
+            .is_ok()
+        {
+            match worker_service
+                .lookup_invocation_result_index(&self.owned_agent_id, status, key)
+                .await
+            {
+                Ok(InvocationResultIndexLookup::Found(index)) => {
+                    crate::metrics::workers::record_invocation_result_resolution("physical_hit");
+                    return Some(index);
+                }
+                Ok(InvocationResultIndexLookup::DefinitiveMiss) => {
+                    crate::metrics::workers::record_invocation_result_resolution("physical_miss");
+                    return None;
+                }
+                Ok(InvocationResultIndexLookup::Incomplete) | Err(_) => {}
+            }
+        }
+
+        crate::metrics::workers::record_invocation_result_resolution("oplog_fallback");
+        let mut current_idempotency_key = None;
+        let mut cancelled_idempotency_key = None;
+        let mut result = None;
+        let mut first = OplogIndex::INITIAL;
+        let chunk_size = self
+            .deps
+            .config()
+            .invocation_results
+            .physical_index_catch_up_chunk_size
+            .max(1);
+        while first <= status.oplog_idx {
+            let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(chunk_size);
+            let entries = self
+                .deps
+                .oplog_service()
+                .read_exact(&self.owned_agent_id, self.agent_mode(), first, count)
+                .await;
+            if entries.is_empty() {
+                break;
+            }
+            fold_invocation_result_entries(
+                &mut current_idempotency_key,
+                &mut cancelled_idempotency_key,
+                &status.deleted_regions,
+                &entries,
+                |candidate, index| {
+                    if candidate == key {
+                        result = Some(index);
+                    }
+                },
+            );
+            first = entries.keys().max().unwrap().next();
+        }
+        result
     }
 
     async fn stop_internal(
@@ -5793,9 +5981,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let status = self.last_known_status.load_full().as_ref().clone();
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
 
-        let mut invocation_results = self.invocation_results.write().await;
+        let mut invocation_results = self.hydrated_invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
-            if invocation_results.contains_key(idempotency_key) {
+            if invocation_results
+                .get_valid(idempotency_key, &status)
+                .is_some()
+            {
                 continue;
             }
             invocation_results.insert(
@@ -5814,6 +6005,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         stderr: String::new(),
                     }),
                 },
+                status.invocation_results.revert_generation(),
+                status.oplog_idx,
             );
             self.publish_completion(idempotency_key, Err(error.clone()));
             origins.remove(idempotency_key);
@@ -6081,6 +6274,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .iter()
                         .map(|i| i.environment_plugin_grant_id)
                         .collect(),
+                    invocation_results: this.config().invocation_results.membership(),
                     agent_mode,
                     ..Default::default()
                 };
@@ -6200,6 +6394,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // TODO: should be private, exposed for the invocation loop for now.
     pub async fn reattach_worker_status(&self) {
+        self.hydrated_invocation_results.write().await.clear();
         self.state_actor.reattach_worker_status().await;
     }
 
@@ -7523,6 +7718,25 @@ pub(crate) enum EvictionStopOutcome {
     CleanupFailed,
 }
 
+pub(crate) struct WorkerCacheRetirement<'a> {
+    in_progress: &'a AtomicBool,
+    committed: bool,
+}
+
+impl WorkerCacheRetirement<'_> {
+    pub(crate) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for WorkerCacheRetirement<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.in_progress.store(false, Ordering::Release);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FilesystemPressureEligibility {
     idle_since: u64,
@@ -7636,6 +7850,86 @@ enum InvocationResult {
     Lazy {
         oplog_idx: OplogIndex,
     },
+}
+
+/// Bounded cache of invocation result payloads loaded from the oplog. The status membership only
+/// stores result oplog indexes; this cache avoids repeatedly loading and decoding those entries.
+struct HydratedInvocationResultCache {
+    values: HashMap<IdempotencyKey, HydratedInvocationResultCacheEntry>,
+    insertion_order: VecDeque<IdempotencyKey>,
+    capacity: usize,
+}
+
+struct HydratedInvocationResultCacheEntry {
+    result: InvocationResult,
+    /// Oplog branch generation in which this result was produced.
+    revert_generation: u64,
+    oplog_idx: OplogIndex,
+}
+
+impl HydratedInvocationResultCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            values: HashMap::new(),
+            insertion_order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn get_valid(
+        &self,
+        key: &IdempotencyKey,
+        status: &AgentStatusRecord,
+    ) -> Option<(&InvocationResult, OplogIndex)> {
+        self.values.get(key).and_then(|entry| {
+            (entry.revert_generation == status.invocation_results.revert_generation()
+                && !status.deleted_regions.is_in_deleted_region(entry.oplog_idx))
+            .then_some((&entry.result, entry.oplog_idx))
+        })
+    }
+
+    #[cfg(test)]
+    fn contains_key(&self, key: &IdempotencyKey) -> bool {
+        self.values.contains_key(key)
+    }
+
+    fn insert(
+        &mut self,
+        key: IdempotencyKey,
+        value: InvocationResult,
+        revert_generation: u64,
+        oplog_idx: OplogIndex,
+    ) {
+        if !self.values.contains_key(&key) {
+            self.insertion_order.push_back(key.clone());
+        }
+        self.values.insert(
+            key,
+            HydratedInvocationResultCacheEntry {
+                result: value,
+                revert_generation,
+                oplog_idx,
+            },
+        );
+        while self.values.len() > self.capacity {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.values.remove(&oldest);
+            }
+        }
+    }
+
+    fn remove(&mut self, key: &IdempotencyKey) -> Option<HydratedInvocationResultCacheEntry> {
+        let result = self.values.remove(key);
+        if result.is_some() {
+            self.insertion_order.retain(|entry| entry != key);
+        }
+        result
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
+        self.insertion_order.clear();
+    }
 }
 
 impl InvocationResult {
@@ -7801,6 +8095,22 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
+        let target_revision = ComponentRevision::new(2).unwrap();
+        let (semantic_key, storage_key, payload, _) =
+            into_pending_invocation_parts(AgentInvocation::ManualUpdate { target_revision });
+
+        assert!(semantic_key.is_none());
+        assert!(!storage_key.value.is_empty());
+        assert!(matches!(
+            payload,
+            AgentInvocationPayload::ManualUpdate {
+                target_revision: actual
+            } if actual == target_revision
+        ));
+    }
+
+    #[test]
     fn reconstruction_agent_quota_maps_to_startup_suspension() {
         let error =
             reconstruction_startup_error(crate::services::agent_filesystem::Error::AgentQuota(
@@ -7829,6 +8139,26 @@ mod tests {
         assert!(!running_worker_can_be_evicted(
             true, false, false, false, false, true
         ));
+    }
+
+    #[test]
+    fn cache_retirement_guard_rolls_back_uncommitted_attempts_only() {
+        let in_progress = AtomicBool::new(true);
+        {
+            let _retirement = WorkerCacheRetirement {
+                in_progress: &in_progress,
+                committed: false,
+            };
+        }
+        assert!(!in_progress.load(Ordering::Acquire));
+
+        in_progress.store(true, Ordering::Release);
+        WorkerCacheRetirement {
+            in_progress: &in_progress,
+            committed: false,
+        }
+        .commit();
+        assert!(in_progress.load(Ordering::Acquire));
     }
 
     #[test]
@@ -8133,6 +8463,33 @@ mod tests {
 
         let mut reconstructed = EphemeralInvocationState::Accepted(None);
         assert!(reconstructed.accept(&first).is_err());
+    }
+
+    #[test]
+    fn hydrated_invocation_result_cache_is_bounded() {
+        let first = IdempotencyKey::new("first".to_string());
+        let second = IdempotencyKey::new("second".to_string());
+        let mut cache = HydratedInvocationResultCache::new(1);
+        cache.insert(
+            first.clone(),
+            InvocationResult::Lazy {
+                oplog_idx: OplogIndex::from_u64(2),
+            },
+            0,
+            OplogIndex::from_u64(2),
+        );
+
+        cache.insert(
+            second.clone(),
+            InvocationResult::Lazy {
+                oplog_idx: OplogIndex::from_u64(4),
+            },
+            0,
+            OplogIndex::from_u64(4),
+        );
+
+        assert!(!cache.contains_key(&first));
+        assert!(cache.contains_key(&second));
     }
 
     #[test]

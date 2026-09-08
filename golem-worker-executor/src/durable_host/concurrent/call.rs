@@ -4518,11 +4518,11 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
     .map_err(|err| {
         WorkerExecutorError::runtime(format!("failed to serialize durable call response: {err}"))
     })?;
-    let (response, bytes, cached) = *prepared;
+    let (response, bytes) = *prepared;
     let raw_payload = oplog.upload_raw_payload(bytes).await.map_err(|err| {
         WorkerExecutorError::runtime(format!("failed to store durable call response: {err}"))
     })?;
-    let response_payload = raw_payload.into_payload_with_cache(cached).map_err(|err| {
+    let response_payload = raw_payload.into_payload().map_err(|err| {
         WorkerExecutorError::runtime(format!(
             "failed to prepare durable call response payload: {err}"
         ))
@@ -4593,17 +4593,18 @@ fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
     .contains(&TypeId::of::<Resp>())
 }
 
-type EncodedResponse<Resp> = Box<(Box<Resp>, Vec<u8>, Arc<HostResponse>)>;
+type EncodedResponse<Resp> = Box<(Box<Resp>, Vec<u8>)>;
 
 // Keep the large HostResponse enum's construction/serialization frame out of the async caller.
 // Box the input and output so the blocking-task envelope also has a bounded stack footprint.
 #[inline(never)]
-fn encode_response<Resp: Clone + Into<HostResponse>>(
+fn encode_response<Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String>>(
     response: Box<Resp>,
 ) -> Result<EncodedResponse<Resp>, String> {
-    let host_response: HostResponse = response.as_ref().clone().into();
+    let host_response: HostResponse = (*response).into();
     let bytes = golem_common::serialization::serialize(&host_response)?;
-    Ok(Box::new((response, bytes, Arc::new(host_response))))
+    let response = Box::new(Resp::try_from(host_response)?);
+    Ok(Box::new((response, bytes)))
 }
 
 #[cfg(test)]
@@ -4615,14 +4616,13 @@ mod response_encoding_tests {
     use test_r::test;
 
     #[test]
-    fn response_encoding_preserves_payload_and_cache() {
+    fn response_encoding_preserves_payload() {
         let response = HostResponseRandomBytes {
             bytes: vec![1, 2, 3, 4],
         };
         let expected: HostResponse = response.clone().into();
-        let (returned, bytes, cached) = *encode_response(Box::new(response.clone())).unwrap();
+        let (returned, bytes) = *encode_response(Box::new(response.clone())).unwrap();
         assert_eq!(*returned, response);
-        assert_eq!(*cached, expected);
         assert_eq!(
             bytes,
             golem_common::serialization::serialize(&expected).unwrap()
@@ -4671,11 +4671,11 @@ mod response_encoding_tests {
                 let response = HostResponseRandomBytes {
                     bytes: vec![42; length],
                 };
-                let (returned, bytes, cached) = *encode_response(Box::new(response))
+                let (returned, bytes) = *encode_response(Box::new(response))
                     .map_err(wasmtime::Error::msg)?;
                 assert_eq!(returned.bytes.len(), length);
                 assert!(!bytes.is_empty());
-                assert!(matches!(cached.as_ref(), HostResponse::RandomBytes(value) if value.bytes == returned.bytes));
+                assert!(matches!(golem_common::serialization::deserialize::<HostResponse>(&bytes).unwrap(), HostResponse::RandomBytes(value) if value.bytes == returned.bytes));
             }
             Ok(())
         })?;

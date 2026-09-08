@@ -73,6 +73,9 @@ impl SqliteKeyValueStorage {
             KeyValueStorageNamespace::AgentStatus { agent_id } => {
                 format!("agent-status:{}", agent_id.to_redis_key())
             }
+            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => {
+                format!("agent-invocation-result-index:{}", agent_id.to_redis_key())
+            }
             KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
                 format!("agent-status-checkpoint:{}", agent_id.to_redis_key())
             }

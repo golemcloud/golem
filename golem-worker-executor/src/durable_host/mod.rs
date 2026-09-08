@@ -4728,7 +4728,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => {}
             }
 
-            let (start_index, _) = self
+            let start_index = self
                 .public_state
                 .worker()
                 .oplog()

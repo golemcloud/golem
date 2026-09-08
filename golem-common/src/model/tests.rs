@@ -18,10 +18,12 @@ use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
-    AgentStatus, AgentStatusRecord, ComponentId, DurableStreamSessionIndex,
-    DurableStreamSessionStatus, FilterComparator, IdempotencyKey, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    StringFilterComparator, Timestamp,
+    AgentStatus, AgentStatusRecord, ComponentId, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+    DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
+    DurableStreamSessionIndex, DurableStreamSessionStatus, FilterComparator, IdempotencyKey,
+    InvocationResultBloom, InvocationResultMembership, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator,
+    Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -69,6 +71,130 @@ fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished()
         index
             .get(&IdempotencyKey::new("done-139".to_string()))
             .is_some()
+    );
+}
+
+#[test]
+fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
+    let mut membership = InvocationResultMembership::new(2, 64, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+    let fourth = IdempotencyKey::new("fourth".to_string());
+    let fifth = IdempotencyKey::new("fifth".to_string());
+
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    assert!(membership.is_exact_complete());
+
+    membership.insert(third.clone(), OplogIndex::from_u64(30));
+    membership.insert(fourth.clone(), OplogIndex::from_u64(40));
+    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
+
+    assert_eq!(membership.len(), 2);
+    assert!(!membership.is_exact_complete());
+    assert_eq!(membership.change_generation(), 5);
+    assert_eq!(
+        membership.oldest_retained_index(),
+        Some(OplogIndex::from_u64(40))
+    );
+    assert_eq!(membership.get(&first), None);
+    assert_eq!(membership.get(&second), None);
+    assert_eq!(membership.get(&third), None);
+    assert_eq!(membership.get(&fourth), Some(&OplogIndex::from_u64(40)));
+    assert_eq!(membership.get(&fifth), Some(&OplogIndex::from_u64(50)));
+    assert!(membership.might_contain(&first));
+    assert!(membership.might_contain(&second));
+    assert!(membership.might_contain(&third));
+    assert!(membership.might_contain(&fourth));
+    assert!(membership.might_contain(&fifth));
+}
+
+#[test]
+fn invocation_result_membership_updates_recency_for_repeated_keys() {
+    let mut membership = InvocationResultMembership::new(2, 64, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+    let fourth = IdempotencyKey::new("fourth".to_string());
+    let fifth = IdempotencyKey::new("fifth".to_string());
+    let sixth = IdempotencyKey::new("sixth".to_string());
+
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    membership.insert(third, OplogIndex::from_u64(30));
+    membership.insert(fourth, OplogIndex::from_u64(40));
+    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
+    membership.insert(first.clone(), OplogIndex::from_u64(60));
+    membership.insert(sixth.clone(), OplogIndex::from_u64(70));
+
+    assert_eq!(membership.get(&first), Some(&OplogIndex::from_u64(60)));
+    assert_eq!(membership.get(&second), None);
+    assert_eq!(membership.get(&fifth), None);
+    assert_eq!(membership.get(&sixth), Some(&OplogIndex::from_u64(70)));
+}
+
+#[test]
+fn invocation_result_membership_binary_round_trip_preserves_membership() {
+    use crate::serialization::{deserialize, serialize};
+
+    let mut membership = InvocationResultMembership::new(2, 64, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+    let fourth = IdempotencyKey::new("fourth".to_string());
+    let fifth = IdempotencyKey::new("fifth".to_string());
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second, OplogIndex::from_u64(20));
+    membership.insert(third, OplogIndex::from_u64(30));
+    membership.insert(fourth, OplogIndex::from_u64(40));
+    membership.insert(fifth, OplogIndex::from_u64(50));
+    membership.set_revert_generation(4);
+
+    let bytes = serialize(&membership).unwrap();
+    let recovered: InvocationResultMembership = deserialize(&bytes).unwrap();
+
+    assert_eq!(recovered, membership);
+    assert!(recovered.might_contain(&first));
+    assert_eq!(recovered.revert_generation(), 4);
+}
+
+#[test]
+fn small_invocation_result_membership_serializes_without_a_bloom_filter() {
+    use crate::serialization::{deserialize, serialize};
+
+    let mut membership = InvocationResultMembership::default();
+    membership.insert(
+        IdempotencyKey::new("first".to_string()),
+        OplogIndex::from_u64(10),
+    );
+
+    assert!(membership.is_exact_complete());
+    let bytes = serialize(&membership).unwrap();
+    assert!(bytes.len() < 1024);
+    let recovered: InvocationResultMembership = deserialize(&bytes).unwrap();
+    assert_eq!(recovered, membership);
+}
+
+#[test]
+fn default_invocation_result_bloom_keeps_new_invocations_local_at_100x_capacity() {
+    let history_size = 100 * DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY;
+    let mut bloom = InvocationResultBloom::new(
+        DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+        DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+    );
+    for index in 0..history_size {
+        bloom.insert(&IdempotencyKey::new(format!("existing-{index}")));
+    }
+
+    let sample_size = 100_000;
+    let false_positives = (0..sample_size)
+        .filter(|index| bloom.might_contain(&IdempotencyKey::new(format!("new-{index}"))))
+        .count();
+
+    assert!(
+        false_positives * 100 < sample_size * 2,
+        "default Bloom filter sent {false_positives}/{sample_size} new invocations to physical lookup"
     );
 }
 
