@@ -83,7 +83,8 @@ mod tests {
     use test_r::test;
 
     /// Encodes one `repeated golem.shardmanager.ShardId shard_ids = 1` element
-    /// the way the pre-ticket-4 `AssignShardsRequest` did: field 1, wire type 2
+    /// the way a former `repeated ShardId shard_ids = 1` on `AssignShardsRequest` was
+    /// encoded: field 1, wire type 2
     /// (length-delimited), carrying an encoded `ShardId` submessage.
     fn old_shard_ids_field(values: &[i64]) -> Vec<u8> {
         let mut buf = Vec::new();

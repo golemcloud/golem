@@ -313,6 +313,10 @@ impl ShardManager for GrpcShardManager {
         .await
     }
 
+    /// One attempt, never retried inside the client: the renewal loop backs off failures itself
+    /// on a schedule derived from the lease, and stacking the client's `Unavailable` retries under
+    /// that would let a single pass sit in the RPC for longer than the lease it is renewing - and,
+    /// on a stop, for longer than the grace the deregister has to be sent in.
     async fn renew_shard_lease(
         &self,
         executor_id: Uuid,
@@ -320,7 +324,7 @@ impl ShardManager for GrpcShardManager {
     ) -> Result<ShardLease, ShardLeaseError> {
         let response = self
             .client
-            .call("renew_shard_lease", move |client| {
+            .call_without_retry("renew_shard_lease", move |client| {
                 let request = RenewShardLeaseRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
@@ -350,7 +354,7 @@ impl ShardManager for GrpcShardManager {
     ) -> Result<(), ShardLeaseError> {
         let response = self
             .client
-            .call("deregister", move |client| {
+            .call_without_retry("deregister", move |client| {
                 let request = DeregisterRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(

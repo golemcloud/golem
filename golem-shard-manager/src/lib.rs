@@ -370,6 +370,7 @@ pub async fn run(
                         kv,
                         shard_manager_config.number_of_shards,
                         fence,
+                        etcd.compaction_retention_revisions,
                     )),
                     Arc::new(UnavailableQuotaRepo),
                     Some(leadership),

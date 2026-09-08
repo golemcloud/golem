@@ -254,17 +254,15 @@ impl ShardManagement {
         Ok(ack)
     }
 
-    /// Extends `executor_id`'s shard lease, asserting the set of shards it believes it holds.
+    /// Extends `executor_id`'s shard lease and returns the manager's set for it.
     ///
-    /// Every claimed shard must exist, be assigned to this executor and be at exactly the claimed
-    /// epoch; if any one of them is not, the whole renewal fails with
-    /// [`ShardManagerError::StaleShardEpoch`], **nothing** is renewed and the expiry is left where
-    /// it was. That atomicity is by construction rather than by unwinding: the mutation runs on a
-    /// clone that is dropped the moment the closure refuses.
-    ///
-    /// Only the *claimed* shards are checked. A shard the manager has assigned to this executor
-    /// that the executor does not claim is not an error - it is an executor that has not received
-    /// its last push yet - and the full set returned here is what corrects it.
+    /// The claimed shards are what the executor believes it holds. A claim that does not match -
+    /// a shard not assigned to this executor, or assigned at another epoch - is renewed all the
+    /// same and logged: the grant returned carries the manager's set, which the executor adopts,
+    /// so the renewal is the guaranteed second delivery of a push that was lost. Only a lease the
+    /// manager no longer holds is refused, with [`ShardManagerError::ShardLeaseNotFound`], and
+    /// that refusal stores nothing: the mutation runs on a clone that is dropped when the closure
+    /// refuses.
     ///
     /// A renewal never advances an epoch: the epoch is an ownership generation, and moving it on a
     /// renewal would make a lost response permanently fatal for a shard the executor still owns.
@@ -466,12 +464,11 @@ impl ShardManagement {
                 full_assignment_requests = full_assignment_requests.iter().join(", "),
                 "Shard management loop woken up",
             );
-            // The write lock is held while
-            //   - removals are applied to the state and got persisted,
-            //   - the rebalance plan is calculated,
-            // but the rebalance plan is NOT applied yet. The lock is then released for apply.
+            // The write lock is held while the reaping and the executor changes are applied and
+            // persisted and the plan is computed. It is released before the plan is applied, so a
+            // renewal is never queued behind a whole pass.
             let now = Utc::now();
-            let (mut base, mut rebalance, full_assignment_executors, addrs) = self
+            let (rebalance, full_assignment_executors) = self
                 .mutate_and_persist(|current_shard_state| {
                     // Every pass begins by reaping the leases that lapsed since the last one.
                     // Removing a lease drops its shard assignments, so the plan computed below
@@ -501,115 +498,68 @@ impl ShardManagement {
                     );
 
                     let rebalance = Rebalance::from_shard_state(current_shard_state, threshold);
-                    let addrs = current_shard_state.executor_addrs();
 
-                    // The state the plan was computed against, and the state `apply_rebalance`
-                    // below is applied to. `execute_rebalance` builds the pushes from it, so what
-                    // an executor is told matches what is then stored.
-                    (
-                        current_shard_state.clone(),
-                        rebalance,
-                        full_assignment_executors,
-                        addrs,
-                    )
+                    (rebalance, full_assignment_executors)
                 })
                 .await?;
-
-            // `base` was cloned inside the closure, before that persist bumped the revision, so it
-            // is one behind the state it reflects whenever the pass wrote anything. Stamp it with
-            // the revision the state was actually stored under: `execute_rebalance` builds its
-            // pushes from `base` and bumps once more, so they name the revision the apply below
-            // lands at, and a renewal read from either persisted state loses to them.
-            base.revision = self.shard_state.read().await.revision;
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
-            let rebalance_failures =
-                Self::execute_rebalance(worker_executors.clone(), &base, &mut rebalance, &addrs)
-                    .await?;
 
-            let mut needs_retry = false;
-            if !rebalance_failures.failed_assignments.is_empty() {
-                let failed_shards: HashSet<ShardId> = rebalance_failures
-                    .failed_assignments
-                    .iter()
-                    .filter_map(|executor_id| {
-                        rebalance.get_assignments().assignments.get(executor_id)
-                    })
-                    .flatten()
-                    .copied()
-                    .collect();
-                rebalance.remove_assignment_shards(&failed_shards);
+            // The plan is applied and persisted *before* anything is sent, and every delivery
+            // below is then read off the stored state. Two things rest on that order. A delivery
+            // names the revision it really lands at, rather than predicting one that a renewal
+            // persisting in the meantime would consume. And a renewal served while the fan-out is
+            // still in flight reads that same stored state, so a losing executor is handed a set
+            // that already excludes the shard being moved - which matters because a revoke is a
+            // delta with no revision of its own, so nothing else could order it against a grant.
+            self.mutate_and_persist(|current_shard_state| {
+                current_shard_state.apply_rebalance(&rebalance)
+            })
+            .await?;
 
-                warn!(
-                    failed_shards = failed_shards.iter().join(", "),
-                    "Some shards could not be assigned and will be left unassigned for retry"
-                );
-
-                {
-                    let mut updates_guard = self.updates.lock().await;
-                    for executor_id in &rebalance_failures.failed_assignments {
-                        if full_assignment_executors.contains(executor_id) {
-                            updates_guard.retry_full_assignment(*executor_id);
-                        }
-                    }
-                }
-                needs_retry = true;
-            }
-
-            if !rebalance_failures.failed_unassignments.is_empty() {
-                warn!(
-                    failed_executors = rebalance_failures.failed_unassignments.iter().join(", "),
-                    "Some shards could not be unassigned and rebalance will be retried"
-                );
-                needs_retry = true;
-            }
-
-            // A planned epoch that was overtaken between the push and the apply is re-minted, and
-            // the executor that was pushed the stale one has to be told the epoch it really holds.
-            let stale_pushes = self
-                .mutate_and_persist(|current_shard_state| {
-                    current_shard_state.apply_rebalance(&rebalance)
-                })
-                .await?;
-            if !stale_pushes.is_empty() {
-                warn!(
-                    executors = stale_pushes.iter().join(", "),
-                    "Some executors were pushed a shard epoch that was overtaken before it was \
-                     applied and will be pushed their full set again"
-                );
-                {
-                    let mut updates_guard = self.updates.lock().await;
-                    for executor_id in &stale_pushes {
-                        updates_guard.retry_full_assignment(*executor_id);
-                    }
-                }
-                needs_retry = true;
-            }
-
-            // Read after the persist rather than out of the closure, so the snapshot's
-            // `revision` field is consistent with what was stored.
+            // Read after the persist rather than out of the closure, so the snapshot's `revision`
+            // field is consistent with what was stored.
             let shard_state_snapshot = self.shard_state.read().await.clone();
+            let addrs = shard_state_snapshot.executor_addrs();
 
-            let pushes = pushes_for(
+            // One fan-out for both reasons an executor needs its set: it gained shards in this
+            // plan, or it is owed an authoritative copy after a registration or a failed delivery.
+            let push_to: BTreeSet<ExecutorId> = rebalance
+                .get_assignments()
+                .assignments
+                .keys()
+                .copied()
+                .chain(full_assignment_executors.iter().copied())
+                .collect();
+
+            let failures = Self::execute_rebalance(
+                worker_executors.clone(),
                 &shard_state_snapshot,
-                full_assignment_executors.iter().copied(),
-            )?;
+                &rebalance,
+                &push_to,
+                &addrs,
+            )
+            .await?;
 
-            let failed_full_assignments = if pushes.is_empty() {
-                BTreeSet::new()
-            } else {
-                assign_shards(worker_executors.clone(), &pushes, &addrs).await
-            };
-
-            if !failed_full_assignments.is_empty() {
+            // Both halves are repaired the same way, and repaired forwards: the store already
+            // holds the new ownership, so an executor that missed a delivery needs the set it is
+            // now recorded as holding, not a rollback of the plan. Its own next renewal carries
+            // that same set, which bounds the repair even if the push fails again.
+            let mut needs_retry = false;
+            let unreached: BTreeSet<ExecutorId> = failures
+                .failed_unassignments
+                .iter()
+                .chain(failures.failed_assignments.iter())
+                .copied()
+                .collect();
+            if !unreached.is_empty() {
                 warn!(
-                    failed_executors = failed_full_assignments.iter().join(", "),
-                    "Some executors could not receive authoritative shard assignment and will be retried"
+                    failed_executors = unreached.iter().join(", "),
+                    "Some executors could not be given their shard set and will be pushed it again"
                 );
-
                 {
                     let mut updates_guard = self.updates.lock().await;
-                    for executor_id in &failed_full_assignments {
+                    for executor_id in &unreached {
                         updates_guard.retry_full_assignment(*executor_id);
                     }
                 }
@@ -618,6 +568,13 @@ impl ShardManagement {
 
             if needs_retry {
                 self.change.notify_one();
+            }
+
+            // After the pass, so it never delays a rebalance. Only the leader runs this loop, so
+            // only the leader compacts, and a failure here costs history, not correctness.
+            let latest = *self.external_revision.lock().await;
+            if let Err(error) = self.persistence.compact(latest).await {
+                warn!(error = %error, "Compacting the shard lease state's history failed");
             }
         }
     }
@@ -734,46 +691,49 @@ impl ShardManagement {
         self.change.notify_one();
     }
 
-    /// Revokes first, then pushes each gaining executor its complete new shard set.
+    /// Revokes the shards that moved away from their old owners, then pushes every executor that
+    /// needs one its complete shard set.
     ///
-    /// `base` is the state the plan was computed against and the one `apply_rebalance` is applied
-    /// to afterwards, so applying the (already stripped) plan to a copy of it yields exactly the
-    /// sets and epochs that will be stored - nothing here predicts them.
+    /// Both are taken from `shard_state`, which is the state the plan has *already* been persisted
+    /// into. So a push names the revision it lands at instead of a predicted one, and a revoke -
+    /// which carries no revision and so cannot be ordered against anything - only ever names a
+    /// shard the store has already moved away.
+    ///
+    /// Revokes complete before any push goes out: a losing executor must have dropped a shard
+    /// before its new owner is told it holds it.
     async fn execute_rebalance(
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
-        base: &ShardLeaseState,
-        rebalance: &mut Rebalance,
+        shard_state: &ShardLeaseState,
+        rebalance: &Rebalance,
+        push_to: &BTreeSet<ExecutorId>,
         addrs: &ExecutorAddrs,
     ) -> Result<RebalanceFailures, ShardManagerError> {
+        // An idle pass reaches here with nothing planned and nobody owed a copy. Returning before
+        // the log keeps a cluster where nothing is happening from announcing a rebalance every
+        // tick for as long as it runs.
+        if rebalance.get_unassignments().is_empty() && push_to.is_empty() {
+            return Ok(RebalanceFailures {
+                failed_assignments: BTreeSet::new(),
+                failed_unassignments: BTreeSet::new(),
+            });
+        }
+
         info!("Beginning rebalance...");
 
-        if !rebalance.get_unassignments().is_empty() {
+        let failed_unassignments = if rebalance.get_unassignments().is_empty() {
+            BTreeSet::new()
+        } else {
             info!(
                 unassignments = %rebalance.get_unassignments(),
                 "Executing shard unassignments",
             );
-        }
-        let failed_unassignments = revoke_shards(
-            worker_executors.clone(),
-            rebalance.get_unassignments(),
-            addrs,
-        )
-        .await;
-        let failed_shards: HashSet<ShardId> = failed_unassignments
-            .iter()
-            .filter_map(|executor_id| rebalance.get_unassignments().unassignments.get(executor_id))
-            .flatten()
-            .copied()
-            .collect();
-        // Before the assignments are built, so a shard whose revoke failed is never pushed to a
-        // second owner.
-        rebalance.remove_shards(&failed_shards);
-        if !failed_shards.is_empty() {
-            warn!(
-                failed_shards = failed_shards.iter().join(", "),
-                "Some shards could not be unassigned and have been removed from rebalance"
-            );
-        }
+            revoke_shards(
+                worker_executors.clone(),
+                rebalance.get_unassignments(),
+                addrs,
+            )
+            .await
+        };
 
         if !rebalance.get_assignments().is_empty() {
             info!(
@@ -782,20 +742,7 @@ impl ShardManagement {
             );
         }
 
-        let mut planned = base.clone();
-        // The probe: the plan applied to a copy of the state it will be applied to for real, which
-        // is what turns "plan + base" into the exact set each gaining executor is to hold. Its
-        // stale-push report is the live apply's to make, not this copy's.
-        let _ = planned.apply_rebalance(rebalance);
-        // The live apply persists this set one revision on from `base`, so that is the revision
-        // these pushes carry: a renewal read from `base` itself then loses to them on the executor
-        // instead of tying and undoing the push. Bumping the probe copy costs nothing.
-        planned.bump_revision()?;
-        let pushes = pushes_for(
-            &planned,
-            rebalance.get_assignments().assignments.keys().copied(),
-        )?;
-
+        let pushes = pushes_for(shard_state, push_to.iter().copied())?;
         let failed_assignments = if pushes.is_empty() {
             BTreeSet::new()
         } else {

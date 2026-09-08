@@ -50,8 +50,9 @@ pub type RenewalDelay = Option<Duration>;
 /// agents are recovered for the new set exactly as the initial registration and
 /// `assign_shards_internal` do. Installed by
 /// `WorkerExecutorImpl::new`, which is the only place that can name `Ctx`.
-pub type ShardAssignmentChangedHook =
-    Arc<dyn Fn() -> BoxFuture<'static, Result<(), anyhow::Error>> + Send + Sync>;
+pub type ShardAssignmentChangedHookFn =
+    dyn Fn() -> BoxFuture<'static, Result<(), anyhow::Error>> + Send + Sync;
+pub type ShardAssignmentChangedHook = Arc<ShardAssignmentChangedHookFn>;
 
 #[async_trait]
 pub trait ShardManagerService: Send + Sync {
@@ -75,7 +76,7 @@ pub trait ShardManagerService: Send + Sync {
     /// Installs the hook fired when a re-registration replaces this executor's
     /// shard assignment. No-op by default: an implementation that
     /// never re-registers has nothing to announce.
-    fn set_assignment_changed_hook(&self, _hook: ShardAssignmentChangedHook) {}
+    fn set_assignment_changed_hook(&self, _hook: &ShardAssignmentChangedHook) {}
 }
 
 /// The interval arm of the renewal loop. A `None` delay is a lease that never
@@ -110,7 +111,13 @@ pub struct GrpcShardManagerService {
     /// backoff so a retry never waits longer than the lease it is saving.
     granted_cadence: RwLock<Option<Duration>>,
     /// Announced after a re-registration installs a fresh grant.
-    assignment_changed_hook: RwLock<Option<ShardAssignmentChangedHook>>,
+    ///
+    /// Weak, following `LazyWorkerActivator`: the hook closes over the whole service graph, and
+    /// that graph owns this service, so a strong reference here would be a cycle - nothing would
+    /// ever free the engine, the caches or the pools, and the `me` weak reference below would
+    /// never be able to observe a drop. `WorkerExecutorImpl` holds the strong one, so the hook
+    /// lives exactly as long as the executor that can serve it.
+    assignment_changed_hook: RwLock<Option<Weak<ShardAssignmentChangedHookFn>>>,
 }
 
 impl GrpcShardManagerService {
@@ -168,7 +175,12 @@ impl GrpcShardManagerService {
     /// agents are recovered for the new set. A failure here is logged, never
     /// fatal — the lease itself is already installed.
     async fn announce_assignment_changed(&self) {
-        let hook = self.assignment_changed_hook.read().unwrap().clone();
+        let hook = self
+            .assignment_changed_hook
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade);
         if let Some(hook) = hook
             && let Err(error) = hook().await
         {
@@ -217,7 +229,19 @@ impl GrpcShardManagerService {
                         break;
                     }
                 };
-                renewal_delay = svc.renew_shard_lease().await;
+                // Raced against the token as well, not just the sleep before it. A renewal is a
+                // gRPC round trip that can be followed by a re-registration and a full agent
+                // recovery, so a termination signal arriving while one runs would otherwise not
+                // be seen until it finished - past the grace `main` waits, which is exactly the
+                // window the deregister below has to be sent in. Abandoning a renewal midway
+                // costs nothing here: the process is stopping and handing the lease back.
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        svc.deregister().await;
+                        break;
+                    }
+                    delay = svc.renew_shard_lease() => renewal_delay = delay,
+                }
             }
         });
     }
@@ -296,12 +320,21 @@ impl ShardManagerService for GrpcShardManagerService {
             .register(port, pod_name, self.executor_id())
             .await?;
 
-        let number_of_shards = registration.number_of_shards.try_into().map_err(|_| {
+        let number_of_shards: usize = registration.number_of_shards.try_into().map_err(|_| {
             ShardManagerError::ConversionError(format!(
                 "RegisterSuccess.number_of_shards {} does not fit a usize",
                 registration.number_of_shards
             ))
         })?;
+
+        // `ShardId::from_agent_id` divides by it, so a zero would abort this executor on its
+        // first routing decision rather than fail the registration. `AssignShards` refuses one
+        // for the same reason; this is the other door the count comes through.
+        if number_of_shards == 0 {
+            return Err(ShardManagerError::ConversionError(
+                "RegisterSuccess.number_of_shards must not be 0".to_string(),
+            ));
+        }
 
         let assignment = ShardAssignment {
             number_of_shards,
@@ -405,8 +438,8 @@ impl ShardManagerService for GrpcShardManagerService {
         self.shard_service.clear_assignment();
     }
 
-    fn set_assignment_changed_hook(&self, hook: ShardAssignmentChangedHook) {
-        *self.assignment_changed_hook.write().unwrap() = Some(hook);
+    fn set_assignment_changed_hook(&self, hook: &ShardAssignmentChangedHook) {
+        *self.assignment_changed_hook.write().unwrap() = Some(Arc::downgrade(hook));
     }
 }
 
@@ -518,6 +551,8 @@ mod tests {
     struct MockShardManager {
         register_fn: StdMutex<Option<RegisterFn>>,
         renew_fn: StdMutex<Option<RenewFn>>,
+        /// Holds a renewal inside the RPC, so a test can act while one is still in flight.
+        renew_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
         register_calls: StdMutex<Vec<Uuid>>,
         renew_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
         deregister_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
@@ -528,6 +563,7 @@ mod tests {
             Self {
                 register_fn: StdMutex::new(None),
                 renew_fn: StdMutex::new(None),
+                renew_gate: StdMutex::new(None),
                 register_calls: StdMutex::new(Vec::new()),
                 renew_calls: StdMutex::new(Vec::new()),
                 deregister_calls: StdMutex::new(Vec::new()),
@@ -550,6 +586,11 @@ mod tests {
             + 'static,
         ) -> Self {
             *self.renew_fn.lock().unwrap() = Some(Box::new(f));
+            self
+        }
+
+        fn with_renew_gate(self, gate: Arc<tokio::sync::Notify>) -> Self {
+            *self.renew_gate.lock().unwrap() = Some(gate);
             self
         }
 
@@ -593,6 +634,11 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((executor_id, shard_epochs.clone()));
+            // Cloned out before the await: the guard must not be held across it.
+            let gate = self.renew_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
             let guard = self.renew_fn.lock().unwrap();
             let f = guard.as_ref().expect("renew_fn not configured");
             f(executor_id, shard_epochs)
@@ -659,6 +705,100 @@ mod tests {
         let shard_service = Arc::new(ShardServiceDefault::new());
         let service = GrpcShardManagerService::new(mock, shard_service.clone(), shutdown);
         (service, shard_service)
+    }
+
+    #[test]
+    // The hook closes over the whole service graph, and that graph owns this service, so a strong
+    // reference here would be a cycle: the engine, the caches and the pools would never be freed
+    // and `me` could never observe a drop. `WorkerExecutorImpl` owns the hook - this only borrows
+    // it, the same arrangement `LazyWorkerActivator` uses for the worker activator.
+    async fn the_service_only_borrows_the_assignment_changed_hook() {
+        let mock = Arc::new(MockShardManager::new());
+        let (service, _shard_service) = make_service(mock, Shutdown::new());
+
+        let owner = Arc::new(());
+        let sentinel = Arc::downgrade(&owner);
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let _captured = owner.clone();
+            Box::pin(async move { Ok(()) })
+        });
+        service.set_assignment_changed_hook(&hook);
+        assert!(
+            sentinel.upgrade().is_some(),
+            "the hook is alive while its owner holds it"
+        );
+
+        drop(hook);
+        assert!(
+            sentinel.upgrade().is_none(),
+            "the shard manager service must not keep the assignment-changed hook alive - holding \
+             it would keep the whole service graph alive with it"
+        );
+
+        // And an announcement with nothing to announce to is simply skipped, never a panic.
+        service.announce_assignment_changed().await;
+    }
+
+    #[test]
+    // The loop watches the shutdown token while it sleeps *and* while a renewal is in flight. A
+    // renewal is a round trip that can be followed by a re-registration and a recovery of every
+    // running agent, so a token only looked at between renewals would let a termination signal
+    // wait out the grace `main` allows - and the lease would then be handed back by expiry, a
+    // whole lease period later, rather than by the deregister this loop exists to send.
+    async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
+        let expiry = Utc::now() + ChronoDuration::seconds(3);
+        // Never released: the renewal is still in the RPC when the token is cancelled.
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_register(move |_| Ok(registration(Some(expiry), [(0, 1)])))
+                .with_renew(move |_, claimed| {
+                    Ok(ShardLease {
+                        shard_epochs: claimed,
+                        expires_at: Some(expiry),
+                        revision: ShardLeaseRevision(1),
+                    })
+                })
+                .with_renew_gate(gate.clone()),
+        );
+        let shutdown = Shutdown::new();
+        let (service, shard_service) = make_service(mock.clone(), shutdown.clone());
+
+        let assignment = service.register(PORT, None).await.unwrap();
+        shard_service.register(
+            assignment.number_of_shards,
+            &assignment.shard_epochs,
+            assignment.expires_at,
+            assignment.revision,
+        );
+
+        // The renewal has been sent and is parked in the gate.
+        for _ in 0..100 {
+            if !mock.renew_calls().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            mock.renew_calls().len(),
+            1,
+            "the loop should have issued a renewal that is now in flight"
+        );
+        assert!(mock.deregister_calls().is_empty());
+
+        shutdown.cancel();
+
+        for _ in 0..100 {
+            if !mock.deregister_calls().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            mock.deregister_calls().len(),
+            1,
+            "cancellation must be observed while the renewal is still in flight, not after it"
+        );
     }
 
     /// A grant that never expires has nothing to renew, so the
@@ -761,13 +901,14 @@ mod tests {
 
         let announced = Arc::new(AtomicBool::new(false));
         let flag = announced.clone();
-        service.set_assignment_changed_hook(Arc::new(move || {
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
             let flag = flag.clone();
             Box::pin(async move {
                 flag.store(true, Ordering::SeqCst);
                 Ok(())
             })
-        }));
+        });
+        service.set_assignment_changed_hook(&hook);
 
         let assignment = service.register(PORT, None).await.unwrap();
         shard_service.register(
@@ -826,13 +967,14 @@ mod tests {
 
         let announced = Arc::new(AtomicUsize::new(0));
         let count = announced.clone();
-        service.set_assignment_changed_hook(Arc::new(move || {
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
             let count = count.clone();
             Box::pin(async move {
                 count.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             })
-        }));
+        });
+        service.set_assignment_changed_hook(&hook);
 
         service.renew_shard_lease().await;
         assert_eq!(
@@ -894,13 +1036,14 @@ mod tests {
 
         let announced = Arc::new(AtomicBool::new(false));
         let flag = announced.clone();
-        service.set_assignment_changed_hook(Arc::new(move || {
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
             let flag = flag.clone();
             Box::pin(async move {
                 flag.store(true, Ordering::SeqCst);
                 Ok(())
             })
-        }));
+        });
+        service.set_assignment_changed_hook(&hook);
 
         service.renew_shard_lease().await;
 
@@ -1004,7 +1147,7 @@ mod tests {
         assert_eq!(
             shard_service.current_assignment().unwrap().shard_id_set(),
             HashSet::from([ShardId::new(0)]),
-            "without dropping the shards, which is ticket 5's drain, not this fence"
+            "without dropping the shards: the fence refuses new work and leaves the set alone"
         );
     }
 

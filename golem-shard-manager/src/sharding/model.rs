@@ -480,18 +480,16 @@ impl ShardLeaseState {
     /// Applies `rebalance`, and reports the executors whose push is now stale and has to be
     /// repeated.
     ///
-    /// The epoch of every planned assignment was decided when the plan was computed and has
-    /// already been pushed to its target, so it is applied rather than re-minted: minting again
-    /// here would store an epoch the executor was never told. That holds only while the epoch is
-    /// still *fresh* - strictly above the highest epoch recorded for that shard. `Register` writes
-    /// outside the loop and transfers a restarted instance's shards inline, so between the push and
-    /// this apply the recorded epoch can have caught up with the carried one. Storing it anyway
-    /// would leave two live executors believing they hold the same shard at the same epoch, which
-    /// is exactly the pair an oplog fence cannot tell apart. So a fresh epoch is minted instead and
-    /// the target is reported back, for a full push that tells it the epoch it actually holds; the
-    /// cost is one pass in which that executor is fenced out rather than admitted.
-    pub fn apply_rebalance(&mut self, rebalance: &Rebalance) -> BTreeSet<ExecutorId> {
-        let mut stale_pushes: BTreeSet<ExecutorId> = BTreeSet::new();
+    /// The epoch of every planned assignment was decided when the plan was computed, so it is
+    /// applied rather than re-minted - but only while it is still *fresh*, strictly above the
+    /// highest epoch recorded for that shard. `Register` writes outside the loop and transfers a
+    /// restarted instance's shards inline, so between the plan and this apply the recorded epoch
+    /// can have caught up with the planned one. Storing it anyway would leave two live executors
+    /// believing they hold the same shard at the same epoch, which is exactly the pair an oplog
+    /// fence cannot tell apart, so a fresh one is minted instead. Nothing has been told the
+    /// planned epoch yet: the pushes go out from the state this writes, so they carry whichever
+    /// epoch is stored here.
+    pub fn apply_rebalance(&mut self, rebalance: &Rebalance) {
         for (executor_id, shard_ids) in &rebalance.get_assignments().assignments {
             if !self.has_executor(*executor_id) {
                 warn!(
@@ -512,9 +510,8 @@ impl ShardLeaseState {
                             planned_epoch = %carried,
                             minted_epoch = %minted,
                             "Planned shard epoch was overtaken before the plan was applied; \
-                             minting a fresh one and repeating the push"
+                             minting a fresh one"
                         );
-                        stale_pushes.insert(*executor_id);
                         minted
                     }
                     None => self.next_epoch_for(*executor_id, *shard_id),
@@ -528,7 +525,6 @@ impl ShardLeaseState {
             }
         }
         debug_assert!(self.check_invariants().is_ok());
-        stale_pushes
     }
 
     /// Whether `epoch` is still above every epoch ever recorded for `shard_id`, and so may be
@@ -1159,11 +1155,7 @@ mod tests {
         assert_eq!(rebalance.epoch_for(shard(1)), Some(ShardEpoch(1)));
         assert_eq!(rebalance.epoch_for(shard(2)), None);
 
-        let stale_pushes = shard_state.apply_rebalance(&rebalance);
-        assert!(
-            stale_pushes.is_empty(),
-            "a plan applied to the state it was built from carries fresh epochs"
-        );
+        shard_state.apply_rebalance(&rebalance);
 
         assert_eq!(
             shard_state.shards_for_executor(executor(1)),
@@ -1180,10 +1172,8 @@ mod tests {
 
         // Applying the same plan again is a no-op on the state (idempotent assignments, guarded
         // unassignments). The carried epoch is no longer above the recorded one - this very apply
-        // put it there - so it is re-minted, which for an unchanged owner is the same value; the
-        // target is reported for a repeat push, which is a redundant push, never a wrong one.
-        let stale_pushes = shard_state.apply_rebalance(&rebalance);
-        assert_eq!(stale_pushes, BTreeSet::from([executor(2)]));
+        // put it there - so it is re-minted, which for an unchanged owner is the same value.
+        shard_state.apply_rebalance(&rebalance);
         assert_eq!(
             shard_state.shards_for_executor(executor(2)),
             Some(shards(&[0, 1]))
@@ -1192,12 +1182,13 @@ mod tests {
     }
 
     #[test]
-    // `Register` writes outside the loop, so between the moment a plan's epochs were pushed to
-    // their target and the moment the plan is applied, a restarted instance registering at a known
-    // address can inherit the same shard and mint the same epoch inline. Storing the carried epoch
-    // then would leave two live executors on the same `(shard, epoch)`, which is exactly the pair
-    // an oplog fence cannot tell apart.
-    fn a_planned_epoch_overtaken_before_the_apply_is_re_minted_and_reported() {
+    // `Register` writes outside the loop, so between the moment a plan's epochs are decided and
+    // the moment the plan is applied, a restarted instance registering at a known address can
+    // inherit the same shard and mint the same epoch inline. Storing the carried epoch then would
+    // leave two live executors on the same `(shard, epoch)`, which is exactly the pair an oplog
+    // fence cannot tell apart. The push goes out from what this stores, so re-minting here is all
+    // that is needed - nothing has been told the planned epoch.
+    fn a_planned_epoch_overtaken_before_the_apply_is_re_minted() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1, 2, 3]), (2, 2, &[])]);
 
         // the plan: shard 0 moves from executor 1 to executor 2, at epoch 1
@@ -1213,7 +1204,7 @@ mod tests {
         shard_state.add_executor(executor(3), addr(1), None, t0(), TTL);
         assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(1)));
 
-        let stale_pushes = shard_state.apply_rebalance(&rebalance);
+        shard_state.apply_rebalance(&rebalance);
 
         assert_eq!(
             shard_state.epoch_for_shard(shard(0)),
@@ -1223,11 +1214,6 @@ mod tests {
         assert_eq!(
             shard_state.shard_assignments[&shard(0)].executor_id,
             executor(2)
-        );
-        assert_eq!(
-            stale_pushes,
-            BTreeSet::from([executor(2)]),
-            "the executor that was pushed the overtaken epoch must be queued for a full push"
         );
         assert!(shard_state.check_invariants().is_ok());
     }

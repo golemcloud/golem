@@ -14,7 +14,7 @@
 
 use super::model::{Assignments, ExecutorShards, ShardEpoch, ShardLeaseState, Unassignments};
 use golem_common::model::ShardId;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tracing::trace;
@@ -209,27 +209,6 @@ impl Rebalance {
     /// The epoch this plan decided for `shard_id`, if the plan assigns it.
     pub fn epoch_for(&self, shard_id: ShardId) -> Option<ShardEpoch> {
         self.assigned_epochs.get(&shard_id).copied()
-    }
-
-    pub fn remove_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        self.remove_assignment_shards(shard_ids);
-        for unassigned_shard_ids in self.unassignments.unassignments.values_mut() {
-            unassigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-        self.unassignments
-            .unassignments
-            .retain(|_, shards| !shards.is_empty());
-    }
-
-    pub fn remove_assignment_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for assigned_shard_ids in self.assignments.assignments.values_mut() {
-            assigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
-        }
-        self.assignments
-            .assignments
-            .retain(|_, shards| !shards.is_empty());
-        self.assigned_epochs
-            .retain(|shard_id, _| !shard_ids.contains(shard_id));
     }
 }
 

@@ -57,7 +57,7 @@ impl ShardManagerServiceImpl {
         pod: Pod,
         pod_name: Option<String>,
     ) -> Result<RegisterAck, ShardManagerError> {
-        debug!(executor_id = %executor_id, "Received request to register executor at: {}", pod);
+        debug!(executor_id = %executor_id, addr = %pod, "Received request to register executor");
         let ack = self
             .shard_management
             .register_executor(executor_id, ExecutorAddr::from(pod), pod_name)

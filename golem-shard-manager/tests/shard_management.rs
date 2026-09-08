@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
     ExecutorAddr, ExecutorId, ExternalRevision, HealthCheck, HealthCheckError, NO_REVISION,
-    RoutingTablePersistence, ShardAssignmentPush, ShardEpoch, ShardLeaseState, ShardManagement,
-    ShardManagerError, WorkerExecutorService,
+    RoutingTablePersistence, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
+    ShardLeaseState, ShardManagement, ShardManagerError, WorkerExecutorService,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr};
@@ -86,6 +86,19 @@ impl TestPersistence {
         self.store.lock().await.shard_state.clone()
     }
 
+    /// The state that was stored carrying `revision`, if any write ever stored one.
+    ///
+    /// A delivery names the revision of the state it was read from, so this is how a test checks
+    /// that such a state really existed rather than being predicted for a write still to come.
+    async fn state_at(&self, revision: ShardLeaseRevision) -> Option<ShardLeaseState> {
+        self.writes
+            .lock()
+            .await
+            .iter()
+            .find(|(_, written)| written.revision == revision)
+            .map(|(_, written)| written.clone())
+    }
+
     /// Scripts the outcome of the next writes. `vec![None, Some(err)]` fails only the second one.
     async fn fail_writes(&self, script: Vec<Option<ShardManagerError>>) {
         *self.injected.lock().await = script.into();
@@ -150,7 +163,7 @@ impl RoutingTablePersistence for TestPersistence {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 struct TestWorkerExecutors {
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
@@ -163,7 +176,16 @@ struct TestWorkerExecutors {
     /// `local_assignments` records only the net effect, so no-op commands - exactly what a leader
     /// that has lost the fence would still issue - leave no trace there.
     commands: Arc<Mutex<Vec<String>>>,
+    /// A renewal to serve from inside the next revoke, and the grant it came back with.
+    ///
+    /// The fan-out is exactly when an executor's own renewal timer can fire, and what that
+    /// renewal is told is what decides whether a shard it has just been revoked comes back.
+    #[allow(clippy::type_complexity)]
+    renew_during_revoke: Arc<Mutex<Option<(ShardManagement, ExecutorId, Claim)>>>,
+    grant_during_revoke: Arc<Mutex<Option<ShardLeaseGrant>>>,
 }
+
+type Claim = BTreeMap<ShardId, ShardEpoch>;
 
 impl TestWorkerExecutors {
     async fn set_local_assignment(&self, pod: Pod, shard_ids: &[i64]) {
@@ -188,6 +210,20 @@ impl TestWorkerExecutors {
 
     async fn fail_next_revocations(&self, pod: Pod, count: usize) {
         self.failed_revocations.lock().await.insert(pod, count);
+    }
+
+    /// Arms one renewal to be served from inside the next revoke this double receives.
+    async fn renew_during_next_revoke(
+        &self,
+        shard_management: ShardManagement,
+        executor_id: ExecutorId,
+        claimed: Claim,
+    ) {
+        *self.renew_during_revoke.lock().await = Some((shard_management, executor_id, claimed));
+    }
+
+    async fn grant_served_during_revoke(&self) -> Option<ShardLeaseGrant> {
+        self.grant_during_revoke.lock().await.clone()
     }
 
     async fn pushes_to(&self, pod: Pod) -> Vec<ShardAssignmentPush> {
@@ -253,6 +289,18 @@ impl WorkerExecutorService for TestWorkerExecutors {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         self.record("revoke", *pod, shard_ids).await;
+
+        // Serve an executor's renewal in the middle of the fan-out, which is when a real one
+        // would arrive, and keep what it was granted for the test to look at.
+        let armed = self.renew_during_revoke.lock().await.take();
+        if let Some((shard_management, executor_id, claimed)) = armed {
+            let grant = shard_management
+                .renew_shard_lease(executor_id, &claimed)
+                .await
+                .expect("the renewal served during the fan-out should have been granted");
+            *self.grant_during_revoke.lock().await = Some(grant);
+        }
+
         if Self::should_fail(&self.failed_revocations, *pod).await {
             return Err(ShardManagerError::Timeout);
         }
@@ -676,9 +724,82 @@ async fn reconciliation_clears_duplicate_local_shard_owner() {
 }
 
 #[test]
-// A transient assign failure leaves shards unassigned for one loop, then the
-// next loop assigns them from the routing table's unassigned set.
-async fn failed_assignment_is_retried_from_unassigned_shards() {
+// A revoke is the one delivery with no revision of its own, so nothing on the executor can order
+// it against a renewal grant that crossed it on the network: a grant still listing the revoked
+// shard would simply put it back, and both executors would then admit it until the loser's next
+// renewal. What rules that out is that the plan is stored before any of it is sent - so a renewal
+// served in the middle of the fan-out already reads the shard as belonging to its new owner.
+async fn a_renewal_served_during_the_revoke_fan_out_does_not_hand_the_shard_back() {
+    let old_pod = pod(1, 9000);
+    let new_pod = pod(2, 9001);
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    worker_executors
+        .set_local_assignment(old_pod, &[0, 1, 2, 3])
+        .await;
+
+    let (shard_management, persistence, mut join_set) = new_shard_management(
+        shard_state_with_executors(
+            4,
+            vec![(executor(1), old_pod, "worker-executor-0", &[0, 1, 2, 3])],
+        ),
+        worker_executors.clone(),
+    )
+    .await;
+
+    // The claim is what the losing executor still believes it holds - every shard, including the
+    // two about to move.
+    let before = persistence.latest().await;
+    worker_executors
+        .renew_during_next_revoke(
+            shard_management.clone(),
+            executor(1),
+            claim_of(&before, executor(1)),
+        )
+        .await;
+
+    shard_management
+        .register_executor(
+            executor(2),
+            new_pod.into(),
+            Some("worker-executor-1".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
+
+    wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
+    wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
+
+    let grant = worker_executors
+        .grant_served_during_revoke()
+        .await
+        .expect("the armed renewal should have been served from inside the revoke");
+    assert_eq!(
+        grant.shard_epochs.keys().copied().collect::<BTreeSet<_>>(),
+        shard_ids(&[2, 3]),
+        "a renewal served while the fan-out is in flight must already exclude the shards being \
+         moved; granting them back would leave two executors admitting the same shard"
+    );
+
+    // ...and the push that gave them to their new owner names a revision that is really stored,
+    // so a grant read before it can only ever be older, never equal to it.
+    let last_push = worker_executors
+        .pushes_to(new_pod)
+        .await
+        .pop()
+        .expect("the gaining executor should have been pushed its set");
+    let stored = persistence.state_at(last_push.revision).await.expect(
+        "the push must name a revision the store really held, not one predicted for a later write",
+    );
+    assert_eq!(shards_at(&stored, new_pod), shard_ids(&[0, 1]));
+
+    join_set.abort_all();
+}
+
+#[test]
+// The plan is stored before it is pushed, so a transient assign failure does not roll the shards
+// back to unassigned: the store already records the new owner. The executor that missed its push
+// is queued for a full one instead, and the next loop delivers the set it is recorded as holding.
+async fn failed_assignment_is_retried_with_a_full_push() {
     let old_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -716,9 +837,11 @@ async fn failed_assignment_is_retried_from_unassigned_shards() {
 }
 
 #[test]
-// A failed revoke must not assign the shard elsewhere, but it should be retried
-// and eventually converge without another shard-manager event.
-async fn failed_revoke_is_retried_without_assigning_to_new_executor_first() {
+// A revoke carries no revision, so it is only ever sent for a shard the store has already moved -
+// which means a failed one cannot be undone by rolling the plan back. The old owner is queued for
+// a full push instead, which tells it the set it is now recorded as holding, and the pass converges
+// without another shard-manager event.
+async fn failed_revoke_is_repaired_by_a_full_push() {
     let old_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -1056,11 +1179,11 @@ async fn a_persistence_failure_leaves_the_state_untouched_and_stops_the_loop() {
 }
 
 #[test]
-// The second persist of a pass runs *after* the rebalance reached the executors over gRPC, so
-// rolling it back leaves them holding shards the routing table no longer records - and a rebalance
-// planned from the rolled-back state then sees a balanced table and plans nothing, forever. Ending
-// the task is what saves it: the process restarts and re-sends every authoritative assignment.
-async fn a_persistence_failure_after_the_rebalance_was_executed_stops_the_loop() {
+// The plan is persisted before any of it is sent, so a refused write means nothing was commanded:
+// no executor was told to drop a shard, none was told it gained one, and the routing table still
+// describes what every executor holds. The loop must stop all the same - a refused fenced write
+// means another shard manager may own the topology, so this process must not keep driving it.
+async fn a_persistence_failure_applying_the_rebalance_stops_the_loop_before_anything_is_sent() {
     let existing_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -1080,9 +1203,8 @@ async fn a_persistence_failure_after_the_rebalance_was_executed_stops_the_loop()
     .await;
 
     // Let the registration's own write through, then fail the persist of the applied rebalance.
-    // Two entries, not three: the pass the registration wakes up finds nothing changed before the
-    // plan is executed, so the no-op guard skips that write entirely and the second entry lands on
-    // the apply.
+    // Two entries, not three: the pass the registration wakes up finds nothing changed while it
+    // plans, so the no-op guard skips that write entirely and the second entry lands on the apply.
     persistence
         .fail_writes(vec![None, Some(ShardManagerError::ConcurrentModification)])
         .await;
@@ -1118,16 +1240,20 @@ async fn a_persistence_failure_after_the_rebalance_was_executed_stops_the_loop()
         "the in-memory state must match the last state that was actually stored"
     );
 
-    // ... but the rebalance it triggered was rolled back after the executor was told about it.
-    // That divergence is why the loop must stop rather than carry on.
+    // ... and the rebalance it triggered was refused before a byte of it went out, so the store,
+    // the in-memory state and both executors still agree on who holds what.
     assert!(
         shards_at(&after, new_pod).is_empty(),
-        "the rolled-back rebalance must not appear in the routing table"
+        "the refused rebalance must not appear in the routing table"
     );
     assert!(
-        !worker_executors.local_assignment(new_pod).await.is_empty(),
-        "the rebalance should have reached the executor before the persist failed - without that, \
-         this test is not exercising the second persist site"
+        worker_executors.local_assignment(new_pod).await.is_empty(),
+        "a rebalance whose persist was refused must never have been pushed"
+    );
+    assert_eq!(
+        worker_executors.local_assignment(existing_pod).await,
+        shard_ids(&[0, 1, 2, 3]),
+        "and nothing must have been revoked from the executor that still holds every shard"
     );
 }
 
@@ -1545,7 +1671,7 @@ async fn a_demoted_leaders_fenced_write_fails_before_any_executor_command() {
 }
 
 #[test]
-// The gap ticket 3 characterised, closed: `register_executor` persists the lease and only then
+// `register_executor` persists the lease and only then
 // acknowledges, so a registration whose write is refused is refused to the executor too. Nothing
 // is stored, nothing is pushed, and the leader whose fenced write was rejected stops - the write
 // happens outside the loop now, so the error reaches the loop through the fail-stop slot rather
@@ -2039,7 +2165,7 @@ async fn an_expired_lease_is_reclaimed_within_one_tick() {
 
 #[test]
 // A graceful shutdown hands the lease back and the shards with it. `Deregister` deliberately does
-// not notify the loop - the ticket makes the lease protocol pull-based - so the tick is what has to
+// not notify the loop, so the tick is what has to
 // re-home them, and it bounds the hand-off by one period.
 async fn deregistering_an_executor_re_homes_its_shards_within_one_tick() {
     let leaving_pod = pod(1, 9000);
@@ -2060,10 +2186,10 @@ async fn deregistering_an_executor_re_homes_its_shards_within_one_tick() {
 
     wait_for_local_assignment(&worker_executors, staying_pod, shard_ids(&[0, 1, 2, 3])).await;
 
-    // The push that re-homed the shards is built from a probe copy before the live apply, and
-    // carries the revision that apply lands at - so a persisted state exists at exactly that
-    // revision holding exactly that set. A renewal read from the pre-apply state then loses to
-    // the push on the executor instead of tying with it and undoing it.
+    // The push that re-homed the shards is read off the state the plan was already persisted
+    // into, so a persisted state exists at exactly the revision it names, holding exactly the set
+    // it carries. A renewal read before that persist names a strictly older revision and so loses
+    // to the push on the executor instead of tying with it and undoing it.
     let last_push = worker_executors
         .pushes_to(staying_pod)
         .await

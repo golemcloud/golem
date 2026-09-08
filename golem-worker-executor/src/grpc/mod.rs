@@ -25,6 +25,7 @@ use crate::model::public_oplog::{
 };
 use crate::model::{LastError, LookupResult, ReadFileResult};
 use crate::services::events::Event;
+use crate::services::shard_manager::ShardAssignmentChangedHook;
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
 };
@@ -115,6 +116,10 @@ pub struct WorkerExecutorImpl<
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+    /// Same arrangement for the assignment-changed hook: the shard manager service keeps a Weak
+    /// to it, because the hook closes over the service graph that owns that service. Holding the
+    /// strong one here ties the hook's life to the executor's rather than making a cycle of it.
+    _assignment_changed_hook: ShardAssignmentChangedHook,
     ctx: PhantomData<Ctx>,
 }
 
@@ -125,6 +130,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Self {
             services: self.services.clone(),
             _worker_activator: self._worker_activator.clone(),
+            _assignment_changed_hook: self._assignment_changed_hook.clone(),
             ctx: PhantomData,
         }
     }
@@ -158,25 +164,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         lazy_worker_activator.set(worker_activator.clone());
 
+        // A re-registration after `LeaseNotFound`, and a renewal that corrected the set, must
+        // announce the new assignment exactly as this function and `assign_shards_internal` do.
+        // The renewal loop cannot name `Ctx`, so it is handed this hook — installed before
+        // `register`, which is what starts that loop. The executor owns it and the service
+        // borrows it weakly, so closing over the service graph here is not a reference cycle.
+        let hook_services = services.clone();
+        let assignment_changed_hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let services = hook_services.clone();
+            Box::pin(async move { Self::apply_shard_assignment_effects(&services).await })
+        });
+
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
             _worker_activator: worker_activator,
+            _assignment_changed_hook: assignment_changed_hook.clone(),
             ctx: PhantomData,
         };
 
         info!(port, "Registering worker executor");
 
-        // A re-registration after `LeaseNotFound` must announce the
-        // new assignment exactly as this function and `assign_shards_internal`
-        // do. The renewal loop cannot name `Ctx`, so it is handed this hook —
-        // installed before `register`, which is what starts that loop.
-        let hook_services = services.clone();
         worker_executor
             .shard_manager_service()
-            .set_assignment_changed_hook(Arc::new(move || {
-                let services = hook_services.clone();
-                Box::pin(async move { Self::apply_shard_assignment_effects(&services).await })
-            }));
+            .set_assignment_changed_hook(&assignment_changed_hook);
 
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         let shard_assignment = worker_executor
@@ -184,7 +194,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .register(port, pod_name)
             .await?;
 
-        info!("Received initial shard assignment ({shard_assignment})");
+        info!(assignment = %shard_assignment, "Received initial shard assignment");
 
         worker_executor.shard_service().register(
             shard_assignment.number_of_shards,
@@ -1018,7 +1028,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     /// Full replace: the request carries this executor's complete
     /// shard set with epochs, the lease expiry, and the cluster's shard count.
     /// Anything absent from the set is dropped, and any agent whose shard went
-    /// away is restarted — the sweep the RPC this one absorbs used to run.
+    /// away is restarted.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
@@ -1080,7 +1090,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
         // Pure set membership on purpose: a lapsed lease must not restart every
-        // running agent. Draining on lease loss is ticket 5's.
+        // running agent: a lapsed lease refuses new work and leaves running work alone.
         for (agent_id, worker_details) in this.active_agents().snapshot().await {
             if this.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
