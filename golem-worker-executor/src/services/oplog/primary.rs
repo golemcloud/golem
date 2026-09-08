@@ -23,8 +23,9 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogError, OplogService, OrderedOplogStart, PendingUpload,
-    ReservedPayload, ReservedRawStartBuilder, cursor_value, next_scan_cursor, scan_modes,
+    OplogAddReceipt, OplogConstructor, OplogError, OplogFence, OplogService, OrderedOplogStart,
+    PendingUpload, ReservedPayload, ReservedRawStartBuilder, cursor_value, next_scan_cursor,
+    scan_modes,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -34,6 +35,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::model::RetryConfig;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -55,12 +57,39 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, warn};
 
+/// Runs a storage operation under the retry policy, panicking on anything it cannot retry away.
+///
+/// Reads, deletions and prefix drops keep this shape: a permanent failure there is a broken
+/// deployment, and failing fast is the long-standing contract.
 async fn retry_storage_op<T, F, Fut>(
     retry_config: &RetryConfig,
     op_name: &str,
     key: &str,
-    mut op: F,
+    op: F,
 ) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    match retry_storage_op_fenceable(retry_config, op_name, key, op).await {
+        Ok(val) => val,
+        Err(err) => panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}"),
+    }
+}
+
+/// As [`retry_storage_op`], but hands a fence back instead of panicking on it.
+///
+/// A fenced write is not a storage failure: the storage is healthy and refused the write on
+/// purpose, because this executor no longer owns the agent's shard. Retrying cannot change that,
+/// and panicking would take the whole executor down over one agent that simply moved. Every other
+/// permanent failure still panics, so the fail-stop contract is unchanged for everything else -
+/// including the primary-key collision that has always been the crude fence.
+async fn retry_storage_op_fenceable<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> Result<T, IndexedStorageError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
@@ -69,7 +98,8 @@ where
     loop {
         attempts += 1;
         match op().await {
-            Ok(val) => return val,
+            Ok(val) => return Ok(val),
+            Err(err @ IndexedStorageError::Fenced { .. }) => return Err(err),
             Err(IndexedStorageError::Transient(msg)) => {
                 if let Some(delay) = get_delay(retry_config, attempts) {
                     record_oplog_storage_retry(op_name);
@@ -151,17 +181,18 @@ impl SerializedOplogAppend {
         namespace: &IndexedStorageNamespace,
         api_name: &'static str,
         key: &str,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let storage = indexed_storage.with_entity("oplog", api_name, "entry");
         match self {
             Self::Entry((id, value)) => {
                 storage
-                    .append_raw(namespace.clone(), key, *id, value.to_vec(), None)
+                    .append_raw(namespace.clone(), key, *id, value.to_vec(), shard_epoch)
                     .await
             }
             Self::Batch(entries) => {
                 storage
-                    .append_many_raw(namespace, key, entries.clone(), None)
+                    .append_many_raw(namespace, key, entries.clone(), shard_epoch)
                     .await
             }
         }
@@ -176,18 +207,26 @@ async fn retry_oplog_append(
     api_name: &'static str,
     key: &str,
     append: SerializedOplogAppend,
-) {
+    shard_epoch: Option<ShardEpoch>,
+) -> Result<(), IndexedStorageError> {
     let mut attempts = 0u32;
     let mut write_may_have_committed = false;
     loop {
         attempts += 1;
         let error = match append
-            .write(indexed_storage, namespace, api_name, key)
+            .write(indexed_storage, namespace, api_name, key, shard_epoch)
             .await
         {
-            Ok(()) => return,
+            Ok(()) => return Ok(()),
             Err(error) => error,
         };
+
+        // The storage refused the write because the shard has a new owner. Not a transient
+        // failure to retry and not an indeterminate one to reconcile: it is a deliberate refusal,
+        // so hand it back and let the caller give up this one agent instead of aborting.
+        if matches!(error, IndexedStorageError::Fenced { .. }) {
+            return Err(error);
+        }
 
         let retryable = match &error {
             IndexedStorageError::Indeterminate(_) => {
@@ -209,11 +248,8 @@ async fn retry_oplog_append(
                 }
                 false
             }
-            // No backend asserts an epoch yet, so nothing can produce this. Treated as permanent
-            // until the fence is armed, which is when it becomes a value the caller acts on.
-            IndexedStorageError::Fenced { .. } => {
-                panic!("Indexed storage operation '{op_name}' was fenced for key '{key}': {error}")
-            }
+            // Returned above; named here only because the guard does not make this exhaustive.
+            IndexedStorageError::Fenced { .. } => unreachable!("a fence returns before this match"),
         };
 
         if write_may_have_committed {
@@ -226,7 +262,7 @@ async fn retry_oplog_append(
             )
             .await
             {
-                Some(true) => return,
+                Some(true) => return Ok(()),
                 Some(false) => panic!(
                     "Indexed storage operation '{op_name}' failed for key '{key}' and the indeterminate write did not match storage: {error}"
                 ),
@@ -363,8 +399,13 @@ impl PrimaryOplogService {
             api_name,
             &key,
             SerializedOplogAppend::Entry((1, value)),
+            None,
         )
-        .await;
+        .await
+        .unwrap_or_else(|err| {
+            // Unreachable: this path asserts no epoch, so no backend can fence it.
+            panic!("Failed to append the initial oplog entry for key '{key}': {err}")
+        });
     }
 
     async fn get_last_index_from_storage(
@@ -586,6 +627,9 @@ impl OplogService for PrimaryOplogService {
             .get_or_open(
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
+                    // `OplogService::open` does not carry the caller's shard epoch yet, so no
+                    // append asserts one and no backend can fence. Threading it is the last step.
+                    None,
                     self.indexed_storage.clone(),
                     self.blob_storage.clone(),
                     self.replicas,
@@ -801,11 +845,13 @@ struct CreateOplogConstructor {
     agent_mode: AgentMode,
     account_id: AccountId,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl CreateOplogConstructor {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        shard_epoch: Option<ShardEpoch>,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
@@ -820,6 +866,7 @@ impl CreateOplogConstructor {
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     ) -> Self {
         Self {
+            shard_epoch,
             indexed_storage,
             blob_storage,
             replicas,
@@ -852,6 +899,7 @@ impl OplogConstructor for CreateOplogConstructor {
             }
         };
         Arc::new(PrimaryOplog::new(
+            self.shard_epoch,
             self.indexed_storage,
             self.blob_storage,
             self.replicas,
@@ -1003,6 +1051,7 @@ impl Drop for PrimaryOplog {
 impl PrimaryOplog {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        shard_epoch: Option<ShardEpoch>,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
@@ -1018,6 +1067,7 @@ impl PrimaryOplog {
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let mut state = PrimaryOplogState {
+            shard_epoch,
             indexed_storage,
             blob_storage,
             replicas,
@@ -1045,10 +1095,14 @@ impl PrimaryOplog {
                     OplogJob::Add { entry, done } => {
                         record_oplog_call("add");
                         let idx = state.push(entry);
-                        if state.over_commit_threshold() {
-                            state.commit(CommitLevel::Always).await;
-                        }
-                        let _ = done.send(Ok(idx));
+                        // A threshold commit failing must fail the `add` that triggered it: the
+                        // caller would otherwise be told its entry landed when the batch it was
+                        // folded into was refused.
+                        let result = match state.maybe_commit().await {
+                            Ok(()) => Ok(idx),
+                            Err(error) => Err(error),
+                        };
+                        let _ = done.send(result);
                     }
                     OplogJob::AddDurableStreamBatch { make_batch, done } => {
                         record_oplog_call("add_durable_stream_batch");
@@ -1076,9 +1130,11 @@ impl PrimaryOplog {
                             }
                             Ok(result)
                         });
-                        if result.is_ok() && state.over_commit_threshold() {
-                            state.commit(CommitLevel::Always).await;
-                        }
+                        let result = match (result, state.maybe_commit().await) {
+                            (Ok(value), Ok(())) => Ok(value),
+                            (Err(error), _) => Err(error.into()),
+                            (Ok(_), Err(error)) => Err(error),
+                        };
                         let _ = done.send(result.map_err(OplogError::from));
                     }
                     OplogJob::AddPair {
@@ -1090,10 +1146,11 @@ impl PrimaryOplog {
                         let first_idx = state.push(start);
                         let second = make_second(first_idx);
                         let second_idx = state.push(second);
-                        if state.over_commit_threshold() {
-                            state.commit(CommitLevel::Always).await;
-                        }
-                        let _ = done.send(Ok((first_idx, second_idx)));
+                        // Both halves of the pair share the threshold commit, so a refused
+                        // commit fails the pair rather than reporting a write that was rolled
+                        // back.
+                        let result = state.maybe_commit().await.map(|()| (first_idx, second_idx));
+                        let _ = done.send(result);
                     }
                     OplogJob::AddStart {
                         serialized_request,
@@ -1133,9 +1190,11 @@ impl PrimaryOplog {
                                 Err(err) => Err(err),
                             }
                         };
-                        if result.is_ok() && state.over_commit_threshold() {
-                            state.commit(CommitLevel::Always).await;
-                        }
+                        let result = match (result, state.maybe_commit().await) {
+                            (Ok(value), Ok(())) => Ok(value),
+                            (Err(error), _) => Err(error.into()),
+                            (Ok(_), Err(error)) => Err(error),
+                        };
                         let _ = done.send(result.map_err(OplogError::from));
                     }
                     OplogJob::AddIndexedStart {
@@ -1160,14 +1219,16 @@ impl PrimaryOplog {
                                 })
                             },
                         );
-                        if result.is_ok() && state.over_commit_threshold() {
-                            state.commit(CommitLevel::Always).await;
-                        }
+                        let result = match (result, state.maybe_commit().await) {
+                            (Ok(value), Ok(())) => Ok(value),
+                            (Err(error), _) => Err(error.into()),
+                            (Ok(_), Err(error)) => Err(error),
+                        };
                         let _ = done.send(result.map_err(OplogError::from));
                     }
                     OplogJob::Commit { level, done } => {
                         let result = state.commit(level).await;
-                        let _ = done.send(Ok(result));
+                        let _ = done.send(result);
                     }
                     OplogJob::DropPrefix {
                         last_dropped_id,
@@ -1451,6 +1512,13 @@ struct PrimaryOplogState {
     /// any buffered entries, so no committed entry can reference a not-yet-written blob.
     pending_uploads: Vec<PendingUpload>,
     durable_stream_sessions: super::raw_session::RawSessionCache,
+    /// The shard epoch this executor held for the agent's shard when the oplog was opened, and
+    /// the one every append asserts.
+    ///
+    /// Cached at open rather than read per write: one live oplog is one ownership generation, and
+    /// this is the value its metadata row was written with. A renewal never changes it - an epoch
+    /// only moves when the shard changes owner, and then this oplog is the losing side.
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl PrimaryOplogState {
@@ -1525,7 +1593,10 @@ impl PrimaryOplogState {
         }
     }
 
-    async fn append(&mut self, entries: Vec<OplogEntry>) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn append(
+        &mut self,
+        entries: Vec<OplogEntry>,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         record_oplog_call("append");
 
         // Commit barrier: every deferred external payload reserved during this session must be
@@ -1546,7 +1617,7 @@ impl PrimaryOplogState {
         }
 
         if entries.is_empty() {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         }
 
         let entry_count = entries.len() as u64;
@@ -1578,8 +1649,10 @@ impl PrimaryOplogState {
             "append",
             &self.key,
             SerializedOplogAppend::Batch(serialized_pairs),
+            self.shard_epoch,
         )
-        .await;
+        .await
+        .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err))?;
 
         let account_id = self.account_id.to_string();
         let environment_id = self.owned_agent_id.environment_id().to_string();
@@ -1597,11 +1670,34 @@ impl PrimaryOplogState {
         );
 
         self.last_committed_idx = last_idx;
-        BTreeMap::from_iter(
+        Ok(BTreeMap::from_iter(
             pairs
                 .into_iter()
                 .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry)),
-        )
+        ))
+    }
+
+    /// Commits if the buffer is over the threshold. Separated out so the actor arms can fold a
+    /// threshold-commit failure into the job that triggered it.
+    async fn maybe_commit(&mut self) -> Result<(), OplogError> {
+        if self.over_commit_threshold() {
+            self.commit(CommitLevel::Always).await?;
+        }
+        Ok(())
+    }
+
+    /// Names the agent on a storage error, so the worker that hit it can be given up by id.
+    fn as_oplog_error(owned_agent_id: &OwnedAgentId, err: IndexedStorageError) -> OplogError {
+        match err {
+            IndexedStorageError::Fenced {
+                expected, actual, ..
+            } => OplogError::Fenced(OplogFence {
+                agent_id: owned_agent_id.agent_id(),
+                expected_epoch: expected,
+                actual_epoch: actual,
+            }),
+            other => OplogError::Storage(other.to_string()),
+        }
     }
 
     /// Pushes an entry into the in-memory buffer and advances the oplog index,
@@ -1642,7 +1738,10 @@ impl PrimaryOplogState {
         self.buffer.len() > self.max_operations_before_commit as usize
     }
 
-    async fn commit(&mut self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &mut self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         record_oplog_call("commit");
 
         let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
