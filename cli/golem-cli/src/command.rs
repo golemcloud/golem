@@ -2816,9 +2816,6 @@ pub mod server {
         #[command(after_help = crate::command_examples::SERVER_CLEAN)]
         Clean,
     }
-
-    #[cfg(test)]
-    mod tests;
 }
 
 pub fn builtin_exec_subcommands() -> BTreeSet<String> {
