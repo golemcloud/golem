@@ -677,6 +677,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 pub trait RpcCounter {
     fn new(name: String) -> Self;
     fn inc_by(&mut self, value: u64);
+    fn inc_and_return_text(&mut self, bytes: u32) -> String;
     fn get_value(&self) -> u64;
     fn get_args(&self) -> Vec<String>;
     fn get_env(&self) -> Vec<(String, String)>;
@@ -698,6 +699,11 @@ impl RpcCounter for RpcCounterImpl {
 
     fn inc_by(&mut self, value: u64) {
         self.value += value;
+    }
+
+    fn inc_and_return_text(&mut self, bytes: u32) -> String {
+        self.value += 1;
+        "x".repeat(bytes as usize)
     }
 
     fn get_value(&self) -> u64 {
@@ -983,6 +989,12 @@ pub trait CancelTester {
 
     /// Starts an async RPC call, awaits its completion, then cancels (should be no-op)
     async fn test_cancel_completed(&self, counter_name: String) -> u64;
+
+    fn grow_memory_before_rpc_activation(&self, counter_name: String);
+
+    async fn receive_large_rpc_result(&self, counter_name: String) -> u64;
+
+    async fn grow_memory_after_rpc_result(&self, counter_name: String);
 }
 
 struct CancelTesterImpl {
@@ -1015,6 +1027,49 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 impl CancelTester for CancelTesterImpl {
     fn new(name: String) -> Self {
         Self { _name: name }
+    }
+
+    fn grow_memory_before_rpc_activation(&self, counter_name: String) {
+        let constructor = encode_single_parameter(counter_name);
+        let input = encode_single_parameter(1u64);
+        let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
+        rpc.invoke_and_await("inc_by", input, None).unwrap();
+    }
+
+    async fn receive_large_rpc_result(&self, counter_name: String) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let future = rpc
+            .async_invoke_and_await(
+                "inc_and_return_text",
+                encode_single_parameter(4 * 1024 * 1024u32),
+                None,
+            )
+            .future;
+        let result = future.get().await.unwrap().unwrap();
+        let value = golem_rust::decode_schema_value(result).unwrap();
+        let text = String::from_value(&value).unwrap();
+        assert!(text.bytes().all(|byte| byte == b'x'));
+        text.len() as u64
+    }
+
+    async fn grow_memory_after_rpc_result(&self, counter_name: String) {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let future = rpc
+            .async_invoke_and_await("inc_by", encode_single_parameter(1u64), None)
+            .future;
+        future.get().await.unwrap();
+        assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 
     fn test_cancel_before_await(&self, counter_name: String) {
