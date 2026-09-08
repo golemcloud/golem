@@ -86,25 +86,27 @@ impl ComponentFilesArchiveReader {
             .map_err(anyhow::Error::from)?;
         let reopened = file.reopen().map_err(anyhow::Error::from)?;
         let mut output = tokio::fs::File::from_std(reopened);
-        let mut input = (&mut entry_reader).compat();
         let mut hasher = blake3::Hasher::new();
         let mut size = 0u64;
-        let mut buffer = vec![0u8; 64 * 1024];
 
-        loop {
-            let read = input.read(&mut buffer).await.map_err(anyhow::Error::from)?;
-            if read == 0 {
-                break;
+        {
+            let mut input = (&mut entry_reader).compat();
+            let mut buffer = vec![0u8; 64 * 1024];
+
+            loop {
+                let read = input.read(&mut buffer).await.map_err(anyhow::Error::from)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+                output
+                    .write_all(&buffer[..read])
+                    .await
+                    .map_err(anyhow::Error::from)?;
+                size += read as u64;
             }
-            hasher.update(&buffer[..read]);
-            output
-                .write_all(&buffer[..read])
-                .await
-                .map_err(anyhow::Error::from)?;
-            size += read as u64;
         }
         output.flush().await.map_err(anyhow::Error::from)?;
-        drop(input);
 
         if entry_reader.compute_hash() != expected_crc {
             return Err(ComponentError::MalformedComponentArchive {
