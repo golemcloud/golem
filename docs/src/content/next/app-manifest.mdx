@@ -328,6 +328,12 @@ The generator reads only the release's safe tool definition and metadata digest.
   </Field>
 
   <Field meta={{
+    path: "localServer.systemMemoryOverride",
+  }}>
+    ***Optional positive byte-size string*** that overrides detected system memory for local agent admission and eviction, leaving room for other applications. For example, `2GiB` sets a 2 GiB budget; the executor uses 80% for admission and reserves 20% for host overhead. Flag, environment variable, and manifest accept the same case-insensitive units: `1mb` and `1MB` mean 1,000,000 bytes; `1MiB` means 1,048,576 bytes. Whole-number quantities and ASCII spaces are accepted; use `1536 MiB` instead of `1.5 GiB`. Quote unitless byte values in YAML. Precedence is `--system-memory-override`, then `GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE`, then this field, then automatic host/cgroup memory detection. The value maps to the executor's `memory.system_memory_override`. This is not a hard process RSS limit: compilation and other host allocations can exceed the budget.
+  </Field>
+
+  <Field meta={{
     path: "localServer.agentFilesystemRoot",
   }}>
     ***Optional root directory*** for deterministic agent filesystem directories, laid out as `<root>/<environment_id>/<component_id>/<agent_name>/`.
