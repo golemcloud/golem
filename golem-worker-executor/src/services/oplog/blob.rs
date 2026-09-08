@@ -32,8 +32,8 @@ use golem_service_base::storage::blob::{
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.
@@ -241,10 +241,17 @@ struct BlobOplogArchive {
     agent_mode: AgentMode,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     level: usize,
-    entries: Arc<RwLock<BTreeMap<OplogIndex, PathBuf>>>,
-    created: Arc<async_lock::RwLock<bool>>,
+    /// `entries`, `created` and `cache` are guarded by `std` primitives rather than async locks:
+    /// the archive is used both by wasmtime store-polled futures (durable host calls) and by
+    /// independent tokio tasks. Tokio's fair locks hand ownership to a queued waiter at wake
+    /// time, before it is polled, so a store-polled future queued on an async lock could become
+    /// its owner while the store is unable to poll it (wasmtime#11869/#11870), wedging every
+    /// other user of the archive. Every critical section below is synchronous and never spans an
+    /// `await`.
+    entries: Mutex<BTreeMap<OplogIndex, PathBuf>>,
+    created: AtomicBool,
     #[allow(clippy::type_complexity)]
-    cache: RwLock<
+    cache: Mutex<
         EvictingCacheMap<
             OplogIndex,
             OplogEntry,
@@ -268,8 +275,8 @@ impl BlobOplogArchive {
             level,
         )
         .await;
-        let created = Arc::new(async_lock::RwLock::new(exists));
-        let entries = Arc::new(RwLock::new(if exists {
+        let created = AtomicBool::new(exists);
+        let entries = Mutex::new(if exists {
             Self::entries(
                 owned_agent_id.clone(),
                 agent_mode,
@@ -279,7 +286,7 @@ impl BlobOplogArchive {
             .await
         } else {
             BTreeMap::new()
-        }));
+        });
 
         BlobOplogArchive {
             owned_agent_id,
@@ -288,7 +295,7 @@ impl BlobOplogArchive {
             level,
             created,
             entries,
-            cache: RwLock::new(EvictingCacheMap::new()),
+            cache: Mutex::new(EvictingCacheMap::new()),
         }
     }
 
@@ -303,18 +310,16 @@ impl BlobOplogArchive {
             agent_mode,
             blob_storage,
             level,
-            created: Arc::new(async_lock::RwLock::new(false)),
-            entries: Arc::new(RwLock::new(BTreeMap::new())),
-            cache: RwLock::new(EvictingCacheMap::new()),
+            created: AtomicBool::new(false),
+            entries: Mutex::new(BTreeMap::new()),
+            cache: Mutex::new(EvictingCacheMap::new()),
         }
     }
 
     async fn ensure_is_created(&self) {
-        // The `created` lock must not be held across the storage call: an async lock held across
-        // IO by a wasmtime store-polled future can deadlock the store (wasmtime#11869/#11870).
         // `create_dir` is idempotent in every blob storage backend, so racing creators are
         // harmless.
-        if *self.created.read().await {
+        if self.created.load(Ordering::Acquire) {
             return;
         }
         self.blob_storage
@@ -336,7 +341,7 @@ impl BlobOplogArchive {
                 )
             });
 
-        *self.created.write().await = true;
+        self.created.store(true, Ordering::Release);
     }
 
     pub(crate) async fn exists(
@@ -428,7 +433,7 @@ impl BlobOplogArchive {
         // across IO by a wasmtime store-polled future can deadlock the store
         // (wasmtime#11869/#11870). The chunk key is copied out under a short lock instead.
         let last_idx = {
-            let entries = self.entries.read().await;
+            let entries = self.entries.lock().unwrap();
             // Find the first chunk whose last index is >= end_of_range
             entries.keys().find(|k| **k >= end_of_range).copied()
         };
@@ -466,7 +471,7 @@ impl BlobOplogArchive {
                 // The chunk may have been dropped by a concurrent `drop_prefix` between copying
                 // its key and fetching it. If its key is gone from the entries map, treat it as
                 // the layer boundary; otherwise the storage is genuinely inconsistent.
-                if self.entries.read().await.contains_key(&last_idx) {
+                if self.entries.lock().unwrap().contains_key(&last_idx) {
                     return Err(OplogReadError::corruption(
                         source,
                         format!("compressed chunk ending at {last_idx} is missing"),
@@ -506,7 +511,7 @@ impl BlobOplogArchive {
                         ),
                     )
                 })?;
-        let mut cache = self.cache.write().await;
+        let mut cache = self.cache.lock().unwrap();
 
         let mut collected = Vec::new();
 
@@ -540,7 +545,7 @@ impl OplogArchive for BlobOplogArchive {
 
         while last_idx >= idx {
             {
-                let mut cache = self.cache.write().await;
+                let mut cache = self.cache.lock().unwrap();
 
                 while let Some(entry) = cache.get(&last_idx) {
                     result.insert(last_idx, entry.clone());
@@ -621,7 +626,7 @@ impl OplogArchive for BlobOplogArchive {
                     )
                 });
 
-            self.entries.write().await.insert(oplog_index, path);
+            self.entries.lock().unwrap().insert(oplog_index, path);
         }
 
         total_bytes
@@ -647,7 +652,7 @@ impl OplogArchive for BlobOplogArchive {
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
-        let entries = self.entries.read().await;
+        let entries = self.entries.lock().unwrap();
         entries
             .keys()
             .last()
@@ -658,13 +663,11 @@ impl OplogArchive for BlobOplogArchive {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.ensure_is_created().await;
 
-        // The `entries` and `created` locks must not be held across the storage calls below: an
-        // async lock held across IO by a wasmtime store-polled future can deadlock the store
-        // (wasmtime#11869/#11870). The keys are removed from the map before the blobs are
-        // deleted, so concurrent readers either still find the chunk in storage or observe its
-        // key gone from the map and treat it as the layer boundary.
+        // The keys are removed from the map before the blobs are deleted, so concurrent readers
+        // either still find the chunk in storage or observe its key gone from the map and treat
+        // it as the layer boundary.
         let (idx_to_drop, is_empty) = {
-            let mut entries = self.entries.write().await;
+            let mut entries = self.entries.lock().unwrap();
             let idx_to_drop = entries
                 .keys()
                 .filter(|key| **key <= last_dropped_id)
@@ -706,12 +709,7 @@ impl OplogArchive for BlobOplogArchive {
             });
 
         if is_empty {
-            let was_created = {
-                let mut created = self.created.write().await;
-                let was_created = *created;
-                *created = false;
-                was_created
-            };
+            let was_created = self.created.swap(false, Ordering::AcqRel);
             if was_created {
                 self.blob_storage
                 .with("blob_oplog", "drop_prefix")
@@ -734,7 +732,7 @@ impl OplogArchive for BlobOplogArchive {
     }
 
     async fn length(&self) -> u64 {
-        let entries = self.entries.read().await;
+        let entries = self.entries.lock().unwrap();
         entries.len() as u64
     }
 

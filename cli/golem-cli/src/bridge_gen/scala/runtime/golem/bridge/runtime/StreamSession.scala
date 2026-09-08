@@ -229,9 +229,33 @@ object StreamSession {
     val pingSequence = new AtomicLong(0L)
     val pongSequence = new AtomicLong(0L)
 
-    def send(text: String): Future[Unit] = Bridge.toScala(socket.sendText(text, true)).map(_ => ())
-    def sendBinary(metadata: Json, payload: Vector[Byte]): Future[Unit] =
-      Bridge.toScala(socket.sendBinary(StreamSessionProtocol.binary(metadata, payload), true)).map(_ => ())
+    // `java.net.http.WebSocket` rejects a text or binary send while another one is still pending, so
+    // every data frame goes through one FIFO chain. Each send is bound to the socket that was current
+    // when it was enqueued: if that socket has been replaced by the time the send runs (or fails), the
+    // frame is dropped without error because the per-stream state replays unacknowledged data after
+    // the resume handshake remaps the channels.
+    val sendQueue = new AtomicReference[CompletableFuture[Unit]](CompletableFuture.completedFuture(()))
+    def enqueueSend(operation: WebSocket => CompletableFuture[WebSocket]): Future[Unit] = {
+      val target = socket
+      val completion = new CompletableFuture[Unit]()
+      val previous = sendQueue.getAndSet(completion)
+      previous.whenComplete { (_, _) =>
+        if (target == null || (target ne socket)) completion.complete(())
+        else
+          try
+            operation(target).whenComplete { (_, error) =>
+              if (error == null || (target ne socket)) completion.complete(())
+              else completion.completeExceptionally(error)
+            }
+          catch { case error: Throwable => completion.completeExceptionally(error) }
+      }
+      Bridge.toScala(completion)
+    }
+    def send(text: String): Future[Unit] = enqueueSend(_.sendText(text, true))
+    def sendBinary(metadata: Json, payload: Vector[Byte]): Future[Unit] = {
+      val frame = StreamSessionProtocol.binary(metadata, payload)
+      enqueueSend(_.sendBinary(frame, true))
+    }
     def cancel(channel: Long, reason: String): Future[Unit] = send(StreamSessionProtocol.message("streamCancel", Vector("channel" -> Json.fromLong(channel), "reason" -> Json.string(reason))))
     def highWater(mapping: Json): (BigInt, Boolean) = {
       val value = Json.requireField(mapping, "inputHighWater").fold(e => throw BridgeException(e), identity)

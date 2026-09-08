@@ -47,7 +47,7 @@ macro_rules! ok_or_continue {
 }
 use ok_or_continue;
 
-fn authorize_environment_permission(
+pub(crate) fn authorize_environment_permission(
     auth: &AuthCtx,
     environment: &Environment,
     verb: EnvironmentVerb,

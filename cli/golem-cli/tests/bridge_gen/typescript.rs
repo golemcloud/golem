@@ -1018,8 +1018,11 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
 
     let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
     assert!(source.contains("base.createToolClientRuntime(\"grep\")"));
-    assert!(source.contains("invokeAndAwait([], typedInput, stdin)"));
-    assert!(source.contains("invokeAndAwait([\"replace\"], typedInput, undefined)"));
+    assert!(source.contains("type ToolInputStream = base.ToolInputStream;"));
+    assert!(source.contains("grep(") && source.contains("base.StartedToolInvocation<string[]>"));
+    assert!(source.contains("replace(") && source.contains("base.StartedToolInvocation<void>"));
+    assert!(source.contains("this.runtime.start([], typedInput, stdin, true)"));
+    assert!(source.contains("this.runtime.start([\"replace\"], typedInput, undefined, true)"));
     assert!(source.contains("[...this.inherited"));
     assert!(source.contains("{ tag: 'record', fields }"));
     assert!(source.contains("const __golemSchemaGraphs = {"));
@@ -1028,17 +1031,31 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(!source.contains("schemaGraphFromJson"));
     assert!(source.contains("base.splitToolRpcError(error, decodeGrepError)"));
     assert!(
-        source.contains("base.typedSchemaValueConforms(expectedResultGraph, invocation.result)")
+        source.contains(
+            "base.typedSchemaValueConforms(expectedResultGraph, invocationResult.result)"
+        )
     );
     assert!(source.contains("base.typedSchemaValueConforms(expectedGraph, typed)"));
-    assert!(source.contains("base.disposeToolStdout(invocation.stdout)"));
+    assert!(source.contains(
+        "base.startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel())"
+    ));
+    assert!(source.contains("invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream')"));
     assert!(source.contains("tool result did not contain a value"));
     assert!(source.contains("tool result unexpectedly contained a value"));
-    assert!(source.contains("stdout?: ToolOutputStream"));
+    assert!(source.contains(
+        "const settledResult = base.mapSettledToolResult(invocation.settledResult, (invocationResult)"
+    ));
     assert!(source.contains("export type ColorMode"));
     assert!(!source.contains("golem-ts-bridge"));
     assert!(!source.contains("kind: 'record'"));
     assert!(!source.contains("legacy"));
+    std::fs::write(
+        package_dir.join(format!("{package_name}.ts")),
+        format!(
+            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<{{ result: string[]; stdout: Uint8Array }}> = started.collect();\nvoid stdout; void result; void collected;\n"
+        ),
+    )
+    .unwrap();
     install_and_build(&package_dir);
 }
 
@@ -1063,6 +1080,8 @@ fn guest_tool_with_unstructured_result_compiles() {
         .unwrap()
         .generate()
         .unwrap();
+    let source = std::fs::read_to_string(package_dir.join(format!("{package_name}.ts"))).unwrap();
+    assert!(source.contains("const invocationOutcome = await invocation.settledResult"));
     install_and_build(&package_dir);
 }
 

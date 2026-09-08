@@ -2646,6 +2646,15 @@ impl DurableStreamProducer {
                     replayed: true,
                 });
             }
+            if let Some(terminal) = stream.events.get(&first_sequence)
+                && terminal.is_terminal()
+            {
+                let terminal = terminal.clone();
+                let error = fenced_by_terminal(stream);
+                drop(index);
+                self.publish_repair(stream_id, vec![terminal]).await?;
+                return Err(error);
+            }
             return Err(DurableStreamProducerError::EventConflict);
         }
         index.ensure_producer_write_allowed()?;
@@ -3067,6 +3076,22 @@ impl DurableStreamProducer {
             }
         }
         index.ensure_producer_write_allowed()?;
+        let stream = index
+            .streams
+            .get(&stream_id)
+            .expect("terminal replay validated the stream");
+        if stream.terminal {
+            let terminal = stream
+                .events
+                .values()
+                .next_back()
+                .expect("terminal stream has no terminal event")
+                .clone();
+            let error = fenced_by_terminal(stream);
+            drop(index);
+            self.publish_repair(stream_id, vec![terminal]).await?;
+            return Err(error);
+        }
         validate_new_terminal(&index, stream_id, sequence)?;
         let producer_fingerprint = self.producer_fingerprint;
         let mut entries = self
@@ -3326,6 +3351,24 @@ impl DurableStreamProducer {
         )
         .await?;
         Ok(())
+    }
+
+    pub(crate) async fn has_open_forwarded_session_input(
+        &self,
+        session_key: &StreamSessionKeyV1,
+    ) -> bool {
+        let index = self.index.lock().await;
+        let Some(mappings) = index.session_stream_mappings.get(session_key) else {
+            return false;
+        };
+        mappings.iter().any(|(handle, role)| {
+            *role == SessionStreamRoleV1::Input
+                && mappings.contains(&(handle.clone(), SessionStreamRoleV1::Output))
+                && index
+                    .streams
+                    .get(&handle.stream_id)
+                    .is_some_and(|stream| !stream.terminal)
+        })
     }
 
     pub(crate) async fn finish_session(
@@ -7049,6 +7092,76 @@ pub(crate) mod tests {
             CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
         );
         assert!(reader.next().await.unwrap().is_none());
+    }
+
+    #[test]
+    async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::Values(vec![vec![1]]),
+            )
+            .await
+            .unwrap();
+        producer
+            .cancel_open(
+                handle.stream_id,
+                StreamCancelRoleV1::InputConsumer,
+                StreamCancelReasonV1::GuestDrop,
+                None,
+            )
+            .await
+            .unwrap();
+        let oplog_length = oplog.committed_length();
+
+        assert!(matches!(
+            producer
+                .write_items(
+                    handle.stream_id,
+                    1,
+                    StreamItemsPayloadV1::Values(vec![vec![2]]),
+                )
+                .await,
+            Err(DurableStreamProducerError::FencedByTerminal(
+                CommittedProducerStreamEventPayloadV1::Cancel {
+                    role: StreamCancelRoleV1::InputConsumer,
+                    reason: StreamCancelReasonV1::GuestDrop,
+                    details: None,
+                }
+            ))
+        ));
+        assert_eq!(oplog.committed_length(), oplog_length);
+
+        assert!(matches!(
+            producer
+                .end(handle.stream_id, 64, StreamEndResultV1::Ok)
+                .await,
+            Err(DurableStreamProducerError::FencedByTerminal(
+                CommittedProducerStreamEventPayloadV1::Cancel {
+                    role: StreamCancelRoleV1::InputConsumer,
+                    reason: StreamCancelReasonV1::GuestDrop,
+                    details: None,
+                }
+            ))
+        ));
+        assert_eq!(oplog.committed_length(), oplog_length);
     }
 
     #[test]

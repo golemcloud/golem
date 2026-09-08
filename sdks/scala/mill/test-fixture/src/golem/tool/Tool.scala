@@ -8,6 +8,8 @@ import scala.concurrent.Future
 
 final class ToolInputStream
 final class ToolOutputStream
+final class ToolMiddlewareInputHandle
+final class ToolMiddlewareOutputHandle
 final class ToolBuildError
 final class ExtendedToolType
 final class CanonicalInputModel
@@ -17,6 +19,10 @@ final case class ToolInvokeResult(
   result: Option[TypedSchemaValue],
   stdout: Option[ToolOutputStream]
 )
+final case class ToolMiddlewareResult(
+  result: Option[TypedSchemaValue],
+  stdout: Option[ToolMiddlewareOutputHandle]
+)
 
 sealed trait ToolError[+E]
 sealed trait ToolInvokeError[+E]
@@ -25,8 +31,8 @@ trait RawToolUnderlying {
   def invoke(
     commandPath: List[String],
     input: TypedSchemaValue,
-    stdin: Option[ToolInputStream]
-  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]
+    stdin: Option[ToolMiddlewareInputHandle]
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]
 }
 
 trait UniversalToolUnderlying extends RawToolUnderlying
@@ -36,7 +42,7 @@ final case class UniversalToolMiddlewareInvocation(
   toolMetadata: WitTool,
   commandPath: List[String],
   input: TypedSchemaValue,
-  stdin: Option[ToolInputStream],
+  stdin: Option[ToolMiddlewareInputHandle],
   principal: Principal
 )
 
@@ -44,7 +50,7 @@ trait UniversalToolMiddleware {
   def invoke(
     invocation: UniversalToolMiddlewareInvocation,
     underlying: UniversalToolUnderlying
-  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]
 }
 
 trait ToolErrorSchema[E] {
@@ -109,17 +115,17 @@ object ToolUnderlyingRuntime {
     descriptor: Either[ToolBuildError, ExtendedToolType],
     commandPath: List[String],
     input: Either[ToolInvokeError[Nothing], TypedSchemaValue],
-    stdin: Option[ToolInputStream]
-  ): Future[Either[ToolInvokeError[Nothing], ToolInvokeResult]] = ???
+    stdin: Option[ToolMiddlewareInputHandle]
+  ): Future[Either[ToolInvokeError[Nothing], ToolMiddlewareResult]] = ???
 
   def complete[E, A](
-    call: Future[Either[ToolInvokeError[E], ToolInvokeResult]]
-  )(decode: ToolInvokeResult => Either[ToolError[Nothing], A]): Future[Either[ToolInvokeError[E], A]] = ???
+    call: Future[Either[ToolInvokeError[E], ToolMiddlewareResult]]
+  )(decode: ToolMiddlewareResult => Either[ToolError[Nothing], A]): Future[Either[ToolInvokeError[E], A]] = ???
 
-  def decodeUnitResult(result: ToolInvokeResult): Either[ToolError[Nothing], Unit] = ???
+  def decodeUnitResult(result: ToolMiddlewareResult): Either[ToolError[Nothing], Unit] = ???
 
   def decodeValueResult[A](
-    result: ToolInvokeResult,
+    result: ToolMiddlewareResult,
     from: FromSchema[A]
   ): Either[ToolError[Nothing], A] = ???
 }

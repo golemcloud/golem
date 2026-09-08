@@ -61,15 +61,16 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
     var lastInput: Option[TypedSchemaValue] = None
     var lastStdin: Option[ToolInputStream]  = None
 
-    def invokeAndAwait(
+    def start(
       commandPath: List[String],
       input: TypedSchemaValue,
-      stdin: Option[ToolInputStream]
-    ): Future[Either[ToolRpcFailure, ToolInvokeResult]] = {
+      stdin: Option[ToolInputStream],
+      stdout: Boolean
+    ): Either[ToolRpcFailure, ToolRpcStarted] = {
       lastCommandPath = commandPath
       lastInput = Some(input)
       lastStdin = stdin
-      Future.successful(response)
+      Right(ToolRpcStarted(None, Future.successful(response), () => ()))
     }
   }
 
@@ -80,7 +81,7 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
   private lazy val gitErrorSchema   = ToolErrorSchemaDerivation.derive[GitError]
 
   private def ok(text: String): Either[ToolRpcFailure, ToolInvokeResult] =
-    Right(ToolInvokeResult(Some(IntoSchema[String].toTyped(text)), None))
+    Right(ToolInvokeResult(Some(IntoSchema[String].toTyped(text))))
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ToolClientRuntimeSpec")(

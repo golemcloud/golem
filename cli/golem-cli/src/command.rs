@@ -31,6 +31,7 @@ use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
     BuildArgs, ForceBuildArg, OptionalComponentName, OptionalComponentNames, PostDeployArgs,
 };
+use crate::command::tool::ToolSubcommand;
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
@@ -678,7 +679,11 @@ pub enum GolemCliSubcommand {
         /// Optional filter for language or template name
         filter: Option<String>,
     },
-    /// Build all or selected components in the application
+    /// Build all or selected components in the application.
+    ///
+    /// Bridge generation for remote tool releases reads metadata through the selected
+    /// environment. Required automatic grant changes are shown for confirmation and committed
+    /// as a separate setup step before the local build continues.
     #[command(after_help = crate::command_examples::BUILD)]
     Build {
         #[command(flatten)]
@@ -774,10 +779,11 @@ pub enum GolemCliSubcommand {
         ///
         /// In `--format json/yaml/toon`, `deploy` may emit multiple structured
         /// documents. Depending on the plan, stdout can contain
-        /// `deploy.diff` and/or `deploy.plan`, followed by a final
-        /// `deploy` success document. Parse stdout as a sequence of
-        /// documents and branch on `$type`; do not assume every possible
-        /// document appears.
+        /// `deploy.diff`, `deploy.plan`, `deploy.environment-setup-plan`,
+        /// and/or `deploy.environment-tool-grants`, followed by a final
+        /// `deploy` success document. Parse stdout as a sequence of documents
+        /// and branch on `$type`; do not assume every possible document
+        /// appears.
         #[arg(long, conflicts_with_all = ["stage", "approve_staging_steps"])]
         plan: bool,
         /// Only plan and stage changes, but do not apply them to the environment; used for testing
@@ -858,6 +864,11 @@ pub enum GolemCliSubcommand {
     Environment {
         #[clap(subcommand)]
         subcommand: EnvironmentSubcommand,
+    },
+    /// Manage tools
+    Tool {
+        #[clap(subcommand)]
+        subcommand: ToolSubcommand,
     },
     /// Manage components
     Component {
@@ -1172,6 +1183,111 @@ pub mod environment {
         /// List application environments on the current server
         #[command(after_help = crate::command_examples::ENVIRONMENT_LIST)]
         List,
+    }
+}
+
+pub mod tool {
+    use clap::{ArgGroup, Args, Subcommand};
+    use golem_common::base_model::account::{AccountEmail, AccountId};
+    use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
+    use golem_common::base_model::tool::ToolName;
+    use golem_common::base_model::tool_release::ToolReleaseId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolSubcommand {
+        /// List tools in the selected environment's current deployment
+        #[command(after_help = crate::command_examples::TOOL_LIST)]
+        List,
+        /// Get a tool from the selected environment's current deployment
+        #[command(after_help = crate::command_examples::TOOL_GET)]
+        Get {
+            /// Deployed tool name
+            tool_name: ToolName,
+        },
+        /// Manage published tool releases
+        Release {
+            #[command(subcommand)]
+            subcommand: ToolReleaseSubcommand,
+        },
+        /// Manage tool grants for the selected environment
+        Grant {
+            #[command(subcommand)]
+            subcommand: ToolGrantSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolGrantSubcommand {
+        /// Grant a published tool release to the selected environment
+        #[command(after_help = crate::command_examples::TOOL_GRANT_CREATE)]
+        Create(ToolGrantCreateArgs),
+        /// List active tool grants in the selected environment
+        #[command(after_help = crate::command_examples::TOOL_GRANT_LIST)]
+        List,
+        /// Get an active tool grant
+        #[command(after_help = crate::command_examples::TOOL_GRANT_GET)]
+        Get {
+            /// Environment tool grant ID
+            grant_id: EnvironmentToolGrantId,
+        },
+        /// Delete a tool grant
+        #[command(after_help = crate::command_examples::TOOL_GRANT_DELETE)]
+        Delete {
+            /// Environment tool grant ID
+            grant_id: EnvironmentToolGrantId,
+        },
+        /// Restore a deleted tool grant
+        #[command(after_help = crate::command_examples::TOOL_GRANT_RESTORE)]
+        Restore {
+            /// Environment tool grant ID
+            grant_id: EnvironmentToolGrantId,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("release").required(true).multiple(false).args(["release_id", "account"])))]
+    pub struct ToolGrantCreateArgs {
+        /// Published tool release ID
+        #[arg(long)]
+        pub release_id: Option<ToolReleaseId>,
+        /// Publisher account email
+        #[arg(long, requires_all = ["name", "version"])]
+        pub account: Option<AccountEmail>,
+        /// Published tool name
+        #[arg(long, requires_all = ["account", "version"])]
+        pub name: Option<ToolName>,
+        /// Published tool version
+        #[arg(long, requires_all = ["account", "name"])]
+        pub version: Option<String>,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolReleaseSubcommand {
+        /// List tool releases owned by an account
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_LIST)]
+        List {
+            /// Account ID; defaults to the authenticated account
+            #[arg(long)]
+            account_id: Option<AccountId>,
+        },
+        /// Get a tool release
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_GET)]
+        Get {
+            /// Published tool release ID
+            release_id: ToolReleaseId,
+        },
+        /// Make a release unavailable for new deployments and new grants
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_DE_PUBLISH)]
+        DePublish {
+            /// Published tool release ID
+            release_id: ToolReleaseId,
+        },
+        /// Restore a de-published release
+        #[command(after_help = crate::command_examples::TOOL_RELEASE_RESTORE)]
+        Restore {
+            /// Published tool release ID
+            release_id: ToolReleaseId,
+        },
     }
 }
 
@@ -2587,11 +2703,18 @@ pub mod server {
     use crate::config::{
         DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
     };
+    use anyhow::Context;
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
+        /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
+        /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
+        /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
+        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        pub system_memory_override: Option<std::num::NonZeroU64>,
+
         /// Address to serve the main API on, defaults to 0.0.0.0
         #[clap(long)]
         pub router_addr: Option<String>,
@@ -2640,6 +2763,31 @@ pub mod server {
     }
 
     impl RunArgs {
+        pub fn with_env_overrides(self) -> anyhow::Result<Self> {
+            self.with_env_overrides_from(|name| std::env::var(name))
+        }
+
+        fn with_env_overrides_from(
+            mut self,
+            get_env: impl FnOnce(&str) -> Result<String, std::env::VarError>,
+        ) -> anyhow::Result<Self> {
+            if self.system_memory_override.is_none() {
+                const NAME: &str = "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE";
+                match get_env(NAME) {
+                    Ok(value) => {
+                        self.system_memory_override = Some(
+                            crate::model::byte_size::parse_positive(&value)
+                                .map_err(anyhow::Error::msg)
+                                .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
+                        );
+                    }
+                    Err(std::env::VarError::NotPresent) => {}
+                    Err(err) => return Err(err).with_context(|| format!("Failed to read {NAME}")),
+                }
+            }
+            Ok(self)
+        }
+
         pub fn router_addr(&self) -> &str {
             self.router_addr.as_deref().unwrap_or("0.0.0.0")
         }
@@ -2732,6 +2880,52 @@ mod test {
     #[test]
     fn command_debug_assert() {
         GolemCliCommand::command().debug_assert();
+    }
+
+    #[test]
+    fn tool_commands_follow_deployment_release_and_grant_hierarchy() {
+        for args in [
+            vec!["golem", "tool", "list"],
+            vec!["golem", "tool", "get", "grep"],
+            vec!["golem", "tool", "release", "list"],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "create",
+                "--release-id",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+            vec!["golem", "tool", "grant", "list"],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "get",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "delete",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+            vec![
+                "golem",
+                "tool",
+                "grant",
+                "restore",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(args.clone()).is_ok(),
+                "failed to parse {args:?}"
+            );
+        }
+
+        assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
     }
 
     #[test]

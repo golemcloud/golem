@@ -176,7 +176,7 @@ mod tests {
             &component,
             &agent,
             "run_with_memory_and_work",
-            data_value!(512u64, 5_000u64),
+            data_value!(512u64, 10_000u64),
         );
         let recovery = async {
             user.wait_for_status(&worker, AgentStatus::Running, Duration::from_secs(10))

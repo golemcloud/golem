@@ -86,6 +86,7 @@ impl<T: Clone> DurableLiveStreamBus<T> {
         &self,
     ) -> Result<DurableLiveStreamSubscription<T>, DurableLiveStreamBusError> {
         let mut state = self.state.lock().await;
+        state.readers.retain(|_, sender| !sender.is_closed());
         if state.readers.len() >= self.max_readers {
             crate::metrics::durable_stream::record_limit_violation("live_readers");
             crate::metrics::durable_stream::record_live_join_rejected();

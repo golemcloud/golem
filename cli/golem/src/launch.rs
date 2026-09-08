@@ -62,6 +62,7 @@ use uuid::uuid;
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
 
 pub struct LaunchArgs {
+    pub system_memory_override: Option<std::num::NonZeroU64>,
     pub router_addr: String,
     pub router_port: u16,
     pub custom_request_port: u16,
@@ -283,11 +284,22 @@ fn registry_service_config(
                 },
             );
             accounts.insert(
-                "builtin-plugin-owner".to_string(),
+                "builtin_plugin_owner".to_string(),
                 PrecreatedAccount {
                     id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
                     name: "Builtin Plugin Owner".to_string(),
                     email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                    token: None,
+                    plan_id,
+                    role: AccountRole::BuiltinPluginOwner,
+                },
+            );
+            accounts.insert(
+                "builtin_tool_owner".to_string(),
+                PrecreatedAccount {
+                    id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
+                    name: "Builtin Tool Owner".to_string(),
+                    email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
                     token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,
@@ -426,6 +438,7 @@ fn worker_executor_config(
         ..Default::default()
     };
 
+    config.memory.system_memory_override = args.system_memory_override.map(|value| value.get());
     config.add_port_to_tracing_file_name_if_enabled();
     Ok(config)
 }
@@ -533,4 +546,50 @@ async fn run_worker_service(
         .start_endpoints(join_set, None)
         .instrument(span)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use poem::EndpointExt;
+    use test_r::test;
+
+    #[test]
+    fn local_server_system_memory_override_reaches_executor_config() {
+        let shard_manager = golem_shard_manager::RunDetails {
+            http_port: 0,
+            grpc_port: 0,
+        };
+        let registry = golem_registry_service::SingleExecutableRunDetails {
+            grpc_port: 0,
+            endpoint: poem::endpoint::make_sync(|_| poem::Response::default()).boxed(),
+        };
+        let worker_service = golem_worker_service::TrafficReadyEndpoints {
+            grpc_port: 0,
+            custom_request_port: 0,
+            mcp_port: 0,
+            api_endpoint: poem::endpoint::make_sync(|_| poem::Response::default()).boxed(),
+        };
+        for system_memory_override in [None, std::num::NonZeroU64::new(2_147_483_648)] {
+            let args = LaunchArgs {
+                system_memory_override,
+                router_addr: "127.0.0.1".into(),
+                router_port: 0,
+                custom_request_port: 0,
+                mcp_port: 0,
+                ports_file: None,
+                data_dir: PathBuf::from("unused"),
+                agent_filesystem_root: None,
+                resource_usage_metering: ResourceUsageMeteringConfig::default(),
+            };
+            let config =
+                worker_executor_config(&args, &shard_manager, &registry, &worker_service).unwrap();
+            assert_eq!(
+                config.memory.system_memory_override,
+                system_memory_override.map(|value| value.get())
+            );
+            assert_eq!(config.memory.worker_memory_ratio, 0.8);
+            assert!(config.memory.enable_measured_admission);
+        }
+    }
 }

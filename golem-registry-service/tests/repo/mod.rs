@@ -27,6 +27,7 @@ use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
+use golem_registry_service::repo::environment_tool_grant::EnvironmentToolGrantRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::McpDeploymentRepo;
 use golem_registry_service::repo::model::account::{
@@ -47,6 +48,7 @@ use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::repo::tool_release::ToolReleaseRepo;
 use golem_registry_service::services::account::AccountService;
 use golem_registry_service::services::account_usage::AccountUsageService;
 use golem_registry_service::services::plan::PlanService;
@@ -75,6 +77,7 @@ pub struct Deps {
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
+    pub environment_tool_grant_repo: Box<dyn EnvironmentToolGrantRepo>,
     pub plan_repo: Box<dyn PlanRepo>,
     pub component_repo: Box<dyn ComponentRepo>,
     pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
@@ -83,6 +86,7 @@ pub struct Deps {
     pub full_deployment_repo: Box<dyn DeploymentRepo>,
     pub plugin_repo: Box<dyn PluginRepo>,
     pub registry_change_repo: Box<dyn RegistryChangeRepo>,
+    pub tool_release_repo: Box<dyn ToolReleaseRepo>,
     pub test_db: TestDb,
 }
 

@@ -15,6 +15,7 @@
 use golem_common::model::OwnedAgentId;
 use golem_common::model::card::CardId;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{RwLock, watch};
 
@@ -154,6 +155,30 @@ impl CardInterestIndex {
                 .insert(agent_id.clone());
         }
         interests.revision = interests.revision.wrapping_add(1);
+    }
+
+    /// Clears an agent's interests only when `condition` succeeds. Interest
+    /// updates are serialized with the condition so a replacement for the
+    /// same agent cannot register interests between cache removal and cleanup.
+    pub(crate) async fn clear_agent_interest_if(
+        &self,
+        agent_id: &OwnedAgentId,
+        condition: impl Future<Output = bool> + Send,
+    ) -> bool {
+        let mut interests = self.interests.write().await;
+        if !condition.await {
+            return false;
+        }
+
+        let changed = interests
+            .by_card
+            .values()
+            .any(|agents| agents.contains(agent_id));
+        Self::remove_agent_from_all_cards(&mut interests.by_card, agent_id);
+        if changed {
+            interests.revision = interests.revision.wrapping_add(1);
+        }
+        true
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {

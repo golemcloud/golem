@@ -14,11 +14,13 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
+use crate::services::component::ComponentWriteService;
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::{
+    AgentTypeName, DeployedRegisteredAgentType, InitialAgentFileUpload,
+};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
@@ -31,9 +33,10 @@ use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use poem_openapi::OpenApi;
+use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
+use poem_openapi::{Multipart, OpenApi};
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -41,6 +44,7 @@ pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     deployment_service: Arc<DeploymentService>,
     deployment_write_service: Arc<DeploymentWriteService>,
+    component_write_service: Arc<ComponentWriteService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -54,14 +58,46 @@ impl EnvironmentsApi {
         environment_service: Arc<EnvironmentService>,
         deployment_service: Arc<DeploymentService>,
         deployment_write_service: Arc<DeploymentWriteService>,
+        component_write_service: Arc<ComponentWriteService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             deployment_service,
             deployment_write_service,
+            component_write_service,
             auth_service,
         }
+    }
+
+    /// Upload a content-addressed initial agent file for deployment in this environment
+    #[oai(
+        path = "/envs/:environment_id/initial-agent-files",
+        method = "post",
+        operation_id = "upload_environment_initial_agent_file"
+    )]
+    async fn upload_environment_initial_agent_file(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        payload: UploadInitialAgentFileRequest,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<InitialAgentFileUpload>> {
+        let record = recorded_http_api_request!(
+            "upload_environment_initial_agent_file",
+            environment_id = environment_id.0.to_string(),
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let result = async {
+            let file = Arc::new(payload.file.into_file());
+            Ok(Json(
+                self.component_write_service
+                    .upload_initial_agent_file(environment_id.0, file, &auth)
+                    .await?,
+            ))
+        }
+        .instrument(record.span.clone())
+        .await;
+        record.result(result)
     }
 
     /// Create an application environment
@@ -689,4 +725,9 @@ impl EnvironmentsApi {
             .await?;
         Ok(Json(tool))
     }
+}
+
+#[derive(Multipart)]
+struct UploadInitialAgentFileRequest {
+    file: TempFileUpload,
 }

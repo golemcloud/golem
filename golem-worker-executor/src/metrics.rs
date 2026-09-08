@@ -447,6 +447,22 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "invocation_result_resolution_total",
+            "Invocation-result resolutions by the lookup path and outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_chunks_total",
+            "Physical invocation-result index catch-up chunks completed"
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_entries_total",
+            "Oplog entries processed while catching up the physical invocation-result index"
+        )
+        .unwrap();
         static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
             "golem_agent_filesystem_lifecycle_seconds",
             "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
@@ -515,6 +531,17 @@ pub mod workers {
         AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_invocation_result_resolution(outcome: &'static str) {
+        INVOCATION_RESULT_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_invocation_result_index_catch_up(entries: usize) {
+        INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
+        INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
     }
 
     pub fn record_agent_filesystem_lifecycle(
@@ -1136,7 +1163,7 @@ pub mod oplog {
         .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
-            "Number of oplog storage operation retries due to transient errors",
+            "Number of oplog storage operation retries due to transient errors or indeterminate writes",
             &["op"]
         )
         .unwrap();

@@ -45,6 +45,7 @@ use golem_common::model::domain_registration::{Domain, DomainRegistrationCreatio
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord,
 };
@@ -216,6 +217,7 @@ pub trait TestDsl {
         name: &str,
         unique: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<ToolName, BTreeMap<AgentTypeName, ToolBindingInput>>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -868,6 +870,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     wasm_name: String,
     unique: bool,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+    tool_agent_bindings: BTreeMap<ToolName, BTreeMap<AgentTypeName, ToolBindingInput>>,
     files_for_archive: Vec<IFSEntry>,
 }
 
@@ -880,6 +883,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             name,
             unique: false,
             agent_type_provision_configs: BTreeMap::new(),
+            tool_agent_bindings: BTreeMap::new(),
             files_for_archive: Vec::new(),
         }
     }
@@ -1069,6 +1073,23 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         Ok(self)
     }
 
+    /// Makes a discovered tool available to one agent type with the default binding parameters.
+    pub fn with_tool_agent_binding(
+        mut self,
+        tool_name: &str,
+        agent_type: &str,
+    ) -> anyhow::Result<Self> {
+        let tool_name = ToolName::try_from(tool_name).map_err(anyhow::Error::msg)?;
+        self.tool_agent_bindings
+            .entry(tool_name)
+            .or_default()
+            .insert(
+                AgentTypeName(agent_type.to_string()),
+                ToolBindingInput::default(),
+            );
+        Ok(self)
+    }
+
     /// Stores the component and returns the final component name too which is useful when used
     /// together with unique
     pub async fn store(self) -> anyhow::Result<ComponentDto> {
@@ -1079,6 +1100,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 &self.name,
                 self.unique,
                 self.agent_type_provision_configs,
+                self.tool_agent_bindings,
                 self.files_for_archive,
             )
             .await

@@ -44,6 +44,8 @@ pub enum ComponentRepoError {
     ComponentViolatesUniqueness,
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error("Component is referenced by a tool release or deployment snapshot")]
+    ComponentSourceInUse,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
     #[error(transparent)]

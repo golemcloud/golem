@@ -2,7 +2,6 @@
 package "golemcloud/golem_sdk/schema"
 
 import {
-  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
@@ -44,6 +43,13 @@ pub fn[U : QuantityUnit] unit_allowed(TypeTag[U], String) -> Bool
 pub fn value_kind(@schema_model.SchemaValue) -> String
 
 // Errors
+pub suberror AgentStreamReadError {
+  Ownership(String)
+  Transport(String)
+  WireDecode(@schema_model.SchemaModelError)
+  ItemDecode(FromSchemaError)
+} derive(Eq, @debug.Debug)
+
 pub suberror FromSchemaError {
   ShapeMismatch(expected~ : String, actual~ : String, context~ : String)
   OutOfRange(index~ : UInt, len~ : UInt, context~ : String)
@@ -59,10 +65,23 @@ pub(all) struct AgentStream[T] {
   // private fields
 }
 pub fn[T] AgentStream::drop(Self[T]) -> Unit
-pub fn[T] AgentStream::from_reader(@async-core.Stream[@types.SchemaValueTree]) -> Self[T]
-pub async fn[T : FromSchema] AgentStream::read(Self[T]) -> T? raise FromSchemaError
+pub fn[T] AgentStream::new() -> (AgentStreamWriter[T], Self[T])
+pub fn[T] AgentStream::produce(async (AgentStreamWriter[T]) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
+pub async fn[T : FromSchema] AgentStream::read(Self[T]) -> T?
 pub impl[T] FromSchema for AgentStream[T]
 pub impl[T : IntoSchema] IntoSchema for AgentStream[T]
+
+pub(all) enum AgentStreamWriteOutcome {
+  Accepted
+  PeerDropped
+} derive(Eq, @debug.Debug)
+
+pub struct AgentStreamWriter[T] {
+  // private fields
+}
+pub async fn[T] AgentStreamWriter::close(Self[T]) -> Unit
+pub async fn[T : IntoSchema] AgentStreamWriter::write_all(Self[T], Array[T]) -> AgentStreamWriteOutcome
+pub async fn[T : IntoSchema] AgentStreamWriter::write_one(Self[T], T) -> AgentStreamWriteOutcome
 
 pub(all) struct Duration {
   nanoseconds : Int64
