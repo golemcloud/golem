@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::{Assignments, ExecutorShards, ShardEpoch, ShardLeaseState, Unassignments};
-use golem_common::model::ShardId;
-use std::collections::BTreeMap;
+use super::model::{Assignments, ExecutorShards, ShardLeaseState, Unassignments};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tracing::trace;

@@ -419,9 +419,7 @@ impl ShardLeaseState {
     /// the owner stays the same, one past the highest epoch ever recorded for that shard when the
     /// owner changes.
     ///
-    /// Pure, and the single definition of the rule: [`Self::assign_shard`] mints with it, and
-    /// [`Rebalance`] uses it to decide a plan's epochs at plan time so that the epoch pushed to an
-    /// executor is the one that is later stored.
+    /// Pure, and the single definition of the rule; [`Self::assign_shard`] mints with it.
     pub fn next_epoch_for(&self, executor_id: ExecutorId, shard_id: ShardId) -> ShardEpoch {
         match self.shard_assignments.get(&shard_id) {
             Some(entry) if entry.executor_id == executor_id => entry.epoch,
