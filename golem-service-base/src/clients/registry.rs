@@ -99,6 +99,7 @@ impl ResourceUsageMetering {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceUsageUpdate {
+    pub period: golem_common::model::account_usage::AccountUsagePeriod,
     pub monthly_usage_mode_revision: u64,
     pub memory_byte_nanoseconds_remainder: u64,
     pub durable_storage_byte_nanoseconds_remainder: u64,
@@ -562,7 +563,7 @@ impl RegistryService for GrpcRegistryService {
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
             Some(get_resource_limits_response::Result::Success(payload)) => {
-                Ok(payload.limits.ok_or("missing limits field")?.into())
+                Ok(payload.limits.ok_or("missing limits field")?.try_into()?)
             }
             Some(get_resource_limits_response::Result::Error(error)) => Err(error.into()),
         }
@@ -605,6 +606,10 @@ impl RegistryService for GrpcRegistryService {
             .into_iter()
             .map(|(k, v)| GrpcResourceUsageUpdate {
                 account_id: Some(k.into()),
+                period: Some(golem_api_grpc::proto::golem::common::AccountUsagePeriod {
+                    year: v.period.year,
+                    month: v.period.month,
+                }),
                 monthly_usage_mode_revision: v.monthly_usage_mode_revision,
                 memory_byte_nanoseconds_remainder: v.memory_byte_nanoseconds_remainder,
                 durable_storage_byte_nanoseconds_remainder: v

@@ -14,6 +14,7 @@
 
 use super::Worker;
 use super::entity_slot::{EntitySlot, EntitySlotRegistration};
+use super::invocation::fuel_exhaustion_error;
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
 use crate::durable_host::replay_state::ReplayState;
@@ -484,6 +485,12 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     self.creation_error(error.into())
                 }
             })?;
+
+        let current_level = store.get_fuel().unwrap_or(0);
+        let agent_mode = store.data().agent_mode();
+        if let Err(error) = store.data_mut().ensure_fuel(current_level) {
+            return Err(fuel_exhaustion_error(agent_mode, error));
+        }
 
         Ok(HostedInstance {
             instance,

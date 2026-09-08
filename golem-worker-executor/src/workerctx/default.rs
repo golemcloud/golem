@@ -41,7 +41,7 @@ use crate::services::oplog::{Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
-use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+use crate::services::resource_limits::{AtomicResourceEntry, FuelBorrow, ResourceLimits};
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
@@ -62,6 +62,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::account_usage::AccountUsagePeriod;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
@@ -123,6 +124,10 @@ struct FuelTracker {
     pub(self) ephemeral_overdraft_borrows: Vec<(u64, u64)>,
     /// Revision of the currently refundable account-pool reservation.
     pub(self) account_borrow_revision: Option<u64>,
+    /// Policy refresh generation that granted the current account reservation.
+    pub(self) account_borrow_generation: Option<u64>,
+    /// Usage period that granted the current account reservation.
+    pub(self) account_borrow_period: Option<AccountUsagePeriod>,
     /// Whether the currently outstanding partial batch came from local ephemeral overdraft.
     pub(self) last_borrow_was_ephemeral_overdraft: bool,
 }
@@ -137,6 +142,8 @@ impl FuelTracker {
             ephemeral_overdraft_prepaid: 0,
             ephemeral_overdraft_borrows: Vec::new(),
             account_borrow_revision: None,
+            account_borrow_generation: None,
+            account_borrow_period: None,
             last_borrow_was_ephemeral_overdraft: false,
         }
     }
@@ -161,16 +168,27 @@ impl FuelTracker {
     /// Called after a successful borrow to advance the pre-paid floor.
     /// The new floor is always `fuel_to_borrow` below the current gauge,
     /// regardless of any deficit covered by this borrow.
+    #[cfg(test)]
     pub(self) fn on_borrow_success(&mut self, current_gauge: u64) {
         self.prepaid_gauge_floor = current_gauge.saturating_sub(self.fuel_to_borrow);
     }
 
-    pub(self) fn on_account_borrow_success(&mut self, current_gauge: u64, revision: u64) {
-        self.on_borrow_success(current_gauge);
+    pub(self) fn on_account_borrow_success(
+        &mut self,
+        current_gauge: u64,
+        prepaid: u64,
+        revision: u64,
+        generation: u64,
+        period: AccountUsagePeriod,
+    ) {
+        self.prepaid_gauge_floor = current_gauge.saturating_sub(prepaid);
         self.account_borrow_revision = Some(revision);
+        self.account_borrow_generation = Some(generation);
+        self.account_borrow_period = Some(period);
         self.last_borrow_was_ephemeral_overdraft = false;
     }
 
+    #[cfg(test)]
     pub(self) fn try_borrow_ephemeral_overdraft(
         &mut self,
         current_gauge: u64,
@@ -194,6 +212,8 @@ impl FuelTracker {
                 self.ephemeral_overdraft_borrows.push((revision, amount));
             }
             self.account_borrow_revision = None;
+            self.account_borrow_generation = None;
+            self.account_borrow_period = None;
             self.on_borrow_success(current_gauge);
             self.last_borrow_was_ephemeral_overdraft = true;
             Ok(())
@@ -227,41 +247,69 @@ impl FuelTracker {
         agent_mode: AgentMode,
         current_level: u64,
     ) -> Result<(), AgentError> {
+        if let Some((revision, period)) =
+            resource_limit_entry.hard_limit_attribution_after(self.account_borrow_generation)
+        {
+            if self.needs_borrow(current_level) {
+                let deficit = self.prepaid_gauge_floor.saturating_sub(current_level);
+                resource_limit_entry.record_hard_limit_overshoot(deficit, revision, period);
+                self.prepaid_gauge_floor = current_level;
+                self.account_borrow_revision = None;
+                self.account_borrow_generation = None;
+                self.account_borrow_period = None;
+            }
+            return Err(Self::fuel_exhausted(agent_mode, self.overdraft_limit()));
+        }
         if !self.needs_borrow(current_level) {
             return Ok(());
         }
+        let deficit = self.prepaid_gauge_floor.saturating_sub(current_level);
         let amount_to_borrow = self.determine_amount_to_borrow(current_level);
-        let borrow_result = resource_limit_entry.borrow_fuel_with_revision(amount_to_borrow);
-        if let Ok(revision) = borrow_result {
-            self.on_account_borrow_success(current_level, revision);
-            debug!(amount = amount_to_borrow, "Borrowed fuel");
-            Ok(())
-        } else if agent_mode == AgentMode::Ephemeral {
-            if !resource_limit_entry.has_effective_fuel() {
-                return Err(AgentError::EphemeralFuelExhausted(
-                    EphemeralFuelExhaustedError {
-                        overdraft_limit: self.overdraft_limit(),
-                    },
-                ));
-            }
-
-            self.try_borrow_ephemeral_overdraft(
-                current_level,
-                amount_to_borrow,
-                borrow_result.expect_err("failed account borrow must retain its revision"),
-            )
-            .inspect(|_| {
-                debug!(
-                    amount = amount_to_borrow,
-                    "Borrowed ephemeral overdraft fuel"
+        match resource_limit_entry.borrow_fuel_with_revision(amount_to_borrow) {
+            FuelBorrow::Borrowed {
+                amount,
+                revision,
+                generation,
+                period,
+            } if amount > deficit => {
+                let prepaid = amount - deficit;
+                self.on_account_borrow_success(
+                    current_level,
+                    prepaid,
+                    revision,
+                    generation,
+                    period,
                 );
-            })
-        } else {
-            Err(AgentError::EphemeralCannotSuspend(
-                EphemeralCannotSuspendError {
-                    reason: "fuel exhausted".to_string(),
-                },
-            ))
+                debug!(amount, "Borrowed fuel");
+                Ok(())
+            }
+            outcome => {
+                let borrowed = match outcome {
+                    FuelBorrow::Borrowed { amount, .. } => amount,
+                    FuelBorrow::Exhausted { .. } => 0,
+                };
+                resource_limit_entry.record_hard_limit_overshoot(
+                    deficit.saturating_sub(borrowed),
+                    outcome.revision(),
+                    outcome.period(),
+                );
+                self.prepaid_gauge_floor = current_level;
+                self.account_borrow_revision = None;
+                self.account_borrow_generation = None;
+                self.account_borrow_period = None;
+                Err(Self::fuel_exhausted(agent_mode, self.overdraft_limit()))
+            }
+        }
+    }
+
+    fn fuel_exhausted(agent_mode: AgentMode, overdraft_limit: u64) -> AgentError {
+        match agent_mode {
+            AgentMode::Ephemeral => {
+                AgentError::EphemeralFuelExhausted(EphemeralFuelExhaustedError { overdraft_limit })
+            }
+            AgentMode::Durable => AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                reason: "fuel exhausted".to_string(),
+            }),
         }
     }
 
@@ -306,7 +354,12 @@ impl FuelTracker {
                 .account_borrow_revision
                 .take()
                 .expect("refundable account fuel must retain its revision");
-            resource_limit_entry.return_fuel_for_revision(unused, revision);
+            let period = self
+                .account_borrow_period
+                .take()
+                .expect("refundable account fuel must retain its period");
+            self.account_borrow_generation = None;
+            resource_limit_entry.return_fuel_for_revision_and_period(unused, revision, period);
             debug!(amount = unused, "Returned fuel");
         }
         for (revision, consumed_overdraft) in self.consumed_ephemeral_overdraft(unused) {
@@ -1154,8 +1207,10 @@ mod tests {
     use crate::services::resource_limits::AtomicResourceEntry;
     use crate::worker::invocation::rearm_fuel_check;
     use crate::workerctx::FuelManagement;
+    use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
     use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
+    use golem_service_base::model::MonthlyComputePolicy;
     use std::sync::Arc;
     use test_r::test;
     use wasmtime::{AsContextMut, Config, Engine, Module, Store, UpdateDeadline};
@@ -1163,6 +1218,7 @@ mod tests {
     struct FuelTestContext {
         tracker: FuelTracker,
         resource_limit_entry: Arc<AtomicResourceEntry>,
+        agent_mode: AgentMode,
     }
 
     impl FuelManagement for FuelTestContext {
@@ -1171,11 +1227,8 @@ mod tests {
         }
 
         fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
-            self.tracker.ensure_fuel(
-                &self.resource_limit_entry,
-                AgentMode::Durable,
-                current_level,
-            )
+            self.tracker
+                .ensure_fuel(&self.resource_limit_entry, self.agent_mode, current_level)
         }
 
         fn return_fuel(&mut self, current_level: u64) -> u64 {
@@ -1387,32 +1440,142 @@ mod tests {
     }
 
     #[test]
-    fn ephemeral_overdraft_keeps_each_accrual_revision_across_mode_changes() {
+    fn hard_limit_ephemeral_execution_never_uses_local_overdraft() {
         let entry = AtomicResourceEntry::new(1, 0, 0, 0, 0);
         let mut tracker = fuel_tracker();
 
         tracker
             .ensure_fuel(&entry, AgentMode::Ephemeral, INITIAL)
             .unwrap();
-        entry.update_usage_revision_for_test(1);
-        tracker
-            .ensure_fuel(&entry, AgentMode::Ephemeral, INITIAL - 10_000)
-            .unwrap();
-        entry.update_usage_revision_for_test(2);
-        tracker
-            .ensure_fuel(&entry, AgentMode::Ephemeral, INITIAL - 20_000)
-            .unwrap();
-        tracker.settle_fuel(&entry, INITIAL - 24_000);
+        assert!(
+            tracker
+                .ensure_fuel(&entry, AgentMode::Ephemeral, INITIAL - 1)
+                .is_err()
+        );
+        assert!(tracker.ephemeral_overdraft_borrows.is_empty());
+        assert_eq!(entry.fuel_delta(), 1);
+    }
 
-        let pre_opt_in_debt = entry.capture_usage_update_for_test();
-        let pre_opt_out_debt = entry.capture_usage_update_for_test();
-        let post_opt_out_debt = entry.capture_usage_update_for_test();
-        assert_eq!(pre_opt_in_debt.monthly_usage_mode_revision, 0);
-        assert_eq!(pre_opt_in_debt.fuel_delta, 10_000);
-        assert_eq!(pre_opt_out_debt.monthly_usage_mode_revision, 1);
-        assert_eq!(pre_opt_out_debt.fuel_delta, 10_000);
-        assert_eq!(post_opt_out_debt.monthly_usage_mode_revision, 2);
-        assert_eq!(post_opt_out_debt.fuel_delta, 4_000);
+    #[test]
+    fn resident_fuel_check_observes_refreshed_zero_before_prepaid_early_return() {
+        let entry = AtomicResourceEntry::new(100_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+        assert!(!tracker.needs_borrow(INITIAL - 1));
+
+        assert!(entry.apply_compute_snapshot_for_test(
+            1,
+            MonthlyComputePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 0,
+            },
+            0,
+        ));
+
+        assert!(
+            tracker
+                .ensure_fuel(&entry, AgentMode::Durable, INITIAL - 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn refreshed_hard_limit_records_fuel_burned_past_the_prepaid_floor() {
+        let entry = AtomicResourceEntry::new(100_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+
+        assert!(entry.apply_compute_snapshot_for_test(
+            1,
+            MonthlyComputePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 0,
+            },
+            0,
+        ));
+
+        let current_level = INITIAL - FUEL_TO_BORROW - 5_000;
+        assert!(
+            tracker
+                .ensure_fuel(&entry, AgentMode::Durable, current_level)
+                .is_err()
+        );
+        assert_eq!(entry.fuel_delta(), (FUEL_TO_BORROW + 5_000) as i64);
+        assert_eq!(tracker.prepaid_gauge_floor, current_level);
+    }
+
+    #[test]
+    fn partial_hard_limit_borrow_sets_exact_floor_and_refunds_unused_fuel() {
+        let entry = AtomicResourceEntry::new(5_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+        assert_eq!(tracker.prepaid_gauge_floor, INITIAL - 5_000);
+        tracker.settle_fuel(&entry, INITIAL - 2_000);
+
+        assert_eq!(entry.fuel_delta(), 2_000);
+        assert_eq!(tracker.prepaid_gauge_floor, INITIAL - 2_000);
+    }
+
+    #[test]
+    fn hard_limit_borrow_covering_only_the_deficit_is_exhausted() {
+        let entry = AtomicResourceEntry::new(15_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+
+        let current_level = INITIAL - 15_000;
+        assert!(
+            tracker
+                .ensure_fuel(&entry, AgentMode::Durable, current_level)
+                .is_err()
+        );
+        assert_eq!(tracker.prepaid_gauge_floor, current_level);
+        assert_eq!(entry.fuel_delta(), 15_000);
+    }
+
+    #[test]
+    fn replenishment_advances_the_floor_by_only_the_new_prepaid_batch() {
+        let entry = AtomicResourceEntry::new(100_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+
+        let current_level = INITIAL - 15_000;
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, current_level)
+            .unwrap();
+
+        assert_eq!(tracker.prepaid_gauge_floor, current_level - FUEL_TO_BORROW);
+        assert_eq!(entry.fuel_delta(), 25_000);
+    }
+
+    #[test]
+    fn hard_limit_overshoot_records_the_full_observed_deficit_at_its_revision() {
+        let entry = AtomicResourceEntry::new(5_000, 0, 0, 0, 0);
+        let mut tracker = fuel_tracker();
+        tracker
+            .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
+            .unwrap();
+
+        assert!(
+            tracker
+                .ensure_fuel(&entry, AgentMode::Durable, INITIAL - 8_000)
+                .is_err()
+        );
+        let usage = entry.capture_usage_update_for_test();
+        assert_eq!(usage.monthly_usage_mode_revision, 0);
+        assert_eq!(usage.fuel_delta, 8_000);
     }
 
     #[test]
@@ -1441,6 +1604,7 @@ mod tests {
             FuelTestContext {
                 tracker: fuel_tracker(),
                 resource_limit_entry: resource_limit_entry.clone(),
+                agent_mode: AgentMode::Durable,
             },
         );
         store.set_fuel(INITIAL)?;
@@ -1495,6 +1659,41 @@ mod tests {
             resource_limit_entry.fuel_delta() > first_call_charge,
             "the second call must borrow before consuming fuel returned by the first"
         );
+        Ok(())
+    }
+
+    #[test]
+    async fn hard_limit_zero_epoch_callback_blocks_durable_and_ephemeral_stores()
+    -> anyhow::Result<()> {
+        let mut config = Config::new();
+        config.consume_fuel(true).epoch_interruption(true);
+        let engine = Engine::new(&config)?;
+        let module = Module::new(&engine, r#"(module (func (export "run")))"#)?;
+
+        for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let mut store = Store::new(
+                &engine,
+                FuelTestContext {
+                    tracker: fuel_tracker(),
+                    resource_limit_entry: Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
+                    agent_mode,
+                },
+            );
+            store.set_fuel(INITIAL)?;
+            store.epoch_deadline_callback(|mut store| {
+                let current_level = store.get_fuel().unwrap_or(0);
+                store
+                    .data_mut()
+                    .ensure_fuel(current_level)
+                    .map_err(|error| wasmtime::Error::msg(format!("{error:?}")))?;
+                Ok(UpdateDeadline::Continue(1))
+            });
+            store.set_epoch_deadline(0);
+            let instance = wasmtime::Instance::new_async(&mut store, &module, &[]).await?;
+            let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
+
+            assert!(run.call_async(&mut store, ()).await.is_err());
+        }
         Ok(())
     }
 

@@ -25,11 +25,14 @@ use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT;
+use golem_common::model::account_usage::{
+    AccountUsagePeriod, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, MonthlyUsageMode,
+};
 use golem_common::model::agent::AgentMode;
 use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::collections::{HashMap, VecDeque};
+use golem_service_base::model::MonthlyComputePolicy;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -44,8 +47,6 @@ use tracing::{Instrument, error, info_span};
 pub struct AtomicResourceEntry {
     metering: ResourceUsageMeteringConfig,
     usage_revision_state: Mutex<UsageRevisionState>,
-    // Current (cached) value of the account level fuel limits
-    fuel: AtomicU64,
     // any local fuel consumption that was not yet sent to the server
     delta: AtomicI64,
     // any fuel consumption that is currently in flight to the server
@@ -149,7 +150,64 @@ struct CapturedUsageUpdate {
 #[derive(Debug)]
 struct UsageRevisionState {
     current_revision: u64,
+    current_period: AccountUsagePeriod,
     pending: VecDeque<CapturedUsageUpdate>,
+    monthly_compute: Option<MonthlyComputeGate>,
+}
+
+#[derive(Debug)]
+struct MonthlyComputeGate {
+    period: AccountUsagePeriod,
+    mode: MonthlyUsageMode,
+    available_fuel: u64,
+    failed_delivery_fuel: BTreeMap<AccountUsagePeriod, i128>,
+    unassigned_in_flight_fuel: BTreeMap<AccountUsagePeriod, i128>,
+    in_flight_fuel: HashMap<u64, InFlightFuel>,
+    stale_delivered_fuel: Vec<StaleDeliveredFuel>,
+    refresh_generation: u64,
+    settled_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InFlightFuel {
+    period: AccountUsagePeriod,
+    delta: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StaleDeliveredFuel {
+    period: AccountUsagePeriod,
+    delta: i64,
+    observed_refresh_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FuelBorrow {
+    Borrowed {
+        amount: u64,
+        revision: u64,
+        generation: u64,
+        period: AccountUsagePeriod,
+    },
+    Exhausted {
+        revision: u64,
+        generation: u64,
+        period: AccountUsagePeriod,
+    },
+}
+
+impl FuelBorrow {
+    pub(crate) fn revision(self) -> u64 {
+        match self {
+            Self::Borrowed { revision, .. } | Self::Exhausted { revision, .. } => revision,
+        }
+    }
+
+    pub(crate) fn period(self) -> AccountUsagePeriod {
+        match self {
+            Self::Borrowed { period, .. } | Self::Exhausted { period, .. } => period,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -462,13 +520,61 @@ impl AtomicResourceEntry {
         metering: ResourceUsageMeteringConfig,
         monthly_usage_mode_revision: u64,
     ) -> Self {
+        Self::new_with_all_limits_metering_policy_and_revision(
+            MonthlyComputePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: fuel,
+            },
+            max_memory,
+            max_table_elements,
+            max_disk_space,
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
+            available_http_calls,
+            available_rpc_calls,
+            max_concurrent_agents_per_executor,
+            oplog_writes_per_second,
+            metering,
+            monthly_usage_mode_revision,
+            0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_all_limits_metering_policy_and_revision(
+        monthly_compute: MonthlyComputePolicy,
+        max_memory: usize,
+        max_table_elements: usize,
+        max_disk_space: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
+        available_http_calls: u64,
+        available_rpc_calls: u64,
+        max_concurrent_agents_per_executor: u64,
+        oplog_writes_per_second: u64,
+        metering: ResourceUsageMeteringConfig,
+        monthly_usage_mode_revision: u64,
+        refresh_generation: u64,
+    ) -> Self {
         Self {
             metering,
             usage_revision_state: Mutex::new(UsageRevisionState {
                 current_revision: monthly_usage_mode_revision,
+                current_period: monthly_compute.period,
                 pending: VecDeque::new(),
+                monthly_compute: metering.compute.then_some(MonthlyComputeGate {
+                    period: monthly_compute.period,
+                    mode: monthly_compute.mode,
+                    available_fuel: monthly_compute.available_fuel,
+                    failed_delivery_fuel: BTreeMap::new(),
+                    unassigned_in_flight_fuel: BTreeMap::new(),
+                    in_flight_fuel: HashMap::new(),
+                    stale_delivered_fuel: Vec::new(),
+                    refresh_generation,
+                    settled_generation: refresh_generation,
+                }),
             }),
-            fuel: AtomicU64::new(if metering.compute { fuel } else { u64::MAX }),
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
             in_flight_memory_gb_seconds_delta: AtomicI64::new(0),
@@ -521,28 +627,67 @@ impl AtomicResourceEntry {
             .saturating_sub(self.last_refresh_secs.load(Ordering::Acquire))
     }
 
+    #[cfg(test)]
     fn effective_fuel(&self) -> u64 {
         let revision_state = self.usage_revision_state.lock().unwrap();
         self.effective_fuel_with_revision_state(&revision_state)
     }
 
     fn effective_fuel_with_revision_state(&self, revision_state: &UsageRevisionState) -> u64 {
-        if !self.metering.compute {
+        let Some(gate) = &revision_state.monthly_compute else {
             return u64::MAX;
-        }
-        let fuel = self.fuel.load(Ordering::Acquire);
+        };
         let delta = self.delta.load(Ordering::Acquire);
-        let in_flight = self.in_flight_delta.load(Ordering::Acquire);
+        let assigned_in_flight = gate
+            .in_flight_fuel
+            .values()
+            .filter(|in_flight| {
+                in_flight.period == gate.period || in_flight.period == revision_state.current_period
+            })
+            .map(|in_flight| in_flight.delta as i128)
+            .fold(0i128, i128::saturating_add);
+        let unassigned_in_flight = gate
+            .unassigned_in_flight_fuel
+            .iter()
+            .filter(|(period, _)| {
+                **period == gate.period || **period == revision_state.current_period
+            })
+            .map(|(_, delta)| *delta)
+            .fold(0i128, i128::saturating_add);
         let pending = revision_state
             .pending
             .iter()
+            .filter(|captured| {
+                captured.update.period == gate.period
+                    || captured.update.period == revision_state.current_period
+            })
             .map(|captured| captured.update.fuel_delta as i128)
-            .sum::<i128>();
-
-        // compute sum as i128 to avoid overflow
-        let sum = fuel as i128 + delta as i128 + in_flight as i128 + pending;
-
-        sum.max(0).min(u64::MAX as i128) as u64
+            .fold(0i128, i128::saturating_add);
+        let stale_delivered = gate
+            .stale_delivered_fuel
+            .iter()
+            .filter(|delivered| {
+                delivered.period == gate.period || delivered.period == revision_state.current_period
+            })
+            .map(|delivered| i128::from(delivered.delta.max(0)))
+            .fold(0i128, i128::saturating_add);
+        let failed_delivery = gate
+            .failed_delivery_fuel
+            .iter()
+            .filter(|(period, _)| {
+                **period == gate.period || **period == revision_state.current_period
+            })
+            .map(|(_, delta)| *delta)
+            .fold(0i128, i128::saturating_add);
+        let local_usage = (delta as i128)
+            .saturating_add(assigned_in_flight)
+            .saturating_add(unassigned_in_flight)
+            .saturating_add(pending)
+            .saturating_add(stale_delivered)
+            .saturating_add(failed_delivery);
+        (gate.available_fuel as i128)
+            .saturating_sub(local_usage)
+            .clamp(0, u64::MAX as i128) as u64
     }
 
     #[cfg(test)]
@@ -551,37 +696,103 @@ impl AtomicResourceEntry {
     }
 
     pub fn borrow_fuel(&self, amount: u64) -> bool {
-        self.borrow_fuel_with_revision(amount).is_ok()
+        matches!(
+            self.borrow_fuel_with_revision(amount),
+            FuelBorrow::Borrowed { .. }
+        )
     }
 
-    pub(crate) fn borrow_fuel_with_revision(&self, amount: u64) -> Result<u64, u64> {
-        let revision_state = self.usage_revision_state.lock().unwrap();
-        let revision = revision_state.current_revision;
-        if !self.metering.compute {
-            return Ok(revision);
+    pub(crate) fn borrow_fuel_with_revision(&self, amount: u64) -> FuelBorrow {
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        if self.metering.compute {
+            self.update_usage_period_locked(&mut revision_state, AccountUsagePeriod::current());
         }
-        let available = self.effective_fuel_with_revision_state(&revision_state);
-
+        let revision = revision_state.current_revision;
+        let period = revision_state.current_period;
+        let generation = revision_state
+            .monthly_compute
+            .as_ref()
+            .map_or(0, |gate| gate.settled_generation);
         if amount == 0 {
-            return Ok(revision);
+            return FuelBorrow::Borrowed {
+                amount: 0,
+                revision,
+                generation,
+                period,
+            };
+        }
+        let Some(gate) = &revision_state.monthly_compute else {
+            return FuelBorrow::Borrowed {
+                amount,
+                revision,
+                generation,
+                period,
+            };
+        };
+        let borrowed = match gate.mode {
+            MonthlyUsageMode::AllowOverage => amount,
+            MonthlyUsageMode::HardLimit => {
+                amount.min(self.effective_fuel_with_revision_state(&revision_state))
+            }
         };
 
-        if amount <= available {
-            let amt_i64 = amount.min(i64::MAX as u64) as i64;
+        if borrowed > 0 {
+            let amt_i64 = borrowed.min(i64::MAX as u64) as i64;
             self.delta
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
                     Some(d.saturating_add(amt_i64))
                 })
                 .ok();
-            record_fuel_borrow(amount);
-            Ok(revision)
+            record_fuel_borrow(borrowed);
+            FuelBorrow::Borrowed {
+                amount: borrowed,
+                revision,
+                generation,
+                period,
+            }
         } else {
-            Err(revision)
+            FuelBorrow::Exhausted {
+                revision,
+                generation,
+                period,
+            }
         }
     }
 
-    pub fn has_effective_fuel(&self) -> bool {
-        self.effective_fuel() > 0
+    pub(crate) fn has_compute_capacity(&self) -> bool {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        revision_state.monthly_compute.as_ref().is_none_or(|gate| {
+            gate.mode == MonthlyUsageMode::AllowOverage
+                || self.effective_fuel_with_revision_state(&revision_state) > 0
+        })
+    }
+
+    pub(crate) fn hard_limit_attribution_after(
+        &self,
+        generation: Option<u64>,
+    ) -> Option<(u64, AccountUsagePeriod)> {
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        revision_state.monthly_compute.as_ref().and_then(|gate| {
+            (gate.mode == MonthlyUsageMode::HardLimit
+                && self.effective_fuel_with_revision_state(&revision_state) == 0
+                && generation.is_none_or(|generation| gate.settled_generation > generation))
+            .then_some((revision_state.current_revision, gate.period))
+        })
+    }
+
+    pub(crate) fn record_hard_limit_overshoot(
+        &self,
+        amount: u64,
+        revision: u64,
+        period: AccountUsagePeriod,
+    ) {
+        if amount > 0 {
+            self.record_fuel_delta_for_revision_and_period(
+                revision,
+                period,
+                amount.min(i64::MAX as u64) as i64,
+            );
+        }
     }
 
     pub fn return_fuel(&self, amount: u64) {
@@ -590,11 +801,21 @@ impl AtomicResourceEntry {
     }
 
     pub(crate) fn return_fuel_for_revision(&self, amount: u64, revision: u64) {
+        let period = self.usage_revision_state.lock().unwrap().current_period;
+        self.return_fuel_for_revision_and_period(amount, revision, period);
+    }
+
+    pub(crate) fn return_fuel_for_revision_and_period(
+        &self,
+        amount: u64,
+        revision: u64,
+        period: AccountUsagePeriod,
+    ) {
         if !self.metering.compute {
             return;
         }
         let amt_i64 = amount.min(i64::MAX as u64) as i64;
-        self.record_fuel_delta_for_revision(revision, -amt_i64);
+        self.record_fuel_delta_for_revision_and_period(revision, period, -amt_i64);
         record_fuel_return(amount);
     }
 
@@ -614,13 +835,23 @@ impl AtomicResourceEntry {
     }
 
     fn record_fuel_delta_for_revision(&self, revision: u64, fuel_delta: i64) {
+        let period = self.usage_revision_state.lock().unwrap().current_period;
+        self.record_fuel_delta_for_revision_and_period(revision, period, fuel_delta);
+    }
+
+    fn record_fuel_delta_for_revision_and_period(
+        &self,
+        revision: u64,
+        period: AccountUsagePeriod,
+        fuel_delta: i64,
+    ) {
         let mut revision_state = self.usage_revision_state.lock().unwrap();
         assert!(
             revision <= revision_state.current_revision,
             "fuel usage references future revision {revision}; current revision is {}",
             revision_state.current_revision
         );
-        if revision == revision_state.current_revision {
+        if revision == revision_state.current_revision && period == revision_state.current_period {
             self.delta
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                     Some(delta.saturating_add(fuel_delta))
@@ -629,6 +860,7 @@ impl AtomicResourceEntry {
         } else {
             revision_state.pending.push_back(CapturedUsageUpdate {
                 update: ResourceUsageUpdate {
+                    period,
                     monthly_usage_mode_revision: revision,
                     memory_byte_nanoseconds_remainder: 0,
                     durable_storage_byte_nanoseconds_remainder: 0,
@@ -846,8 +1078,9 @@ impl AtomicResourceEntry {
     fn capture_usage_update(&self, refresh_threshold_secs: i64) -> Option<CapturedUsageUpdate> {
         self.flush_active_resource_usage();
         let mut revision_state = self.usage_revision_state.lock().unwrap();
+        self.update_usage_period_locked(&mut revision_state, AccountUsagePeriod::current());
         if let Some(captured) = revision_state.pending.pop_front() {
-            self.mark_in_flight(&captured);
+            self.mark_in_flight(&captured, &mut revision_state);
             return Some(captured);
         }
 
@@ -864,14 +1097,19 @@ impl AtomicResourceEntry {
             return None;
         }
 
-        let captured = self.capture_current_usage(revision_state.current_revision, false);
-        self.mark_in_flight(&captured);
+        let captured = self.capture_current_usage(
+            revision_state.current_revision,
+            revision_state.current_period,
+            false,
+        );
+        self.mark_in_flight(&captured, &mut revision_state);
         Some(captured)
     }
 
     fn capture_current_usage(
         &self,
         monthly_usage_mode_revision: u64,
+        period: AccountUsagePeriod,
         include_remainders: bool,
     ) -> CapturedUsageUpdate {
         let fuel_delta = if self.metering.compute {
@@ -894,6 +1132,7 @@ impl AtomicResourceEntry {
         let rpc_count = self.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
         CapturedUsageUpdate {
             update: ResourceUsageUpdate {
+                period,
                 monthly_usage_mode_revision,
                 memory_byte_nanoseconds_remainder: captured_usage.memory_byte_nanoseconds_remainder,
                 durable_storage_byte_nanoseconds_remainder: captured_usage
@@ -917,7 +1156,11 @@ impl AtomicResourceEntry {
         }
     }
 
-    fn mark_in_flight(&self, captured: &CapturedUsageUpdate) {
+    fn mark_in_flight(
+        &self,
+        captured: &CapturedUsageUpdate,
+        revision_state: &mut UsageRevisionState,
+    ) {
         if captured.update.http_call_count_delta > 0 {
             self.syncing_http_calls
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
@@ -938,6 +1181,13 @@ impl AtomicResourceEntry {
                     Some(delta.saturating_add(captured.update.fuel_delta))
                 })
                 .ok();
+            if let Some(gate) = &mut revision_state.monthly_compute {
+                let unassigned = gate
+                    .unassigned_in_flight_fuel
+                    .entry(captured.update.period)
+                    .or_default();
+                *unassigned = unassigned.saturating_add(captured.update.fuel_delta as i128);
+            }
         }
         if captured.update.memory_gb_seconds_delta != 0 {
             self.in_flight_memory_gb_seconds_delta
@@ -962,10 +1212,19 @@ impl AtomicResourceEntry {
         }
     }
 
+    #[cfg(test)]
     fn update_usage_revision(&self, new_revision: u64) {
         self.flush_active_resource_usage();
         let mut revision_state = self.usage_revision_state.lock().unwrap();
-        if revision_state.current_revision == new_revision {
+        self.update_usage_revision_locked(&mut revision_state, new_revision);
+    }
+
+    fn update_usage_revision_locked(
+        &self,
+        revision_state: &mut UsageRevisionState,
+        new_revision: u64,
+    ) {
+        if revision_state.current_revision >= new_revision {
             return;
         }
 
@@ -980,10 +1239,18 @@ impl AtomicResourceEntry {
             if !active {
                 break;
             }
-            let captured = self.capture_current_usage(revision_state.current_revision, false);
+            let captured = self.capture_current_usage(
+                revision_state.current_revision,
+                revision_state.current_period,
+                false,
+            );
             revision_state.pending.push_back(captured);
         }
-        let captured = self.capture_current_usage(revision_state.current_revision, true);
+        let captured = self.capture_current_usage(
+            revision_state.current_revision,
+            revision_state.current_period,
+            true,
+        );
         if captured.update.memory_byte_nanoseconds_remainder != 0
             || captured.update.durable_storage_byte_nanoseconds_remainder != 0
             || captured.update.ephemeral_storage_byte_nanoseconds_remainder != 0
@@ -993,9 +1260,244 @@ impl AtomicResourceEntry {
         revision_state.current_revision = new_revision;
     }
 
+    fn update_usage_period_locked(
+        &self,
+        revision_state: &mut UsageRevisionState,
+        new_period: AccountUsagePeriod,
+    ) {
+        if revision_state.current_period >= new_period {
+            return;
+        }
+
+        loop {
+            let active = (self.metering.compute && self.delta.load(Ordering::Acquire) != 0)
+                || self
+                    .account_usage_accumulator
+                    .as_ref()
+                    .is_some_and(|accumulator| accumulator.lock().unwrap().is_active())
+                || self.unsynced_http_calls.load(Ordering::Acquire) > 0
+                || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0;
+            if !active {
+                break;
+            }
+            let captured = self.capture_current_usage(
+                revision_state.current_revision,
+                revision_state.current_period,
+                false,
+            );
+            revision_state.pending.push_back(captured);
+        }
+        let captured = self.capture_current_usage(
+            revision_state.current_revision,
+            revision_state.current_period,
+            true,
+        );
+        if captured.update.memory_byte_nanoseconds_remainder != 0
+            || captured.update.durable_storage_byte_nanoseconds_remainder != 0
+            || captured.update.ephemeral_storage_byte_nanoseconds_remainder != 0
+        {
+            revision_state.pending.push_back(captured);
+        }
+        revision_state.current_period = new_period;
+    }
+
+    fn begin_compute_refresh(&self, generation: u64, update: &ResourceUsageUpdate) {
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        if let Some(gate) = &mut revision_state.monthly_compute {
+            gate.refresh_generation = gate.refresh_generation.max(generation);
+            if update.fuel_delta != 0 {
+                let remaining_unassigned = gate
+                    .unassigned_in_flight_fuel
+                    .get(&update.period)
+                    .copied()
+                    .unwrap_or_default()
+                    .saturating_sub(update.fuel_delta as i128);
+                if remaining_unassigned == 0 {
+                    gate.unassigned_in_flight_fuel.remove(&update.period);
+                } else {
+                    gate.unassigned_in_flight_fuel
+                        .insert(update.period, remaining_unassigned);
+                }
+                let previous = gate.in_flight_fuel.insert(
+                    generation,
+                    InFlightFuel {
+                        period: update.period,
+                        delta: update.fuel_delta,
+                    },
+                );
+                assert!(previous.is_none(), "refresh generation must be unique");
+            }
+        }
+    }
+
+    fn apply_compute_snapshot(
+        &self,
+        generation: u64,
+        monthly_compute: MonthlyComputePolicy,
+        monthly_usage_mode_revision: u64,
+        usage_update_applied: bool,
+    ) -> bool {
+        self.flush_active_resource_usage();
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        let current_period = revision_state.current_period;
+        if revision_state.monthly_compute.is_none() {
+            self.update_usage_revision_locked(&mut revision_state, monthly_usage_mode_revision);
+            self.update_usage_period_locked(&mut revision_state, monthly_compute.period);
+            return true;
+        }
+        let gate = revision_state
+            .monthly_compute
+            .as_mut()
+            .expect("compute gate was checked above");
+        let delivered = gate.in_flight_fuel.remove(&generation);
+        if let Some(delivered) = delivered {
+            self.in_flight_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.delta))
+                })
+                .ok();
+        }
+        if generation != gate.refresh_generation || generation <= gate.settled_generation {
+            if let Some(delivered) = delivered
+                && (delivered.period == gate.period || delivered.period == current_period)
+            {
+                if usage_update_applied {
+                    if delivered.delta > 0 {
+                        gate.stale_delivered_fuel.push(StaleDeliveredFuel {
+                            period: delivered.period,
+                            delta: delivered.delta,
+                            observed_refresh_generation: gate.refresh_generation,
+                        });
+                    }
+                } else {
+                    let failed_delivery = gate
+                        .failed_delivery_fuel
+                        .entry(delivered.period)
+                        .or_default();
+                    *failed_delivery = failed_delivery
+                        .saturating_add(delivered.delta as i128)
+                        .max(0);
+                }
+            }
+            return false;
+        }
+
+        self.update_usage_revision_locked(&mut revision_state, monthly_usage_mode_revision);
+        self.update_usage_period_locked(&mut revision_state, monthly_compute.period);
+        let gate = revision_state
+            .monthly_compute
+            .as_mut()
+            .expect("compute gate was checked above");
+        if usage_update_applied
+            && let Some(delivered) = delivered
+            && delivered.period > monthly_compute.period
+            && delivered.delta > 0
+        {
+            gate.stale_delivered_fuel.push(StaleDeliveredFuel {
+                period: delivered.period,
+                delta: delivered.delta,
+                observed_refresh_generation: generation,
+            });
+        }
+        gate.failed_delivery_fuel
+            .retain(|period, _| *period >= monthly_compute.period);
+        gate.stale_delivered_fuel.retain(|retained| {
+            retained.period > monthly_compute.period
+                || (retained.period == monthly_compute.period
+                    && generation <= retained.observed_refresh_generation)
+        });
+        if !usage_update_applied
+            && let Some(delivered) = delivered
+            && delivered.period >= monthly_compute.period
+        {
+            let failed_delivery = gate
+                .failed_delivery_fuel
+                .entry(delivered.period)
+                .or_default();
+            *failed_delivery = failed_delivery
+                .saturating_add(delivered.delta as i128)
+                .max(0);
+        }
+        gate.period = monthly_compute.period;
+        gate.mode = monthly_compute.mode;
+        gate.available_fuel = monthly_compute.available_fuel;
+        gate.settled_generation = generation;
+        true
+    }
+
+    fn fail_compute_delivery(&self, generation: u64) -> bool {
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        let current_period = revision_state.current_period;
+        let Some(gate) = &mut revision_state.monthly_compute else {
+            return true;
+        };
+        let delivered = gate.in_flight_fuel.remove(&generation);
+        if let Some(delivered) = delivered {
+            self.in_flight_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.delta))
+                })
+                .ok();
+            if delivered.period == gate.period || delivered.period == current_period {
+                let failed_delivery = gate
+                    .failed_delivery_fuel
+                    .entry(delivered.period)
+                    .or_default();
+                *failed_delivery = failed_delivery
+                    .saturating_add(delivered.delta as i128)
+                    .max(0);
+            }
+        }
+        if generation != gate.refresh_generation || generation <= gate.settled_generation {
+            return false;
+        }
+        gate.settled_generation = generation;
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn update_usage_revision_for_test(&self, new_revision: u64) {
         self.update_usage_revision(new_revision);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_compute_snapshot_for_test(
+        &self,
+        generation: u64,
+        monthly_compute: MonthlyComputePolicy,
+        monthly_usage_mode_revision: u64,
+    ) -> bool {
+        self.begin_compute_refresh_for_test(generation, 0);
+        self.apply_compute_snapshot(
+            generation,
+            monthly_compute,
+            monthly_usage_mode_revision,
+            true,
+        )
+    }
+
+    #[cfg(test)]
+    fn begin_compute_refresh_for_test(&self, generation: u64, fuel_delta: i64) {
+        let period = self.usage_revision_state.lock().unwrap().current_period;
+        let update = ResourceUsageUpdate {
+            period,
+            monthly_usage_mode_revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
+            fuel_delta,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            metering: golem_service_base::clients::registry::ResourceUsageMetering {
+                compute: self.metering.compute,
+                memory: self.metering.memory,
+                filesystem: self.metering.filesystem,
+            },
+        };
+        self.begin_compute_refresh(generation, &update);
     }
 
     #[cfg(test)]
@@ -1209,6 +1711,7 @@ pub struct ResourceLimitsGrpc {
     client: Arc<dyn RegistryService>,
     entries: scc::HashMap<AccountId, Arc<OnceCell<Arc<AtomicResourceEntry>>>>,
     metering: ResourceUsageMeteringConfig,
+    refresh_generation: AtomicU64,
 }
 
 impl ResourceLimitsGrpc {
@@ -1223,6 +1726,7 @@ impl ResourceLimitsGrpc {
             client: registry_service,
             entries: scc::HashMap::new(),
             metering,
+            refresh_generation: AtomicU64::new(1),
         };
         let svc = Arc::new(svc);
         let svc_weak = Arc::downgrade(&svc);
@@ -1274,6 +1778,26 @@ impl ResourceLimitsGrpc {
         Ok(last_known_limits)
     }
 
+    fn next_refresh_generation(&self) -> u64 {
+        self.refresh_generation.fetch_add(1, Ordering::AcqRel)
+    }
+
+    async fn begin_compute_refresh(
+        &self,
+        account_id: AccountId,
+        generation: u64,
+        update: &ResourceUsageUpdate,
+    ) {
+        if let Some(cell) = self
+            .entries
+            .read_async(&account_id, |_, entry| entry.clone())
+            .await
+            && let Some(entry) = cell.get()
+        {
+            entry.begin_compute_refresh(generation, update);
+        }
+    }
+
     /// Builds and sends a single batch to the registry covering:
     /// - active accounts with non-zero fuel, memory, storage, HTTP, or RPC deltas
     /// - otherwise-idle accounts past the refresh threshold
@@ -1316,6 +1840,11 @@ impl ResourceLimitsGrpc {
                 let updates: HashMap<_, _> = pending_updates.by_ref().take(256).collect();
                 if updates.is_empty() {
                     break;
+                }
+                let refresh_generation = self.next_refresh_generation();
+                for (account_id, update) in &updates {
+                    self.begin_compute_refresh(*account_id, refresh_generation, update)
+                        .await;
                 }
 
                 tracing::debug!(
@@ -1369,7 +1898,11 @@ impl ResourceLimitsGrpc {
                                 error!(
                                     "Registry did not apply resource usage update for account {account_id}; dropping the in-flight update"
                                 );
-                                self.reset_in_flight_delta(*account_id).await;
+                                self.reset_in_flight_delta(
+                                    *account_id,
+                                    refresh_generation,
+                                )
+                                .await;
                                 continue;
                             };
                             if !resource_limits.usage_update_applied {
@@ -1420,8 +1953,12 @@ impl ResourceLimitsGrpc {
                             }
                         }
                         for (account_id, resource_limits) in updated_limits.0 {
-                            self.update_last_known_limits(account_id, resource_limits)
-                                .await;
+                            self.update_last_known_limits(
+                                account_id,
+                                resource_limits,
+                                refresh_generation,
+                            )
+                            .await;
                         }
                     }
                     Err(err) => {
@@ -1444,7 +1981,11 @@ impl ResourceLimitsGrpc {
                                     update.http_call_count_delta,
                                     update.rpc_call_count_delta,
                                 );
-                                self.reset_in_flight_delta(*account_id).await;
+                                self.reset_in_flight_delta(
+                                    *account_id,
+                                    refresh_generation,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1459,16 +2000,18 @@ impl ResourceLimitsGrpc {
         &self,
         account_id: AccountId,
         updated_limits: golem_service_base::model::ResourceLimits,
+        refresh_generation: u64,
     ) {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
-            entry.update_usage_revision(updated_limits.monthly_usage_mode_revision);
-            if self.metering.compute {
-                entry.in_flight_delta.store(0, Ordering::Release);
-                entry
-                    .fuel
-                    .store(updated_limits.available_fuel, Ordering::Release);
+            if !entry.apply_compute_snapshot(
+                refresh_generation,
+                updated_limits.monthly_compute.clone(),
+                updated_limits.monthly_usage_mode_revision,
+                updated_limits.usage_update_applied,
+            ) {
+                return;
             }
             if self.metering.memory {
                 entry
@@ -1533,12 +2076,12 @@ impl ResourceLimitsGrpc {
         }
     }
 
-    async fn reset_in_flight_delta(&self, account_id: AccountId) {
+    async fn reset_in_flight_delta(&self, account_id: AccountId, refresh_generation: u64) {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
-            if self.metering.compute {
-                entry.in_flight_delta.swap(0, Ordering::AcqRel);
+            if !entry.fail_compute_delivery(refresh_generation) {
+                return;
             }
             if self.metering.memory {
                 entry
@@ -1571,10 +2114,11 @@ impl ResourceLimits for ResourceLimitsGrpc {
 
         let entry = cell
             .get_or_try_init(|| async {
+                let refresh_generation = self.next_refresh_generation();
                 let fetched = self.fetch_resource_limits(account_id).await?;
                 Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
-                    AtomicResourceEntry::new_with_all_limits_metering_and_revision(
-                        fetched.available_fuel,
+                    AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+                        fetched.monthly_compute,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
                         fetched.max_disk_space_per_worker,
@@ -1586,6 +2130,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.oplog_writes_per_second,
                         self.metering,
                         fetched.monthly_usage_mode_revision,
+                        refresh_generation,
                     ),
                 ))
             })
@@ -1686,6 +2231,44 @@ mod tests {
                 filesystem: true,
             },
             revision,
+        )
+    }
+
+    fn monthly_compute(available_fuel: u64) -> MonthlyComputePolicy {
+        MonthlyComputePolicy {
+            period: AccountUsagePeriod::current(),
+            mode: MonthlyUsageMode::HardLimit,
+            available_fuel,
+        }
+    }
+
+    fn compute_entry(
+        period: AccountUsagePeriod,
+        mode: MonthlyUsageMode,
+        available_fuel: u64,
+    ) -> AtomicResourceEntry {
+        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+            MonthlyComputePolicy {
+                period,
+                mode,
+                available_fuel,
+            },
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig {
+                compute: true,
+                memory: false,
+                filesystem: false,
+            },
+            7,
+            0,
         )
     }
 
@@ -1816,7 +2399,7 @@ mod tests {
         assert!(entry.record_rpc_call());
 
         entry.update_usage_revision(4);
-        assert_eq!(entry.effective_fuel(), 10_100);
+        assert_eq!(entry.effective_fuel(), 9_900);
         assert!(entry.borrow_fuel(200));
         entry.record_resource_usage(AgentMode::Durable, 20, 40);
 
@@ -1858,6 +2441,18 @@ mod tests {
         assert_eq!(after_opt_in.update.fuel_delta, 200);
         assert_eq!(after_opt_in.update.memory_gb_seconds_delta, 20);
         assert_eq!(after_opt_in.update.durable_storage_byte_seconds_delta, 40);
+    }
+
+    #[test]
+    fn older_policy_revision_cannot_roll_back_usage_attribution() {
+        let entry = metered_entry_with_revision(7);
+
+        entry.update_usage_revision(3);
+
+        assert_eq!(
+            entry.usage_revision_state.lock().unwrap().current_revision,
+            7
+        );
     }
 
     #[test]
@@ -2219,27 +2814,28 @@ mod tests {
     }
 
     #[test]
-    fn effective_fuel_sums_fuel_delta_and_in_flight() {
-        // delta = +200 (fuel lent), in_flight = +50 (earlier batch in transit)
+    fn effective_fuel_subtracts_unsent_and_in_flight_usage() {
         let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
-        entry.delta.store(200, Ordering::Release);
-        entry.in_flight_delta.store(50, Ordering::Release);
-        assert_eq!(entry.effective_fuel(), 1250);
+        assert!(entry.borrow_fuel(50));
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(1, 50);
+        assert!(entry.borrow_fuel(200));
+        assert_eq!(entry.effective_fuel(), 750);
     }
 
     #[test]
-    fn effective_fuel_clamps_to_zero_when_sum_is_negative() {
-        // delta negative (more returned than borrowed): 100 + (-200) = -100 → 0
+    fn effective_fuel_applies_signed_refunds_with_saturation() {
         let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.delta.store(-200, Ordering::Release);
-        assert_eq!(entry.effective_fuel(), 0);
+        assert_eq!(entry.effective_fuel(), 300);
     }
 
     #[test]
-    fn effective_fuel_clamps_to_u64_max_when_sum_overflows() {
-        // u64::MAX + i64::MAX overflows u64 in i128 arithmetic → clamped
+    fn effective_fuel_clamps_refund_overflow_to_u64_max() {
         let entry = AtomicResourceEntry::new(u64::MAX, 0, usize::MAX, u64::MAX, u64::MAX);
-        entry.delta.store(i64::MAX, Ordering::Release);
+        entry.delta.store(-1, Ordering::Release);
         assert_eq!(entry.effective_fuel(), u64::MAX);
     }
 
@@ -2247,10 +2843,8 @@ mod tests {
     fn borrow_fuel_succeeds_and_increases_delta() {
         let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
         assert!(entry.borrow_fuel(300));
-        // borrow_fuel records the loan by adding positively to delta
         assert_eq!(entry.delta.load(Ordering::Acquire), 300);
-        // effective_fuel = 1000 + 300 = 1300 (optimistic: more appears available)
-        assert_eq!(entry.effective_fuel(), 1300);
+        assert_eq!(entry.effective_fuel(), 700);
     }
 
     #[test]
@@ -2262,11 +2856,11 @@ mod tests {
     }
 
     #[test]
-    fn borrow_fuel_fails_when_amount_exceeds_effective_fuel() {
-        // fuel=100, effective=100; borrowing 101 must fail
+    fn borrow_fuel_uses_partial_final_capacity() {
         let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX, u64::MAX);
-        assert!(!entry.borrow_fuel(101));
-        assert_eq!(entry.delta.load(Ordering::Acquire), 0);
+        assert!(entry.borrow_fuel(101));
+        assert_eq!(entry.delta.load(Ordering::Acquire), 100);
+        assert!(!entry.borrow_fuel(1));
     }
 
     #[test]
@@ -2285,11 +2879,10 @@ mod tests {
     }
 
     #[test]
-    fn borrow_fuel_one_over_effective_fuel_fails() {
-        // Borrowing effective_fuel + 1 must fail
+    fn borrow_fuel_one_over_effective_fuel_takes_the_exact_remainder() {
         let entry = AtomicResourceEntry::new(500, 0, usize::MAX, u64::MAX, u64::MAX);
-        assert!(!entry.borrow_fuel(501));
-        assert_eq!(entry.delta.load(Ordering::Acquire), 0);
+        assert!(entry.borrow_fuel(501));
+        assert_eq!(entry.delta.load(Ordering::Acquire), 500);
     }
 
     #[test]
@@ -2325,7 +2918,667 @@ mod tests {
         entry.record_overdraft_debt(2000);
 
         assert_eq!(entry.delta.load(Ordering::Acquire), 2000);
-        assert_eq!(entry.effective_fuel(), 3000);
+        assert_eq!(entry.effective_fuel(), 0);
+    }
+
+    #[test]
+    fn hard_limit_zero_blocks_while_allow_overage_zero_borrows() {
+        let period = AccountUsagePeriod::current();
+        let hard = compute_entry(period, MonthlyUsageMode::HardLimit, 0);
+        assert!(!hard.has_compute_capacity());
+        assert!(matches!(
+            hard.borrow_fuel_with_revision(1),
+            FuelBorrow::Exhausted { .. }
+        ));
+
+        let overage = compute_entry(period, MonthlyUsageMode::AllowOverage, 0);
+        assert!(overage.has_compute_capacity());
+        assert_eq!(
+            overage.borrow_fuel_with_revision(10),
+            FuelBorrow::Borrowed {
+                amount: 10,
+                revision: 7,
+                generation: 0,
+                period,
+            }
+        );
+        assert_eq!(overage.fuel_delta(), 10);
+    }
+
+    #[test]
+    fn exact_capacity_and_partial_final_borrow_are_atomic() {
+        let entry = compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            15,
+        );
+        assert_eq!(
+            entry.borrow_fuel_with_revision(10),
+            FuelBorrow::Borrowed {
+                amount: 10,
+                revision: 7,
+                generation: 0,
+                period: AccountUsagePeriod::current(),
+            }
+        );
+        assert_eq!(
+            entry.borrow_fuel_with_revision(10),
+            FuelBorrow::Borrowed {
+                amount: 5,
+                revision: 7,
+                generation: 0,
+                period: AccountUsagePeriod::current(),
+            }
+        );
+        assert!(matches!(
+            entry.borrow_fuel_with_revision(1),
+            FuelBorrow::Exhausted { .. }
+        ));
+        assert_eq!(entry.fuel_delta(), 15);
+    }
+
+    #[test]
+    fn every_local_delivery_state_reduces_hard_limit_capacity() {
+        let unsent = compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            100,
+        );
+        assert!(unsent.borrow_fuel(10));
+        assert_eq!(unsent.effective_fuel(), 90);
+
+        let in_flight = compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            100,
+        );
+        assert!(in_flight.borrow_fuel(10));
+        in_flight
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(in_flight.effective_fuel(), 90);
+
+        let pending = compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            100,
+        );
+        assert!(pending.borrow_fuel(10));
+        pending.update_usage_revision(8);
+        assert_eq!(pending.effective_fuel(), 90);
+
+        let failed = compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            100,
+        );
+        assert!(failed.borrow_fuel(10));
+        failed
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        failed.begin_compute_refresh_for_test(1, 10);
+        assert!(failed.fail_compute_delivery(1));
+        assert_eq!(failed.effective_fuel(), 90);
+        assert_eq!(failed.in_flight_delta.load(Ordering::Acquire), 0);
+        assert!(
+            failed
+                .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+                .is_none(),
+            "failed compute usage is retained only for enforcement"
+        );
+    }
+
+    #[test]
+    fn signed_refunds_reduce_unsent_and_failed_delivery_enforcement_usage() {
+        let entry = compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            100,
+        );
+        assert!(entry.borrow_fuel(60));
+        entry.return_fuel(20);
+        assert_eq!(entry.effective_fuel(), 60);
+
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(1, 40);
+        assert!(entry.fail_compute_delivery(1));
+        assert_eq!(entry.effective_fuel(), 60);
+
+        entry.return_fuel(20);
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(2, -20);
+        assert!(entry.fail_compute_delivery(2));
+        assert_eq!(entry.effective_fuel(), 80);
+    }
+
+    #[test]
+    fn concurrent_hard_limit_borrowers_cannot_exceed_capacity() {
+        let entry = Arc::new(compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            100,
+        ));
+        let borrowers = (0..16)
+            .map(|_| {
+                let entry = entry.clone();
+                std::thread::spawn(move || match entry.borrow_fuel_with_revision(10) {
+                    FuelBorrow::Borrowed { amount, .. } => amount,
+                    FuelBorrow::Exhausted { .. } => 0,
+                })
+            })
+            .collect::<Vec<_>>();
+        let borrowed = borrowers
+            .into_iter()
+            .map(|borrower| borrower.join().unwrap())
+            .sum::<u64>();
+
+        assert_eq!(borrowed, 100);
+        assert_eq!(entry.fuel_delta(), 100);
+        assert!(!entry.has_compute_capacity());
+    }
+
+    #[test]
+    fn stale_refresh_cannot_change_policy_or_revision() {
+        let period = AccountUsagePeriod::current();
+        let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 100);
+        entry.begin_compute_refresh_for_test(1, 0);
+        assert!(entry.apply_compute_snapshot(
+            1,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: 0,
+            },
+            8,
+            true,
+        ));
+        assert!(!entry.apply_compute_snapshot(
+            1,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 1_000,
+            },
+            1,
+            true,
+        ));
+        assert!(entry.borrow_fuel(20));
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(2, 20);
+
+        assert!(!entry.apply_compute_snapshot(
+            1,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 1_000,
+            },
+            1,
+            true,
+        ));
+        let revision_state = entry.usage_revision_state.lock().unwrap();
+        assert_eq!(revision_state.current_revision, 8);
+        assert_eq!(
+            revision_state.monthly_compute.as_ref().unwrap().mode,
+            MonthlyUsageMode::AllowOverage
+        );
+        drop(revision_state);
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 20);
+
+        assert!(entry.apply_compute_snapshot(
+            2,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 0,
+            },
+            9,
+            true,
+        ));
+        entry.begin_compute_refresh_for_test(3, 0);
+        assert!(!entry.apply_compute_snapshot(
+            2,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: u64::MAX,
+            },
+            10,
+            true,
+        ));
+        assert!(!entry.has_compute_capacity());
+    }
+
+    #[test]
+    fn refresh_acknowledges_only_its_own_in_flight_fuel() {
+        let period = AccountUsagePeriod::current();
+        let entry = compute_entry(period, MonthlyUsageMode::AllowOverage, 100);
+
+        assert!(entry.borrow_fuel(10));
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(1, 10);
+
+        assert!(entry.borrow_fuel(20));
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(2, 20);
+
+        assert!(entry.apply_compute_snapshot(
+            2,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 70,
+            },
+            1,
+            true,
+        ));
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 10);
+        assert_eq!(entry.effective_fuel(), 60);
+
+        assert!(!entry.apply_compute_snapshot(
+            1,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: u64::MAX,
+            },
+            1,
+            true,
+        ));
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
+        assert_eq!(entry.effective_fuel(), 60);
+
+        entry.begin_compute_refresh_for_test(3, 0);
+        assert!(entry.apply_compute_snapshot(
+            3,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 70,
+            },
+            1,
+            true,
+        ));
+        assert_eq!(entry.effective_fuel(), 70);
+    }
+
+    #[test]
+    fn unapplied_registry_update_remains_charged_for_enforcement() {
+        let period = AccountUsagePeriod::current();
+        let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 100);
+        assert!(entry.borrow_fuel(10));
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(1, 10);
+
+        assert!(entry.apply_compute_snapshot(
+            1,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 100,
+            },
+            7,
+            false,
+        ));
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
+        assert_eq!(entry.effective_fuel(), 90);
+        assert!(
+            entry
+                .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+                .is_none(),
+            "unapplied compute usage is retained only for enforcement"
+        );
+    }
+
+    #[test]
+    fn amount_mode_and_period_changes_restore_compute_admission() {
+        let period = AccountUsagePeriod::current();
+        let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 10);
+        assert!(entry.borrow_fuel(10));
+        assert!(!entry.has_compute_capacity());
+
+        entry.begin_compute_refresh_for_test(1, 0);
+        assert!(entry.apply_compute_snapshot(
+            1,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 20,
+            },
+            7,
+            true,
+        ));
+        assert!(entry.has_compute_capacity());
+
+        entry.begin_compute_refresh_for_test(2, 0);
+        assert!(entry.apply_compute_snapshot(
+            2,
+            MonthlyComputePolicy {
+                period,
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: 0,
+            },
+            8,
+            true,
+        ));
+        assert!(entry.has_compute_capacity());
+
+        let failed = compute_entry(period, MonthlyUsageMode::HardLimit, 10);
+        assert!(failed.borrow_fuel(10));
+        failed
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        failed.begin_compute_refresh_for_test(1, 10);
+        assert!(failed.fail_compute_delivery(1));
+        assert!(!failed.has_compute_capacity());
+        let next_period = if period.month == 12 {
+            AccountUsagePeriod {
+                year: period.year + 1,
+                month: 1,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: period.year,
+                month: period.month + 1,
+            }
+        };
+        failed.begin_compute_refresh_for_test(2, 0);
+        assert!(failed.apply_compute_snapshot(
+            2,
+            MonthlyComputePolicy {
+                period: next_period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 10,
+            },
+            7,
+            true,
+        ));
+        assert!(failed.has_compute_capacity());
+    }
+
+    #[test]
+    fn period_rollover_keeps_pre_refresh_usage_in_its_accrual_period() {
+        let period = AccountUsagePeriod::current();
+        let next_period = if period.month == 12 {
+            AccountUsagePeriod {
+                year: period.year + 1,
+                month: 1,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: period.year,
+                month: period.month + 1,
+            }
+        };
+        let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 100);
+        assert!(entry.borrow_fuel(10));
+
+        assert!(entry.apply_compute_snapshot_for_test(
+            1,
+            MonthlyComputePolicy {
+                period: next_period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 100,
+            },
+            7,
+        ));
+        assert_eq!(entry.effective_fuel(), 100);
+
+        let previous_period_usage = entry.capture_usage_update_for_test();
+        assert_eq!(previous_period_usage.period, period);
+        assert_eq!(previous_period_usage.fuel_delta, 10);
+
+        assert!(entry.borrow_fuel(5));
+        let current_period_usage = entry.capture_usage_update_for_test();
+        assert_eq!(current_period_usage.period, next_period);
+        assert_eq!(current_period_usage.fuel_delta, 5);
+    }
+
+    #[test]
+    fn compute_usage_advances_period_before_registry_refresh() {
+        let current_period = AccountUsagePeriod::current();
+        let previous_period = if current_period.month == 1 {
+            AccountUsagePeriod {
+                year: current_period.year - 1,
+                month: 12,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: current_period.year,
+                month: current_period.month - 1,
+            }
+        };
+        let entry = compute_entry(previous_period, MonthlyUsageMode::HardLimit, 100);
+
+        assert_eq!(
+            entry.borrow_fuel_with_revision(10),
+            FuelBorrow::Borrowed {
+                amount: 10,
+                revision: 7,
+                generation: 0,
+                period: current_period,
+            }
+        );
+        let captured = entry.capture_usage_update_for_test();
+        assert_eq!(captured.period, current_period);
+        assert_eq!(captured.fuel_delta, 10);
+    }
+
+    #[test]
+    fn pre_refresh_rollover_borrows_share_the_remaining_capacity() {
+        let current_period = AccountUsagePeriod::current();
+        let previous_period = if current_period.month == 1 {
+            AccountUsagePeriod {
+                year: current_period.year - 1,
+                month: 12,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: current_period.year,
+                month: current_period.month - 1,
+            }
+        };
+        let entry = compute_entry(previous_period, MonthlyUsageMode::HardLimit, 100);
+
+        assert!(entry.borrow_fuel(60));
+        assert_eq!(entry.effective_fuel(), 40);
+        assert_eq!(
+            entry.borrow_fuel_with_revision(60),
+            FuelBorrow::Borrowed {
+                amount: 40,
+                revision: 7,
+                generation: 0,
+                period: current_period,
+            }
+        );
+        assert!(!entry.has_compute_capacity());
+    }
+
+    #[test]
+    fn pre_refresh_rollover_in_flight_and_failed_usage_stays_charged() {
+        let current_period = AccountUsagePeriod::current();
+        let previous_period = if current_period.month == 1 {
+            AccountUsagePeriod {
+                year: current_period.year - 1,
+                month: 12,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: current_period.year,
+                month: current_period.month - 1,
+            }
+        };
+        let entry = compute_entry(previous_period, MonthlyUsageMode::HardLimit, 100);
+
+        assert!(entry.borrow_fuel(60));
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        assert_eq!(entry.effective_fuel(), 40);
+        entry.begin_compute_refresh_for_test(1, 60);
+        assert_eq!(entry.effective_fuel(), 40);
+
+        assert!(entry.fail_compute_delivery(1));
+        assert_eq!(entry.effective_fuel(), 40);
+        assert_eq!(
+            entry.borrow_fuel_with_revision(60),
+            FuelBorrow::Borrowed {
+                amount: 40,
+                revision: 7,
+                generation: 1,
+                period: current_period,
+            }
+        );
+
+        let pending_entry = compute_entry(previous_period, MonthlyUsageMode::HardLimit, 100);
+        assert!(pending_entry.borrow_fuel(60));
+        pending_entry.update_usage_revision(8);
+        assert_eq!(pending_entry.effective_fuel(), 40);
+    }
+
+    #[test]
+    fn newer_period_delivery_stays_charged_until_registry_reaches_that_period() {
+        let current_period = AccountUsagePeriod::current();
+        let previous_period = if current_period.month == 1 {
+            AccountUsagePeriod {
+                year: current_period.year - 1,
+                month: 12,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: current_period.year,
+                month: current_period.month - 1,
+            }
+        };
+        let entry = compute_entry(previous_period, MonthlyUsageMode::HardLimit, 100);
+
+        assert!(entry.borrow_fuel(60));
+        entry
+            .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
+            .unwrap();
+        entry.begin_compute_refresh_for_test(1, 60);
+        assert!(entry.apply_compute_snapshot(
+            1,
+            MonthlyComputePolicy {
+                period: previous_period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 100,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(entry.effective_fuel(), 40);
+
+        entry.begin_compute_refresh_for_test(2, 0);
+        assert!(entry.apply_compute_snapshot(
+            2,
+            MonthlyComputePolicy {
+                period: current_period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 40,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(entry.effective_fuel(), 40);
+    }
+
+    #[test]
+    fn compute_disabled_entry_has_no_gate_or_compute_accounting() {
+        let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
+            0,
+            20,
+            30,
+            40,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig {
+                compute: false,
+                memory: true,
+                filesystem: true,
+            },
+        );
+        assert!(
+            entry
+                .usage_revision_state
+                .lock()
+                .unwrap()
+                .monthly_compute
+                .is_none()
+        );
+        assert_eq!(
+            entry.borrow_fuel_with_revision(123),
+            FuelBorrow::Borrowed {
+                amount: 123,
+                revision: 0,
+                generation: 0,
+                period: AccountUsagePeriod::current(),
+            }
+        );
+        assert_eq!(entry.delta.load(Ordering::Acquire), 0);
+        let captured = entry.capture_usage_update(0).unwrap();
+        assert_eq!(captured.update.fuel_delta, 0);
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn compute_disabled_entry_advances_shared_usage_attribution() {
+        let period = AccountUsagePeriod::current();
+        let next_period = AccountUsagePeriod {
+            year: period.year + 1,
+            month: 1,
+        };
+        let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
+            0,
+            20,
+            30,
+            40,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig {
+                compute: false,
+                memory: true,
+                filesystem: true,
+            },
+        );
+
+        assert!(entry.apply_compute_snapshot_for_test(
+            1,
+            MonthlyComputePolicy {
+                period: next_period,
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: 0,
+            },
+            7,
+        ));
+        entry.record_resource_usage(AgentMode::Durable, 3, 5);
+        let captured = entry.capture_usage_update_for_test();
+
+        assert_eq!(captured.period, next_period);
+        assert_eq!(captured.monthly_usage_mode_revision, 7);
+        assert_eq!(captured.fuel_delta, 0);
+        assert_eq!(captured.memory_gb_seconds_delta, 3);
+        assert_eq!(captured.durable_storage_byte_seconds_delta, 5);
     }
 
     #[test]
@@ -2665,7 +3918,7 @@ mod tests {
 
         // Prime the entry with 5 available HTTP and 3 available RPC.
         mock.set_get_limits_response(ServiceResourceLimits {
-            available_fuel: 1000,
+            monthly_compute: monthly_compute(1000),
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
@@ -2692,7 +3945,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 1000,
+                monthly_compute: monthly_compute(1000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -2727,7 +3980,7 @@ mod tests {
         let id = account_id();
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         mock.set_get_limits_response(ServiceResourceLimits {
-            available_fuel: 1000,
+            monthly_compute: monthly_compute(1000),
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
@@ -2744,7 +3997,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 1000,
+                monthly_compute: monthly_compute(1000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -2844,7 +4097,7 @@ mod tests {
         fn new(available_fuel: u64, max_memory: u64) -> Self {
             Self {
                 get_limits_result: Mutex::new(Ok(ServiceResourceLimits {
-                    available_fuel,
+                    monthly_compute: monthly_compute(available_fuel),
                     max_memory_per_worker: max_memory,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
@@ -3243,7 +4496,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 1000,
+                monthly_compute: monthly_compute(1000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3287,7 +4540,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 700,
+                monthly_compute: monthly_compute(700),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3372,7 +4625,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 600,
+                monthly_compute: monthly_compute(600),
                 max_memory_per_worker: 1024,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3394,7 +4647,7 @@ mod tests {
 
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 600);
+        assert_eq!(entry.effective_fuel(), 600);
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
         assert_eq!(entry.max_memory.load(Ordering::Acquire), 1024);
     }
@@ -3408,7 +4661,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 700,
+                monthly_compute: monthly_compute(700),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3460,7 +4713,7 @@ mod tests {
                 .load(Ordering::Acquire),
             0
         );
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 1000);
+        assert_eq!(entry.effective_fuel(), 700);
         assert_eq!(
             crate::metrics::resources::memory_gb_seconds_total(&id.to_string(), AgentMode::Durable,),
             0.0
@@ -3498,7 +4751,7 @@ mod tests {
             svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
         }
 
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 500);
+        assert_eq!(entry.effective_fuel(), 200);
         assert!(entry.borrow_fuel(1));
     }
 
@@ -3511,7 +4764,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 700,
+                monthly_compute: monthly_compute(700),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3545,7 +4798,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 800,
+                monthly_compute: monthly_compute(800),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3606,7 +4859,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 900,
+                monthly_compute: monthly_compute(900),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3632,7 +4885,7 @@ mod tests {
         svc.send_batch(0).await;
 
         // Server returned 900 — entry must reflect that, not be zeroed.
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 900);
+        assert_eq!(entry.effective_fuel(), 900);
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
 
@@ -3647,7 +4900,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 5000,
+                monthly_compute: monthly_compute(5000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3671,7 +4924,7 @@ mod tests {
         svc.send_batch(STALE_THRESHOLD_SECS).await;
         let after = Utc::now().timestamp();
 
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 5000);
+        assert_eq!(entry.effective_fuel(), 5000);
         let stored = entry.last_refresh_secs.load(Ordering::Acquire);
         assert!(stored >= before);
         assert!(stored <= after);
@@ -3691,7 +4944,7 @@ mod tests {
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
         // fuel unchanged (no server call)
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 1000);
+        assert_eq!(entry.effective_fuel(), 1000);
     }
 
     #[test]
@@ -3710,7 +4963,7 @@ mod tests {
         svc.send_batch(STALE_THRESHOLD_SECS).await;
 
         assert_eq!(entry.last_refresh_secs.load(Ordering::Acquire), old_ts);
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 1000);
+        assert_eq!(entry.effective_fuel(), 1000);
     }
 
     #[test]
@@ -3722,7 +4975,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 5000,
+                monthly_compute: monthly_compute(5000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3746,7 +4999,7 @@ mod tests {
         svc.send_batch(STALE_THRESHOLD_SECS).await;
 
         // Fuel should now reflect the server-returned value
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 5000);
+        assert_eq!(entry.effective_fuel(), 5000);
     }
 
     // -------------------------------------------------------------------------
@@ -3756,7 +5009,7 @@ mod tests {
     fn mock_with_concurrent_agent_limit(limit: u64) -> Arc<MockRegistryService> {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         *mock.get_limits_result.lock().unwrap() = Ok(ServiceResourceLimits {
-            available_fuel: 1000,
+            monthly_compute: monthly_compute(1000),
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
@@ -3808,7 +5061,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 900,
+                monthly_compute: monthly_compute(900),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3844,7 +5097,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 900,
+                monthly_compute: monthly_compute(900),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,

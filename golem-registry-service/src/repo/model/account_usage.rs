@@ -17,11 +17,12 @@ use crate::repo::model::plan::PlanRecord;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension, MonthlyUsageMode,
-    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, StorageLimit,
+    AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension, MonthlyPlanAmountError,
+    MonthlyPlanAmounts, MonthlyUsageMode, MonthlyUsageModeTransition,
+    MonthlyUsageModeTransitionSource, StorageLimit,
 };
 use golem_service_base::clients::registry::ResourceUsageMetering;
-use golem_service_base::model::ResourceLimits;
+use golem_service_base::model::{MonthlyComputePolicy, ResourceLimits};
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::{RepoError, RepoResult, SqlDateTime};
 use sqlx::FromRow;
@@ -120,6 +121,7 @@ pub struct AccountUsage {
     pub admin_grant_values: AdminResourceGrantValues,
     pub admin_grants: Vec<AdminResourceGrant>,
     pub metering: Option<ResourceUsageMetering>,
+    pub monthly_usage_mode: MonthlyUsageMode,
     pub monthly_usage_mode_revision: u64,
     pub monthly_usage_attribution: Option<MonthlyUsageAttribution>,
     pub changes: BTreeMap<UsageType, i64>,
@@ -169,6 +171,7 @@ pub struct AccountUsagePlan {
     pub storage_grant_expires_at: Option<SqlDateTime>,
     pub storage_grant_created_by: Option<Uuid>,
     pub storage_grant_created_at: Option<SqlDateTime>,
+    pub monthly_usage_mode: String,
     pub monthly_usage_mode_revision: NumericU64,
 }
 
@@ -183,6 +186,15 @@ pub struct AdminResourceGrantValues {
 }
 
 impl AccountUsagePlan {
+    pub fn monthly_usage_mode(&self) -> RepoResult<MonthlyUsageMode> {
+        let persisted_mode = monthly_usage_mode(&self.monthly_usage_mode)?;
+        if persisted_mode == MonthlyUsageMode::AllowOverage && !self.plan.overage_eligible {
+            Ok(MonthlyUsageMode::HardLimit)
+        } else {
+            Ok(persisted_mode)
+        }
+    }
+
     pub fn admin_grant_values(&self) -> AdminResourceGrantValues {
         AdminResourceGrantValues {
             monthly_compute_gcu: self
@@ -482,6 +494,27 @@ impl AccountUsageRecord {
 }
 
 impl AccountUsage {
+    pub fn monthly_plan_amounts(&self) -> MonthlyPlanAmounts {
+        MonthlyPlanAmounts {
+            compute_gcu: self
+                .admin_grant_values
+                .monthly_compute_gcu
+                .unwrap_or_else(|| self.plan.monthly_compute_gcu.get()),
+            memory_gb_seconds: self
+                .admin_grant_values
+                .monthly_memory_gb_seconds
+                .unwrap_or_else(|| self.plan.monthly_memory_gb_seconds.get()),
+            durable_storage_gb_month: self
+                .admin_grant_values
+                .monthly_durable_storage_gb_month
+                .unwrap_or_else(|| self.plan.monthly_durable_storage_gb_month.get()),
+            ephemeral_storage_gb_month: self
+                .admin_grant_values
+                .monthly_ephemeral_storage_gb_month
+                .unwrap_or_else(|| self.plan.monthly_ephemeral_storage_gb_month.get()),
+        }
+    }
+
     pub fn usage(&self, usage_type: UsageType) -> u64 {
         self.usage.get(&usage_type).copied().unwrap_or(0)
     }
@@ -513,8 +546,8 @@ impl AccountUsage {
         self.final_value(usage_type) <= self.plan.limit(usage_type)
     }
 
-    pub fn resource_limits(&self) -> ResourceLimits {
-        let fuel_limit = self.plan.limit(UsageType::MonthlyGasLimit);
+    pub fn resource_limits(&self) -> Result<ResourceLimits, MonthlyPlanAmountError> {
+        let fuel_limit = self.monthly_plan_amounts().resolve()?.compute_fuel;
         let available_fuel =
             fuel_limit.saturating_sub(self.final_value(UsageType::MonthlyGasLimit));
 
@@ -526,9 +559,16 @@ impl AccountUsage {
         let available_rpc_calls =
             rpc_limit.saturating_sub(self.final_value(UsageType::MonthlyRpcCalls));
 
-        ResourceLimits {
+        Ok(ResourceLimits {
             monthly_usage_mode_revision: self.monthly_usage_mode_revision,
-            available_fuel,
+            monthly_compute: MonthlyComputePolicy {
+                period: AccountUsagePeriod {
+                    year: self.year,
+                    month: self.month,
+                },
+                mode: self.monthly_usage_mode,
+                available_fuel,
+            },
             max_memory_per_worker: self.max_memory_per_worker.effective_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: self.storage_limit.executor_value(),
@@ -539,7 +579,7 @@ impl AccountUsage {
             max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
             oplog_writes_per_second: self.plan.oplog_writes_per_second.get(),
             usage_update_applied: true,
-        }
+        })
     }
 }
 

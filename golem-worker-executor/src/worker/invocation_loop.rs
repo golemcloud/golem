@@ -21,7 +21,7 @@ use crate::services::agent_filesystem::{
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
-use crate::services::{HasActiveAgents, HasOplog, HasShardService, HasWorker};
+use crate::services::{HasActiveAgents, HasConfig, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -40,7 +40,7 @@ use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::oplog::{AgentError, OplogEntry};
+use golem_common::model::oplog::{AgentError, EphemeralFuelExhaustedError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
     IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
@@ -112,7 +112,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
-    pub resume_replay_pending: Arc<AtomicBool>,
+    pub resume_replay_pending: Arc<AtomicU64>,
     pub start_attempt: Uuid,
     /// What this worker's phase spans link back to, and the fields they carry.
     pub worker_trace: WorkerTrace,
@@ -136,6 +136,35 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     Interrupted(InterruptKind),
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComputeAdmission {
+    Admit,
+    Suspend,
+    FailInvocation,
+}
+
+fn compute_admission(has_capacity: bool, agent_mode: AgentMode) -> ComputeAdmission {
+    match (has_capacity, agent_mode) {
+        (true, _) => ComputeAdmission::Admit,
+        (false, AgentMode::Durable) => ComputeAdmission::Suspend,
+        (false, AgentMode::Ephemeral) => ComputeAdmission::FailInvocation,
+    }
+}
+
+fn compute_exhausted_invocation_error(
+    config: &crate::services::golem_config::GolemConfig,
+) -> WorkerExecutorError {
+    WorkerExecutorError::InvocationFailed {
+        error: AgentError::EphemeralFuelExhausted(EphemeralFuelExhaustedError {
+            overdraft_limit: config
+                .limits
+                .fuel_to_borrow
+                .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
+        }),
+        stderr: String::new(),
+    }
 }
 
 struct ResidentAgentOwnership<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesystem> {
@@ -704,9 +733,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
                                         continue 'outer;
                                     }
-                                    WorkerCommand::ResumeReplay => {
+                                    command @ WorkerCommand::ResumeReplay { .. } => {
                                         debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
-                                        Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::ResumeReplay);
+                                        Self::defer_wakeup(&mut deferred_wakeups, command);
                                         continue 'outer;
                                     }
                                     WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
@@ -876,13 +905,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     fn defer_wakeup(deferred_wakeups: &mut VecDeque<WorkerCommand>, command: WorkerCommand) {
-        let already_deferred = match command {
+        let already_deferred = match &command {
             WorkerCommand::WorkAvailable => deferred_wakeups
                 .iter()
                 .any(|command| matches!(command, WorkerCommand::WorkAvailable)),
-            WorkerCommand::ResumeReplay => deferred_wakeups
-                .iter()
-                .any(|command| matches!(command, WorkerCommand::ResumeReplay)),
+            WorkerCommand::ResumeReplay { .. } => false,
             WorkerCommand::InternalStatusChanged => true,
             WorkerCommand::UpdateFilesystemLimit { .. } => false,
         };
@@ -899,6 +926,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     ) -> CreateInstanceResult<Ctx> {
         async {
             debug!("Creating the worker instance");
+            if compute_admission(
+                self.parent.resource_entry.has_compute_capacity(),
+                self.parent.agent_mode(),
+            ) == ComputeAdmission::Suspend
+            {
+                return CreateInstanceResult::Interrupted(InterruptKind::Suspend(
+                    Timestamp::now_utc(),
+                ));
+            }
             match RunningWorker::create_instance(self.parent.clone(), permit).await {
                 Ok((agent, window, recovery_decision)) => CreateInstanceResult::Created {
                     agent: Box::new(agent),
@@ -1183,7 +1219,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     permit_state:
         &'a mut ConcurrentAgentPermitState<crate::services::active_agents::ConcurrentAgentPermit>,
     idle_since_millis: Arc<AtomicU64>,
-    resume_replay_pending: Arc<AtomicBool>,
+    resume_replay_pending: Arc<AtomicU64>,
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
     /// What this worker's phase spans link back to, and the fields they carry.
     worker_trace: WorkerTrace,
@@ -1312,10 +1348,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         }
                     }
                 }
-                WorkerCommand::ResumeReplay => {
-                    self.resume_replay_pending.store(false, Ordering::Release);
-                    self.resume_replay().await
-                }
+                WorkerCommand::ResumeReplay { sender } => self.resume_replay(sender).await,
                 WorkerCommand::UpdateFilesystemLimit { .. } => unreachable!(),
             };
             match outcome {
@@ -1697,18 +1730,49 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///
     /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
     /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
-    async fn resume_replay(&self) -> CommandOutcome {
+    async fn resume_replay(
+        &self,
+        sender: Sender<Result<(), WorkerExecutorError>>,
+    ) -> CommandOutcome {
         async {
+            match compute_admission(
+                self.parent.resource_entry.has_compute_capacity(),
+                self.parent.agent_mode(),
+            ) {
+                ComputeAdmission::Admit => {}
+                ComputeAdmission::Suspend => {
+                    self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
+                    let _ = sender.send(Err(WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Suspend(Timestamp::now_utc()),
+                    }));
+                    return CommandOutcome::Continue;
+                }
+                ComputeAdmission::FailInvocation => {
+                    self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
+                    let _ = sender.send(Err(compute_exhausted_invocation_error(
+                        &self.parent.config(),
+                    )));
+                    return CommandOutcome::Continue;
+                }
+            }
             let mut store = self.store.lock().await;
 
             let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
+            self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
 
             match resume_replay_result {
-                Ok(None) => CommandOutcome::Continue,
-                Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
+                Ok(None) => {
+                    let _ = sender.send(Ok(()));
+                    CommandOutcome::Continue
+                }
+                Ok(Some(decision)) => {
+                    let _ = sender.send(Ok(()));
+                    CommandOutcome::BreakInnerLoop(decision)
+                }
                 Err(err) => {
                     warn!("Failed to resume replay: {err}");
                     store.data().set_suspended();
+                    let _ = sender.send(Err(err.clone()));
                     CommandOutcome::BreakOuterLoop(Some(err))
                 }
             }
@@ -2050,6 +2114,33 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let kind = invocation.kind();
         let display_name = invocation.display_name();
         let invocation_idempotency_key = idempotency_key.clone();
+        match compute_admission(
+            self.parent.resource_entry.has_compute_capacity(),
+            self.parent.agent_mode(),
+        ) {
+            ComputeAdmission::Admit => {}
+            ComputeAdmission::Suspend => {
+                return self
+                    .agent_invocation_failed(
+                        &display_name,
+                        &invocation_idempotency_key,
+                        Ok(InvokeResult::Interrupted {
+                            consumed_fuel: 0,
+                            interrupt_kind: InterruptKind::Suspend(Timestamp::now_utc()),
+                        }),
+                    )
+                    .await;
+            }
+            ComputeAdmission::FailInvocation => {
+                return self
+                    .agent_invocation_failed(
+                        &display_name,
+                        &invocation_idempotency_key,
+                        Err(compute_exhausted_invocation_error(&self.parent.config())),
+                    )
+                    .await;
+            }
+        }
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
@@ -2922,10 +3013,10 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicSnapshotAction,
-        ResidentAgentOwnership, ResidentWakeup, catch_invocation_loop_panic,
-        close_usage_before_delete, coalesce_filesystem_limit_update,
-        failed_agent_invocation_outcome, finish_filesystem_limit_unload,
+        CommandOutcome, ComputeAdmission, ConcurrentAgentPermitState, InvocationLoop,
+        PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
+        catch_invocation_loop_panic, close_usage_before_delete, coalesce_filesystem_limit_update,
+        compute_admission, failed_agent_invocation_outcome, finish_filesystem_limit_unload,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
         snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
         successful_agent_invocation_outcome, unload_resident_agent_ownership,
@@ -2968,6 +3059,22 @@ mod tests {
     struct TestStoreOwner {
         node: Option<OpenNode>,
         dropped: Arc<AtomicBool>,
+    }
+
+    #[test]
+    fn compute_admission_blocks_guest_work_by_agent_mode() {
+        assert_eq!(
+            compute_admission(true, AgentMode::Durable),
+            ComputeAdmission::Admit
+        );
+        assert_eq!(
+            compute_admission(false, AgentMode::Durable),
+            ComputeAdmission::Suspend
+        );
+        assert_eq!(
+            compute_admission(false, AgentMode::Ephemeral),
+            ComputeAdmission::FailInvocation
+        );
     }
 
     #[test]

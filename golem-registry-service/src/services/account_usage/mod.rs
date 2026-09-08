@@ -28,10 +28,9 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::{
     AccountResourcePolicy, AccountUsage, AccountUsageMetering, AccountUsageMetrics,
     AccountUsagePeriod, MeteringStatus, MonthlyComputeLimit, MonthlyComputeUnit,
-    MonthlyLimitBehavior, MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyPlanAmounts,
-    MonthlyResourceLimits, MonthlyStorageLimit, MonthlyStorageUnit, MonthlyUsageMode,
-    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, byte_seconds_to_gb_month,
-    fuel_to_gcu,
+    MonthlyLimitBehavior, MonthlyMemoryLimit, MonthlyMemoryUnit, MonthlyResourceLimits,
+    MonthlyStorageLimit, MonthlyStorageUnit, MonthlyUsageMode, MonthlyUsageModeTransition,
+    MonthlyUsageModeTransitionSource, byte_seconds_to_gb_month, fuel_to_gcu,
 };
 use golem_common::model::card::owner::AccountOwnerPattern;
 use golem_common::model::card::{
@@ -40,13 +39,14 @@ use golem_common::model::card::{
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
-use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+use golem_service_base::model::{AccountResourceLimits, MonthlyComputePolicy, ResourceLimits};
 use golem_service_base::repo::SqlDateTime;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceUsageUpdate {
+    pub period: AccountUsagePeriod,
     pub monthly_usage_mode_revision: u64,
     pub memory_byte_nanoseconds_remainder: u64,
     pub durable_storage_byte_nanoseconds_remainder: u64,
@@ -209,8 +209,14 @@ impl AccountUsageService {
 
         let mut limits_of_updated_accounts = HashMap::new();
         for (account_id, update) in updates {
+            let now = SqlDateTime::now();
             match self
-                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+                .get_account_usage_at(
+                    account_id,
+                    Some(UsageType::MonthlyGasLimit),
+                    update.period,
+                    &now,
+                )
                 .await
             {
                 Ok(mut account_usage) => {
@@ -252,12 +258,59 @@ impl AccountUsageService {
                         "Updating account resource usage"
                     );
 
+                    let monthly_usage_mode_revision = account_usage.monthly_usage_mode_revision;
+                    let fallback_limits = account_usage.resource_limits().ok().map(|limits| {
+                        Self::fence_monthly_compute(limits, monthly_usage_mode_revision, true)
+                    });
                     match self.account_usage_repo.add(&account_usage).await {
-                        Ok(current_revision) => {
-                            account_usage.monthly_usage_mode_revision = current_revision;
-                            limits_of_updated_accounts
-                                .insert(account_id, account_usage.resource_limits());
-                        }
+                        Ok(_) => match self
+                            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+                            .await
+                        {
+                            Ok(account_usage) => match account_usage.resource_limits() {
+                                Ok(limits) => {
+                                    limits_of_updated_accounts.insert(account_id, limits);
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        %account_id,
+                                        %error,
+                                        "Failed to resolve resource limits after usage update"
+                                    );
+                                    limits_of_updated_accounts.insert(
+                                        account_id,
+                                        fallback_limits.clone().unwrap_or_else(|| {
+                                            Self::fenced_resource_limits(
+                                                monthly_usage_mode_revision,
+                                                true,
+                                            )
+                                        }),
+                                    );
+                                }
+                            },
+                            Err(AccountUsageError::AccountNotfound(_)) => {
+                                limits_of_updated_accounts.insert(
+                                    account_id,
+                                    Self::fenced_resource_limits(monthly_usage_mode_revision, true),
+                                );
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    %account_id,
+                                    %error,
+                                    "Failed to reload account usage after resource update"
+                                );
+                                limits_of_updated_accounts.insert(
+                                    account_id,
+                                    fallback_limits.unwrap_or_else(|| {
+                                        Self::fenced_resource_limits(
+                                            monthly_usage_mode_revision,
+                                            true,
+                                        )
+                                    }),
+                                );
+                            }
+                        },
                         Err(error) => {
                             tracing::error!(
                                 %account_id,
@@ -270,23 +323,8 @@ impl AccountUsageService {
                 Err(AccountUsageError::AccountNotfound(_)) => {
                     // We received an update for a deleted account. Return an empty
                     // set of limits to fence the executor more quickly.
-                    limits_of_updated_accounts.insert(
-                        account_id,
-                        ResourceLimits {
-                            monthly_usage_mode_revision: 0,
-                            available_fuel: 0,
-                            max_memory_per_worker: 0,
-                            max_table_elements_per_worker: 0,
-                            max_disk_space_per_worker: 0,
-                            per_invocation_http_call_limit: 0,
-                            per_invocation_rpc_call_limit: 0,
-                            available_http_calls: 0,
-                            available_rpc_calls: 0,
-                            max_concurrent_agents_per_executor: 0,
-                            oplog_writes_per_second: 0,
-                            usage_update_applied: false,
-                        },
-                    );
+                    limits_of_updated_accounts
+                        .insert(account_id, Self::fenced_resource_limits(0, false));
                 }
                 Err(error) => {
                     tracing::error!(
@@ -318,7 +356,9 @@ impl AccountUsageService {
             .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
             .await?;
 
-        Ok(account_usage.resource_limits())
+        account_usage
+            .resource_limits()
+            .map_err(|error| AccountUsageError::InternalError(error.into()))
     }
 
     pub async fn get_usage(
@@ -496,24 +536,7 @@ impl AccountUsageService {
         report: AccountUsageRecord,
         monthly_usage_mode: AccountMonthlyUsageMode,
     ) -> Result<AccountResourcePolicy, AccountUsageError> {
-        let monthly_amounts = MonthlyPlanAmounts {
-            compute_gcu: account_usage
-                .admin_grant_values
-                .monthly_compute_gcu
-                .unwrap_or_else(|| account_usage.plan.monthly_compute_gcu.get()),
-            memory_gb_seconds: account_usage
-                .admin_grant_values
-                .monthly_memory_gb_seconds
-                .unwrap_or_else(|| account_usage.plan.monthly_memory_gb_seconds.get()),
-            durable_storage_gb_month: account_usage
-                .admin_grant_values
-                .monthly_durable_storage_gb_month
-                .unwrap_or_else(|| account_usage.plan.monthly_durable_storage_gb_month.get()),
-            ephemeral_storage_gb_month: account_usage
-                .admin_grant_values
-                .monthly_ephemeral_storage_gb_month
-                .unwrap_or_else(|| account_usage.plan.monthly_ephemeral_storage_gb_month.get()),
-        };
+        let monthly_amounts = account_usage.monthly_plan_amounts();
         let resolved = monthly_amounts
             .resolve()
             .map_err(|error| AccountUsageError::InternalError(error.into()))?;
@@ -573,6 +596,47 @@ impl AccountUsageService {
             max_memory_per_agent: account_usage.max_memory_per_worker,
             max_storage_per_agent: account_usage.storage_limit,
         })
+    }
+
+    fn fenced_resource_limits(
+        monthly_usage_mode_revision: u64,
+        usage_update_applied: bool,
+    ) -> ResourceLimits {
+        ResourceLimits {
+            monthly_usage_mode_revision,
+            monthly_compute: MonthlyComputePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 0,
+            },
+            max_memory_per_worker: 0,
+            max_table_elements_per_worker: 0,
+            max_disk_space_per_worker: 0,
+            per_invocation_http_call_limit: 0,
+            per_invocation_rpc_call_limit: 0,
+            available_http_calls: 0,
+            available_rpc_calls: 0,
+            max_concurrent_agents_per_executor: 0,
+            oplog_writes_per_second: 0,
+            usage_update_applied,
+        }
+    }
+
+    fn fence_monthly_compute(
+        mut limits: ResourceLimits,
+        monthly_usage_mode_revision: u64,
+        usage_update_applied: bool,
+    ) -> ResourceLimits {
+        limits.monthly_usage_mode_revision = monthly_usage_mode_revision;
+        limits.monthly_compute = MonthlyComputePolicy {
+            period: AccountUsagePeriod::current(),
+            mode: MonthlyUsageMode::HardLimit,
+            available_fuel: 0,
+        };
+        limits.available_http_calls = 0;
+        limits.available_rpc_calls = 0;
+        limits.usage_update_applied = usage_update_applied;
+        limits
     }
 
     async fn get_account_usage(
@@ -861,6 +925,7 @@ mod tests {
             admin_grant_values: Default::default(),
             admin_grants: Vec::new(),
             metering: None,
+            monthly_usage_mode: MonthlyUsageMode::HardLimit,
             monthly_usage_mode_revision: 0,
             monthly_usage_attribution: None,
             changes: BTreeMap::new(),
@@ -996,6 +1061,86 @@ mod tests {
             policy.monthly.ephemeral_storage_gb_month.monthly_amount,
             Some(12)
         );
+    }
+
+    #[test]
+    fn resource_limits_resolve_monthly_compute_from_grant_and_current_usage() {
+        let mut usage = make_policy_usage();
+        usage.year = 2026;
+        usage.month = 9;
+        usage.monthly_usage_mode = MonthlyUsageMode::AllowOverage;
+        usage.monthly_usage_mode_revision = 7;
+        usage.admin_grant_values.monthly_compute_gcu = Some(3);
+        usage
+            .usage
+            .insert(UsageType::MonthlyGasLimit, FUEL_PER_GCU + FUEL_PER_GCU / 2);
+
+        let limits = usage.resource_limits().unwrap();
+
+        assert_eq!(
+            limits.monthly_compute.period,
+            AccountUsagePeriod {
+                year: 2026,
+                month: 9
+            }
+        );
+        assert_eq!(limits.monthly_compute.mode, MonthlyUsageMode::AllowOverage);
+        assert_eq!(limits.monthly_compute.available_fuel, 1_500_000);
+        assert_eq!(limits.monthly_usage_mode_revision, 7);
+    }
+
+    #[test]
+    fn deleted_account_limits_fence_compute_for_current_period() {
+        let limits = AccountUsageService::fenced_resource_limits(0, false);
+
+        assert_eq!(limits.monthly_compute.period, AccountUsagePeriod::current());
+        assert_eq!(limits.monthly_compute.mode, MonthlyUsageMode::HardLimit);
+        assert_eq!(limits.monthly_compute.available_fuel, 0);
+        assert!(!limits.usage_update_applied);
+    }
+
+    #[test]
+    fn post_write_failure_fence_acknowledges_the_committed_update() {
+        let limits = AccountUsageService::fenced_resource_limits(7, true);
+
+        assert_eq!(limits.monthly_compute.period, AccountUsagePeriod::current());
+        assert_eq!(limits.monthly_compute.mode, MonthlyUsageMode::HardLimit);
+        assert_eq!(limits.monthly_compute.available_fuel, 0);
+        assert_eq!(limits.available_http_calls, 0);
+        assert_eq!(limits.available_rpc_calls, 0);
+        assert_eq!(limits.monthly_usage_mode_revision, 7);
+        assert!(limits.usage_update_applied);
+    }
+
+    #[test]
+    fn post_write_failure_fence_preserves_per_agent_limits() {
+        let mut limits = make_policy_usage().resource_limits().unwrap();
+        let expected_memory = limits.max_memory_per_worker;
+        let expected_table_elements = limits.max_table_elements_per_worker;
+        let expected_disk_space = limits.max_disk_space_per_worker;
+        let expected_http_limit = limits.per_invocation_http_call_limit;
+        let expected_rpc_limit = limits.per_invocation_rpc_call_limit;
+        let expected_concurrency = limits.max_concurrent_agents_per_executor;
+        let expected_oplog_rate = limits.oplog_writes_per_second;
+
+        limits = AccountUsageService::fence_monthly_compute(limits, 7, true);
+
+        assert_eq!(limits.monthly_compute.available_fuel, 0);
+        assert_eq!(limits.monthly_usage_mode_revision, 7);
+        assert!(limits.usage_update_applied);
+        assert_eq!(limits.max_memory_per_worker, expected_memory);
+        assert_eq!(
+            limits.max_table_elements_per_worker,
+            expected_table_elements
+        );
+        assert_eq!(limits.max_disk_space_per_worker, expected_disk_space);
+        assert_eq!(limits.per_invocation_http_call_limit, expected_http_limit);
+        assert_eq!(limits.per_invocation_rpc_call_limit, expected_rpc_limit);
+        assert_eq!(
+            limits.max_concurrent_agents_per_executor,
+            expected_concurrency
+        );
+        assert_eq!(limits.oplog_writes_per_second, expected_oplog_rate);
     }
 
     #[test]

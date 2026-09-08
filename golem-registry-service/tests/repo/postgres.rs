@@ -541,13 +541,17 @@ async fn test_monthly_usage_mode_baseline_serializes_with_usage_updates(
 }
 
 #[test]
-async fn test_resource_usage_response_uses_revision_observed_under_account_lock(
+async fn test_resource_usage_response_uses_fresh_post_write_policy(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
-    crate::repo::common::test_resource_usage_response_uses_revision_observed_under_account_lock(
-        deps,
-    )
-    .await;
+    crate::repo::common::test_resource_usage_response_uses_fresh_post_write_policy(deps).await;
+}
+
+#[test]
+async fn test_resource_usage_update_uses_declared_period(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_resource_usage_update_uses_declared_period(deps).await;
 }
 
 #[test]

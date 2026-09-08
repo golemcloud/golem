@@ -3819,12 +3819,12 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
         .await
         .unwrap()
         .unwrap();
-    assert!(usage.resource_limits().max_disk_space_per_worker == 1073741824);
+    assert!(usage.resource_limits().unwrap().max_disk_space_per_worker == 1073741824);
     assert_eq!(usage.storage_limit.effective_value, Some(1073741824));
     assert_eq!(usage.storage_limit.plan_default, Some(1073741824));
     assert_eq!(usage.storage_limit.override_value, None);
     assert_eq!(usage.max_memory_per_worker.override_value, None);
-    assert_eq!(usage.resource_limits().max_memory_per_worker, 4000);
+    assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 4000);
 
     deps.account_resource_override_repo
         .upsert(AccountResourceOverrideRecord {
@@ -3871,11 +3871,11 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
         .await
         .unwrap()
         .unwrap();
-    assert!(usage.resource_limits().max_disk_space_per_worker == 1073741824);
+    assert!(usage.resource_limits().unwrap().max_disk_space_per_worker == 1073741824);
     assert_eq!(usage.storage_limit.effective_value, Some(1073741824));
     assert_eq!(usage.storage_limit.override_value, None);
     assert_eq!(usage.max_memory_per_worker.override_value, None);
-    assert_eq!(usage.resource_limits().max_memory_per_worker, 4000);
+    assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 4000);
 }
 
 static ADMIN_GRANT_CLEANUP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -3995,8 +3995,11 @@ pub async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owne
     assert_eq!(usage.max_memory_per_worker.effective_value, 300);
     assert_eq!(usage.storage_limit.override_value, Some(150));
     assert_eq!(usage.storage_limit.effective_value, Some(300));
-    assert_eq!(usage.resource_limits().max_memory_per_worker, 300);
-    assert_eq!(usage.resource_limits().max_disk_space_per_worker, 300);
+    assert_eq!(usage.resource_limits().unwrap().max_memory_per_worker, 300);
+    assert_eq!(
+        usage.resource_limits().unwrap().max_disk_space_per_worker,
+        300
+    );
 
     let policy = deps
         .account_usage_service()
@@ -5166,7 +5169,10 @@ pub async fn test_storage_limit_discards_out_of_range_override_after_plan_update
     assert_eq!(usage.storage_limit.ceiling, Some(1000));
     assert_eq!(usage.storage_limit.effective_value, Some(500));
     assert_eq!(usage.plan.max_disk_space_per_worker.get(), 500);
-    assert_eq!(usage.resource_limits().max_disk_space_per_worker, 500);
+    assert_eq!(
+        usage.resource_limits().unwrap().max_disk_space_per_worker,
+        500
+    );
 
     deps.account_resource_override_repo
         .delete(
@@ -5205,7 +5211,7 @@ pub async fn test_storage_limit_discards_out_of_range_override_after_plan_update
     assert_eq!(usage.storage_limit.plan_default, None);
     assert_eq!(usage.storage_limit.ceiling, None);
     assert_eq!(
-        usage.resource_limits().max_disk_space_per_worker,
+        usage.resource_limits().unwrap().max_disk_space_per_worker,
         golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
     );
 }
@@ -6214,6 +6220,13 @@ pub async fn test_monthly_usage_mode_transitions(deps: &Deps) {
     assert_eq!(enabled.usage_baseline.memory_gb_seconds, 13);
     assert_eq!(enabled.usage_baseline.durable_storage_byte_seconds, 17);
     assert_eq!(enabled.usage_baseline.ephemeral_storage_byte_seconds, 19);
+    let usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.monthly_usage_mode, MonthlyUsageMode::AllowOverage);
 
     assert!(matches!(
         deps.account_usage_repo
@@ -6311,6 +6324,13 @@ pub async fn test_monthly_usage_mode_transitions(deps: &Deps) {
         .unwrap();
     assert_eq!(state.mode, MonthlyUsageMode::HardLimit);
     assert!(!state.overage_eligible);
+    let usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.monthly_usage_mode, MonthlyUsageMode::HardLimit);
     assert!(matches!(
         deps.account_usage_repo
             .set_monthly_usage_mode(
@@ -6762,6 +6782,7 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
     delayed_update.insert(
         AccountId(account_id),
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 1,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -6787,6 +6808,7 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
     remainder_update.insert(
         AccountId(account_id),
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 1,
             memory_byte_nanoseconds_remainder: 11,
             durable_storage_byte_nanoseconds_remainder: 22,
@@ -6914,7 +6936,7 @@ pub async fn test_monthly_usage_mode_baseline_serializes_with_usage_updates(deps
     );
 }
 
-pub async fn test_resource_usage_response_uses_revision_observed_under_account_lock(deps: &Deps) {
+pub async fn test_resource_usage_response_uses_fresh_post_write_policy(deps: &Deps) {
     let TestDb::Postgres(pool) = &deps.test_db else {
         panic!("this race depends on PostgreSQL row-lock semantics");
     };
@@ -6966,6 +6988,7 @@ pub async fn test_resource_usage_response_uses_revision_observed_under_account_l
                     HashMap::from([(
                         AccountId(account_id),
                         ResourceUsageUpdate {
+                            period: AccountUsagePeriod::current(),
                             monthly_usage_mode_revision: 0,
                             memory_byte_nanoseconds_remainder: 0,
                             durable_storage_byte_nanoseconds_remainder: 0,
@@ -7004,12 +7027,83 @@ pub async fn test_resource_usage_response_uses_revision_observed_under_account_l
             .0
             .get(&AccountId(account_id))
             .unwrap()
+            .monthly_compute
+            .mode,
+        MonthlyUsageMode::AllowOverage
+    );
+    assert_eq!(
+        response
+            .0
+            .get(&AccountId(account_id))
+            .unwrap()
             .monthly_usage_mode_revision,
         1
     );
     assert_eq!(
         compute_usage_by_revision(deps, account_id).await,
         vec![(0, 11)]
+    );
+}
+
+pub async fn test_resource_usage_update_uses_declared_period(deps: &Deps) {
+    let account = deps.create_account().await;
+    let account_id = AccountId(account.revision.account_id);
+    let current = AccountUsagePeriod::current();
+    let previous = if current.month == 1 {
+        AccountUsagePeriod {
+            year: current.year - 1,
+            month: 12,
+        }
+    } else {
+        AccountUsagePeriod {
+            year: current.year,
+            month: current.month - 1,
+        }
+    };
+
+    let response = deps
+        .account_usage_service()
+        .update_resource_usage(
+            HashMap::from([(
+                account_id,
+                ResourceUsageUpdate {
+                    period: previous,
+                    monthly_usage_mode_revision: 0,
+                    memory_byte_nanoseconds_remainder: 0,
+                    durable_storage_byte_nanoseconds_remainder: 0,
+                    ephemeral_storage_byte_nanoseconds_remainder: 0,
+                    fuel_delta: 123,
+                    http_call_count_delta: 0,
+                    rpc_call_count_delta: 0,
+                    durable_storage_byte_seconds_delta: 0,
+                    ephemeral_storage_byte_seconds_delta: 0,
+                    memory_gb_seconds_delta: 0,
+                    metering: ResourceUsageMetering::all_enabled(),
+                },
+            )]),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+
+    let limits = response.0.get(&account_id).unwrap();
+    assert!(limits.usage_update_applied);
+    assert_eq!(limits.monthly_compute.period, current);
+    assert_eq!(
+        deps.account_usage_repo
+            .get_usage_report(account_id.0, previous)
+            .await
+            .unwrap()
+            .compute_fuel,
+        123
+    );
+    assert_eq!(
+        deps.account_usage_repo
+            .get_usage_report(account_id.0, current)
+            .await
+            .unwrap()
+            .compute_fuel,
+        0
     );
 }
 
@@ -8163,6 +8257,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8201,6 +8296,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8230,6 +8326,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8258,6 +8355,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8279,6 +8377,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8342,6 +8441,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8380,6 +8480,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8409,6 +8510,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
     updates.insert(
         account_id,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8451,6 +8553,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     http_updates.insert(
         a1,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8467,6 +8570,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     http_updates.insert(
         a2,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8503,6 +8607,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     rpc_updates.insert(
         a3,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,
@@ -8519,6 +8624,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     rpc_updates.insert(
         a4,
         ResourceUsageUpdate {
+            period: AccountUsagePeriod::current(),
             monthly_usage_mode_revision: 0,
             memory_byte_nanoseconds_remainder: 0,
             durable_storage_byte_nanoseconds_remainder: 0,

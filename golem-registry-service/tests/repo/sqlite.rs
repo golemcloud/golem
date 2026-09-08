@@ -310,6 +310,11 @@ async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
 }
 
 #[test]
+async fn test_resource_usage_update_uses_declared_period(deps: &Deps) {
+    crate::repo::common::test_resource_usage_update_uses_declared_period(deps).await;
+}
+
+#[test]
 async fn test_monthly_usage_mode_consent_invariants(deps: &Deps) {
     crate::repo::common::test_monthly_usage_mode_consent_invariants(deps).await;
 }

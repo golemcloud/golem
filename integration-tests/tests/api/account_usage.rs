@@ -173,6 +173,7 @@ async fn account_usage_reports_all_customer_dimensions(
             .batch_update_resource_usage(HashMap::from([(
                 AccountId(user.account_id.0),
                 ResourceUsageUpdate {
+                    period: AccountUsagePeriod::current(),
                     monthly_usage_mode_revision: 0,
                     memory_byte_nanoseconds_remainder: 0,
                     durable_storage_byte_nanoseconds_remainder: 0,
@@ -331,6 +332,7 @@ async fn account_owner_explicitly_changes_monthly_usage_mode(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
                 memory_byte_nanoseconds_remainder: 0,
                 durable_storage_byte_nanoseconds_remainder: 0,
@@ -548,6 +550,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
                 memory_byte_nanoseconds_remainder: 0,
                 durable_storage_byte_nanoseconds_remainder: 0,
@@ -588,6 +591,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
                 memory_byte_nanoseconds_remainder: 0,
                 durable_storage_byte_nanoseconds_remainder: 0,

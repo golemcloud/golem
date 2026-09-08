@@ -533,6 +533,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
 
         let admin_grant_values = account_plan.admin_grant_values();
         let admin_grants = account_plan.admin_grants()?;
+        let monthly_usage_mode = account_plan.monthly_usage_mode()?;
         Ok(Some(AccountUsage {
             account_id,
             year: date.as_utc().year(),
@@ -543,6 +544,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             admin_grant_values,
             admin_grants,
             metering: None,
+            monthly_usage_mode,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
             monthly_usage_attribution: None,
             plan: account_plan.plan,
@@ -672,6 +674,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
 
         let admin_grant_values = account_plan.admin_grant_values();
         let admin_grants = account_plan.admin_grants()?;
+        let monthly_usage_mode = account_plan.monthly_usage_mode()?;
         Ok(Some(AccountUsage {
             account_id,
             year: date.as_utc().year(),
@@ -682,6 +685,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             admin_grant_values,
             admin_grants,
             metering: None,
+            monthly_usage_mode,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
             monthly_usage_attribution: None,
             plan: account_plan.plan,
@@ -1173,6 +1177,7 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                     p.monthly_compute_gcu, p.monthly_memory_gb_seconds,
                     p.monthly_durable_storage_gb_month, p.monthly_ephemeral_storage_gb_month,
                     p.overage_eligible,
+                    COALESCE(mode.mode, 'hard_limit') AS monthly_usage_mode,
                     COALESCE(mode.revision, 0) AS monthly_usage_mode_revision,
                     p.max_table_elements_per_worker,
                     p.max_disk_space_per_worker_enabled,
