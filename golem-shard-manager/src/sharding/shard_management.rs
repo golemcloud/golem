@@ -337,6 +337,18 @@ impl ShardManagement {
                 );
             }
 
+            // Ahead of the renewal, so the grant read below carries the repaired epochs. This
+            // only ever fires when the stored state is behind the cluster it is managing.
+            let raised = shard_state.raise_epoch_floor(executor_id, &claimed);
+            if !raised.is_empty() {
+                warn!(
+                    executor_id = %executor_id,
+                    raised_shards = raised.iter().join(", "),
+                    "Shard lease claim carried epochs ahead of the stored state; raising them. \
+                     The shard state has lost history - it was wiped, restored or replaced"
+                );
+            }
+
             if !shard_state.renew_lease(executor_id, now, lease_ttl) {
                 return Err(ShardManagerError::Internal(format!(
                     "executor {executor_id} holds no lease right after it was found"
