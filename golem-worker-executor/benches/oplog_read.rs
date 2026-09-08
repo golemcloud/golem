@@ -71,6 +71,7 @@ impl Fixture {
                 self.initial_metadata.clone(),
                 last_known_status(),
                 execution_status(),
+                None,
             )
             .await
     }
@@ -171,6 +172,7 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
             initial_metadata.clone(),
             last_known_status(),
             execution_status(),
+            None,
         )
         .await;
 

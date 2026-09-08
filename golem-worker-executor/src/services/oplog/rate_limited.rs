@@ -21,6 +21,7 @@ use crate::services::oplog::{
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -380,6 +381,7 @@ impl OplogService for RateLimitedOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
@@ -393,6 +395,7 @@ impl OplogService for RateLimitedOplogService {
                 initial_worker_metadata,
                 last_known_status,
                 execution_status,
+                shard_epoch,
             )
             .await;
         Arc::new(RateLimitedOplog::new(
@@ -411,6 +414,7 @@ impl OplogService for RateLimitedOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
@@ -424,6 +428,7 @@ impl OplogService for RateLimitedOplogService {
                 initial_worker_metadata,
                 last_known_status,
                 execution_status,
+                shard_epoch,
             )
             .await;
         Arc::new(RateLimitedOplog::new(
@@ -442,6 +447,7 @@ impl OplogService for RateLimitedOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
@@ -455,6 +461,7 @@ impl OplogService for RateLimitedOplogService {
                 initial_worker_metadata,
                 last_known_status,
                 execution_status,
+                shard_epoch,
             )
             .await;
         Arc::new(RateLimitedOplog::new(
@@ -675,6 +682,7 @@ mod tests {
                 make_agent_metadata(agent_id, account_id, env_id),
                 last_known_status,
                 execution_status,
+                None,
             )
             .await
     }

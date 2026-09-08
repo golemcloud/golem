@@ -161,6 +161,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let timestamp = Timestamp::now_utc();
@@ -225,6 +226,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 

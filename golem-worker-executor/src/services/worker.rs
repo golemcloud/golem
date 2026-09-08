@@ -1537,7 +1537,7 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
@@ -1604,6 +1604,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -1616,6 +1617,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -1628,6 +1630,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }

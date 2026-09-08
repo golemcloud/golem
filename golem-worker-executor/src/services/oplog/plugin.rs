@@ -31,6 +31,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
@@ -519,6 +520,7 @@ struct CreateOplogConstructor {
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     plugin_max_commit_count: usize,
     plugin_max_elapsed_time: Duration,
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl CreateOplogConstructor {
@@ -537,6 +539,7 @@ impl CreateOplogConstructor {
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         plugin_max_commit_count: usize,
         plugin_max_elapsed_time: Duration,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Self {
         Self {
             owned_agent_id,
@@ -552,6 +555,7 @@ impl CreateOplogConstructor {
             execution_status,
             plugin_max_commit_count,
             plugin_max_elapsed_time,
+            shard_epoch,
         }
     }
 }
@@ -577,6 +581,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         self.initial_worker_metadata.clone(),
                         self.last_known_status.clone(),
                         self.execution_status.clone(),
+                        self.shard_epoch,
                     )
                     .await
             } else {
@@ -588,6 +593,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         self.initial_worker_metadata.clone(),
                         self.last_known_status.clone(),
                         self.execution_status.clone(),
+                        self.shard_epoch,
                     )
                     .await
             }
@@ -600,6 +606,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
+                    self.shard_epoch,
                 )
                 .await
         };
@@ -674,6 +681,7 @@ impl OplogService for ForwardingOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -692,6 +700,7 @@ impl OplogService for ForwardingOplogService {
                     execution_status,
                     self.plugin_max_commit_count,
                     self.plugin_max_elapsed_time,
+                    shard_epoch,
                 ),
             )
             .await
@@ -705,6 +714,7 @@ impl OplogService for ForwardingOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -723,6 +733,7 @@ impl OplogService for ForwardingOplogService {
                     execution_status,
                     self.plugin_max_commit_count,
                     self.plugin_max_elapsed_time,
+                    shard_epoch,
                 ),
             )
             .await
@@ -736,6 +747,7 @@ impl OplogService for ForwardingOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -754,6 +766,7 @@ impl OplogService for ForwardingOplogService {
                     execution_status,
                     self.plugin_max_commit_count,
                     self.plugin_max_elapsed_time,
+                    shard_epoch,
                 ),
             )
             .await
