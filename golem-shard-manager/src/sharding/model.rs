@@ -480,14 +480,13 @@ impl ShardLeaseState {
     /// Applies `rebalance`, and reports the executors whose push is now stale and has to be
     /// repeated.
     ///
-    /// The epoch of every planned assignment was decided when the plan was computed, so it is
-    /// applied rather than re-minted - but only while it is still *fresh*, strictly above the
-    /// highest epoch recorded for that shard. `Register` writes outside the loop and transfers a
-    /// restarted instance's shards inline, so between the plan and this apply the recorded epoch
-    /// can have caught up with the planned one. Storing it anyway would leave two live executors
-    /// believing they hold the same shard at the same epoch, which is exactly the pair an oplog
-    /// fence cannot tell apart, so a fresh one is minted instead. The pushes go out from the
-    /// state this writes, so they carry whichever epoch is stored here.
+    /// Every assigned shard's epoch is minted here, against the state as it is at the apply:
+    /// strictly above the highest epoch ever recorded for that shard, including one that a
+    /// `Register` - which writes outside the loop and transfers a restarted instance's shards
+    /// inline - raised between the plan and this apply. Two live executors on the same
+    /// `(shard, epoch)` is the pair an oplog fence cannot tell apart, and minting only at the
+    /// point of storage is what rules it out: the pushes go out from the state this writes, so
+    /// no executor is ever told an epoch the store does not hold.
     pub fn apply_rebalance(&mut self, rebalance: &Rebalance) {
         for (executor_id, shard_ids) in &rebalance.get_assignments().assignments {
             if !self.has_executor(*executor_id) {
@@ -499,23 +498,7 @@ impl ShardLeaseState {
                 continue;
             }
             for shard_id in shard_ids {
-                let epoch = match rebalance.epoch_for(*shard_id) {
-                    Some(carried) if self.epoch_is_fresh(*shard_id, carried) => carried,
-                    Some(carried) => {
-                        let minted = self.next_epoch_for(*executor_id, *shard_id);
-                        warn!(
-                            executor_id = %executor_id,
-                            shard_id = %shard_id,
-                            planned_epoch = %carried,
-                            minted_epoch = %minted,
-                            "Planned shard epoch was overtaken before the plan was applied; \
-                             minting a fresh one"
-                        );
-                        minted
-                    }
-                    None => self.next_epoch_for(*executor_id, *shard_id),
-                };
-                self.assign_shard_with_epoch(*executor_id, *shard_id, epoch);
+                self.assign_shard(*executor_id, *shard_id);
             }
         }
         for (executor_id, shard_ids) in &rebalance.get_unassignments().unassignments {
@@ -524,15 +507,6 @@ impl ShardLeaseState {
             }
         }
         debug_assert!(self.check_invariants().is_ok());
-    }
-
-    /// Whether `epoch` is still above every epoch ever recorded for `shard_id`, and so may be
-    /// stored without two holders ending up on the same `(shard, epoch)`.
-    fn epoch_is_fresh(&self, shard_id: ShardId, epoch: ShardEpoch) -> bool {
-        match self.shard_epochs.get(&shard_id) {
-            Some(high_water) => epoch > *high_water,
-            None => true,
-        }
     }
 
     pub fn take_pending_rebalance(&mut self) -> BTreeSet<ShardId> {
@@ -1146,13 +1120,7 @@ mod tests {
         let mut unassignments = Unassignments::new();
         unassignments.unassign(executor(1), shard(0));
         unassignments.unassign(executor(1), shard(1));
-        let rebalance = Rebalance::new(assignments, unassignments, &shard_state);
-
-        // The epochs are decided when the plan is built, because that is what the executors are
-        // pushed before the plan is applied.
-        assert_eq!(rebalance.epoch_for(shard(0)), Some(ShardEpoch(1)));
-        assert_eq!(rebalance.epoch_for(shard(1)), Some(ShardEpoch(1)));
-        assert_eq!(rebalance.epoch_for(shard(2)), None);
+        let rebalance = Rebalance::new(assignments, unassignments);
 
         shard_state.apply_rebalance(&rebalance);
 
@@ -1169,9 +1137,8 @@ mod tests {
         assert_eq!(shard_state.epoch_for_shard(shard(2)), Some(ShardEpoch(0)));
         assert!(shard_state.check_invariants().is_ok());
 
-        // Applying the same plan again is a no-op on the state (idempotent assignments, guarded
-        // unassignments). The carried epoch is no longer above the recorded one - this very apply
-        // put it there - so it is re-minted, which for an unchanged owner is the same value.
+        // Applying the same plan again is a no-op on the state: an assignment to the shard's
+        // current owner keeps its epoch, and an unassignment is owner-guarded.
         shard_state.apply_rebalance(&rebalance);
         assert_eq!(
             shard_state.shards_for_executor(executor(2)),
@@ -1182,21 +1149,20 @@ mod tests {
 
     #[test]
     // Between the plan and the apply, a restarted instance registering at a known address can
-    // inherit the same shard and mint the same epoch inline. Storing the planned epoch then would
-    // put two live executors on one `(shard, epoch)`, so `apply_rebalance` mints a fresh one.
-    fn a_planned_epoch_overtaken_before_the_apply_is_re_minted() {
+    // inherit the same shard and mint an epoch for it inline. The apply mints against the state as
+    // it is then, so its epoch is above that one - never a second holder of the same `(shard, epoch)`.
+    fn an_epoch_minted_at_apply_is_above_one_a_register_minted_in_between() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1, 2, 3]), (2, 2, &[])]);
 
-        // the plan: shard 0 moves from executor 1 to executor 2, at epoch 1
+        // the plan: shard 0 moves from executor 1 to executor 2
         let mut assignments = Assignments::new();
         assignments.assign(executor(2), shard(0));
         let mut unassignments = Unassignments::new();
         unassignments.unassign(executor(1), shard(0));
-        let rebalance = Rebalance::new(assignments, unassignments, &shard_state);
-        assert_eq!(rebalance.epoch_for(shard(0)), Some(ShardEpoch(1)));
+        let rebalance = Rebalance::new(assignments, unassignments);
 
         // ...and before it is applied, executor 1 is replaced at its own address by a restart,
-        // which inherits shard 0 inline and mints epoch 1 for it too
+        // which inherits shard 0 inline and mints epoch 1 for it
         shard_state.add_executor(executor(3), addr(1), None, t0(), TTL);
         assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(1)));
 
@@ -1205,7 +1171,7 @@ mod tests {
         assert_eq!(
             shard_state.epoch_for_shard(shard(0)),
             Some(ShardEpoch(2)),
-            "the carried epoch was stored although the high-water mark had caught up with it"
+            "the epoch minted at the apply must be above the one the restart minted in between"
         );
         assert_eq!(
             shard_state.shard_assignments[&shard(0)].executor_id,

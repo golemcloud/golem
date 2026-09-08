@@ -23,37 +23,13 @@ use tracing::trace;
 pub struct Rebalance {
     assignments: Assignments,
     unassignments: Unassignments,
-    /// The ownership epoch each assigned shard takes when this plan is applied, decided against
-    /// the state the plan was computed from. `apply_rebalance` stores it as long as it is still
-    /// above the epoch recorded for the shard, and mints a fresh one otherwise. A shard is
-    /// assigned to at most one executor in a plan, so one entry per shard is enough.
-    assigned_epochs: BTreeMap<ShardId, ShardEpoch>,
 }
 
 impl Rebalance {
-    /// Builds a plan against `shard_state` and decides, now, the epoch every assigned shard will
-    /// take when the plan is applied to that same state.
-    pub fn new(
-        assignments: Assignments,
-        unassignments: Unassignments,
-        shard_state: &ShardLeaseState,
-    ) -> Self {
-        let assigned_epochs = assignments
-            .assignments
-            .iter()
-            .flat_map(|(executor_id, shard_ids)| {
-                shard_ids.iter().map(|shard_id| {
-                    (
-                        *shard_id,
-                        shard_state.next_epoch_for(*executor_id, *shard_id),
-                    )
-                })
-            })
-            .collect();
+    pub fn new(assignments: Assignments, unassignments: Unassignments) -> Self {
         Rebalance {
             assignments,
             unassignments,
-            assigned_epochs,
         }
     }
 
@@ -73,7 +49,7 @@ impl Rebalance {
         let mut unassignments = Unassignments::new();
         let executor_count = shard_state.executor_count();
         if executor_count == 0 {
-            return Rebalance::new(assignments, unassignments, shard_state);
+            return Rebalance::new(assignments, unassignments);
         }
 
         let mut executors: Vec<ExecutorShards> = shard_state.executor_shard_sets();
@@ -130,7 +106,7 @@ impl Rebalance {
         }
 
         if executor_count == 1 {
-            return Rebalance::new(assignments, unassignments, shard_state);
+            return Rebalance::new(assignments, unassignments);
         };
 
         // We redistribute shards from each entry having more than the optimal count
@@ -188,7 +164,7 @@ impl Rebalance {
             }
         }
 
-        Rebalance::new(assignments, unassignments, shard_state)
+        Rebalance::new(assignments, unassignments)
     }
 
     pub fn get_assignments(&self) -> &Assignments {
@@ -201,11 +177,6 @@ impl Rebalance {
 
     pub fn is_empty(&self) -> bool {
         self.assignments.assignments.is_empty() && self.unassignments.unassignments.is_empty()
-    }
-
-    /// The epoch this plan decided for `shard_id`, if the plan assigns it.
-    pub fn epoch_for(&self, shard_id: ShardId) -> Option<ShardEpoch> {
-        self.assigned_epochs.get(&shard_id).copied()
     }
 }
 
