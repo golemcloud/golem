@@ -2053,9 +2053,12 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
         "got {err:?}"
     );
 
-    // a wrong epoch, alongside a claim entry that is perfectly valid
+    // a wrong epoch on a shard that belongs to somebody else, alongside claim entries that are
+    // perfectly valid. Corrected and never adopted: an epoch stamped onto another executor's
+    // assignment would leave both of them live on one `(shard, epoch)`, which is the one pair the
+    // oplog fence cannot separate.
     let mut wrong_epoch = truth.clone();
-    wrong_epoch.insert(ShardId::new(1), ShardEpoch(7));
+    wrong_epoch.insert(ShardId::new(2), ShardEpoch(7));
     let expiry_before = expiry_of(&persistence.latest().await, executor(1));
     let grant = shard_management
         .renew_shard_lease(executor(1), wrong_epoch)
@@ -2066,6 +2069,11 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
         "the grant is the manager's set, not the claim"
     );
     assert!(grant.expires_at > expiry_before, "the lease was extended");
+    assert_eq!(
+        persistence.latest().await.epoch_for_shard(ShardId::new(2)),
+        Some(ShardEpoch(0)),
+        "the claim moved another executor's shard"
+    );
 
     // a shard that belongs to another executor
     let moved = BTreeMap::from([(ShardId::new(2), ShardEpoch(0))]);
@@ -2097,6 +2105,49 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
     assert_eq!(claim_of(&after, executor(1)), truth);
     assert!(expiry_of(&after, executor(1)) > expiry_before);
     assert_eq!(after.get_unassigned_shards(), shard_ids(&[2, 3]));
+
+    join_set.abort_all();
+}
+
+#[test]
+// The one case where a claim moves the manager's state rather than being corrected by it. An
+// executor is never told an epoch the store did not hold first, so a claim ahead of the record is
+// only possible when the store lost history - wiped, restored from a backup, or replaced. The
+// executors' oplog rows are still fenced against the epochs they were granted before the loss, so
+// a manager that went on granting from a lower floor would have every one of their writes refused
+// for good. The renewal is the one moment the cluster can tell the manager what it forgot.
+async fn a_claim_ahead_of_the_record_raises_the_managers_floor() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+
+    let before = persistence.latest().await;
+    assert_eq!(before.epoch_for_shard(ShardId::new(1)), Some(ShardEpoch(0)));
+
+    let mut ahead = claim_of(&before, executor(1));
+    ahead.insert(ShardId::new(1), ShardEpoch(7));
+    let grant = shard_management
+        .renew_shard_lease(executor(1), ahead.clone())
+        .await
+        .expect("a claim ahead of the record is renewed, not refused");
+
+    // The grant is still read off the manager's state - that state was repaired first, so the
+    // owner is told the epoch it already holds instead of one its oplog rows would refuse.
+    assert_eq!(grant.shard_epochs, ahead);
+
+    let after = persistence.latest().await;
+    assert_eq!(after.epoch_for_shard(ShardId::new(1)), Some(ShardEpoch(7)));
+    assert_eq!(claim_of(&after, executor(1)), ahead);
+    assert_eq!(
+        after.shards_for_executor(executor(1)),
+        Some(shard_ids(&[0, 1])),
+        "repairing an epoch moved a shard"
+    );
+    assert_eq!(
+        after.shards_for_executor(executor(2)),
+        Some(shard_ids(&[2, 3])),
+        "repairing an epoch disturbed another executor"
+    );
 
     join_set.abort_all();
 }
