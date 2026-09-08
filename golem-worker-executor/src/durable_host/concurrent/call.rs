@@ -4598,6 +4598,10 @@ type EncodedResponse<Resp> = Box<(Box<Resp>, Vec<u8>)>;
 // Keep the large HostResponse enum's construction/serialization frame out of the async caller.
 // Box the input and output so the blocking-task envelope also has a bounded stack footprint.
 #[inline(never)]
+#[allow(
+    clippy::boxed_local,
+    reason = "the caller must not move the generic response onto its small Wasmtime fiber stack"
+)]
 fn encode_response<Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String>>(
     response: Box<Resp>,
 ) -> Result<EncodedResponse<Resp>, String> {
