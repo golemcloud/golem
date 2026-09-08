@@ -7381,21 +7381,22 @@ pub(crate) mod tests {
             .unwrap()
             .value;
 
-        let retained = producer.committed_retention.lock().unwrap();
-        assert_eq!(retained.batches.len(), 1);
-        assert_eq!(retained.entries, 1);
-        let super::RetainedCommittedEvents::Packed {
-            first_offset,
-            bytes,
-            ..
-        } = &retained.batches.front().unwrap().events
-        else {
-            panic!("packed write was expanded in retention")
-        };
-        assert_eq!(*first_offset, offsets[0]);
-        assert_eq!(bytes.len(), offsets.len());
-        assert!(retained.bytes < offsets.len() * 2);
-        drop(retained);
+        {
+            let retained = producer.committed_retention.lock().unwrap();
+            assert_eq!(retained.batches.len(), 1);
+            assert_eq!(retained.entries, 1);
+            let super::RetainedCommittedEvents::Packed {
+                first_offset,
+                bytes,
+                ..
+            } = &retained.batches.front().unwrap().events
+            else {
+                panic!("packed write was expanded in retention")
+            };
+            assert_eq!(*first_offset, offsets[0]);
+            assert_eq!(bytes.len(), offsets.len());
+            assert!(retained.bytes < offsets.len() * 2);
+        }
         let before = oplog.point_reads.load(Ordering::Relaxed);
         let events = producer
             .read_segment(&handle, Some(offsets[9]), None)
