@@ -58,6 +58,7 @@ futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 heck = { workspace = true }
 http = { workspace = true }
+humanize-rs = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -68,7 +69,6 @@ itertools = { workspace = true }
 jsonschema = { workspace = true }
 lenient_bool = { workspace = true }
 minijinja = { workspace = true }
-parse-size = { workspace = true }
 phf = { workspace = true }
 portable-pty = { workspace = true }
 prettyplease = { workspace = true }

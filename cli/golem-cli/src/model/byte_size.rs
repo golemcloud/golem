@@ -15,8 +15,14 @@
 use std::num::NonZeroU64;
 
 pub fn parse_positive(input: &str) -> Result<NonZeroU64, String> {
-    let bytes = parse_size::parse_size(input).map_err(|err| err.to_string())?;
-    NonZeroU64::new(bytes).ok_or_else(|| "memory size must be greater than zero bytes".to_string())
+    if !input.is_ascii() {
+        return Err("memory size must contain only ASCII characters".to_string());
+    }
+    let bytes = input
+        .parse::<humanize_rs::bytes::Bytes<u64>>()
+        .map_err(|err| err.to_string())?;
+    NonZeroU64::new(bytes.size())
+        .ok_or_else(|| "memory size must be greater than zero bytes".to_string())
 }
 
 pub mod optional {
@@ -45,5 +51,45 @@ pub mod optional {
                 parse_positive(value).map_err(serde::de::Error::custom)
             })
             .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_positive;
+    use test_r::test;
+
+    #[test]
+    fn positive_byte_sizes() {
+        for (input, expected) in [
+            ("1mb", 1_000_000),
+            ("1MB", 1_000_000),
+            ("1MiB", 1_048_576),
+            (" 2 GiB ", 2_147_483_648),
+            ("1536 MiB", 1_610_612_736),
+            ("42", 42),
+            ("18446744073709551615 B", u64::MAX),
+        ] {
+            assert_eq!(parse_positive(input).unwrap().get(), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn invalid_byte_sizes() {
+        for input in [
+            "",
+            "0",
+            "0 B",
+            "-1 MB",
+            "1.5 GiB",
+            "garbage",
+            "18446744073709551616 B",
+            "18446744073709551615 KiB",
+            "1💾 MB",
+            "１ MB",
+            "1\u{a0}MiB",
+        ] {
+            assert!(parse_positive(input).is_err(), "accepted {input}");
+        }
     }
 }
