@@ -203,22 +203,16 @@ pub struct GolemHostApiImpl {
 }
 
 fn summarize_tool(tool: tool_host::RegisteredTool) -> ToolSummary {
-    let (name, summary, aliases) = tool
+    let (summary, aliases) = tool
         .definition
         .commands
         .nodes
         .first()
-        .map(|node| {
-            (
-                node.name.clone(),
-                node.doc.summary.clone(),
-                node.aliases.clone(),
-            )
-        })
+        .map(|node| (node.doc.summary.clone(), node.aliases.clone()))
         .unwrap_or_default();
     let uuid = tool.implemented_by.uuid;
     (
-        name,
+        tool.lookup_name,
         tool.definition.version,
         summary,
         aliases,

@@ -573,6 +573,46 @@ fn guest_tool_mode_moon_checks_fixed_codec_type_name_collision() {
     moon_check_wasm(dir.path());
 }
 
+#[test]
+fn guest_tool_mode_generates_name_aware_error_decoder() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut tool = phase_eight_tool();
+    let errors = &mut tool.commands.nodes[0].body.as_mut().unwrap().errors;
+    errors[0].name = "first-text".into();
+    errors[1].name = "restricted-text".into();
+    errors.push(ErrorCase {
+        name: "second-text".into(),
+        doc: tool_doc("another text error"),
+        kind: ErrorKind::RuntimeError,
+        exit_code: 3,
+        payload: Some(SchemaType::string()),
+    });
+    errors.push(ErrorCase {
+        name: "empty".into(),
+        doc: tool_doc("empty error"),
+        kind: ErrorKind::RuntimeError,
+        exit_code: 4,
+        payload: None,
+    });
+    let mut generator = MoonBitToolBridgeGenerator::new(tool, target, true).unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
+    for expected in [
+        "(name : String, value : @model.TypedSchemaValue) -> Result[NewError, String]?",
+        "\"first-text\" => {",
+        "\"second-text\" => {",
+        "\"empty\" => {",
+        "return Some(Ok(NewError::Empty))",
+        "_ => None",
+    ] {
+        assert!(source.contains(expected), "missing {expected}:\n{source}");
+    }
+    assert!(!source.contains("payload did not match any declared error case"));
+    moon_check_wasm(dir.path());
+}
+
 // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
 fn guest_tool_mode_marks_substring_collision_parameter_used() {

@@ -368,9 +368,9 @@ final case class ExtendedErrorCase(
 trait ToolErrorSchema[E] {
   def errorCases: Either[ToolBuildError, List[ExtendedErrorCase]]
 
-  def toErrorPayloadValue(error: E): Either[String, TypedSchemaValue]
+  def toErrorValue(error: E): Either[String, NamedToolError]
 
-  def fromErrorPayloadValue(value: TypedSchemaValue): Either[String, E]
+  def fromErrorValue(value: NamedToolError): Either[String, E]
 }
 
 object ToolErrorSchema {

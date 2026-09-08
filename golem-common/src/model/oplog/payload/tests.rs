@@ -27,17 +27,18 @@ use crate::model::oplog::host_functions::{
 };
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
-    SerializableDateTime, SerializableEntityBodyExecution, SerializableFileTimes,
-    SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpVersion,
-    SerializableIpAddress, SerializableIpAddresses, SerializableP3FileSystemError,
-    SerializableP3FsErrorCode, SerializableP3HttpBodyChunk, SerializableP3HttpClientSend,
-    SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult,
-    SerializableP3HttpRequestBodyFrame, SerializableP3HttpRequestOptions, SerializableP3HttpScheme,
-    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3TcpChunk,
-    SerializableP3UdpDatagram, SerializableResponseHeaders, SerializableRpcError,
-    SerializableScheduleId, SerializableStreamError, SerializableToolError,
-    SerializableToolInvocationResult, SerializableToolOperationTerminal,
-    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
+    SerializableCustomToolError, SerializableDateTime, SerializableEntityBodyExecution,
+    SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
+    SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
+    SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
+    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
+    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
+    SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
+    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
+    SerializableResponseHeaders, SerializableRpcError, SerializableScheduleId,
+    SerializableStreamError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
+    SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
@@ -1102,6 +1103,7 @@ where
 
 fn discovered_tool(name: &str) -> DiscoveredTool {
     DiscoveredTool {
+        lookup_name: name.to_string(),
         definition: Tool {
             version: "1.0.0".to_string(),
             commands: CommandTree {
@@ -1277,6 +1279,40 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
         response.clone(),
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolInvocationRejected>(
+        request, response,
+    );
+}
+
+#[test]
+fn named_custom_tool_error_payload_roundtrips() {
+    let payload = ().into_typed_schema_value().unwrap();
+    let error = SerializableToolRpcError::RemoteToolError(Box::new(
+        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+            name: "not-found".to_string(),
+            payload,
+        })),
+    ));
+    let request = HostRequestGolemToolInvocationRejected {
+        attempt_ordinal: 1,
+        tool_name: "grep".to_string(),
+        command_path: Vec::new(),
+        input: None,
+        input_decode_failure: None,
+        has_stdin: false,
+        has_stdout: false,
+        call_mode: EntityCallMode::Synchronous,
+        error: error.clone(),
+    };
+    let response = HostResponseEntityInvocation {
+        result: Ok(SerializableToolOperationTerminal {
+            body_execution: SerializableEntityBodyExecution::Executed,
+            result: Err(error),
+        }
+        .into_typed_schema_value()
+        .unwrap()),
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolInvocationRejected>(
         request, response,
     );
 }

@@ -547,6 +547,19 @@ pub struct ToolInvocationDescriptor {
     pub has_stdin: bool,
     pub has_stdout: bool,
     pub declares_stdout: bool,
+    pub output_contract: ToolOutputContract,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+pub struct ToolOutputContract {
+    pub result: Option<crate::schema::SchemaGraph>,
+    pub errors: Vec<NamedToolErrorSchema>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+pub struct NamedToolErrorSchema {
+    pub name: String,
+    pub payload: crate::schema::SchemaGraph,
 }
 
 /// Activation-independent identity used to claim an entity invocation `Start` during historical
@@ -1312,6 +1325,10 @@ mod tests {
                 has_stdin: true,
                 has_stdout: true,
                 declares_stdout: true,
+                output_contract: ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
             })),
             principal: Some(Principal::GolemUser(GolemUserPrincipal {
                 account_id: AccountId::new(),
@@ -1347,6 +1364,10 @@ mod tests {
                 has_stdin: true,
                 has_stdout: false,
                 declares_stdout: false,
+                output_contract: ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
             })),
             principal: None,
         };

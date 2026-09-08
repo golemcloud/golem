@@ -144,7 +144,7 @@ test "checked-in authoring fixture generates middleware source" {
   assert_true(generated.contains("PresentedUnderlying::admin__run"))
   assert_true(generated.contains("StorageUnderlying::fetch"))
   assert_true(generated.contains("[\"admin\", \"run\"]"))
-  assert_true(generated.contains("RunError::from_error_payload_value"))
+  assert_true(generated.contains("decode_named_tool_error"))
   assert_true(generated.contains("RunError::to_error_payload_value"))
   assert_true(generated.contains("decode_result_empty"))
   assert_true(generated.contains("decode_result_value"))

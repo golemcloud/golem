@@ -6,6 +6,7 @@ pub(all) enum ToolInvokeError[E] {
   ConstraintViolation(String)
   InvalidResult(String)
   Tool(E)
+  UnknownToolError(@toolCommon.CustomToolError)
 } derive(Eq, Debug)
 
 ///|
@@ -20,6 +21,7 @@ pub fn[E, M] ToolInvokeError::map_tool(
     ConstraintViolation(message) => ConstraintViolation(message)
     InvalidResult(message) => InvalidResult(message)
     Tool(error) => Tool(transform(error))
+    UnknownToolError(error) => UnknownToolError(error)
   }
 }
 
@@ -96,7 +98,9 @@ pub async fn UnderlyingTool::invoke(
   input : @model.TypedSchemaValue,
   stdin : MiddlewareStdin?,
 ) -> Result[OwnedInvocationResult, ToolInvokeError[@model.TypedSchemaValue]] {
-  self.invoke_with(command_path, input, stdin, value => Ok(value))
+  self.invoke_with(command_path, input, stdin, fn(_name, value) {
+    Some(Ok(value))
+  })
 }
 
 ///|
@@ -106,7 +110,7 @@ pub async fn[E] UnderlyingTool::invoke_with(
   command_path : Array[String],
   input : @model.TypedSchemaValue,
   stdin : MiddlewareStdin?,
-  decode_custom_error : (@model.TypedSchemaValue) -> Result[E, String],
+  decode_custom_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> Result[OwnedInvocationResult, ToolInvokeError[E]] {
   match self.ownership.begin_call() {
     Err(error) => return Err(error)
@@ -154,7 +158,7 @@ pub async fn[E] UnderlyingTool::invoke_with(
 ///|
 pub fn[E] decode_tool_error(
   error : @toolCommon.ToolError,
-  decode_custom_error : (@model.TypedSchemaValue) -> Result[E, String],
+  decode_custom_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolInvokeError[E] {
   decode_tool_error_with_ownership(error, decode_custom_error, None)
 }
@@ -162,7 +166,7 @@ pub fn[E] decode_tool_error(
 ///|
 fn[E] decode_tool_error_with_ownership(
   error : @toolCommon.ToolError,
-  decode_custom_error : (@model.TypedSchemaValue) -> Result[E, String],
+  decode_custom_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
   ownership : OwnershipContext?,
 ) -> ToolInvokeError[E] {
   match error {
@@ -172,13 +176,14 @@ fn[E] decode_tool_error_with_ownership(
     @toolCommon.ToolError::ConstraintViolation(message) =>
       ConstraintViolation(message)
     @toolCommon.ToolError::InvalidResult(message) => InvalidResult(message)
-    @toolCommon.ToolError::CustomError(value) => {
-      let decoded = match @toolCore.decode_typed_value(value, "tool error") {
+    @toolCommon.ToolError::CustomError(error) => {
+      let decoded = match
+        @toolCore.decode_typed_value(error.payload, "tool error") {
         Ok(decoded) => decoded
         Err(message) => return InvalidResult(message)
       }
-      match decode_custom_error(decoded) {
-        Ok(error) => {
+      match decode_custom_error(error.name, decoded) {
+        Some(Ok(error)) => {
           match ownership {
             Some(ownership) =>
               ownership.register_cleanup(fn() {
@@ -188,10 +193,11 @@ fn[E] decode_tool_error_with_ownership(
           }
           Tool(error)
         }
-        Err(message) => {
+        Some(Err(message)) => {
           @model.drop_owned_capabilities(decoded.value)
           InvalidResult(message)
         }
+        None => UnknownToolError(error)
       }
     }
   }
@@ -217,8 +223,9 @@ pub fn encode_tool_error(
           )
         }
       }
-      @toolCommon.ToolError::CustomError(encoded)
+      @toolCommon.ToolError::CustomError({ name: "custom", payload: encoded, })
     }
+    UnknownToolError(error) => @toolCommon.ToolError::CustomError(error)
   }
 }
 

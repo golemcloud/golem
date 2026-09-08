@@ -31,6 +31,7 @@ use super::model::resource_definition::ResourceDefinitionRepoError;
 use super::model::retry_policy::RetryPolicyRepoError;
 use super::resource_definition::DbResourceDefinitionRepo;
 use super::retry_policy::DbRetryPolicyRepo;
+use super::tool_middleware_release::{DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepoError};
 use super::tool_release::{DbToolReleaseRepo, ToolReleaseRepoError};
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -905,6 +906,31 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         );
                     }
 
+                    let mut resolved_middleware_release_ids = HashMap::new();
+                    for release in &deployment_creation.tool_middleware_releases {
+                        let persisted = DbToolMiddlewareReleaseRepo::<PostgresPool>::create_or_restore_within_transaction(tx, release)
+                            .await
+                            .map_err(|err| match err {
+                                ToolMiddlewareReleaseRepoError::ImmutableConflict => DeployRepoError::ToolReleaseImmutableConflict,
+                                ToolMiddlewareReleaseRepoError::DePublishedConflict => DeployRepoError::ToolReleaseDePublishedConflict,
+                                ToolMiddlewareReleaseRepoError::ConcurrentModification => DeployRepoError::ConcurrentModification,
+                                other => DeployRepoError::InternalError(anyhow::Error::new(other)),
+                            })?;
+                        resolved_middleware_release_ids.insert(release.tool_middleware_release_id, persisted.release.tool_middleware_release_id);
+                    }
+                    for middleware in &mut deployment_creation.registered_tool_middlewares {
+                        if let Some(actual) = middleware.release_id.and_then(|id| resolved_middleware_release_ids.get(&id.0)) {
+                            middleware.release_id = Some(golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*actual));
+                        }
+                    }
+                    for chain in &mut deployment_creation.tool_middleware_chains {
+                        for occurrence in &mut chain.occurrences {
+                            if let Some(actual) = occurrence.middleware.release_id.and_then(|id| resolved_middleware_release_ids.get(&id.0)) {
+                                occurrence.middleware.release_id = Some(golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*actual));
+                            }
+                        }
+                    }
+
                     for registered_tool in &mut deployment_creation.registered_tools {
                         if let Some(actual) = registered_tool
                             .tool_release_id
@@ -933,6 +959,24 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     for agent_tool_binding in &deployment_creation.agent_tool_bindings {
                         Self::create_deployment_agent_tool_binding(tx, agent_tool_binding).await?;
                     }
+
+                    tx.execute(
+                        sqlx::query(indoc! { r#"
+                            INSERT INTO deployment_tool_middleware_snapshots
+                                (environment_id, deployment_revision_id, registered_middlewares,
+                                 compiled_chains, universal_installations, compatibility_mode,
+                                 published_names, remote_names)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        "#})
+                        .bind(environment_id)
+                        .bind(deployment_revision_id)
+                        .bind(Blob::new(deployment_creation.registered_tool_middlewares))
+                        .bind(Blob::new(deployment_creation.tool_middleware_chains))
+                        .bind(Blob::new(deployment_creation.universal_tool_middlewares))
+                        .bind(Blob::new(deployment_creation.tool_compatibility_mode))
+                        .bind(Blob::new(deployment_creation.published_tool_middlewares))
+                        .bind(Blob::new(deployment_creation.remote_tool_middlewares)),
+                    ).await?;
 
                     for compiled_mcp in &deployment_creation.compiled_mcp {
                         Self::create_deployment_mcp(tx, compiled_mcp).await?;
@@ -1421,10 +1465,25 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await?;
+        let middleware_snapshot = self
+            .with_ro("get_deployment_tool_middleware_snapshot")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, deployment_revision_id, registered_middlewares,
+                           compiled_chains, universal_installations, compatibility_mode,
+                           published_names, remote_names
+                    FROM deployment_tool_middleware_snapshots
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await?;
         Ok(ToolDeploymentStateRecord {
             deployment_revision_id,
             registered_tools,
             agent_tool_bindings,
+            middleware_snapshot,
         })
     }
 

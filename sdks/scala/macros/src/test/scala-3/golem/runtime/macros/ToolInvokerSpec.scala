@@ -159,7 +159,9 @@ object ToolInvokerSpec extends ZIOSpecDefault {
             anonymous
           )
         )
-        assertTrue(result == Left(ToolInvokeError.Tool(IntoSchema[String].toTyped("nope"))))
+        assertTrue(
+          result == Left(ToolInvokeError.UnknownToolError("bad-input", IntoSchema[String].toTyped("nope")))
+        )
       },
       test("Principal parameters are injected and excluded from the schema") {
         val idx    = echoTool.commandIndexByPath(List("whoami")).get

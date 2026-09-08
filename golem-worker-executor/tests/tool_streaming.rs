@@ -201,6 +201,8 @@ fn deployment_state(
         deployment_revision,
         registered_tools,
         agent_tool_bindings: BTreeMap::from([(agent_type, bindings)]),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
     }
 }
 

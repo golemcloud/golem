@@ -432,11 +432,14 @@ describe('public bridge runtime', () => {
       bridge.splitToolRpcError(
         {
           tag: 'remote-tool-error',
-          val: { tag: 'custom-error', val: bridge.typedSchemaValueToWit(typed) },
+          val: {
+            tag: 'custom-error',
+            val: { name: 'failed', payload: bridge.typedSchemaValueToWit(typed) },
+          },
         },
-        (payload) => payload.value,
+        (name, payload) => ({ name, value: payload.value }),
       ),
-    ).toEqual({ tag: 'tool', error: bridge.v.string('bad') });
+    ).toEqual({ tag: 'tool', error: { name: 'failed', value: bridge.v.string('bad') } });
     expect(bridge.splitToolRpcError({ tag: 'denied', val: 'no' }, () => 'unused')).toEqual({
       tag: 'rpc',
       error: { tag: 'denied', val: 'no' },
@@ -448,15 +451,18 @@ describe('public bridge runtime', () => {
       tag: 'remote-tool-error',
       val: {
         tag: 'custom-error',
-        val: bridge.typedSchemaValueToWit({
-          graph: { defs: new Map(), root: bridge.t.string() },
-          value: bridge.v.string('bad'),
-        }),
+        val: {
+          name: 'failed',
+          payload: bridge.typedSchemaValueToWit({
+            graph: { defs: new Map(), root: bridge.t.string() },
+            value: bridge.v.string('bad'),
+          }),
+        },
       },
     } satisfies RpcError;
     for (const error of [custom, { tag: 'denied', val: 'no' } satisfies RpcError]) {
       expect(bridge.isRpcError(error)).toBe(true);
-      expect(bridge.splitToolRpcError(error, (payload) => payload.value).tag).toBe(
+      expect(bridge.splitToolRpcError(error, (_name, payload) => payload.value).tag).toBe(
         error === custom ? 'tool' : 'rpc',
       );
     }
@@ -490,7 +496,7 @@ describe('public bridge runtime', () => {
   it('does not classify malformed custom-error typed payloads as host RPC errors', () => {
     const malformed = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: { graph: null, value: null } },
+      val: { tag: 'custom-error', val: { name: 'broken', payload: { graph: null, value: null } } },
     };
 
     expect(bridge.isRpcError(malformed)).toBe(false);
@@ -510,12 +516,12 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'secret', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(true);
     expect(payload.value.valueNodes[0].val).toBe(raw);
-    expect(bridge.splitToolRpcError(error, (decoded) => decoded.value.tag)).toEqual({
+    expect(bridge.splitToolRpcError(error, (_name, decoded) => decoded.value.tag)).toEqual({
       tag: 'tool',
       error: 'secret',
     });
@@ -534,7 +540,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(() => bridge.typedSchemaValueFromWit(payload)).toThrow();
@@ -562,7 +568,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect.soft(bridge.isRpcError(error)).toBe(false);
@@ -582,7 +588,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(false);

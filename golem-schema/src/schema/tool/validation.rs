@@ -56,7 +56,7 @@
 
 use super::{
     CommandBody, CommandIndex, CommandNode, Constraint, Globals, OptionShape, OptionSpec,
-    Positional, Ref, Tool,
+    Positional, Ref, Tool, ToolMiddleware, ToolMiddlewareScope,
 };
 use crate::schema::graph::{RefResolutionError, SchemaGraph};
 use crate::schema::metadata::TypeId;
@@ -260,6 +260,81 @@ pub fn validate_tool(tool: &Tool) -> Result<(), Vec<ToolValidationError>> {
         Ok(())
     } else {
         Err(ctx.errors)
+    }
+}
+
+/// A producer-side construction-invariant violation in tool middleware metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolMiddlewareValidationError {
+    InvalidIdentifier { kind: &'static str, value: String },
+    DuplicateIdentity { value: String },
+    InvalidPresentedTool(Vec<ToolValidationError>),
+    InvalidExpectedTool(Vec<ToolValidationError>),
+}
+
+impl Display for ToolMiddlewareValidationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidIdentifier { kind, value } => write!(f, "invalid {kind}: {value:?}"),
+            Self::DuplicateIdentity { value } => {
+                write!(f, "duplicate tool middleware name or alias: {value:?}")
+            }
+            Self::InvalidPresentedTool(errors) => {
+                write!(f, "invalid presented tool descriptor: {errors:?}")
+            }
+            Self::InvalidExpectedTool(errors) => {
+                write!(f, "invalid expected tool descriptor: {errors:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ToolMiddlewareValidationError {}
+
+/// Validate middleware identity metadata and every embedded tool descriptor.
+pub fn validate_tool_middleware(
+    middleware: &ToolMiddleware,
+) -> Result<(), Vec<ToolMiddlewareValidationError>> {
+    let mut errors = Vec::new();
+    let mut identities = HashSet::new();
+    for (kind, identity) in std::iter::once(("tool middleware name", &middleware.name)).chain(
+        middleware
+            .aliases
+            .iter()
+            .map(|alias| ("tool middleware alias", alias)),
+    ) {
+        if !is_valid_identifier(identity) {
+            errors.push(ToolMiddlewareValidationError::InvalidIdentifier {
+                kind,
+                value: identity.clone(),
+            });
+        }
+        if !identities.insert(identity) {
+            errors.push(ToolMiddlewareValidationError::DuplicateIdentity {
+                value: identity.clone(),
+            });
+        }
+    }
+
+    if let ToolMiddlewareScope::Monomorphic(scope) = &middleware.scope {
+        if let Err(tool_errors) = validate_tool(&scope.presented) {
+            errors.push(ToolMiddlewareValidationError::InvalidPresentedTool(
+                tool_errors,
+            ));
+        }
+        if let Some(expected) = &scope.expected
+            && let Err(tool_errors) = validate_tool(expected)
+        {
+            errors.push(ToolMiddlewareValidationError::InvalidExpectedTool(
+                tool_errors,
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 
@@ -1348,5 +1423,70 @@ fn collect_refs(constraint: &Constraint) -> Vec<&Ref> {
         Constraint::MutexGroups(groups) => groups.iter().flat_map(|g| g.refs.iter()).collect(),
         Constraint::Implies(implies) => implies.lhs.iter().chain(implies.rhs.iter()).collect(),
         Constraint::Forbids(forbids) => forbids.lhs.iter().chain(forbids.rhs.iter()).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::graph::SchemaGraph;
+    use crate::schema::tool::{
+        CommandTree, Doc, MonomorphicToolMiddlewareScope, ToolMiddlewareScope,
+    };
+    use test_r::test;
+
+    fn tool(name: &str) -> Tool {
+        Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: name.to_string(),
+                    aliases: vec![],
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: vec![],
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_middleware_identity_and_both_embedded_tools() {
+        let middleware = ToolMiddleware {
+            name: "Bad_Name".to_string(),
+            version: "middleware-v3".to_string(),
+            aliases: vec!["Bad_Name".to_string()],
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Monomorphic(MonomorphicToolMiddlewareScope {
+                presented: tool("BadPresented"),
+                expected: Some(tool("BadExpected")),
+            }),
+        };
+
+        let errors = validate_tool_middleware(&middleware).unwrap_err();
+        assert!(errors.iter().any(|e| matches!(
+            e,
+            ToolMiddlewareValidationError::InvalidIdentifier {
+                kind: "tool middleware name",
+                ..
+            }
+        )));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ToolMiddlewareValidationError::DuplicateIdentity { .. }))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ToolMiddlewareValidationError::InvalidPresentedTool(_)))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ToolMiddlewareValidationError::InvalidExpectedTool(_)))
+        );
     }
 }

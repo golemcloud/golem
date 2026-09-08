@@ -89,6 +89,50 @@ pub fn decode_tool(tool: wire::Tool) -> Result<Tool, ToolWitError> {
     Tool::try_from(&tool)
 }
 
+/// Encode tool middleware metadata into its WIT representation.
+pub fn tool_middleware_to_wit(
+    middleware: &ToolMiddleware,
+) -> Result<wire::ToolMiddleware, ToolWitError> {
+    let scope = match &middleware.scope {
+        ToolMiddlewareScope::Monomorphic(scope) => {
+            wire::ToolMiddlewareScope::Monomorphic(wire::MonomorphicScope {
+                presented: encode_tool(&scope.presented)?,
+                expected: scope.expected.as_ref().map(encode_tool).transpose()?,
+            })
+        }
+        ToolMiddlewareScope::Universal => wire::ToolMiddlewareScope::Universal,
+    };
+    Ok(wire::ToolMiddleware {
+        name: middleware.name.clone(),
+        version: middleware.version.clone(),
+        aliases: middleware.aliases.clone(),
+        doc: wire::Doc::from(&middleware.doc),
+        scope,
+    })
+}
+
+/// Decode tool middleware metadata from its WIT representation.
+pub fn tool_middleware_from_wit(
+    middleware: wire::ToolMiddleware,
+) -> Result<ToolMiddleware, ToolWitError> {
+    let scope = match middleware.scope {
+        wire::ToolMiddlewareScope::Monomorphic(scope) => {
+            ToolMiddlewareScope::Monomorphic(MonomorphicToolMiddlewareScope {
+                presented: decode_tool(scope.presented)?,
+                expected: scope.expected.map(decode_tool).transpose()?,
+            })
+        }
+        wire::ToolMiddlewareScope::Universal => ToolMiddlewareScope::Universal,
+    };
+    Ok(ToolMiddleware {
+        name: middleware.name,
+        version: middleware.version,
+        aliases: middleware.aliases,
+        doc: Doc::from(&middleware.doc),
+        scope,
+    })
+}
+
 fn decode_tool_value(
     value: &crate::schema::wit::wire::SchemaValueTree,
 ) -> Result<SchemaValue, DecodeError> {
@@ -856,4 +900,92 @@ fn decode_error_case(dec: &GraphDecoder, e: &wire::ErrorCase) -> Result<ErrorCas
             .map(|p| dec.decode_type_at(*p))
             .transpose()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::graph::SchemaGraph;
+    use test_r::test;
+
+    fn tool(name: &str, version: &str) -> Tool {
+        Tool {
+            version: version.to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: name.to_string(),
+                    aliases: vec![],
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: vec![],
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    #[test]
+    fn tool_middleware_roundtrip_preserves_independent_versions() {
+        let middleware = ToolMiddleware {
+            name: "redactor".to_string(),
+            version: "middleware-7".to_string(),
+            aliases: vec!["scrubber".to_string()],
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Monomorphic(MonomorphicToolMiddlewareScope {
+                presented: tool("public-tool", "presented-2"),
+                expected: Some(tool("private-tool", "expected-9")),
+            }),
+        };
+
+        let decoded =
+            tool_middleware_from_wit(tool_middleware_to_wit(&middleware).unwrap()).unwrap();
+        assert_eq!(decoded, middleware);
+    }
+
+    #[test]
+    fn universal_middleware_roundtrip_preserves_its_version() {
+        let middleware = ToolMiddleware {
+            name: "audit".to_string(),
+            version: "middleware-only-version".to_string(),
+            aliases: vec![],
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Universal,
+        };
+
+        let decoded =
+            tool_middleware_from_wit(tool_middleware_to_wit(&middleware).unwrap()).unwrap();
+        assert_eq!(decoded, middleware);
+    }
+
+    #[test]
+    fn malformed_embedded_tool_is_rejected() {
+        let middleware = ToolMiddleware {
+            name: "redactor".to_string(),
+            version: "1".to_string(),
+            aliases: vec![],
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Monomorphic(MonomorphicToolMiddlewareScope {
+                presented: tool("public-tool", "1"),
+                expected: None,
+            }),
+        };
+        let mut wire = tool_middleware_to_wit(&middleware).unwrap();
+        let wire::ToolMiddlewareScope::Monomorphic(scope) = &mut wire.scope else {
+            unreachable!()
+        };
+        scope.presented.schema.type_nodes[0].body =
+            crate::schema::wit::wire::SchemaTypeBody::RefType(i32::MAX);
+        scope
+            .presented
+            .schema
+            .defs
+            .push(crate::schema::wit::wire::SchemaTypeDef {
+                id: "broken".to_string(),
+                name: None,
+                body: 0,
+            });
+
+        assert!(tool_middleware_from_wit(wire).is_err());
+    }
 }

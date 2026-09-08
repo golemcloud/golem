@@ -883,7 +883,8 @@ describe('tool guest exports', () => {
       );
     expect(customError).toMatchObject({ tag: 'custom-error' });
     const payload = typedSchemaValueFromWit(
-      (customError as { val: Parameters<typeof typedSchemaValueFromWit>[0] }).val,
+      (customError as { val: { payload: Parameters<typeof typedSchemaValueFromWit>[0] } }).val
+        .payload,
     );
     expect(fallibleCommand.body?.errors[0].payloadCodec?.fromValue(payload.value)).toEqual({
       reason: 'nope',
@@ -909,7 +910,11 @@ describe('tool guest exports', () => {
       );
     expect(payloadlessError).toMatchObject({ tag: 'custom-error' });
     const unitPayload = typedSchemaValueFromWit(
-      (payloadlessError as { val: Parameters<typeof typedSchemaValueFromWit>[0] }).val,
+      (
+        payloadlessError as {
+          val: { payload: Parameters<typeof typedSchemaValueFromWit>[0] };
+        }
+      ).val.payload,
     );
     expect(unitPayload).toEqual({
       graph: { defs: new Map(), root: t.tuple([]) },

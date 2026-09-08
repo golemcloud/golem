@@ -56,6 +56,12 @@ impl DeploymentPlan {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            remote_tool_middleware_deployments: Default::default(),
+            published_tool_middlewares: Default::default(),
+            universal_tool_middlewares: Default::default(),
+            tool_compatibility_mode: Default::default(),
+            environment_tool_middleware_bindings: Default::default(),
+            agent_tool_middleware_bindings: Default::default(),
         }
     }
 }
@@ -88,6 +94,12 @@ impl DeploymentSummary {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            remote_tool_middleware_deployments: Default::default(),
+            published_tool_middlewares: Default::default(),
+            universal_tool_middlewares: Default::default(),
+            tool_compatibility_mode: Default::default(),
+            environment_tool_middleware_bindings: Default::default(),
+            agent_tool_middleware_bindings: Default::default(),
         }
     }
 }

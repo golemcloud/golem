@@ -290,6 +290,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let extracted_metadata = extract_component_metadata(&source_path, false, true).await?;
         let agent_types = extracted_metadata.agent_types;
         let tools = extracted_metadata.tools;
+        let tool_middlewares = extracted_metadata.tool_middlewares;
         for agent_type in &agent_types {
             agent_type_provision_configs
                 .entry(agent_type.type_name.clone())
@@ -327,6 +328,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     agent_type_provision_configs,
                     tool_deployment_configs,
                     tools,
+                    tool_middlewares,
+                    tool_middleware_provision_configs: BTreeMap::new(),
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
@@ -425,6 +428,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     tools: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| metadata.tools.clone()),
+                    tool_middlewares: updated_wasm
+                        .as_ref()
+                        .map(|(_wasm, metadata)| metadata.tool_middlewares.clone()),
+                    tool_middleware_provision_config_updates: None,
                     tool_deployment_config_updates: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| {
@@ -1051,6 +1058,10 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             version: DeploymentVersion(Uuid::new_v4().to_string()),
             publish_tools: Vec::new(),
             remote_tools: Vec::new(),
+            publish_tool_middlewares: Vec::new(),
+            remote_tool_middlewares: Vec::new(),
+            universal_tool_middlewares: Vec::new(),
+            tool_compatibility_mode: Default::default(),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),

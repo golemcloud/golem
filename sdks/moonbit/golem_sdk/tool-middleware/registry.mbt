@@ -13,6 +13,7 @@ pub(all) enum ToolMiddlewareScope {
 ///|
 pub(all) struct ToolMiddleware {
   name : String
+  version : String
   aliases : Array[String]
   doc : @toolCommon.Doc
   scope : ToolMiddlewareScope
@@ -43,6 +44,7 @@ let tool_middleware_state : ToolMiddlewareState = {
 fn ToolMiddleware::to_wit(self : ToolMiddleware) -> @toolCommon.ToolMiddleware {
   {
     name: self.name,
+    version: self.version,
     aliases: self.aliases.copy(),
     doc: self.doc,
     scope: match self.scope {

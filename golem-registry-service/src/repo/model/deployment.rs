@@ -19,6 +19,7 @@ use super::agent_secrets::{
 use super::audit::DeletableRevisionAuditFields;
 use super::resource_definition::{ResourceDefinitionCreationArgs, ResourceDefinitionRepoError};
 use super::retry_policy::{RetryPolicyCreationRecord, RetryPolicyRepoError};
+use super::tool_middleware_release::ToolMiddlewareReleaseRecord;
 use super::tool_release::ToolReleaseRecord;
 use super::tool_release::{TOOL_RELEASE_SOURCE_COMPONENT, TOOL_RELEASE_SOURCE_HOST};
 use crate::model::agent_secret::{
@@ -55,7 +56,12 @@ use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolName, ToolProvisionConfig,
     ToolSource,
 };
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, RegisteredToolMiddleware, ToolMiddlewareInstallation,
+    ToolMiddlewareName,
+};
 use golem_common::schema::tool::Tool;
+use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -295,6 +301,8 @@ impl DeploymentIdentity {
                 .collect::<Result<Vec<_>, _>>()?,
             remote_tools,
             published_tools,
+            remote_tool_middlewares: Vec::new(),
+            published_tool_middlewares: Vec::new(),
         })
     }
 }
@@ -355,6 +363,12 @@ impl DeploymentIdentity {
                 .collect(),
             remote_tools,
             published_tools,
+            remote_tool_middleware_deployments: Default::default(),
+            published_tool_middlewares: Default::default(),
+            universal_tool_middlewares: Default::default(),
+            tool_compatibility_mode: Default::default(),
+            environment_tool_middleware_bindings: Default::default(),
+            agent_tool_middleware_bindings: Default::default(),
         })
     }
 }
@@ -408,6 +422,8 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .collect::<Result<Vec<_>, _>>()?,
             remote_tools,
             published_tools,
+            remote_tool_middlewares: Vec::new(),
+            published_tool_middlewares: Vec::new(),
         })
     }
 }
@@ -704,6 +720,19 @@ pub struct ToolDeploymentStateRecord {
     pub deployment_revision_id: i64,
     pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
     pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
+    pub middleware_snapshot: Option<DeploymentToolMiddlewareSnapshotRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentToolMiddlewareSnapshotRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub registered_middlewares: Blob<Vec<RegisteredToolMiddleware>>,
+    pub compiled_chains: Blob<Vec<CompiledToolMiddlewareChain>>,
+    pub universal_installations: Blob<Vec<ToolMiddlewareInstallation>>,
+    pub compatibility_mode: Blob<ToolCompatibilityMode>,
+    pub published_names: Blob<Vec<ToolMiddlewareName>>,
+    pub remote_names: Blob<Vec<ToolMiddlewareName>>,
 }
 
 impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
@@ -790,6 +819,38 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
             deployment_revision,
             registered_tools,
             agent_tool_bindings,
+            registered_tool_middlewares: value
+                .middleware_snapshot
+                .as_ref()
+                .map(|snapshot| {
+                    snapshot
+                        .registered_middlewares
+                        .value()
+                        .iter()
+                        .cloned()
+                        .map(|middleware| {
+                            (
+                                ToolMiddlewareName::try_from(middleware.definition.name.clone())
+                                    .expect("validated snapshot name"),
+                                middleware,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            tool_middleware_chains: value
+                .middleware_snapshot
+                .map(|snapshot| {
+                    let mut result = std::collections::BTreeMap::new();
+                    for chain in snapshot.compiled_chains.into_value() {
+                        result
+                            .entry(chain.agent_type_name.clone())
+                            .or_insert_with(std::collections::BTreeMap::new)
+                            .insert(chain.tool_name.clone(), chain);
+                    }
+                    result
+                })
+                .unwrap_or_default(),
         })
     }
 }
@@ -863,6 +924,13 @@ pub struct DeploymentRevisionCreationRecord {
     pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
     pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
     pub tool_releases: Vec<ToolReleaseRecord>,
+    pub registered_tool_middlewares: Vec<RegisteredToolMiddleware>,
+    pub tool_middleware_chains: Vec<CompiledToolMiddlewareChain>,
+    pub tool_middleware_releases: Vec<ToolMiddlewareReleaseRecord>,
+    pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+    pub tool_compatibility_mode: ToolCompatibilityMode,
+    pub published_tool_middlewares: Vec<ToolMiddlewareName>,
+    pub remote_tool_middlewares: Vec<ToolMiddlewareName>,
 
     pub created_agent_secrets: Vec<AgentSecretCreationRecord>,
     pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
@@ -889,6 +957,13 @@ impl DeploymentRevisionCreationRecord {
         registered_tools: Vec<RegisteredTool>,
         agent_tool_bindings: Vec<CompiledToolBinding>,
         tool_releases: Vec<ToolReleaseRecord>,
+        registered_tool_middlewares: Vec<RegisteredToolMiddleware>,
+        tool_middleware_chains: Vec<CompiledToolMiddlewareChain>,
+        tool_middleware_releases: Vec<ToolMiddlewareReleaseRecord>,
+        universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+        tool_compatibility_mode: ToolCompatibilityMode,
+        published_tool_middlewares: Vec<ToolMiddlewareName>,
+        remote_tool_middlewares: Vec<ToolMiddlewareName>,
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
         updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
         replaced_agent_secrets: Vec<DeploymentAgentSecretReplacement>,
@@ -993,6 +1068,13 @@ impl DeploymentRevisionCreationRecord {
                 })
                 .collect(),
             tool_releases,
+            registered_tool_middlewares,
+            tool_middleware_chains,
+            tool_middleware_releases,
+            universal_tool_middlewares,
+            tool_compatibility_mode,
+            published_tool_middlewares,
+            remote_tool_middlewares,
             created_agent_secrets: created_agent_secrets
                 .into_iter()
                 .map(|r| {

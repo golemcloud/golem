@@ -25,6 +25,7 @@ pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
 pub mod oauth2_token;
@@ -38,6 +39,7 @@ pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
 pub mod token;
+pub mod tool_middleware_release;
 pub mod tool_release;
 
 pub(crate) const REGISTRY_CHANGE_ADVISORY_LOCK_KEY: i64 = 100;

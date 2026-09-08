@@ -193,6 +193,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "InitialAgentFile",
                 "golem_common::model::component::InitialAgentFile",
             ),
+            (
+                "ToolMiddleware",
+                "golem_common::schema::tool::ToolMiddleware",
+            ),
+            (
+                "ToolMiddlewareName",
+                "golem_common::model::tool_middleware::ToolMiddlewareName",
+            ),
+            (
+                "ToolMiddlewareDeploymentMetadata",
+                "golem_common::model::tool_middleware::ToolMiddlewareDeploymentMetadata",
+            ),
             // deployment
             ("Deployment", "golem_common::model::deployment::Deployment"),
             (
@@ -224,6 +236,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::tool::DeployedRegisteredTool",
             ),
             ("ToolSource", "golem_common::model::tool::ToolSource"),
+            ("RegisteredToolMiddleware", "golem_common::model::tool_middleware::RegisteredToolMiddleware"),
+            ("ToolMiddlewareSource", "golem_common::model::tool_middleware::ToolMiddlewareSource"),
+            ("ToolMiddlewareRelease", "golem_common::model::tool_middleware_release::ToolMiddlewareRelease"),
+            ("ToolMiddlewareReleaseMetadata", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseMetadata"),
+            ("ToolMiddlewareReleaseReference", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseReference"),
+            ("ToolMiddlewareReleaseById", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseById"),
+            ("ToolMiddlewareReleaseByCoordinates", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseByCoordinates"),
+            ("ToolMiddlewareReleaseLifecycle", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseLifecycle"),
+            ("ToolMiddlewareReleaseOrigin", "golem_common::model::tool_middleware_release::ToolMiddlewareReleaseOrigin"),
+            ("ToolMiddlewarePublication", "golem_common::model::tool_middleware_release::ToolMiddlewarePublication"),
+            ("ToolMiddlewarePublicationPlanAction", "golem_common::model::tool_middleware_release::ToolMiddlewarePublicationPlanAction"),
+            ("ToolMiddlewarePublicationPlanEntry", "golem_common::model::tool_middleware_release::ToolMiddlewarePublicationPlanEntry"),
             (
                 "ToolRelease",
                 "golem_common::model::tool_release::ToolRelease",
@@ -280,6 +304,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "EnvironmentToolGrantDeletion",
                 "golem_common::model::environment_tool_grant::EnvironmentToolGrantDeletion",
             ),
+            ("EnvironmentToolMiddlewareGrant", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrant"),
+            ("EnvironmentToolMiddlewareGrantCreation", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantCreation"),
+            ("EnvironmentToolMiddlewareGrantDeletion", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantDeletion"),
+            ("EnvironmentToolMiddlewareGrantLifecycle", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantLifecycle"),
+            ("EnvironmentToolMiddlewareGrantWithDetails", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantWithDetails"),
+            ("EnvironmentToolMiddlewareGrantReconciliation", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantReconciliation"),
+            ("EnvironmentToolMiddlewareValidation", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareValidation"),
+            ("EnvironmentToolMiddlewareValidationResult", "golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareValidationResult"),
             (
                 "EnvironmentToolGrantLifecycle",
                 "golem_common::model::environment_tool_grant::EnvironmentToolGrantLifecycle",

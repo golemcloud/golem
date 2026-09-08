@@ -14,6 +14,7 @@
 
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::tool::{ToolDeploymentMetadata, ToolName};
+use crate::base_model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
@@ -94,6 +95,10 @@ pub struct KnownExports {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub tool_guest_interface: Option<String>,
+    /// Exact exported interface name for `golem:tool/tool-middleware-guest`.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub tool_middleware_guest_interface: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +146,7 @@ impl Debug for ComponentMetadata {
                 &self.data.agent_type_provision_configs,
             )
             .field("tools", &self.data.tools)
+            .field("tool_middlewares", &self.data.tool_middlewares)
             .finish()
     }
 }
@@ -203,6 +209,11 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+
+    /// Complete deployment input for every tool middleware implemented by this component.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
 }
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations

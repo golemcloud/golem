@@ -47,6 +47,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::tool::Tool;
@@ -579,7 +580,11 @@ pub struct Application {
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+    tool_middleware_declarations:
+        BTreeMap<ToolMiddlewareName, WithSource<app_raw::ToolMiddlewareDeclaration>>,
     tool_releases: BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
+    tool_middleware_releases:
+        BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
     component_layer_store: Store<ComponentLayer>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
@@ -761,6 +766,39 @@ impl Application {
         &self.tool_declarations
     }
 
+    pub fn tool_middleware_declarations(
+        &self,
+    ) -> &BTreeMap<ToolMiddlewareName, WithSource<app_raw::ToolMiddlewareDeclaration>> {
+        &self.tool_middleware_declarations
+    }
+
+    pub fn environment_tool_bindings(&self) -> Option<&IndexMap<String, app_raw::ToolBinding>> {
+        self.selected_environment()
+            .tools
+            .as_ref()
+            .map(|tools| &tools.bindings)
+    }
+
+    pub fn universal_tool_middleware(&self) -> Result<Vec<ToolMiddlewareInstallation>, String> {
+        self.selected_environment()
+            .tools
+            .as_ref()
+            .into_iter()
+            .flat_map(|tools| tools.middleware.clone())
+            .map(app_raw::ToolMiddlewareInstallation::into_common)
+            .collect()
+    }
+
+    pub fn tool_compatibility_mode(
+        &self,
+    ) -> golem_common::schema::tool::compatibility::ToolCompatibilityMode {
+        self.selected_environment()
+            .deployment
+            .as_ref()
+            .map(app_raw::DeploymentOptions::compatibility_mode)
+            .unwrap_or_default()
+    }
+
     pub fn selected_environment(&self) -> &app_raw::Environment {
         self.environments
             .get(self.environment_name())
@@ -799,6 +837,28 @@ impl Application {
         self.tool_declarations
             .get(name)
             .and_then(|declaration| declaration.value.release.as_ref())
+    }
+
+    pub fn remote_tool_middleware_release_references(
+        &self,
+    ) -> impl Iterator<Item = (&ToolMiddlewareName, &app_raw::ToolMiddlewareRegistrySubject)> {
+        self.tool_middleware_declarations
+            .iter()
+            .filter_map(|(name, declaration)| {
+                declaration
+                    .value
+                    .release
+                    .as_ref()
+                    .map(|release| (name, release))
+            })
+    }
+
+    pub fn selected_published_tool_middlewares(&self) -> impl Iterator<Item = &str> {
+        self.tool_middleware_releases
+            .get(self.environment_name())
+            .into_iter()
+            .flat_map(|releases| releases.value.keys())
+            .map(String::as_str)
     }
 
     pub fn requires_remote_release_bridge_metadata(&self) -> bool {
@@ -881,8 +941,12 @@ impl Application {
         &self,
         component_name: &ComponentName,
         agent_type_name: &AgentTypeName,
-        component_base: app_raw::AgentLayerProperties,
+        mut component_base: app_raw::AgentLayerProperties,
     ) -> anyhow::Result<(AgentProperties, AgentLayerProperties)> {
+        if let Some(environment_tools) = self.selected_environment().tools.as_ref() {
+            component_base.tools = Some(environment_tools.bindings.clone());
+            component_base.tools_merge_mode = Some(MapMergeMode::Upsert);
+        }
         let base_component_id = AgentLayerId::Component(component_name.clone());
         let mut agent_layer_store = Store::new();
 
@@ -1037,24 +1101,57 @@ impl Application {
         tool_name: &ToolName,
         component_name: &ComponentName,
     ) -> anyhow::Result<ResolvedToolProvision> {
-        self.resolve_tool_provision_with_component(tool_name, Some(component_name))
+        self.resolve_tool_provision_with_component(tool_name, Some(component_name), None)
     }
 
     pub fn resolve_remote_tool_provision(
         &self,
         tool_name: &ToolName,
     ) -> anyhow::Result<ResolvedToolProvision> {
-        self.resolve_tool_provision_with_component(tool_name, None)
+        self.resolve_tool_provision_with_component(tool_name, None, None)
+    }
+
+    pub fn resolve_tool_middleware_provision(
+        &self,
+        middleware_name: &ToolMiddlewareName,
+        component_name: Option<&ComponentName>,
+    ) -> anyhow::Result<ResolvedToolProvision> {
+        let declaration = self
+            .tool_middleware_declarations
+            .get(middleware_name)
+            .with_context(|| format!("Tool middleware '{middleware_name}' is not declared"))?;
+        let tool_name = ToolName::try_from(middleware_name.as_str()).map_err(anyhow::Error::msg)?;
+        let tool_declaration = WithSource::new(
+            declaration.source.clone(),
+            app_raw::ToolDeclaration {
+                component: declaration.value.component.clone(),
+                release: None,
+                templates: declaration.value.templates.clone(),
+                config: declaration.value.properties.config.clone(),
+                env_merge_mode: declaration.value.properties.env_merge_mode,
+                env: declaration.value.properties.env.clone(),
+                plugins_merge_mode: declaration.value.properties.plugins_merge_mode,
+                plugins: declaration.value.properties.plugins.clone(),
+                files_merge_mode: declaration.value.properties.files_merge_mode,
+                files: declaration.value.properties.files.clone(),
+                presets: declaration.value.presets.clone(),
+            },
+        );
+        self.resolve_tool_provision_with_component(
+            &tool_name,
+            component_name,
+            Some(&tool_declaration),
+        )
     }
 
     fn resolve_tool_provision_with_component(
         &self,
         tool_name: &ToolName,
         component_name: Option<&ComponentName>,
+        declaration_override: Option<&WithSource<app_raw::ToolDeclaration>>,
     ) -> anyhow::Result<ResolvedToolProvision> {
-        let declaration = self
-            .tool_declarations
-            .get(tool_name)
+        let declaration = declaration_override
+            .or_else(|| self.tool_declarations.get(tool_name))
             .with_context(|| format!("Tool '{}' is not declared", tool_name))?;
         let mut store = Store::new();
 
@@ -3328,6 +3425,7 @@ mod app_builder {
         HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
         SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
+    use golem_common::model::tool_middleware::ToolMiddlewareName;
     use indexmap::IndexMap;
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -3369,8 +3467,10 @@ mod app_builder {
         Component(ComponentName),
         Agent(AgentTypeName),
         Tool(ToolName),
+        ToolMiddleware(ToolMiddlewareName),
         Environment(EnvironmentName),
         ToolReleases(EnvironmentName),
+        ToolMiddlewareReleases(EnvironmentName),
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
         ResourceDefaults(EnvironmentName),
@@ -3390,8 +3490,10 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
                 UniqueSourceCheckedEntityKey::Agent(_) => "Agent",
                 UniqueSourceCheckedEntityKey::Tool(_) => "Tool",
+                UniqueSourceCheckedEntityKey::ToolMiddleware(_) => "Tool middleware",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
                 UniqueSourceCheckedEntityKey::ToolReleases(_) => property,
+                UniqueSourceCheckedEntityKey::ToolMiddlewareReleases(_) => property,
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
@@ -3422,6 +3524,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Tool(tool_name) => {
                     tool_name.as_str().log_color_highlight().to_string()
                 }
+                UniqueSourceCheckedEntityKey::ToolMiddleware(name) => {
+                    name.as_str().log_color_highlight().to_string()
+                }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
                 }
@@ -3432,6 +3537,11 @@ mod app_builder {
                         environment_name.0.log_color_highlight()
                     )
                 }
+                UniqueSourceCheckedEntityKey::ToolMiddlewareReleases(environment_name) => format!(
+                    "{}.{}",
+                    "toolMiddlewareReleases".log_color_highlight(),
+                    environment_name.0.log_color_highlight()
+                ),
                 UniqueSourceCheckedEntityKey::SecretDefaults(environment_name) => {
                     format!(
                         "{}.{}",
@@ -3655,7 +3765,11 @@ mod app_builder {
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
         agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
         tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+        tool_middleware_declarations:
+            BTreeMap<ToolMiddlewareName, WithSource<app_raw::ToolMiddlewareDeclaration>>,
         tool_releases:
+            BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
+        tool_middleware_releases:
             BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
 
         http_api_deployments: BTreeMap<
@@ -3749,7 +3863,9 @@ mod app_builder {
                 components: builder.components,
                 agents: builder.agents,
                 tool_declarations: builder.tool_declarations,
+                tool_middleware_declarations: builder.tool_middleware_declarations,
                 tool_releases: builder.tool_releases,
+                tool_middleware_releases: builder.tool_middleware_releases,
                 component_layer_store: builder.component_layer_store,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
@@ -3909,17 +4025,33 @@ mod app_builder {
                     }
 
                     let mut tool_issues = Vec::new();
-                    for (raw_tool_name, raw_declaration) in app.application.tools.into_entries() {
-                        if raw_tool_name == "middleware" {
-                            tool_issues.push(ToolValidationIssue::error(
-                                ToolValidationPhase::DeclarationDiscoveryIdentity,
-                                ToolValidationCode::ReservedMiddleware,
-                                ToolEntityPath::tool(&raw_tool_name, "tools.middleware"),
-                                Some(app.source.clone()),
-                                "tools.middleware is reserved for tool middleware declarations, which are implemented by GOL-39",
-                            ));
-                            continue;
+                    let (raw_tools, raw_middlewares) = app.application.tools.into_tools_and_middleware();
+                    if let Some(raw_middlewares) = raw_middlewares {
+                        match serde_json::from_value::<IndexMap<String, app_raw::ToolMiddlewareDeclaration>>(raw_middlewares) {
+                            Ok(declarations) => for (raw_name, declaration) in declarations {
+                                match ToolMiddlewareName::try_from(raw_name.as_str()) {
+                                    Ok(name) => {
+                                        let first = self.add_entity_source(UniqueSourceCheckedEntityKey::ToolMiddleware(name.clone()), &app.source);
+                                        if declaration.component.is_some() && declaration.release.is_some() {
+                                            validation.add_error(format!("Tool middleware {name} cannot specify both component and release in {}", app.source.display()));
+                                        }
+                                        if let Some(app_raw::ToolMiddlewareRegistrySubject::ByCoordinates(reference)) = &declaration.release
+                                            && reference.name != name.as_str()
+                                        {
+                                            validation.add_error(format!("Tool middleware declaration {name} references release name {} in {}", reference.name, app.source.display()));
+                                        }
+                                        if first {
+                                            self.record_selectable_presets(declaration.presets.keys());
+                                            self.tool_middleware_declarations.insert(name, WithSource::new(app.source.clone(), declaration));
+                                        }
+                                    }
+                                    Err(error) => validation.add_error(error),
+                                }
+                            },
+                            Err(error) => validation.add_error(format!("Invalid tools.middleware declaration map in {}: {error}", app.source.display())),
                         }
+                    }
+                    for (raw_tool_name, raw_declaration) in raw_tools {
 
                         let tool_name = match ToolName::try_from(raw_tool_name.as_str()) {
                             Ok(tool_name) => tool_name,
@@ -4073,6 +4205,12 @@ mod app_builder {
                                 environment,
                                 WithSource::new(app.source.to_path_buf(), tool_releases),
                             );
+                        }
+                    }
+
+                    for (environment, releases) in app.application.tool_middleware_releases {
+                        if self.add_entity_source(UniqueSourceCheckedEntityKey::ToolMiddlewareReleases(environment.clone()), &app.source) {
+                            self.tool_middleware_releases.insert(environment, WithSource::new(app.source.to_path_buf(), releases));
                         }
                     }
 
@@ -4556,6 +4694,56 @@ mod app_builder {
 
         fn validate_tool_release_configuration(&mut self, validation: &mut ValidationBuilder) {
             let mut issues = Vec::new();
+            for (name, declaration) in &self.tool_middleware_declarations {
+                if let Some(component_name) = &declaration.value.component
+                    && !self.components.contains_key(component_name)
+                {
+                    validation.add_error(format!(
+                        "Local tool middleware declaration {name} references unknown component {component_name}"
+                    ));
+                }
+                if let Some(release) = &declaration.value.release
+                    && let Err(error) = release.to_release_reference()
+                {
+                    validation.add_error(format!(
+                        "Invalid release reference for tool middleware {name}: {error}"
+                    ));
+                }
+            }
+
+            for (environment_name, environment) in &self.environments {
+                let Some(tools) = &environment.tools else {
+                    continue;
+                };
+                for installation in tools.middleware.iter().chain(
+                    tools
+                        .bindings
+                        .values()
+                        .flat_map(|binding| binding.middleware.iter().flatten()),
+                ) {
+                    match installation.clone().into_common() {
+                        Ok(installation) if !self.tool_middleware_declarations.contains_key(&installation.name) => validation.add_error(format!(
+                            "Environment {environment_name} references undeclared tool middleware {}",
+                            installation.name
+                        )),
+                        Err(error) => validation.add_error(format!("Invalid tool middleware installation in environment {environment_name}: {error}")),
+                        _ => {}
+                    }
+                }
+            }
+
+            for (environment_name, releases) in &self.tool_middleware_releases {
+                for published_name in releases.value.keys() {
+                    match ToolMiddlewareName::try_from(published_name.as_str()) {
+                        Err(error) => validation.add_error(error),
+                        Ok(name) => match self.tool_middleware_declarations.get(&name) {
+                            None => validation.add_error(format!("Environment {environment_name} publishes undeclared tool middleware {name}")),
+                            Some(declaration) if declaration.value.release.is_some() => validation.add_error(format!("Environment {environment_name} cannot publish remote tool middleware {name}")),
+                            _ => {}
+                        }
+                    }
+                }
+            }
             for (tool_name, declaration) in &self.tool_declarations {
                 if declaration.value.component.is_some() && declaration.value.release.is_some() {
                     issues.push(ToolValidationIssue::error(
@@ -5544,8 +5732,7 @@ mod test {
                 unsupported: true
         "# });
 
-        assert_eq!(errors.len(), 3, "unexpected errors: {errors:#?}");
-        assert!(errors.iter().any(|error| error.contains("GOL-39")));
+        assert_eq!(errors.len(), 2, "unexpected errors: {errors:#?}");
         assert!(errors.iter().any(|error| error.contains("InvalidName")));
         assert!(
             errors

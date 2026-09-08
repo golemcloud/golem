@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use super::wire;
-use crate::schema::FromSchema;
-use crate::schema::tool::{Doc, Tool};
+use crate::schema::{FromSchema, IntoSchema};
 use crate::{TypedSchemaValue, decode_typed_schema_value_owned, encode_typed_schema_value_owned};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -31,36 +30,23 @@ pub struct InvocationResult {
 }
 
 #[doc(hidden)]
-pub type ToolMiddlewareInvokeFutureFor<'a> =
-    Pin<Box<dyn Future<Output = Result<InvocationResult, ToolInvokeError<TypedSchemaValue>>> + 'a>>;
+pub type ToolMiddlewareInvokeFutureFor<'a> = Pin<
+    Box<dyn Future<Output = Result<InvocationResult, ToolInvokeError<RawCustomToolError>>> + 'a>,
+>;
 
 #[doc(hidden)]
 pub type ToolMiddlewareInvokeFuture = ToolMiddlewareInvokeFutureFor<'static>;
 
-/// SDK-owned middleware metadata.
+/// A custom tool error whose name is not declared by the typed client.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ToolMiddleware {
+pub struct RawCustomToolError {
     pub name: String,
-    pub aliases: Vec<String>,
-    pub doc: Doc,
-    pub scope: ToolMiddlewareScope,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[allow(clippy::large_enum_variant)]
-pub enum ToolMiddlewareScope {
-    Monomorphic(MonomorphicToolMiddlewareScope),
-    Universal,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct MonomorphicToolMiddlewareScope {
-    pub presented: Tool,
-    pub expected: Option<Tool>,
+    pub payload: TypedSchemaValue,
 }
 
 /// Exact error channel shared by middleware guest dispatch and its underlying layer.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ToolInvokeError<E> {
     InvalidToolName(String),
     InvalidCommandPath(Vec<String>),
@@ -68,6 +54,7 @@ pub enum ToolInvokeError<E> {
     ConstraintViolation(String),
     InvalidResult(String),
     Tool(E),
+    UnknownCustomError(RawCustomToolError),
 }
 
 impl<E> ToolInvokeError<E> {
@@ -83,6 +70,7 @@ impl<E> ToolInvokeError<E> {
             Self::ConstraintViolation(message) => ToolInvokeError::ConstraintViolation(message),
             Self::InvalidResult(message) => ToolInvokeError::InvalidResult(message),
             Self::Tool(error) => ToolInvokeError::Tool(transform(error)),
+            Self::UnknownCustomError(error) => ToolInvokeError::UnknownCustomError(error),
         }
     }
 }
@@ -104,6 +92,9 @@ impl<E: Display> Display for ToolInvokeError<E> {
             Self::ConstraintViolation(message) => write!(f, "constraint violation: {message}"),
             Self::InvalidResult(message) => write!(f, "invalid result: {message}"),
             Self::Tool(error) => error.fmt(f),
+            Self::UnknownCustomError(error) => {
+                write!(f, "unknown custom tool error `{}`", error.name)
+            }
         }
     }
 }
@@ -162,8 +153,11 @@ impl UnderlyingTool {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
-    ) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
-        self.invoke_with(command_path, input, stdin, Ok).await
+    ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+        self.invoke_with(command_path, input, stdin, |name, payload| {
+            Ok(Some(RawCustomToolError { name, payload }))
+        })
+        .await
     }
 
     #[doc(hidden)]
@@ -172,7 +166,7 @@ impl UnderlyingTool {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
-        decode_custom_error: impl FnOnce(TypedSchemaValue) -> Result<E, String>,
+        decode_custom_error: impl FnOnce(String, TypedSchemaValue) -> Result<Option<E>, String>,
     ) -> Result<InvocationResult, ToolInvokeError<E>> {
         let input = encode_typed_schema_value_owned(input)
             .map_err(|error| ToolInvokeError::InvalidInput(error.to_string()))?;
@@ -199,7 +193,7 @@ fn decode_wire_result<E>(
 
 fn decode_wire_error<E>(
     error: wire::ToolError,
-    decode_custom_error: impl FnOnce(TypedSchemaValue) -> Result<E, String>,
+    decode_custom_error: impl FnOnce(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> ToolInvokeError<E> {
     match error {
         wire::ToolError::InvalidToolName(name) => ToolInvokeError::InvalidToolName(name),
@@ -209,20 +203,24 @@ fn decode_wire_error<E>(
             ToolInvokeError::ConstraintViolation(message)
         }
         wire::ToolError::InvalidResult(message) => ToolInvokeError::InvalidResult(message),
-        wire::ToolError::CustomError(value) => {
-            let value = match decode_typed_schema_value_owned(value) {
+        wire::ToolError::CustomError(error) => {
+            let value = match decode_typed_schema_value_owned(error.payload) {
                 Ok(value) => value,
                 Err(error) => return ToolInvokeError::InvalidResult(error.to_string()),
             };
-            match decode_custom_error(value) {
-                Ok(error) => ToolInvokeError::Tool(error),
+            match decode_custom_error(error.name.clone(), value.clone()) {
+                Ok(Some(error)) => ToolInvokeError::Tool(error),
+                Ok(None) => ToolInvokeError::UnknownCustomError(RawCustomToolError {
+                    name: error.name,
+                    payload: value,
+                }),
                 Err(error) => ToolInvokeError::InvalidResult(error),
             }
         }
     }
 }
 
-pub fn decode_result_with_stdout<T: FromSchema, E>(
+pub fn decode_result_with_stdout<T: FromSchema + IntoSchema, E>(
     result: InvocationResult,
 ) -> Result<(T, InputStream), ToolInvokeError<E>> {
     let stdout = expect_stdout(result.stdout)?;
@@ -230,7 +228,7 @@ pub fn decode_result_with_stdout<T: FromSchema, E>(
     Ok((value, stdout))
 }
 
-pub fn decode_result_value<T: FromSchema, E>(
+pub fn decode_result_value<T: FromSchema + IntoSchema, E>(
     result: InvocationResult,
 ) -> Result<T, ToolInvokeError<E>> {
     expect_no_stdout(result.stdout)?;
@@ -250,12 +248,19 @@ pub fn decode_result_empty<E>(result: InvocationResult) -> Result<(), ToolInvoke
     expect_no_value(result.result)
 }
 
-fn decode_expected_value<T: FromSchema, E>(
+fn decode_expected_value<T: FromSchema + IntoSchema, E>(
     value: Option<TypedSchemaValue>,
 ) -> Result<T, ToolInvokeError<E>> {
     let value = value.ok_or_else(|| {
         ToolInvokeError::InvalidResult("tool result did not contain a value".to_string())
     })?;
+    let expected = crate::schema::try_into_schema_graph::<T>()
+        .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?;
+    if value.graph() != &expected {
+        return Err(ToolInvokeError::InvalidResult(
+            "tool result schema does not match the expected result schema".to_string(),
+        ));
+    }
     T::from_value(value.value()).map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))
 }
 
@@ -324,7 +329,9 @@ mod tests {
         ];
 
         for variant in variants {
-            let decoded = decode_wire_error(variant, |_| -> Result<u32, String> { unreachable!() });
+            let decoded = decode_wire_error(variant, |_, _| -> Result<Option<u32>, String> {
+                unreachable!()
+            });
             match decoded {
                 ToolInvokeError::InvalidToolName(value) => assert_eq!(value, "tool"),
                 ToolInvokeError::InvalidCommandPath(value) => assert_eq!(value, ["sub"]),
@@ -332,6 +339,9 @@ mod tests {
                 ToolInvokeError::ConstraintViolation(value) => assert_eq!(value, "constraint"),
                 ToolInvokeError::InvalidResult(value) => assert_eq!(value, "result"),
                 ToolInvokeError::Tool(_) => panic!("protocol error became a custom error"),
+                ToolInvokeError::UnknownCustomError(_) => {
+                    panic!("protocol error became an unknown custom error")
+                }
             }
         }
     }
@@ -340,17 +350,29 @@ mod tests {
     fn custom_error_is_decoded_and_decode_failure_is_invalid_result() {
         let payload = "failure".to_string().into_typed_schema_value().unwrap();
         let wire_payload = encode_typed_schema_value_owned(payload).unwrap();
-        let decoded = decode_wire_error(wire::ToolError::CustomError(wire_payload), |value| {
-            String::from_value(value.value()).map_err(|error| error.to_string())
-        });
+        let decoded = decode_wire_error(
+            wire::ToolError::CustomError(wire::CustomToolError {
+                name: "failure".to_string(),
+                payload: wire_payload,
+            }),
+            |name, value| {
+                assert_eq!(name, "failure");
+                String::from_value(value.value())
+                    .map(Some)
+                    .map_err(|error| error.to_string())
+            },
+        );
         assert_eq!(decoded, ToolInvokeError::Tool("failure".to_string()));
 
         let payload = "failure".to_string().into_typed_schema_value().unwrap();
         let wire_payload = encode_typed_schema_value_owned(payload).unwrap();
-        let decoded =
-            decode_wire_error::<String>(wire::ToolError::CustomError(wire_payload), |_| {
-                Err("wrong custom payload".to_string())
-            });
+        let decoded = decode_wire_error::<String>(
+            wire::ToolError::CustomError(wire::CustomToolError {
+                name: "failure".to_string(),
+                payload: wire_payload,
+            }),
+            |_, _| Err("wrong custom payload".to_string()),
+        );
         assert_eq!(
             decoded,
             ToolInvokeError::InvalidResult("wrong custom payload".to_string())

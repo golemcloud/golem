@@ -35,6 +35,7 @@ use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::model::tool::{
     DeployedRegisteredTool, RegisteredTool, ToolDeploymentState, ToolName,
 };
+use golem_common::model::tool_middleware::RegisteredToolMiddleware;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -410,6 +411,24 @@ impl DeploymentService {
             .map(|record| RegisteredTool::try_from(record).map(DeployedRegisteredTool::from))
             .collect::<Result<_, _>>()
             .map_err(Into::into)
+    }
+
+    pub async fn list_deployment_registered_tool_middlewares(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<RegisteredToolMiddleware>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewTools)?;
+        let state: ToolDeploymentState = self
+            .deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .try_into()?;
+        Ok(state.registered_tool_middlewares.into_values().collect())
     }
 
     pub async fn get_current_tool_deployment_state(

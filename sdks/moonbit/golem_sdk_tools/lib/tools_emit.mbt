@@ -1840,11 +1840,11 @@ fn emit_empty_invocation(command : ToolCommandInfo) -> String {
 fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String {
   let error_type = command.error_type.map(emit_type).unwrap()
   "{\n" +
-  "let payload = match " +
+  "let (__golem_error_name, payload) = match " +
   error_type +
   "::to_error_payload_value(" +
   error_value +
-  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
+  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@toolCommon.ToolError::CustomError({ name: __golem_error_name, payload }))\n}"
 }
 
 ///|
@@ -2073,16 +2073,18 @@ fn emit_tool_error_schema(
     buf.write_string(
       "    " +
       pattern +
-      " => try { Ok(@schema.try_into_typed_schema_value(" +
+      " => try { Ok((\"" +
+      escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
+      "\", @schema.try_into_typed_schema_value(" +
       payload +
-      ")) } catch { __golem_error => Err(__golem_error.to_string()) }\n",
+      "))) } catch { __golem_error => Err(__golem_error.to_string()) }\n",
     )
   }
   buf.write_string("  }\n}\n\n")
   buf.write_string(
     "///|\npub impl @tool.ToolErrorSchema for " +
     type_name +
-    " with from_error_payload_value(__golem_value) {\n",
+    " with from_error_payload_value(__golem_name, __golem_value) {\n  match __golem_name {\n",
   )
   for error in errors {
     let payload_type = error.payload.map(emit_type).unwrap_or("Unit")
@@ -2092,15 +2094,19 @@ fn emit_tool_error_schema(
       (None, _) => error.name
     }
     buf.write_string(
-      "  let __golem_decoded : " +
+      "    \"" +
+      escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
+      "\" => {\n      let __golem_decoded : " +
       payload_type +
-      "? = try { Some(@schema.from_value_as(__golem_value.value)) } catch { _ => None }\n  if __golem_decoded is Some(__golem_payload) { return Ok(" +
+      "? = try { Some(@schema.from_value_as(__golem_value.value)) } catch { _ => None }\n      if __golem_decoded is Some(__golem_payload) { return Ok(" +
       error_value +
-      ") }\n",
+      ") }\n      Err(\"remote tool error payload is malformed for case `" +
+      escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
+      "`\")\n    }\n",
     )
   }
   buf.write_string(
-    "  Err(\"remote tool error payload did not match any declared error case\")\n}\n\n",
+    "    _ => Err(\"unknown remote tool error case `\" + __golem_name + \"`\")\n  }\n}\n\n",
   )
   buf.write_string(
     "///|\nextend " +
@@ -2399,11 +2405,9 @@ fn emit_tool_client_method(
   }
   if has_stdout {
     let decode_error = if command.error_type is Some(_) {
-      "fn(__golem_value) { " +
-      error +
-      "::from_error_payload_value(__golem_value) }"
+      "fn(__golem_name, __golem_value) { @tool.decode_named_tool_error(__golem_name, __golem_value) }"
     } else {
-      "fn(_) { Err(\"remote custom tool error is not declared by this client\") }"
+      "fn(_, _) { None }"
     }
     let decode_result = if is_unit(command.success_type) {
       "@tool.decode_result_empty"

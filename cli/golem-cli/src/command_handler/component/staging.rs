@@ -40,8 +40,9 @@ use golem_common::model::diff::{self, AgentFileDiff, AgentTypeProvisionConfigDif
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::schema::agent::AgentTypeSchema;
-use golem_common::schema::tool::Tool;
+use golem_common::schema::tool::{Tool, ToolMiddleware};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
@@ -104,8 +105,10 @@ impl ComponentDiff {
         match self {
             ComponentDiff::All => true,
             ComponentDiff::Diff { diff } => {
-                !diff.agent_type_provision_config_changes.is_empty()
+                diff.wasm_changed
+                    || !diff.agent_type_provision_config_changes.is_empty()
                     || !diff.tool_deployment_config_changes.is_empty()
+                    || !diff.tool_middleware_deployment_config_changes.is_empty()
             }
         }
     }
@@ -125,6 +128,15 @@ impl ComponentDiff {
                             diff,
                         }) => diff.definition_changed,
                     })
+            }
+        }
+    }
+
+    pub fn tool_middlewares_changed(&self) -> bool {
+        match self {
+            ComponentDiff::All => true,
+            ComponentDiff::Diff { diff } => {
+                !diff.tool_middleware_deployment_config_changes.is_empty()
             }
         }
     }
@@ -204,6 +216,9 @@ pub struct ChangedComponentFiles {
     pub removed_per_tool: BTreeMap<ToolName, Vec<AgentFilePath>>,
     pub file_permission_updates_per_tool:
         BTreeMap<ToolName, BTreeMap<AgentFilePath, AgentFilePermissions>>,
+    pub removed_per_tool_middleware: BTreeMap<ToolMiddlewareName, Vec<AgentFilePath>>,
+    pub file_permission_updates_per_tool_middleware:
+        BTreeMap<ToolMiddlewareName, BTreeMap<AgentFilePath, AgentFilePermissions>>,
 }
 
 impl ChangedComponentFiles {
@@ -222,6 +237,8 @@ pub struct ComponentStager<'a> {
     plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
     manifest_files_by_agent: OnceCell<BTreeMap<AgentTypeName, Vec<InitialComponentFile>>>,
     manifest_files_by_tool: OnceCell<BTreeMap<ToolName, Vec<InitialComponentFile>>>,
+    manifest_files_by_tool_middleware:
+        OnceCell<BTreeMap<ToolMiddlewareName, Vec<InitialComponentFile>>>,
 }
 
 impl<'a> ComponentStager<'a> {
@@ -239,6 +256,7 @@ impl<'a> ComponentStager<'a> {
             plugin_grants,
             manifest_files_by_agent: OnceCell::new(),
             manifest_files_by_tool: OnceCell::new(),
+            manifest_files_by_tool_middleware: OnceCell::new(),
         })
     }
 
@@ -338,6 +356,28 @@ impl<'a> ComponentStager<'a> {
             .unwrap_or_default())
     }
 
+    async fn manifest_files_by_tool_middleware(
+        &self,
+    ) -> anyhow::Result<&BTreeMap<ToolMiddlewareName, Vec<InitialComponentFile>>> {
+        self.manifest_files_by_tool_middleware
+            .get_or_try_init(|| async {
+                let mut result = BTreeMap::new();
+                for (name, config) in &self
+                    .component_deploy_properties
+                    .tool_middleware_provision_configs
+                {
+                    let files = config
+                        .files
+                        .iter()
+                        .map(resolve_tool_ifs_entry)
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    result.insert(name.clone(), expand_component_files(&files).await?);
+                }
+                Ok(result)
+            })
+            .await
+    }
+
     async fn all_manifest_files(&self) -> anyhow::Result<Vec<InitialComponentFile>> {
         let mut files = self
             .manifest_files_by_agent()
@@ -348,6 +388,13 @@ impl<'a> ComponentStager<'a> {
             .collect::<Vec<_>>();
         files.extend(
             self.manifest_files_by_tool()
+                .await?
+                .values()
+                .flatten()
+                .cloned(),
+        );
+        files.extend(
+            self.manifest_files_by_tool_middleware()
                 .await?
                 .values()
                 .flatten()
@@ -438,6 +485,16 @@ impl<'a> ComponentStager<'a> {
             }
         }
 
+        if self.diff.tool_middlewares_changed() {
+            result.extend(
+                self.manifest_files_by_tool_middleware()
+                    .await?
+                    .values()
+                    .flatten()
+                    .cloned(),
+            );
+        }
+
         Ok(result)
     }
 
@@ -453,7 +510,10 @@ impl<'a> ComponentStager<'a> {
         ))
     }
 
-    pub async fn changed_files(&self) -> anyhow::Result<ChangedComponentFiles> {
+    pub async fn changed_files(
+        &self,
+        current_tool_middlewares: &BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    ) -> anyhow::Result<ChangedComponentFiles> {
         if !self.diff.provision_config_changed() {
             return Ok(ChangedComponentFiles {
                 new_or_updated_content: None,
@@ -462,6 +522,8 @@ impl<'a> ComponentStager<'a> {
                 file_permission_updates_per_agent: BTreeMap::new(),
                 removed_per_tool: BTreeMap::new(),
                 file_permission_updates_per_tool: BTreeMap::new(),
+                removed_per_tool_middleware: BTreeMap::new(),
+                file_permission_updates_per_tool_middleware: BTreeMap::new(),
             });
         }
 
@@ -594,6 +656,48 @@ impl<'a> ComponentStager<'a> {
             }
         }
 
+        let mut removed_per_tool_middleware = BTreeMap::new();
+        let mut file_permission_updates_per_tool_middleware = BTreeMap::new();
+        if self.diff.tool_middlewares_changed() {
+            for (name, current) in current_tool_middlewares {
+                let local_files = self
+                    .manifest_files_by_tool_middleware()
+                    .await?
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
+                let local_by_path = local_files
+                    .iter()
+                    .map(|file| (file.target.path.as_abs_str(), file))
+                    .collect::<HashMap<_, _>>();
+                let removed = current
+                    .provision
+                    .files
+                    .iter()
+                    .filter(|file| !local_by_path.contains_key(file.path.as_abs_str()))
+                    .map(|file| file.path.clone())
+                    .collect::<Vec<_>>();
+                if !removed.is_empty() {
+                    removed_per_tool_middleware.insert(name.clone(), removed);
+                }
+                let permission_updates = current
+                    .provision
+                    .files
+                    .iter()
+                    .filter_map(|existing| {
+                        local_by_path
+                            .get(existing.path.as_abs_str())
+                            .filter(|file| file.target.permissions != existing.permissions)
+                            .map(|file| (existing.path.clone(), file.target.permissions))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                if !permission_updates.is_empty() {
+                    file_permission_updates_per_tool_middleware
+                        .insert(name.clone(), permission_updates);
+                }
+            }
+        }
+
         Ok(ChangedComponentFiles {
             new_or_updated_content,
             removed_per_agent,
@@ -601,6 +705,8 @@ impl<'a> ComponentStager<'a> {
             file_permission_updates_per_agent,
             removed_per_tool,
             file_permission_updates_per_tool,
+            removed_per_tool_middleware,
+            file_permission_updates_per_tool_middleware,
         })
     }
 
@@ -626,6 +732,110 @@ impl<'a> ComponentStager<'a> {
         } else {
             None
         }
+    }
+
+    pub fn tool_middlewares(&self) -> &Vec<ToolMiddleware> {
+        &self.component_deploy_properties.tool_middlewares
+    }
+
+    pub fn tool_middlewares_if_changed(&self) -> Option<&Vec<ToolMiddleware>> {
+        self.diff
+            .tool_middlewares_changed()
+            .then(|| self.tool_middlewares())
+    }
+
+    pub async fn tool_middleware_provision_configs(
+        &self,
+    ) -> anyhow::Result<BTreeMap<ToolMiddlewareName, ToolProvisionConfigCreation>> {
+        let all_files = self.all_manifest_files().await?;
+        let archive_paths = resolve_archive_paths_for_sources(
+            all_files.iter().map(|file| file.source.as_url().clone()),
+        )?;
+        let mut result = BTreeMap::new();
+        for (name, config) in &self
+            .component_deploy_properties
+            .tool_middleware_provision_configs
+        {
+            result.insert(
+                name.clone(),
+                ToolProvisionConfigCreation {
+                    config: config.config.clone(),
+                    env: config.env.clone(),
+                    plugin_installations: self.resolve_plugins(&config.plugins)?,
+                    files: self
+                        .resolve_archive_files_for_tool_middleware(name, &archive_paths)
+                        .await?,
+                },
+            );
+        }
+        Ok(result)
+    }
+
+    pub async fn tool_middleware_provision_config_updates_if_changed(
+        &self,
+        changed_files: &ChangedComponentFiles,
+        current: &BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+    ) -> anyhow::Result<Option<BTreeMap<ToolMiddlewareName, ToolProvisionConfigUpdate>>> {
+        if !self.diff.tool_middlewares_changed() {
+            return Ok(None);
+        }
+        let mut result = BTreeMap::new();
+        for (name, config) in &self
+            .component_deploy_properties
+            .tool_middleware_provision_configs
+        {
+            let current_provision = current.get(name).map(|metadata| &metadata.provision);
+            let resolved_plugins = self.resolve_plugins(&config.plugins)?;
+            let current_plugin_ids = current_provision
+                .into_iter()
+                .flat_map(|provision| &provision.plugins)
+                .map(|plugin| plugin.environment_plugin_grant_id)
+                .collect::<BTreeSet<_>>();
+            let new_plugin_ids = resolved_plugins
+                .iter()
+                .map(|plugin| plugin.environment_plugin_grant_id)
+                .collect::<BTreeSet<_>>();
+            let mut plugin_updates = current_plugin_ids
+                .difference(&new_plugin_ids)
+                .map(|id| {
+                    PluginInstallationAction::Uninstall(PluginUninstallation {
+                        environment_plugin_grant_id: *id,
+                    })
+                })
+                .collect::<Vec<_>>();
+            plugin_updates.extend(
+                resolved_plugins
+                    .into_iter()
+                    .map(PluginInstallationAction::Install),
+            );
+            let files_to_remove = changed_files
+                .removed_per_tool_middleware
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            let file_permission_updates = changed_files
+                .file_permission_updates_per_tool_middleware
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            result.insert(
+                name.clone(),
+                ToolProvisionConfigUpdate {
+                    config: Some(config.config.clone()),
+                    env: Some(config.env.clone()),
+                    plugin_updates,
+                    files_to_add_or_update: self
+                        .resolve_archive_files_for_tool_middleware(
+                            name,
+                            &changed_files.archive_paths_by_source,
+                        )
+                        .await?,
+                    files_to_remove,
+                    file_permission_updates,
+                },
+            );
+        }
+        Ok(Some(result))
     }
 
     pub async fn tool_deployment_configs(
@@ -851,6 +1061,40 @@ impl<'a> ComponentStager<'a> {
                     "Found conflicting archive mapping for source {} in tool {} manifest",
                     archive_path,
                     tool_name.as_str().log_color_highlight()
+                ));
+            }
+        }
+        Ok(archive_files)
+    }
+
+    async fn resolve_archive_files_for_tool_middleware(
+        &self,
+        name: &ToolMiddlewareName,
+        archive_paths_by_source: &BTreeMap<String, ArchiveFilePath>,
+    ) -> anyhow::Result<BTreeMap<ArchiveFilePath, AgentFileOptions>> {
+        let mut archive_files = BTreeMap::new();
+        let files = self
+            .manifest_files_by_tool_middleware()
+            .await?
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        for resolved in files {
+            let source = resolved.source.as_url().as_str().to_string();
+            let Some(archive_path) = archive_paths_by_source.get(&source) else {
+                continue;
+            };
+            let options = AgentFileOptions {
+                target_path: AgentFilePath(resolved.target.path.clone()),
+                permissions: resolved.target.permissions,
+            };
+            if let Some(existing) = archive_files.insert(archive_path.clone(), options.clone())
+                && existing != options
+            {
+                return Err(anyhow!(
+                    "Found conflicting archive mapping for source {} in tool middleware {} manifest",
+                    archive_path,
+                    name
                 ));
             }
         }
@@ -1328,6 +1572,7 @@ mod tests {
                 wasm_changed: false,
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
+                tool_middleware_deployment_config_changes: BTreeMap::new(),
             },
         }))
         .unwrap();
@@ -1356,6 +1601,7 @@ mod tests {
                         },
                     }),
                 )]),
+                tool_middleware_deployment_config_changes: BTreeMap::new(),
             },
         }))
         .unwrap();

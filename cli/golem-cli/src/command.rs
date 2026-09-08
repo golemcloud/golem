@@ -1190,7 +1190,10 @@ pub mod tool {
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
+    use golem_common::base_model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantId;
     use golem_common::base_model::tool::ToolName;
+    use golem_common::base_model::tool_middleware::ToolMiddlewareName;
+    use golem_common::base_model::tool_middleware_release::ToolMiddlewareReleaseId;
     use golem_common::base_model::tool_release::ToolReleaseId;
 
     #[derive(Debug, Subcommand)]
@@ -1213,6 +1216,101 @@ pub mod tool {
         Grant {
             #[command(subcommand)]
             subcommand: ToolGrantSubcommand,
+        },
+        /// Manage tool middleware in a separate namespace
+        Middleware {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareSubcommand {
+        /// List tool middleware in the selected environment's current deployment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_LIST)]
+        List,
+        /// Get deployed tool middleware by name
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GET)]
+        Get {
+            /// Deployed tool middleware name
+            middleware_name: ToolMiddlewareName,
+        },
+        /// Manage published tool middleware releases
+        Release {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareReleaseSubcommand,
+        },
+        /// Manage tool middleware grants for the selected environment
+        Grant {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareGrantSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareGrantSubcommand {
+        /// Grant a published tool middleware release to the selected environment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GRANT_CREATE)]
+        Create(ToolMiddlewareGrantCreateArgs),
+        /// List active tool middleware grants in the selected environment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GRANT_LIST)]
+        List,
+        /// Get an active tool middleware grant
+        Get {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+        /// Delete a tool middleware grant
+        Delete {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+        /// Restore a deleted tool middleware grant
+        Restore {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("release").required(true).multiple(false).args(["release_id", "account"])))]
+    pub struct ToolMiddlewareGrantCreateArgs {
+        /// Published tool middleware release ID
+        #[arg(long)]
+        pub release_id: Option<ToolMiddlewareReleaseId>,
+        /// Publisher account email
+        #[arg(long, requires_all = ["name", "version"])]
+        pub account: Option<AccountEmail>,
+        /// Published tool middleware name
+        #[arg(long, requires_all = ["account", "version"])]
+        pub name: Option<ToolMiddlewareName>,
+        /// Published tool middleware version
+        #[arg(long, requires_all = ["account", "name"])]
+        pub version: Option<String>,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareReleaseSubcommand {
+        /// List tool middleware releases owned by an account
+        List {
+            /// Account ID; defaults to the authenticated account
+            #[arg(long)]
+            account_id: Option<AccountId>,
+        },
+        /// Get a tool middleware release
+        Get {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
+        },
+        /// Make a release unavailable for new deployments and new grants
+        DePublish {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
+        },
+        /// Restore a de-published tool middleware release
+        Restore {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
         },
     }
 

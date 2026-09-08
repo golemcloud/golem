@@ -397,7 +397,10 @@ function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): Invoca
       outcome,
       `tool error "${outcome.name}"`,
     );
-    throw { tag: 'custom-error', val: payload } satisfies ToolError;
+    throw {
+      tag: 'custom-error',
+      val: { name: outcome.name, payload },
+    } satisfies ToolError;
   }
 
   throw invalidToolResult(`tool handler returned unknown outcome tag "${outcome.tag}"`);

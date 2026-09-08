@@ -16,9 +16,10 @@ use crate::model::agent::AgentError;
 use crate::model::parsed_function_name::ParsedFunctionName;
 use crate::schema::agent::AgentTypeSchema;
 use crate::schema::agent::wit::{decode_agent_error_rejecting_quota_with, decode_agent_type, wire};
-use crate::schema::tool::Tool;
-use crate::schema::tool::validation::validate_tool;
+use crate::schema::tool::validation::{validate_tool, validate_tool_middleware};
+use crate::schema::tool::wit::tool_middleware_from_wit;
 use crate::schema::tool::wit::wire as tool_wire;
+use crate::schema::tool::{Tool, ToolMiddleware};
 use crate::wasmtime_config::create_wasmtime_config;
 use anyhow::anyhow;
 use golem_schema::schema::SchemaValueStreamHandleRep;
@@ -47,62 +48,25 @@ const AGENT_INTERFACE_NAME: &str = "golem:agent/guest@2.0.0";
 const AGENT_FUNCTION_NAME: &str = "discover-agent-types";
 const TOOL_INTERFACE_NAME: &str = "golem:tool/guest@0.1.0";
 const TOOL_FUNCTION_NAME: &str = "discover-tools";
+const MIDDLEWARE_INTERFACE_NAME: &str = "golem:tool/tool-middleware-guest@0.1.0";
+const MIDDLEWARE_FUNCTION_NAME: &str = "discover-tool-middlewares";
 
-/// Metadata discovered from a WASM component in a single instantiation:
-/// the agent types returned by `golem:agent/guest.discover-agent-types` and
-/// the tools returned by `golem:tool/guest.discover-tools`. Either list is
-/// empty when the component does not export the corresponding interface.
-///
-/// Serializes as `{"agentTypes": [...], "tools": [...]}`. Deserialization also
-/// accepts a bare agent type array (with an empty tool list), the format
-/// extracted-metadata JSON files used before tools were bundled into the
-/// extraction.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// Agent, tool, and middleware metadata discovered in a single component
+/// instantiation. A list is empty when its discovery interface is absent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtractedComponentMetadata {
     pub agent_types: Vec<AgentTypeSchema>,
     pub tools: Vec<Tool>,
+    pub tool_middlewares: Vec<ToolMiddleware>,
 }
 
-impl<'de> Deserialize<'de> for ExtractedComponentMetadata {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Metadata {
-            agent_types: Vec<AgentTypeSchema>,
-            #[serde(default)]
-            tools: Vec<Tool>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Metadata(Metadata),
-            AgentTypes(Vec<AgentTypeSchema>),
-        }
-
-        Ok(match Repr::deserialize(deserializer)? {
-            Repr::Metadata(metadata) => ExtractedComponentMetadata {
-                agent_types: metadata.agent_types,
-                tools: metadata.tools,
-            },
-            Repr::AgentTypes(agent_types) => ExtractedComponentMetadata {
-                agent_types,
-                tools: Vec::new(),
-            },
-        })
-    }
-}
-
-/// Extracts the agent types and tools implemented by the given WASM component
+/// Extracts the agent types, tools, and middleware implemented by a WASM component
 /// using a single component instantiation.
 ///
 /// Agent types come from `golem:agent/guest.discover-agent-types`. When tool
 /// extraction is enabled, `fail_on_missing_discover_method` requires at least
-/// one of the agent or tool discovery interfaces, so tools-only components are
+/// one agent, tool, or middleware discovery interface, so middleware-only components are
 /// valid. Agent-type-only extraction still requires the agent interface.
 /// Tools come from `golem:tool/guest.discover-tools` and are always optional:
 /// components without the tool guest interface yield an empty tool list.
@@ -243,10 +207,25 @@ async fn extract_component_metadata_impl(
         })
         .flatten();
 
-    if fail_on_missing_discover_method && agent_discover.is_none() && tool_discover.is_none() {
+    let middleware_discover = include_tools
+        .then(|| {
+            find_exported_function(
+                &mut store,
+                &instance,
+                MIDDLEWARE_INTERFACE_NAME,
+                MIDDLEWARE_FUNCTION_NAME,
+            )
+        })
+        .flatten();
+
+    if fail_on_missing_discover_method
+        && agent_discover.is_none()
+        && tool_discover.is_none()
+        && middleware_discover.is_none()
+    {
         let expected = if include_tools {
             format!(
-                "Function {AGENT_FUNCTION_NAME} in interface {AGENT_INTERFACE_NAME} or function {TOOL_FUNCTION_NAME} in interface {TOOL_INTERFACE_NAME}"
+                "Function {AGENT_FUNCTION_NAME} in interface {AGENT_INTERFACE_NAME}, {TOOL_FUNCTION_NAME} in interface {TOOL_INTERFACE_NAME}, or {MIDDLEWARE_FUNCTION_NAME} in interface {MIDDLEWARE_INTERFACE_NAME}"
             )
         } else {
             format!("Function {AGENT_FUNCTION_NAME} in interface {AGENT_INTERFACE_NAME}")
@@ -266,7 +245,17 @@ async fn extract_component_metadata_impl(
         Vec::new()
     };
 
-    Ok(ExtractedComponentMetadata { agent_types, tools })
+    let tool_middlewares = if let Some(func) = middleware_discover {
+        discover_tool_middlewares(&mut store, func).await?
+    } else {
+        Vec::new()
+    };
+
+    Ok(ExtractedComponentMetadata {
+        agent_types,
+        tools,
+        tool_middlewares,
+    })
 }
 
 /// Same as [`extract_component_metadata_with_streams`], but extracts only the
@@ -391,7 +380,36 @@ async fn discover_tools(store: &mut Store<Host>, func: Func) -> anyhow::Result<V
     }
 }
 
-/// Renders a wire `tool-error` returned by `discover-tools` as a message.
+async fn discover_tool_middlewares(
+    store: &mut Store<Host>,
+    func: Func,
+) -> anyhow::Result<Vec<ToolMiddleware>> {
+    let typed_func = func
+        .typed::<(), (Result<Vec<tool_wire::ToolMiddleware>, tool_wire::ToolError>,)>(&mut *store)
+        .map_err(|error| anyhow!("Middleware discovery has an invalid signature: {error}"))?;
+    let (result,) = typed_func.call_async(&mut *store, ()).await?;
+    result
+        .map_err(|error| anyhow!(format_wire_tool_error(&error)))?
+        .into_iter()
+        .map(|wire| {
+            let middleware = tool_middleware_from_wit(wire)
+                .map_err(|error| anyhow!("Invalid discovered middleware: {error}"))?;
+            validate_tool_middleware(&middleware).map_err(|errors| {
+                anyhow!(
+                    "Invalid middleware returned by discover-tool-middlewares: {}",
+                    errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+            Ok(middleware)
+        })
+        .collect()
+}
+
+/// Renders a wire discovery error as a message.
 /// Custom error payloads are not decoded: they are self-contained
 /// `typed-schema-value`s that may reference host resources, which discovery
 /// does not support.
@@ -710,24 +728,23 @@ mod tests {
     #[test]
     fn deserializes_component_metadata_object() {
         let metadata: ExtractedComponentMetadata =
-            serde_json::from_str(r#"{"agentTypes": [], "tools": []}"#).unwrap();
+            serde_json::from_str(r#"{"agentTypes": [], "tools": [], "toolMiddlewares": []}"#)
+                .unwrap();
         assert!(metadata.agent_types.is_empty());
         assert!(metadata.tools.is_empty());
+        assert!(metadata.tool_middlewares.is_empty());
     }
 
     #[test]
-    fn deserializes_component_metadata_object_without_tools() {
-        let metadata: ExtractedComponentMetadata =
-            serde_json::from_str(r#"{"agentTypes": []}"#).unwrap();
-        assert!(metadata.agent_types.is_empty());
-        assert!(metadata.tools.is_empty());
+    fn rejects_incomplete_component_metadata() {
+        assert!(
+            serde_json::from_str::<ExtractedComponentMetadata>(r#"{"agentTypes": []}"#).is_err()
+        );
     }
 
     #[test]
-    fn deserializes_legacy_agent_type_array() {
-        let metadata: ExtractedComponentMetadata = serde_json::from_str("[]").unwrap();
-        assert!(metadata.agent_types.is_empty());
-        assert!(metadata.tools.is_empty());
+    fn rejects_agent_type_array() {
+        assert!(serde_json::from_str::<ExtractedComponentMetadata>("[]").is_err());
     }
 
     #[test]
@@ -747,10 +764,11 @@ mod tests {
         let metadata = ExtractedComponentMetadata {
             agent_types: Vec::new(),
             tools: Vec::new(),
+            tool_middlewares: Vec::new(),
         };
         assert_eq!(
             serde_json::to_string(&metadata).unwrap(),
-            r#"{"agentTypes":[],"tools":[]}"#
+            r#"{"agentTypes":[],"tools":[],"toolMiddlewares":[]}"#
         );
     }
 }

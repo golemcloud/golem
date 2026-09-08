@@ -76,16 +76,16 @@ use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::component::ComponentName;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationRequestIdentity, InvocationExecutionMode, ToolInputDecodeFailure,
-    ToolInvocationClaimIdentity, ToolInvocationDescriptor, ToolInvocationDescriptorIdentity,
-    ToolInvocationRejectedIdentity,
+    EntityInvocationRequestIdentity, InvocationExecutionMode, NamedToolErrorSchema,
+    ToolInputDecodeFailure, ToolInvocationClaimIdentity, ToolInvocationDescriptor,
+    ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity, ToolOutputContract,
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolError, SerializableToolInvocationResult,
-    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult,
+    SerializableCustomToolError, SerializableEntityBodyExecution, SerializableToolError,
+    SerializableToolInvocationResult, SerializableToolOperationTerminal,
+    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemToolGetTool, HostRequestGolemToolInvocationRejected,
@@ -447,7 +447,7 @@ where
         let value = match &response {
             Ok(result) => result.result.as_ref(),
             Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
-                SerializableToolError::CustomError(value) => Some(value.as_ref()),
+                SerializableToolError::CustomError(value) => Some(&value.payload),
                 _ => None,
             },
             _ => None,
@@ -774,6 +774,7 @@ fn flag_args(
 }
 
 struct ResolvedToolCommand {
+    command_index: usize,
     args: Vec<String>,
     stdin_required: Option<bool>,
     stdout_required: Option<bool>,
@@ -1108,6 +1109,7 @@ fn resolve_tool_command(
     }
 
     Ok(ResolvedToolCommand {
+        command_index,
         args,
         stdin_required: body.stdin.as_ref().map(|stream| stream.required),
         stdout_required: body.stdout.as_ref().map(|stream| stream.required),
@@ -1155,10 +1157,17 @@ fn project_tool_error<Ctx: WorkerCtx>(
         SerializableToolError::InvalidResult(value) => {
             crate::preview2::golem::tool::host::ToolError::InvalidResult(value)
         }
-        SerializableToolError::CustomError(value) => match encode_typed_tool_value(&value, ctx) {
-            Ok(value) => crate::preview2::golem::tool::host::ToolError::CustomError(value),
-            Err(error) => return RpcError::ProtocolError(error),
-        },
+        SerializableToolError::CustomError(value) => {
+            match encode_typed_tool_value(&value.payload, ctx) {
+                Ok(payload) => crate::preview2::golem::tool::host::ToolError::CustomError(
+                    crate::preview2::golem::tool::common::CustomToolError {
+                        name: value.name,
+                        payload,
+                    },
+                ),
+                Err(error) => return RpcError::ProtocolError(error),
+            }
+        }
     };
     RpcError::RemoteToolError(error)
 }
@@ -1511,9 +1520,9 @@ where
             }));
         }
     };
-    let registered_tool = activation_snapshot.registered_tool().clone();
+    let effective_definition = activation_snapshot.effective_definition().clone();
 
-    let command = match resolve_tool_command(&registered_tool.definition, &command_path, &input) {
+    let command = match resolve_tool_command(&effective_definition, &command_path, &input) {
         Ok(command) => command,
         Err(error) => {
             return Ok(rejected_tool_call(
@@ -1551,7 +1560,54 @@ where
         ));
     }
     let declares_stdout = command.stdout_required.is_some();
+    let body = effective_definition.commands.nodes[command.command_index]
+        .body
+        .as_ref()
+        .expect("a resolved command has a body");
+    let output_contract = ToolOutputContract {
+        result: body
+            .result
+            .as_ref()
+            .map(|result| golem_common::schema::SchemaGraph {
+                defs: effective_definition.schema.defs.clone(),
+                root: result.type_.clone(),
+            }),
+        errors: body
+            .errors
+            .iter()
+            .map(|error| NamedToolErrorSchema {
+                name: error.name.clone(),
+                payload: golem_common::schema::SchemaGraph {
+                    defs: effective_definition.schema.defs.clone(),
+                    root: error
+                        .payload
+                        .clone()
+                        .unwrap_or_else(|| SchemaType::tuple(Vec::new())),
+                },
+            })
+            .collect(),
+    };
     let args = command.args;
+
+    if activation_snapshot
+        .middleware_chain()
+        .is_some_and(|chain| !chain.occurrences.is_empty())
+    {
+        return Ok(rejected_tool_call(
+            &rpc,
+            attempt_ordinal,
+            &command_path,
+            Some(input),
+            None,
+            has_stdin,
+            stdout_requested,
+            call_mode,
+            SerializableToolRpcError::RemoteInternalError(
+                "tool middleware invocation is not implemented by the executor".to_string(),
+            ),
+            stdin,
+        ));
+    }
 
     let activation = match activation_snapshot.into_dispatch_target() {
         Ok(ToolDispatchTarget::Component(activation)) => Arc::new(activation),
@@ -1641,6 +1697,7 @@ where
         has_stdin,
         has_stdout: stdout_requested,
         declares_stdout,
+        output_contract,
     });
     let calling_principal = Principal::Agent(AgentPrincipal {
         agent_id: rpc.owner.owner_id.agent_id.clone(),
@@ -1724,8 +1781,13 @@ fn decode_guest_tool_error<Ctx: WorkerCtx>(
             SerializableToolError::InvalidResult(value)
         }
         crate::preview2::golem::tool::host::ToolError::CustomError(value) => {
-            match decode_typed_tool_value(value, ctx) {
-                Ok(value) => SerializableToolError::CustomError(Box::new(value)),
+            match decode_typed_tool_value(value.payload, ctx) {
+                Ok(payload) => {
+                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                        name: value.name,
+                        payload,
+                    }))
+                }
                 Err(_) => {
                     return SerializableToolRpcError::ProtocolError(
                         "tool guest returned an invalid custom-error payload".to_string(),
@@ -1735,6 +1797,70 @@ fn decode_guest_tool_error<Ctx: WorkerCtx>(
         }
     };
     SerializableToolRpcError::RemoteToolError(Box::new(error))
+}
+
+fn validate_declared_tool_error(
+    error: SerializableToolRpcError,
+    contract: &ToolOutputContract,
+) -> SerializableToolRpcError {
+    let SerializableToolRpcError::RemoteToolError(tool_error) = error else {
+        return error;
+    };
+    let SerializableToolError::CustomError(custom) = tool_error.as_ref() else {
+        return SerializableToolRpcError::RemoteToolError(tool_error);
+    };
+    let Some(declared) = contract.errors.iter().find(|case| case.name == custom.name) else {
+        return SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult(format!(
+                "tool returned undeclared custom error '{}'",
+                custom.name
+            )),
+        ));
+    };
+    if !is_equivalent_cross_graph(
+        custom.payload.graph(),
+        &custom.payload.graph().root,
+        &declared.payload,
+        &declared.payload.root,
+    ) || validate_value(
+        custom.payload.graph(),
+        &custom.payload.graph().root,
+        custom.payload.value(),
+    )
+    .is_err()
+    {
+        return SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult(format!(
+                "payload for custom error '{}' does not match its declared schema",
+                custom.name
+            )),
+        ));
+    }
+    SerializableToolRpcError::RemoteToolError(tool_error)
+}
+
+fn validate_declared_tool_result(
+    result: Option<ModelTypedSchemaValue>,
+    contract: &ToolOutputContract,
+) -> Result<Option<ModelTypedSchemaValue>, SerializableToolRpcError> {
+    match (result.as_ref(), contract.result.as_ref()) {
+        (None, None) => Ok(result),
+        (Some(value), Some(declared))
+            if is_equivalent_cross_graph(
+                value.graph(),
+                &value.graph().root,
+                declared,
+                &declared.root,
+            ) && validate_value(value.graph(), &value.graph().root, value.value()).is_ok() =>
+        {
+            Ok(result)
+        }
+        _ => Err(SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult(
+                "tool result does not match the selected command's declared result".to_string(),
+            ),
+        ))),
+    }
 }
 
 async fn encode_tool_operation_terminal(
@@ -1765,6 +1891,7 @@ struct ToolSidecarInvocation {
     stdin: Option<ToolStdinEntry>,
     stdout: Option<ToolStdoutWriterEntry>,
     principal: Principal,
+    output_contract: ToolOutputContract,
 }
 
 struct ToolSidecarBody {
@@ -1818,6 +1945,7 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         stdin,
         stdout,
         principal,
+        output_contract,
     } = invocation;
     let mut store = store.as_context_mut();
     store
@@ -1929,7 +2057,12 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                             WorkerExecutorError::runtime(
                                 "tool guest returned an invalid result payload",
                             )
-                        })?
+                        })?;
+                    let result = match validate_declared_tool_result(result, &output_contract) {
+                        Ok(result) => result,
+                        Err(error) => return encode_tool_operation_terminal(Err(error)).await,
+                    };
+                    let result = result
                         .map(|value| SerializableToolResultValue::from_typed(&value))
                         .transpose()
                         .map_err(|error| {
@@ -1941,9 +2074,10 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         .await
                 }
                 Err(error) => {
-                    encode_tool_operation_terminal(Err(decode_guest_tool_error(
+                    let error = decode_guest_tool_error(error, store.data_mut().durable_ctx_mut());
+                    encode_tool_operation_terminal(Err(validate_declared_tool_error(
                         error,
-                        store.data_mut().durable_ctx_mut(),
+                        &output_contract,
                     )))
                     .await
                 }
@@ -3064,6 +3198,7 @@ where
         stdin,
         stdout,
         principal: context.principal.clone(),
+        output_contract: descriptor.output_contract.clone(),
     };
     let scope = durability.scope().clone();
     let replaying_completed =
@@ -3861,6 +3996,7 @@ impl TryFrom<&DiscoveredTool> for WitRegisteredTool {
         })?;
 
         Ok(Self {
+            lookup_name: value.lookup_name.clone(),
             definition,
             implemented_by: value.implemented_by.into(),
         })
@@ -4502,7 +4638,8 @@ mod tests {
         ToolStdinStreamConsumer, ToolStdoutWriterEntry, UnderlyingToolStdinStreamConsumer,
         WitRegisteredTool, caller_tool_owner, classify_tool_discovery_error,
         cleanup_tool_endpoints, recorded_tool_body_is_skipped, resolve_tool_command,
-        stdout_limit_error, terminal_tool_discovery_error, validate_stream_attachments,
+        stdout_limit_error, terminal_tool_discovery_error, validate_declared_tool_error,
+        validate_declared_tool_result, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -4516,12 +4653,12 @@ mod tests {
     use golem_common::model::card::owner::ToolOwnerPattern;
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
-    use golem_common::model::entity::EntityCallMode;
+    use golem_common::model::entity::{EntityCallMode, NamedToolErrorSchema, ToolOutputContract};
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::oplog::HostResponseEntityInvocation;
     use golem_common::model::oplog::payload::types::{
-        SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
-        SerializableToolRpcError,
+        SerializableCustomToolError, SerializableEntityBodyExecution, SerializableToolError,
+        SerializableToolOperationTerminal, SerializableToolRpcError,
     };
     use golem_common::model::tool::{RegisteredTool, ToolName, ToolProvisionConfig, ToolSource};
     use golem_common::schema::tool::{
@@ -5240,6 +5377,7 @@ mod tests {
         let expected_definition = registered.definition.clone();
 
         let discovered = DiscoveredTool::from(registered);
+        assert_eq!(discovered.lookup_name, "search");
         assert_eq!(discovered.definition, expected_definition);
         assert_eq!(discovered.implemented_by, component_id);
 
@@ -5249,6 +5387,7 @@ mod tests {
             expected_definition
         );
         assert_eq!(ComponentId::from(wit.implemented_by), component_id);
+        assert_eq!(wit.lookup_name, "search");
     }
 
     #[test]
@@ -5330,8 +5469,76 @@ mod tests {
     }
 
     #[test]
+    fn declared_tool_error_validation_uses_name_before_payload() {
+        let string = SchemaGraph::anonymous(SchemaType::string());
+        let contract = ToolOutputContract {
+            result: None,
+            errors: vec![
+                NamedToolErrorSchema {
+                    name: "first".to_string(),
+                    payload: string.clone(),
+                },
+                NamedToolErrorSchema {
+                    name: "second".to_string(),
+                    payload: string.clone(),
+                },
+            ],
+        };
+        let error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "second".to_string(),
+                payload: TypedSchemaValue::new(string, SchemaValue::String("details".to_string())),
+            })),
+        ));
+
+        assert_eq!(
+            validate_declared_tool_error(error.clone(), &contract),
+            error
+        );
+    }
+
+    #[test]
+    fn declared_payloadless_tool_error_requires_unit_payload() {
+        let unit = SchemaGraph::anonymous(SchemaType::tuple(Vec::new()));
+        let contract = ToolOutputContract {
+            result: None,
+            errors: vec![NamedToolErrorSchema {
+                name: "not-found".to_string(),
+                payload: unit.clone(),
+            }],
+        };
+        let error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "not-found".to_string(),
+                payload: TypedSchemaValue::new(
+                    unit,
+                    SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+            })),
+        ));
+
+        assert_eq!(
+            validate_declared_tool_error(error.clone(), &contract),
+            error
+        );
+    }
+
+    #[test]
+    fn ordinary_payloadless_tool_result_remains_valid() {
+        let contract = ToolOutputContract {
+            result: None,
+            errors: Vec::new(),
+        };
+
+        assert_eq!(validate_declared_tool_result(None, &contract), Ok(None));
+    }
+
+    #[test]
     fn stream_attachment_validation_uses_actual_attachments_and_call_mode() {
         let command = ResolvedToolCommand {
+            command_index: 0,
             args: Vec::new(),
             stdin_required: None,
             stdout_required: None,

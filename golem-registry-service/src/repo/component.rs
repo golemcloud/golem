@@ -535,6 +535,10 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                                 WHERE component_id = $1
                                 UNION ALL
                                 SELECT component_id
+                                FROM tool_middleware_releases
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
                                 FROM deployment_component_revisions
                                 WHERE component_id = $1
                                 UNION ALL

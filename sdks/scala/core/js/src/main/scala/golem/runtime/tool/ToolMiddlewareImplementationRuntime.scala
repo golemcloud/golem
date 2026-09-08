@@ -76,6 +76,8 @@ private[golem] object ToolMiddlewareImplementationRuntime {
   private def validateName(descriptor: ToolMiddlewareDescriptor): Unit =
     if (descriptor.name.trim.isEmpty)
       throw new IllegalArgumentException("tool middleware descriptor name must not be empty")
+    else if (descriptor.version.trim.isEmpty)
+      throw new IllegalArgumentException("tool middleware descriptor version must not be empty")
 
   private def encodeTool(label: String, tool: ExtendedToolType) =
     tool.tryToTool match {

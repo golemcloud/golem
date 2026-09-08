@@ -307,6 +307,51 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_deployed_tool_list_result
     ),
     registry_entry!(
+        "DeployedToolMiddlewareView",
+        "tool.middleware.get",
+        arb_deployed_tool_middleware_result
+    ),
+    registry_entry!(
+        "DeployedToolMiddlewareListView",
+        "tool.middleware.list",
+        arb_deployed_tool_middleware_list_result
+    ),
+    registry_entry!(
+        "ToolMiddlewareReleaseView",
+        "tool.middleware.release",
+        arb_tool_middleware_release_result
+    ),
+    registry_entry!(
+        "ToolMiddlewareReleaseListView",
+        "tool.middleware.release.list",
+        arb_tool_middleware_release_list_result
+    ),
+    registry_entry!(
+        "EnvironmentToolMiddlewareGrantCreateView",
+        "tool.middleware.grant.create",
+        arb_environment_tool_middleware_grant_create_result
+    ),
+    registry_entry!(
+        "EnvironmentToolMiddlewareGrantGetView",
+        "tool.middleware.grant.get",
+        arb_environment_tool_middleware_grant_get_result
+    ),
+    registry_entry!(
+        "EnvironmentToolMiddlewareGrantListView",
+        "tool.middleware.grant.list",
+        arb_environment_tool_middleware_grant_list_result
+    ),
+    registry_entry!(
+        "EnvironmentToolMiddlewareGrantDeleteView",
+        "tool.middleware.grant.delete",
+        arb_environment_tool_middleware_grant_delete_result
+    ),
+    registry_entry!(
+        "EnvironmentToolMiddlewareGrantRestoreView",
+        "tool.middleware.grant.restore",
+        arb_environment_tool_middleware_grant_restore_result
+    ),
+    registry_entry!(
         "EnvironmentSetupPlanView",
         "deploy.environment-setup-plan",
         arb_environment_setup_plan_result
@@ -1062,6 +1107,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
                 )),
             )]),
             tool_deployment_configs: BTreeMap::new(),
+            tool_middleware_deployment_configs: BTreeMap::new(),
         }),
     );
     new.components.insert(
@@ -1076,6 +1122,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
                 )),
             )]),
             tool_deployment_configs: BTreeMap::new(),
+            tool_middleware_deployment_configs: BTreeMap::new(),
         }),
     );
 
@@ -1696,6 +1743,12 @@ fn empty_deployment_diff() -> golem_common::model::diff::DeploymentDiff {
         mcp_deployments: BTreeMap::new(),
         remote_tools: BTreeMap::new(),
         published_tools: Default::default(),
+        remote_tool_middleware_deployments: BTreeMap::new(),
+        published_tool_middlewares: Default::default(),
+        universal_tool_middlewares_changed: false,
+        tool_compatibility_mode_changed: false,
+        environment_tool_middleware_bindings: BTreeMap::new(),
+        agent_tool_middleware_bindings: BTreeMap::new(),
     }
 }
 
@@ -4711,6 +4764,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                         ),
                     )]),
                     tool_deployment_configs: BTreeMap::new(),
+                    tool_middleware_deployment_configs: BTreeMap::new(),
                 };
 
                 let new_component = golem_common::model::diff::Component {
@@ -4744,6 +4798,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                         ),
                     )]),
                     tool_deployment_configs: BTreeMap::new(),
+                    tool_middleware_deployment_configs: BTreeMap::new(),
                 };
 
                 current.components.insert(
@@ -5197,6 +5252,110 @@ fn arb_tool_release_list_result() -> OutputDocumentStrategy {
     serialized_output(Just(crate::model::tool_release::ToolReleaseListView {
         releases: vec![sample_tool_release()],
     }))
+}
+
+fn sample_tool_middleware_release()
+-> golem_common::model::tool_middleware_release::ToolMiddlewareRelease {
+    serde_json::from_value(json!({
+        "id": uuid::Uuid::new_v4(), "ownerAccountId": uuid::Uuid::new_v4(),
+        "name": "audit", "version": "1.0.0",
+        "source": { "kind": "component", "componentId": uuid::Uuid::new_v4(), "componentRevision": 0, "componentName": "middleware" },
+        "definition": { "name": "audit", "version": "1.0.0", "aliases": [], "doc": { "summary": "", "description": "", "examples": [] }, "scope": { "kind": "universal" } },
+        "metadataVersion": "0.1.0", "metadataDigest": blake3::hash(b"middleware").to_hex().to_string(),
+        "immutable": true, "lifecycle": "published", "origin": "ordinary",
+        "createdAt": fixed_datetime(), "createdBy": uuid::Uuid::new_v4(),
+        "stateChangedAt": fixed_datetime(), "stateChangedBy": uuid::Uuid::new_v4()
+    })).unwrap()
+}
+
+fn sample_deployed_tool_middleware()
+-> golem_common::model::tool_middleware::RegisteredToolMiddleware {
+    let release = sample_tool_middleware_release();
+    serde_json::from_value(json!({
+        "deploymentRevision": 0, "releaseId": release.id, "definition": release.definition,
+        "provision": { "config": {}, "env": {}, "plugins": [], "files": [] },
+        "source": release.source, "ownerAccountId": release.owner_account_id,
+        "ownerAccountEmail": "owner@example.com", "metadataVersion": release.metadata_version,
+        "metadataDigest": release.metadata_digest
+    }))
+    .unwrap()
+}
+
+fn sample_environment_tool_middleware_grant_view()
+-> crate::model::tool_middleware::EnvironmentToolMiddlewareGrantView {
+    use golem_common::model::environment_tool_middleware_grant::{
+        EnvironmentToolMiddlewareGrantId, EnvironmentToolMiddlewareGrantLifecycle,
+    };
+    crate::model::tool_middleware::EnvironmentToolMiddlewareGrantView {
+        grant_id: EnvironmentToolMiddlewareGrantId::new(),
+        release_id: golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId::new(),
+        middleware_name: "audit".into(),
+        middleware_version: "1.0.0".into(),
+        owner: "owner@example.com".into(),
+        protected: false,
+        automatic: true,
+        lifecycle: EnvironmentToolMiddlewareGrantLifecycle::Active,
+    }
+}
+
+fn arb_deployed_tool_middleware_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::DeployedToolMiddlewareView {
+            middleware: sample_deployed_tool_middleware(),
+        },
+    ))
+}
+fn arb_deployed_tool_middleware_list_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::DeployedToolMiddlewareListView {
+            middlewares: vec![sample_deployed_tool_middleware()],
+        },
+    ))
+}
+fn arb_tool_middleware_release_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::ToolMiddlewareReleaseView {
+            release: sample_tool_middleware_release(),
+        },
+    ))
+}
+fn arb_tool_middleware_release_list_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::ToolMiddlewareReleaseListView {
+            releases: vec![sample_tool_middleware_release()],
+        },
+    ))
+}
+fn arb_environment_tool_middleware_grant_create_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::EnvironmentToolMiddlewareGrantCreateView {
+            grant: sample_environment_tool_middleware_grant_view(),
+        },
+    ))
+}
+fn arb_environment_tool_middleware_grant_get_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::EnvironmentToolMiddlewareGrantGetView {
+            grant: sample_environment_tool_middleware_grant_view(),
+        },
+    ))
+}
+fn arb_environment_tool_middleware_grant_list_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::EnvironmentToolMiddlewareGrantListView {
+            grants: vec![sample_environment_tool_middleware_grant_view()],
+        },
+    ))
+}
+fn arb_environment_tool_middleware_grant_delete_result() -> OutputDocumentStrategy {
+    serialized_output(Just(crate::model::tool_middleware::EnvironmentToolMiddlewareGrantDeleteView { grant_id: golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantId::new() }))
+}
+fn arb_environment_tool_middleware_grant_restore_result() -> OutputDocumentStrategy {
+    serialized_output(Just(
+        crate::model::tool_middleware::EnvironmentToolMiddlewareGrantRestoreView {
+            grant: sample_environment_tool_middleware_grant_view(),
+        },
+    ))
 }
 
 fn arb_environment_with_details()

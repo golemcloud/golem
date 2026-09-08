@@ -972,13 +972,16 @@ fn encode_dispatch_result(
                 ::std::result::Result::Err(
                     #sdk::tool::ToolInvokeError::Tool(#error_ident)
                 ) => {
-                    let #payload_ident =
+                    let (#error_ident, #payload_ident) =
                         <#error as #sdk::agentic::ToolErrorSchema>::to_error_payload_value(
                             &#error_ident
                         )
                         .map_err(#sdk::tool::ToolInvokeError::InvalidResult)?;
                     return ::std::result::Result::Err(
-                        #sdk::tool::ToolInvokeError::Tool(#payload_ident)
+                        #sdk::tool::ToolInvokeError::Tool(#sdk::tool::RawCustomToolError {
+                            name: #error_ident,
+                            payload: #payload_ident,
+                        })
                     );
                 }
                 ::std::result::Result::Err(#error_ident) => {
@@ -1040,9 +1043,7 @@ fn underlying_invoke(
                 #command_path_ident,
                 #input_ident,
                 #stdin,
-                |_| ::std::result::Result::Err(
-                    "underlying returned a custom error for an infallible command".to_string()
-                ),
+                |_, _| ::std::result::Result::Ok(::std::option::Option::None),
             ).await
         },
     }

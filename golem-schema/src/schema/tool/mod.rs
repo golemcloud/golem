@@ -40,6 +40,7 @@ use crate::schema::schema_value::SchemaValue;
 use serde::{Deserialize, Serialize};
 
 pub mod canonical;
+pub mod compatibility;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;
@@ -121,6 +122,68 @@ impl Tool {
     pub fn name(&self) -> Option<&str> {
         self.commands.nodes.first().map(|node| node.name.as_str())
     }
+}
+
+/// Metadata describing a tool middleware component.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct ToolMiddleware {
+    pub name: String,
+    pub version: String,
+    pub aliases: Vec<String>,
+    pub doc: Doc,
+    pub scope: ToolMiddlewareScope,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum ToolMiddlewareScope {
+    Monomorphic(MonomorphicToolMiddlewareScope),
+    Universal,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct MonomorphicToolMiddlewareScope {
+    pub presented: Tool,
+    pub expected: Option<Tool>,
 }
 
 /// Flattened command hierarchy. Always non-empty; the root command is at index 0.

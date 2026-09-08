@@ -66,7 +66,7 @@ test "client input encoding preserves cancellation and drops input and stdin" {
           [],
           input,
           Some(stdin),
-          fn(_) { Err("unused tool error decoder") },
+          fn(_, _) { Some(Err("unused tool error decoder")) },
         )
         result
       })

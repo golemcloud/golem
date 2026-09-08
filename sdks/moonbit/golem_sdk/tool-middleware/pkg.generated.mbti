@@ -18,7 +18,7 @@ pub fn[T : @schema.FromSchema, E] decode_result_value(OwnedInvocationResult) -> 
 
 pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(OwnedInvocationResult) -> Result[(T, @async-core.Stream[Byte]), ToolInvokeError[E]]
 
-pub fn[E] decode_tool_error(@golemcloud/golem_sdk/interface/golem/tool/common.ToolError, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> ToolInvokeError[E]
+pub fn[E] decode_tool_error(@golemcloud/golem_sdk/interface/golem/tool/common.ToolError, (String, @schema_model.TypedSchemaValue) -> Result[E, String]?) -> ToolInvokeError[E]
 
 pub fn encode_tool_error(ToolInvokeError[@schema_model.TypedSchemaValue]) -> @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
@@ -90,11 +90,13 @@ pub(all) enum ToolInvokeError[E] {
   ConstraintViolation(String)
   InvalidResult(String)
   Tool(E)
+  UnknownToolError(@golemcloud/golem_sdk/interface/golem/tool/common.CustomToolError)
 } derive(Eq, @debug.Debug)
 pub fn[E, M] ToolInvokeError::map_tool(Self[E], (E) -> M) -> Self[M]
 
 pub(all) struct ToolMiddleware {
   name : String
+  version : String
   aliases : Array[String]
   doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
   scope : ToolMiddlewareScope

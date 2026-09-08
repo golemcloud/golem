@@ -52,6 +52,7 @@ sealed trait JsToolRpcErrorTool extends JsToolRpcError {
 /** JS shape of the host `registered-tool` record. */
 @js.native
 sealed trait JsRegisteredTool extends js.Object {
+  def lookupName: String           = js.native
   def definition: JsTool           = js.native
   def implementedBy: JsComponentId = js.native
 }
@@ -68,7 +69,7 @@ private[golem] object ToolHostApi {
    * A tool registered in the environment: its decoded wire descriptor and the
    * component that implements it.
    */
-  final case class RegisteredTool(definition: WitTool, implementedBy: JsComponentId)
+  final case class RegisteredTool(lookupName: String, definition: WitTool, implementedBy: JsComponentId)
 
   /**
    * Every tool the calling agent has access to in the current environment
@@ -86,7 +87,7 @@ private[golem] object ToolHostApi {
     ToolHostModule.getTool(name).toOption.map(decodeRegisteredTool)
 
   private def decodeRegisteredTool(raw: JsRegisteredTool): RegisteredTool =
-    RegisteredTool(ToolWireInterop.toolFromJs(raw.definition), raw.implementedBy)
+    RegisteredTool(raw.lookupName, ToolWireInterop.toolFromJs(raw.definition), raw.implementedBy)
 
   @js.native
   @JSImport("golem:tool/host@0.1.0", JSImport.Namespace)

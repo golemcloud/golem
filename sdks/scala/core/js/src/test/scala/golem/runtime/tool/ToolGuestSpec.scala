@@ -24,7 +24,7 @@ import golem.runtime.tool.host.ToolHostApi
 import golem.schema.{AgentStream, IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
-import golem.tool.wire.WitToolError
+import golem.tool.wire.{WitCustomToolError, WitToolError}
 import golem.{FutureInterop, Principal}
 import zio.test._
 import zio.ZIO
@@ -91,7 +91,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
 
   private lazy val failingRegistered: Unit = {
     val invoker: ToolRegistry.ToolInvoker = (_, _, _, _, _) =>
-      Future.successful(Left(WitToolError.CustomError(typed("boom"))))
+      Future.successful(Left(WitToolError.CustomError(WitCustomToolError("failure", typed("boom")))))
     ToolRegistry.registerInvoker(echoTool("guest-failing"), invoker)
   }
 
@@ -396,11 +396,13 @@ object ToolGuestSpec extends ZIOSpecDefault {
                    .invoke("guest-failing", js.Array[String](), input, noStdin, noStdout, anonymousPrincipal)
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
+        custom  = err.selectDynamic("val")
         payload = SchemaWireInterop.typedFromJs(
-                    err.selectDynamic("val").asInstanceOf[golem.host.js.schema.JsTypedSchemaValue]
+                    custom.selectDynamic("payload").asInstanceOf[golem.host.js.schema.JsTypedSchemaValue]
                   )
       } yield assertTrue(
         err.tag.asInstanceOf[String] == "custom-error",
+        custom.selectDynamic("name").asInstanceOf[String] == "failure",
         payload == typed("boom")
       )
     },
@@ -427,7 +429,12 @@ object ToolGuestSpec extends ZIOSpecDefault {
         tool,
         stdoutInvoker(
           tool,
-          Left(ToolInvokeError.Tool(TypedSchemaValue(strGraph, SchemaValue.StringValue("boom"))))
+          Left(
+            ToolInvokeError.UnknownToolError(
+              "failure",
+              TypedSchemaValue(strGraph, SchemaValue.StringValue("boom"))
+            )
+          )
         )
       )
       for {

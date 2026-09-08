@@ -28,6 +28,9 @@ use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_tool_grant::{
     EnvironmentToolGrantError, EnvironmentToolValidationError,
 };
+use crate::services::environment_tool_middleware_grant::{
+    EnvironmentToolMiddlewareGrantError, EnvironmentToolMiddlewareValidationError,
+};
 use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
@@ -39,6 +42,7 @@ use crate::services::resource_definition::ResourceDefinitionError;
 use crate::services::retry_policy::RetryPolicyError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
+use crate::services::tool_middleware_release::ToolMiddlewareReleaseError;
 use crate::services::tool_release::ToolReleaseError;
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -257,6 +261,9 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         }
         DeployValidationError::ToolBindingParametersMustBeObject { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_PARAMETERS_MUST_BE_OBJECT
+        }
+        DeployValidationError::ToolMiddleware { .. } => {
+            api::error_code::deployment_validation::INVALID_TOOL
         }
     }
 }
@@ -697,6 +704,14 @@ impl From<ComponentError> for ApiError {
             ComponentError::ConflictingToolFileTarget { .. } => {
                 Self::bad_request(api::error_code::INVALID_COMPONENT_FILE_PATH, error)
             }
+            ComponentError::InvalidToolMiddlewareName { .. }
+            | ComponentError::DuplicateToolMiddlewareName(_)
+            | ComponentError::InvalidToolMiddleware { .. }
+            | ComponentError::ToolMiddlewaresRequireSupportedGuestExport { .. }
+            | ComponentError::UndeclaredToolMiddlewareInProvisionConfig(_)
+            | ComponentError::MissingToolMiddlewareProvisionConfig(_) => {
+                Self::bad_request(api::error_code::INVALID_TOOL_METADATA, error)
+            }
             ComponentError::NewAgentTypeMissingInitialPermissions(_) => Self::bad_request(
                 api::error_code::NEW_AGENT_TYPE_MISSING_INITIAL_PERMISSIONS,
                 error,
@@ -974,6 +989,63 @@ impl From<EnvironmentToolValidationError> for ApiError {
         match value {
             EnvironmentToolValidationError::Grant(error) => error.into(),
             EnvironmentToolValidationError::Publication(error) => error.into(),
+        }
+    }
+}
+
+impl From<ToolMiddlewareReleaseError> for ApiError {
+    fn from(value: ToolMiddlewareReleaseError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(_)
+            | ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound
+            | ToolMiddlewareReleaseError::ParentAccountNotFound(_) => {
+                Self::not_found(api::error_code::TOOL_RELEASE_NOT_FOUND, error)
+            }
+            ToolMiddlewareReleaseError::Unauthorized(inner) => inner.into(),
+            ToolMiddlewareReleaseError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+            ToolMiddlewareReleaseError::ProtectedToolMiddlewareRelease => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            _ => Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error),
+        }
+    }
+}
+
+impl From<EnvironmentToolMiddlewareGrantError> for ApiError {
+    fn from(value: EnvironmentToolMiddlewareGrantError) -> Self {
+        let error = value.to_safe_string();
+        match value {
+            EnvironmentToolMiddlewareGrantError::ParentEnvironmentNotFound(_)
+            | EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(_)
+            | EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound => {
+                Self::not_found(api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND, error)
+            }
+            EnvironmentToolMiddlewareGrantError::Unauthorized(inner) => inner.into(),
+            EnvironmentToolMiddlewareGrantError::InternalError(_) => {
+                Self::InternalError(Json(ErrorBody {
+                    error,
+                    code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                    cause: Some(value.into_anyhow()),
+                }))
+            }
+            EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            _ => Self::conflict(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error),
+        }
+    }
+}
+
+impl From<EnvironmentToolMiddlewareValidationError> for ApiError {
+    fn from(value: EnvironmentToolMiddlewareValidationError) -> Self {
+        match value {
+            EnvironmentToolMiddlewareValidationError::Grant(error) => error.into(),
+            EnvironmentToolMiddlewareValidationError::Publication(error) => error.into(),
         }
     }
 }

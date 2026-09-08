@@ -28,7 +28,13 @@ fn universal_middleware(
   name : String,
   aliases : Array[String],
 ) -> ToolMiddleware {
-  { name, aliases, doc: registry_doc(name), scope: Universal, }
+  {
+    name,
+    version: "1.0.0",
+    aliases,
+    doc: registry_doc(name),
+    scope: Universal,
+  }
 }
 
 ///|
@@ -50,6 +56,7 @@ test "middleware registry sorts discovery and keeps aliases out of lookup" {
   register_tool_middleware(
     {
       name: "alpha-policy",
+      version: "1.0.0",
       aliases: ["alpha-alias"],
       doc: registry_doc("alpha"),
       scope: Monomorphic({
@@ -434,7 +441,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
           custom_underlying,
         ) {
         Err(@toolCommon.ToolError::CustomError(payload)) =>
-          custom_payload.val = Some(payload)
+          custom_payload.val = Some(payload.payload)
         _ => fail("guest boundary changed raw custom error")
       }
       assert_eq(raw_drops.val, 0)

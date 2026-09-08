@@ -42,4 +42,5 @@ pub mod template_render;
 pub mod text_format;
 pub mod token;
 pub mod tool_deployment;
+pub mod tool_middleware;
 pub mod tool_release;

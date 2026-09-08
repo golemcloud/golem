@@ -1995,6 +1995,10 @@ mod tests {
                 has_stdin: false,
                 has_stdout: false,
                 declares_stdout: false,
+                output_contract: golem_common::model::entity::ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
             }),
             input: TypedSchemaValue::new(
                 SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),

@@ -23,7 +23,8 @@ use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::application::{Application, ApplicationCreation, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
-    ComponentCreation, ComponentName, ToolDeploymentConfigCreation, ToolProvisionConfigCreation,
+    ComponentCreation, ComponentName, ComponentUpdate, ToolDeploymentConfigCreation,
+    ToolProvisionConfigCreation,
 };
 use golem_common::model::deployment::DeploymentVersion;
 use golem_common::model::diff::Hashable;
@@ -31,12 +32,15 @@ use golem_common::model::environment::{Environment, EnvironmentCreation, Environ
 use golem_common::model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
 };
+use golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantDeletion;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{
-    CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
+    CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool, ToolMiddleware,
+    ToolMiddlewareScope,
 };
 use reqwest_middleware::ClientBuilder;
 use std::collections::BTreeMap;
@@ -166,6 +170,16 @@ fn publisher_tool_config() -> ToolDeploymentConfigCreation {
     }
 }
 
+fn remote_release_middleware(version: &str) -> ToolMiddleware {
+    ToolMiddleware {
+        name: "audit".to_string(),
+        version: version.to_string(),
+        aliases: Vec::new(),
+        doc: Doc::default(),
+        scope: ToolMiddlewareScope::Universal,
+    }
+}
+
 fn wasm_files_under(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut wasm_files = Vec::new();
     let mut directories = vec![root.to_path_buf()];
@@ -216,6 +230,8 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                     tool_name.clone(),
                     publisher_tool_config(),
                 )]),
+                tool_middlewares: Vec::new(),
+                tool_middleware_provision_configs: BTreeMap::new(),
             },
             File::open(&component_wasm).await?,
             None::<File>,
@@ -243,6 +259,10 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                 retry_policy_defaults: Vec::new(),
                 publish_tools: vec![tool_name.clone()],
                 remote_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
+                tool_compatibility_mode: Default::default(),
                 replace_incompatible_agent_secrets: false,
             },
         )
@@ -295,8 +315,10 @@ bridge:
     let staged_deployment = ctx.cli([cmd::DEPLOY, "--stage"]).await;
     assert!(!staged_deployment.success());
     assert!(
-        staged_deployment.stdout_contains("requires environment tool grant changes")
-            || staged_deployment.stderr_contains("requires environment tool grant changes")
+        staged_deployment
+            .stdout_contains("requires environment tool or tool middleware grant changes")
+            || staged_deployment
+                .stderr_contains("requires environment tool or tool middleware grant changes")
     );
     assert!(
         consumer
@@ -544,6 +566,272 @@ environments:
             &EnvironmentToolGrantDeletion { automatic: true },
         )
         .await?;
+
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+async fn remote_middleware_release_is_pinned_across_accounts(
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let base_url = Url::parse(&format!("http://localhost:{}", ctx.router_port()))?;
+    let admin = registry_client(&base_url, golem_client::LOCAL_WELL_KNOWN_TOKEN);
+    let publisher = create_registry_user(&admin, &base_url, "middleware-publisher").await?;
+    let consumer = create_registry_user(&admin, &base_url, "middleware-consumer").await?;
+    let (_, publisher_environment) =
+        create_app_and_environment(&publisher, "middleware-publisher").await?;
+    let (consumer_application, consumer_environment) =
+        create_app_and_environment(&consumer, "middleware-consumer").await?;
+    let middleware_name = ToolMiddlewareName::try_from("audit").unwrap();
+    let component_wasm =
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/tool_middleware_guest.wasm");
+
+    let publisher_component = publisher
+        .client
+        .create_component(
+            &publisher_environment.id.0,
+            &ComponentCreation {
+                component_name: ComponentName::try_from("publisher-middleware:audit")
+                    .map_err(anyhow::Error::msg)?,
+                agent_types: Vec::new(),
+                agent_type_provision_configs: BTreeMap::new(),
+                tools: Vec::new(),
+                tool_deployment_configs: BTreeMap::new(),
+                tool_middlewares: vec![remote_release_middleware("1.2.0")],
+                tool_middleware_provision_configs: BTreeMap::from([(
+                    middleware_name.clone(),
+                    publisher_tool_config().provision,
+                )]),
+            },
+            File::open(&component_wasm).await?,
+            None::<File>,
+        )
+        .await?;
+
+    let yaml_string = |value: &str| serde_json::to_string(value).unwrap();
+    let publisher_plan = publisher
+        .client
+        .get_environment_deployment_plan(&publisher_environment.id.0)
+        .await?;
+    let mut publisher_hash_input = publisher_plan.to_diffable();
+    publisher_hash_input
+        .published_tool_middlewares
+        .insert(middleware_name.to_string());
+    publisher
+        .client
+        .deploy_environment(
+            &publisher_environment.id.0,
+            &DeploymentCreation {
+                current_revision: publisher_plan.current_revision,
+                expected_deployment_hash: publisher_hash_input.hash()?,
+                version: DeploymentVersion("publisher-middleware-1.2.0".to_string()),
+                agent_secret_defaults: Vec::new(),
+                quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
+                publish_tools: Vec::new(),
+                remote_tools: Vec::new(),
+                publish_tool_middlewares: vec![middleware_name.clone()],
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
+                tool_compatibility_mode: Default::default(),
+                replace_incompatible_agent_secrets: false,
+            },
+        )
+        .await?;
+    let release = publisher
+        .client
+        .list_account_tool_middleware_releases(&publisher.account_id.0)
+        .await?
+        .values
+        .into_iter()
+        .find(|release| release.name == middleware_name && release.version == "1.2.0")
+        .expect("publisher deployment must create audit@1.2.0");
+
+    let consumer_manifest = format!(
+        r#"manifestVersion: 1.6.0
+app: {application}
+
+tools:
+  middleware:
+    audit:
+      release:
+        account: {publisher_account}
+        name: audit
+        version: "1.2.0"
+
+environments:
+  {environment}:
+    server:
+      url: {server_url}
+      workerUrl: {server_url}
+      allowInsecure: true
+      auth:
+        staticToken: {token}
+    tools:
+      middleware: [audit]
+"#,
+        application = yaml_string(&consumer_application.name.0),
+        environment = yaml_string(&consumer_environment.name.0),
+        server_url = yaml_string(base_url.as_str()),
+        token = yaml_string(consumer.token.secret()),
+        publisher_account = yaml_string(publisher.account_email.as_str()),
+    );
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), &consumer_manifest)?;
+
+    let deployment = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deployment.success_or_dump());
+    assert!(deployment.stdout_contains("Committed environment tool middleware grant setup"));
+    let grants = consumer
+        .client
+        .list_environment_tool_middleware_grants(&consumer_environment.id.0)
+        .await?
+        .values;
+    assert_eq!(grants.len(), 1);
+    assert!(grants[0].grant.automatic);
+    assert_eq!(grants[0].release.id, release.id);
+
+    let environment = consumer
+        .client
+        .get_environment(&consumer_environment.id.0)
+        .await?;
+    let pinned = environment
+        .current_deployment
+        .expect("deployment must exist");
+    let compiled = consumer
+        .client
+        .list_deployment_registered_tool_middlewares(
+            &consumer_environment.id.0,
+            pinned.deployment_revision.into(),
+        )
+        .await?
+        .values;
+    assert_eq!(compiled.len(), 1);
+    assert_eq!(compiled[0].release_id, Some(release.id));
+    assert_eq!(compiled[0].metadata_digest, release.metadata_digest);
+
+    let no_op = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(no_op.success_or_dump());
+    let after_no_op = consumer
+        .client
+        .get_environment(&consumer_environment.id.0)
+        .await?;
+    assert_eq!(after_no_op.current_deployment.unwrap(), pinned);
+
+    let publisher_component_v13 = publisher
+        .client
+        .update_component(
+            &publisher_component.id.0,
+            &ComponentUpdate {
+                current_revision: publisher_component.revision,
+                agent_types: None,
+                agent_type_provision_config_updates: None,
+                tools: None,
+                tool_deployment_config_updates: None,
+                tool_middlewares: Some(vec![remote_release_middleware("1.3.0")]),
+                tool_middleware_provision_config_updates: None,
+                allow_incompatible_config: false,
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await?;
+    assert_ne!(
+        publisher_component_v13.revision,
+        publisher_component.revision
+    );
+    let publisher_plan_v13 = publisher
+        .client
+        .get_environment_deployment_plan(&publisher_environment.id.0)
+        .await?;
+    let mut publisher_hash_input_v13 = publisher_plan_v13.to_diffable();
+    publisher_hash_input_v13
+        .published_tool_middlewares
+        .insert(middleware_name.to_string());
+    publisher
+        .client
+        .deploy_environment(
+            &publisher_environment.id.0,
+            &DeploymentCreation {
+                current_revision: publisher_plan_v13.current_revision,
+                expected_deployment_hash: publisher_hash_input_v13.hash()?,
+                version: DeploymentVersion("publisher-middleware-1.3.0".to_string()),
+                agent_secret_defaults: Vec::new(),
+                quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
+                publish_tools: Vec::new(),
+                remote_tools: Vec::new(),
+                publish_tool_middlewares: vec![middleware_name.clone()],
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
+                tool_compatibility_mode: Default::default(),
+                replace_incompatible_agent_secrets: false,
+            },
+        )
+        .await?;
+    let release_v13 = publisher
+        .client
+        .list_account_tool_middleware_releases(&publisher.account_id.0)
+        .await?
+        .values
+        .into_iter()
+        .find(|release| release.name == middleware_name && release.version == "1.3.0")
+        .expect("publisher metadata update must create audit@1.3.0");
+    assert_ne!(release_v13.id, release.id);
+    assert_ne!(release_v13.metadata_digest, release.metadata_digest);
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        consumer_manifest.replace("1.2.0", "1.3.0"),
+    )?;
+    let updated_deployment = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(updated_deployment.success_or_dump());
+    let updated_grants = consumer
+        .client
+        .list_environment_tool_middleware_grants(&consumer_environment.id.0)
+        .await?
+        .values;
+    let updated_grant = updated_grants
+        .iter()
+        .find(|grant| grant.release.id == release_v13.id)
+        .expect("metadata update deployment must reconcile the 1.3.0 grant");
+    let updated_environment = consumer
+        .client
+        .get_environment(&consumer_environment.id.0)
+        .await?;
+    let updated_pinned = updated_environment.current_deployment.unwrap();
+    assert_ne!(updated_pinned.deployment_hash, pinned.deployment_hash);
+
+    consumer
+        .client
+        .delete_environment_tool_middleware_grant(
+            &updated_grant.grant.id.0,
+            &EnvironmentToolMiddlewareGrantDeletion { automatic: true },
+        )
+        .await?;
+    let retained = consumer
+        .client
+        .list_deployment_registered_tool_middlewares(
+            &consumer_environment.id.0,
+            updated_pinned.deployment_revision.into(),
+        )
+        .await?
+        .values;
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].release_id, Some(release_v13.id));
+    assert_eq!(retained[0].metadata_digest, release_v13.metadata_digest);
+
+    let future_admission = ctx.cli([cmd::DEPLOY, "--stage"]).await;
+    assert!(!future_admission.success_or_dump());
+    assert!(
+        future_admission
+            .stdout_contains("requires environment tool or tool middleware grant changes")
+            || future_admission
+                .stderr_contains("requires environment tool or tool middleware grant changes")
+    );
 
     Ok(())
 }

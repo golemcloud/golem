@@ -71,9 +71,9 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     validateImplementation(universalTpe, implRepr, implSym)
     validateDirectParent(universalTpe, implSym)
 
-    val constructor          = implSym.primaryConstructor
-    val (name, aliases, doc) = core.universalToolMiddlewareMetadata(implSym)
-    val instance             = Apply(Select(New(TypeTree.of[Impl]), constructor), Nil).asExprOf[Impl]
+    val constructor                   = implSym.primaryConstructor
+    val (name, version, aliases, doc) = core.universalToolMiddlewareMetadata(implSym)
+    val instance                      = Apply(Select(New(TypeTree.of[Impl]), constructor), Nil).asExprOf[Impl]
 
     '{
       UniversalToolMiddlewareHandle(
@@ -81,7 +81,8 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
           ${ Expr(name) },
           ${ Expr(aliases) },
           ${ Expr(doc) },
-          ToolMiddlewareScope.Universal
+          ToolMiddlewareScope.Universal,
+          ${ Expr(version) }
         ),
         () => $instance.asInstanceOf[UniversalToolMiddleware]
       )
@@ -108,12 +109,12 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     validateImplementation(surfaceRepr, implRepr, implSym)
     validateGeneratedTypes(presentedRepr, expectedRepr, underlyingRepr, surfaceRepr, adapter)
 
-    val constructor          = implSym.primaryConstructor
-    val (name, aliases, doc) = core.toolMiddlewareMetadata(implSym)
-    val presentedDescriptor  = new ToolDefinitionAssembler(core).descriptorExprOf[Presented]
-    val expectedDescriptor   = new ToolDefinitionAssembler(core).descriptorExprOf[Expected]
-    val leaves               = flatten(presentedRepr, Nil, Set.empty)
-    val bindings             = Expr.ofList(leaves.map { leaf =>
+    val constructor                   = implSym.primaryConstructor
+    val (name, version, aliases, doc) = core.toolMiddlewareMetadata(implSym)
+    val presentedDescriptor           = new ToolDefinitionAssembler(core).descriptorExprOf[Presented]
+    val expectedDescriptor            = new ToolDefinitionAssembler(core).descriptorExprOf[Expected]
+    val leaves                        = flatten(presentedRepr, Nil, Set.empty)
+    val bindings                      = Expr.ofList(leaves.map { leaf =>
       bindingExpr[Underlying, Surface](leaf, surfaceRepr, underlyingFactory)
     })
 
@@ -131,7 +132,8 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
             ${ Expr(name) },
             ${ Expr(aliases) },
             ${ Expr(doc) },
-            ToolMiddlewareScope.Monomorphic(presentedWire, Some(expectedWire))
+            ToolMiddlewareScope.Monomorphic(presentedWire, Some(expectedWire)),
+            ${ Expr(version) }
           ),
         presented = $presentedDescriptor,
         expected = $expectedDescriptor,

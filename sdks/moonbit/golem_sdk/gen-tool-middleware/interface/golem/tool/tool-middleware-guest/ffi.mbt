@@ -10,16 +10,16 @@ pub fn wasmExportAsyncInvokeToolMiddleware(event_raw : Int, waitable : Int, code
 pub fn wasmExportDiscoverToolMiddlewares() -> Int {
 
       let (result) : (Result[Array[@common.ToolMiddleware], @common.ToolError]) = discover_tool_middlewares();
-      let return_area = mbt_ffi_malloc(40)
+      let return_area = mbt_ffi_malloc(48)
 
       match result {
             Ok(payload) => {
                   mbt_ffi_store8((return_area) + 0, (0))
 
-                  let address = mbt_ffi_malloc((payload).length() * 120);
+                  let address = mbt_ffi_malloc((payload).length() * 128);
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.ToolMiddleware = (payload)[(index)]
-                        let iter_base = address + (index * 120);
+                        let iter_base = address + (index * 128);
                         __wit_bindgen_lower_t531((iter_base) + 0, iter_elem)
 
                   }
@@ -30,7 +30,7 @@ pub fn wasmExportDiscoverToolMiddlewares() -> Int {
             }
             Err(payload0) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t532((return_area) + 4, payload0)
+                  __wit_bindgen_lower_t533((return_area) + 4, payload0)
 
                   ()
             }
@@ -47,32 +47,33 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
             0 => {
 
                   for index141 = 0; index141 < (mbt_ffi_load32((p0) + 8)); index141 = index141 + 1 {
-                        let iter_base = (mbt_ffi_load32((p0) + 4)) + (index141 * 120)
+                        let iter_base = (mbt_ffi_load32((p0) + 4)) + (index141 * 128)
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
+                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
-                        for index = 0; index < (mbt_ffi_load32((iter_base) + 12)); index = index + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 8)) + (index * 8)
+                        for index = 0; index < (mbt_ffi_load32((iter_base) + 20)); index = index + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 16)) + (index * 8)
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                         }
-                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 16))
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 24))
+                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 32))
 
-                        for index0 = 0; index0 < (mbt_ffi_load32((iter_base) + 36)); index0 = index0 + 1 {
-                              let iter_base = (mbt_ffi_load32((iter_base) + 32)) + (index0 * 16)
+                        for index0 = 0; index0 < (mbt_ffi_load32((iter_base) + 44)); index0 = index0 + 1 {
+                              let iter_base = (mbt_ffi_load32((iter_base) + 40)) + (index0 * 16)
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
                               mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                         }
-                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 32))
+                        mbt_ffi_free(mbt_ffi_load32((iter_base) + 40))
 
-                        match (mbt_ffi_load8_u((iter_base) + 40)) {
+                        match (mbt_ffi_load8_u((iter_base) + 48)) {
                               0 => {
-                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 44))
+                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 52))
 
-                                    for index48 = 0; index48 < (mbt_ffi_load32((iter_base) + 56)); index48 = index48 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 52)) + (index48 * 324)
+                                    for index48 = 0; index48 < (mbt_ffi_load32((iter_base) + 64)); index48 = index48 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 60)) + (index48 * 324)
                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                           for index1 = 0; index1 < (mbt_ffi_load32((iter_base) + 12)); index1 = index1 + 1 {
@@ -1742,10 +1743,10 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                           }
 
                                     }
-                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 52))
+                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 60))
 
-                                    for index69 = 0; index69 < (mbt_ffi_load32((iter_base) + 64)); index69 = index69 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 60)) + (index69 * 144)
+                                    for index69 = 0; index69 < (mbt_ffi_load32((iter_base) + 72)); index69 = index69 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 68)) + (index69 * 144)
 
                                           match (mbt_ffi_load8_u((iter_base) + 0)) {
                                                 0 => ()
@@ -2425,10 +2426,10 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                           }
 
                                     }
-                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 60))
+                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
 
-                                    for index70 = 0; index70 < (mbt_ffi_load32((iter_base) + 72)); index70 = index70 + 1 {
-                                          let iter_base = (mbt_ffi_load32((iter_base) + 68)) + (index70 * 24)
+                                    for index70 = 0; index70 < (mbt_ffi_load32((iter_base) + 80)); index70 = index70 + 1 {
+                                          let iter_base = (mbt_ffi_load32((iter_base) + 76)) + (index70 * 24)
                                           mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                           match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -2441,15 +2442,15 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                           }
 
                                     }
-                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 68))
+                                    mbt_ffi_free(mbt_ffi_load32((iter_base) + 76))
 
-                                    match (mbt_ffi_load8_u((iter_base) + 80)) {
+                                    match (mbt_ffi_load8_u((iter_base) + 88)) {
                                           0 => ()
                                           1 => {
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 84))
+                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 92))
 
-                                                for index118 = 0; index118 < (mbt_ffi_load32((iter_base) + 96)); index118 = index118 + 1 {
-                                                      let iter_base = (mbt_ffi_load32((iter_base) + 92)) + (index118 * 324)
+                                                for index118 = 0; index118 < (mbt_ffi_load32((iter_base) + 104)); index118 = index118 + 1 {
+                                                      let iter_base = (mbt_ffi_load32((iter_base) + 100)) + (index118 * 324)
                                                       mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                                       for index71 = 0; index71 < (mbt_ffi_load32((iter_base) + 12)); index71 = index71 + 1 {
@@ -4119,10 +4120,10 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                                       }
 
                                                 }
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 92))
+                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 100))
 
-                                                for index139 = 0; index139 < (mbt_ffi_load32((iter_base) + 104)); index139 = index139 + 1 {
-                                                      let iter_base = (mbt_ffi_load32((iter_base) + 100)) + (index139 * 144)
+                                                for index139 = 0; index139 < (mbt_ffi_load32((iter_base) + 112)); index139 = index139 + 1 {
+                                                      let iter_base = (mbt_ffi_load32((iter_base) + 108)) + (index139 * 144)
 
                                                       match (mbt_ffi_load8_u((iter_base) + 0)) {
                                                             0 => ()
@@ -4802,10 +4803,10 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                                       }
 
                                                 }
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 100))
+                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 108))
 
-                                                for index140 = 0; index140 < (mbt_ffi_load32((iter_base) + 112)); index140 = index140 + 1 {
-                                                      let iter_base = (mbt_ffi_load32((iter_base) + 108)) + (index140 * 24)
+                                                for index140 = 0; index140 < (mbt_ffi_load32((iter_base) + 120)); index140 = index140 + 1 {
+                                                      let iter_base = (mbt_ffi_load32((iter_base) + 116)) + (index140 * 24)
                                                       mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                                       match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -4818,7 +4819,7 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                                       }
 
                                                 }
-                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 108))
+                                                mbt_ffi_free(mbt_ffi_load32((iter_base) + 116))
 
                                           }
                                           _ => panic()
@@ -4863,9 +4864,10 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
 
                         }
                         5 => {
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
 
-                              for index163 = 0; index163 < (mbt_ffi_load32((p0) + 12)); index163 = index163 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 8)) + (index163 * 144)
+                              for index163 = 0; index163 < (mbt_ffi_load32((p0) + 20)); index163 = index163 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index163 * 144)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -5545,10 +5547,10 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
 
-                              for index164 = 0; index164 < (mbt_ffi_load32((p0) + 20)); index164 = index164 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index164 * 24)
+                              for index164 = 0; index164 < (mbt_ffi_load32((p0) + 28)); index164 = index164 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 24)) + (index164 * 24)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                     match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -5561,10 +5563,10 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 24))
 
-                              for index165 = 0; index165 < (mbt_ffi_load32((p0) + 32)); index165 = index165 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 28)) + (index165 * 32)
+                              for index165 = 0; index165 < (mbt_ffi_load32((p0) + 40)); index165 = index165 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 36)) + (index165 * 32)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -5663,7 +5665,7 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 28))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 36))
 
                         }
                         _ => panic()
@@ -5681,7 +5683,7 @@ pub fn wasmExportGetToolMiddleware(p0 : Int, p1 : Int) -> Int {
       let result = mbt_ffi_ptr2str(p0, p1)
 
       let (result0) : (Result[@common.ToolMiddleware, @common.ToolError]) = get_tool_middleware(result);
-      let return_area = mbt_ffi_malloc(124)
+      let return_area = mbt_ffi_malloc(132)
 
       match result0 {
             Ok(payload) => {
@@ -5692,7 +5694,7 @@ pub fn wasmExportGetToolMiddleware(p0 : Int, p1 : Int) -> Int {
             }
             Err(payload1) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t532((return_area) + 4, payload1)
+                  __wit_bindgen_lower_t533((return_area) + 4, payload1)
 
                   ()
             }
@@ -13777,30 +13779,31 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
       match (mbt_ffi_load8_u((p0) + 0)) {
             0 => {
                   mbt_ffi_free(mbt_ffi_load32((p0) + 4))
+                  mbt_ffi_free(mbt_ffi_load32((p0) + 12))
 
-                  for index = 0; index < (mbt_ffi_load32((p0) + 16)); index = index + 1 {
-                        let iter_base = (mbt_ffi_load32((p0) + 12)) + (index * 8)
+                  for index = 0; index < (mbt_ffi_load32((p0) + 24)); index = index + 1 {
+                        let iter_base = (mbt_ffi_load32((p0) + 20)) + (index * 8)
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                   }
-                  mbt_ffi_free(mbt_ffi_load32((p0) + 12))
                   mbt_ffi_free(mbt_ffi_load32((p0) + 20))
                   mbt_ffi_free(mbt_ffi_load32((p0) + 28))
+                  mbt_ffi_free(mbt_ffi_load32((p0) + 36))
 
-                  for index0 = 0; index0 < (mbt_ffi_load32((p0) + 40)); index0 = index0 + 1 {
-                        let iter_base = (mbt_ffi_load32((p0) + 36)) + (index0 * 16)
+                  for index0 = 0; index0 < (mbt_ffi_load32((p0) + 48)); index0 = index0 + 1 {
+                        let iter_base = (mbt_ffi_load32((p0) + 44)) + (index0 * 16)
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
                         mbt_ffi_free(mbt_ffi_load32((iter_base) + 8))
 
                   }
-                  mbt_ffi_free(mbt_ffi_load32((p0) + 36))
+                  mbt_ffi_free(mbt_ffi_load32((p0) + 44))
 
-                  match (mbt_ffi_load8_u((p0) + 44)) {
+                  match (mbt_ffi_load8_u((p0) + 52)) {
                         0 => {
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 48))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 56))
 
-                              for index48 = 0; index48 < (mbt_ffi_load32((p0) + 60)); index48 = index48 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 56)) + (index48 * 324)
+                              for index48 = 0; index48 < (mbt_ffi_load32((p0) + 68)); index48 = index48 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 64)) + (index48 * 324)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                     for index1 = 0; index1 < (mbt_ffi_load32((iter_base) + 12)); index1 = index1 + 1 {
@@ -15470,10 +15473,10 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 56))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 64))
 
-                              for index69 = 0; index69 < (mbt_ffi_load32((p0) + 68)); index69 = index69 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 64)) + (index69 * 144)
+                              for index69 = 0; index69 < (mbt_ffi_load32((p0) + 76)); index69 = index69 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 72)) + (index69 * 144)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -16153,10 +16156,10 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 64))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 72))
 
-                              for index70 = 0; index70 < (mbt_ffi_load32((p0) + 76)); index70 = index70 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 72)) + (index70 * 24)
+                              for index70 = 0; index70 < (mbt_ffi_load32((p0) + 84)); index70 = index70 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 80)) + (index70 * 24)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                     match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -16169,15 +16172,15 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 72))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 80))
 
-                              match (mbt_ffi_load8_u((p0) + 84)) {
+                              match (mbt_ffi_load8_u((p0) + 92)) {
                                     0 => ()
                                     1 => {
-                                          mbt_ffi_free(mbt_ffi_load32((p0) + 88))
+                                          mbt_ffi_free(mbt_ffi_load32((p0) + 96))
 
-                                          for index118 = 0; index118 < (mbt_ffi_load32((p0) + 100)); index118 = index118 + 1 {
-                                                let iter_base = (mbt_ffi_load32((p0) + 96)) + (index118 * 324)
+                                          for index118 = 0; index118 < (mbt_ffi_load32((p0) + 108)); index118 = index118 + 1 {
+                                                let iter_base = (mbt_ffi_load32((p0) + 104)) + (index118 * 324)
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                                 for index71 = 0; index71 < (mbt_ffi_load32((iter_base) + 12)); index71 = index71 + 1 {
@@ -17847,10 +17850,10 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                                 }
 
                                           }
-                                          mbt_ffi_free(mbt_ffi_load32((p0) + 96))
+                                          mbt_ffi_free(mbt_ffi_load32((p0) + 104))
 
-                                          for index139 = 0; index139 < (mbt_ffi_load32((p0) + 108)); index139 = index139 + 1 {
-                                                let iter_base = (mbt_ffi_load32((p0) + 104)) + (index139 * 144)
+                                          for index139 = 0; index139 < (mbt_ffi_load32((p0) + 116)); index139 = index139 + 1 {
+                                                let iter_base = (mbt_ffi_load32((p0) + 112)) + (index139 * 144)
 
                                                 match (mbt_ffi_load8_u((iter_base) + 0)) {
                                                       0 => ()
@@ -18530,10 +18533,10 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                                 }
 
                                           }
-                                          mbt_ffi_free(mbt_ffi_load32((p0) + 104))
+                                          mbt_ffi_free(mbt_ffi_load32((p0) + 112))
 
-                                          for index140 = 0; index140 < (mbt_ffi_load32((p0) + 116)); index140 = index140 + 1 {
-                                                let iter_base = (mbt_ffi_load32((p0) + 112)) + (index140 * 24)
+                                          for index140 = 0; index140 < (mbt_ffi_load32((p0) + 124)); index140 = index140 + 1 {
+                                                let iter_base = (mbt_ffi_load32((p0) + 120)) + (index140 * 24)
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                                 match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -18546,7 +18549,7 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                                 }
 
                                           }
-                                          mbt_ffi_free(mbt_ffi_load32((p0) + 112))
+                                          mbt_ffi_free(mbt_ffi_load32((p0) + 120))
 
                                     }
                                     _ => panic()
@@ -18588,9 +18591,10 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
 
                         }
                         5 => {
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
 
-                              for index162 = 0; index162 < (mbt_ffi_load32((p0) + 12)); index162 = index162 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 8)) + (index162 * 144)
+                              for index162 = 0; index162 < (mbt_ffi_load32((p0) + 20)); index162 = index162 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index162 * 144)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -19270,10 +19274,10 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
 
-                              for index163 = 0; index163 < (mbt_ffi_load32((p0) + 20)); index163 = index163 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index163 * 24)
+                              for index163 = 0; index163 < (mbt_ffi_load32((p0) + 28)); index163 = index163 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 24)) + (index163 * 24)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                     match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -19286,10 +19290,10 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 24))
 
-                              for index164 = 0; index164 < (mbt_ffi_load32((p0) + 32)); index164 = index164 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 28)) + (index164 * 32)
+                              for index164 = 0; index164 < (mbt_ffi_load32((p0) + 40)); index164 = index164 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 36)) + (index164 * 32)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -19388,7 +19392,7 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 28))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 36))
 
                         }
                         _ => panic()
@@ -19410,7 +19414,7 @@ fn invoke_tool_middleware_task_return(return_result: Ref[Result[@common.Invocati
 
                   let cleanup_list : Array[Int] = []
 
-                  let (lowered1056,lowered1057,lowered1058,lowered1059,lowered1060,lowered1061,lowered1062,lowered1063,lowered1064,lowered1065,lowered1066,lowered1067) = match return_value {
+                  let (lowered1059,lowered1060,lowered1061,lowered1062,lowered1063,lowered1064,lowered1065,lowered1066,lowered1067,lowered1068,lowered1069,lowered1070) = match return_value {
                         Ok(payload) => {
 
                               let (lowered, lowered1016, lowered1017, lowered1018, lowered1019, lowered1020, lowered1021, lowered1022, lowered1023) = match ((payload).result) {
@@ -19466,13 +19470,13 @@ fn invoke_tool_middleware_task_return(return_result: Ref[Result[@common.Invocati
                         }
                         Err(payload1028) => {
 
-                              let (lowered1047,lowered1048,lowered1049,lowered1050,lowered1051,lowered1052,lowered1053,lowered1054,lowered1055) = match payload1028 {
+                              let (lowered1048,lowered1049,lowered1050,lowered1051,lowered1052,lowered1053,lowered1054,lowered1055,lowered1056,lowered1057,lowered1058) = match payload1028 {
                                     InvalidToolName(payload1029) => {
 
                                           let ptr = mbt_ffi_str2ptr(payload1029)
                                           cleanup_list.push(ptr)
 
-                                          ((0), ptr, payload1029.length(), 0, 0, 0, 0, 0, 0)
+                                          ((0), ptr, payload1029.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     InvalidCommandPath(payload1030) => {
 
@@ -19489,67 +19493,70 @@ fn invoke_tool_middleware_task_return(return_result: Ref[Result[@common.Invocati
                                           }
                                           cleanup_list.push(address1032)
 
-                                          ((1), address1032, (payload1030).length(), 0, 0, 0, 0, 0, 0)
+                                          ((1), address1032, (payload1030).length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     InvalidInput(payload1034) => {
 
                                           let ptr1035 = mbt_ffi_str2ptr(payload1034)
                                           cleanup_list.push(ptr1035)
 
-                                          ((2), ptr1035, payload1034.length(), 0, 0, 0, 0, 0, 0)
+                                          ((2), ptr1035, payload1034.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     ConstraintViolation(payload1036) => {
 
                                           let ptr1037 = mbt_ffi_str2ptr(payload1036)
                                           cleanup_list.push(ptr1037)
 
-                                          ((3), ptr1037, payload1036.length(), 0, 0, 0, 0, 0, 0)
+                                          ((3), ptr1037, payload1036.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     InvalidResult(payload1038) => {
 
                                           let ptr1039 = mbt_ffi_str2ptr(payload1038)
                                           cleanup_list.push(ptr1039)
 
-                                          ((4), ptr1039, payload1038.length(), 0, 0, 0, 0, 0, 0)
+                                          ((4), ptr1039, payload1038.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     CustomError(payload1040) => {
 
-                                          let address1041 = mbt_ffi_malloc((((payload1040).graph).type_nodes).length() * 144);
-                                          for index1042 = 0; index1042 < (((payload1040).graph).type_nodes).length(); index1042 = index1042 + 1 {
-                                                let iter_elem : @types.SchemaTypeNode = (((payload1040).graph).type_nodes)[(index1042)]
-                                                let iter_base = address1041 + (index1042 * 144);
+                                          let ptr1041 = mbt_ffi_str2ptr((payload1040).name)
+
+                                          let address1042 = mbt_ffi_malloc(((((payload1040).payload).graph).type_nodes).length() * 144);
+                                          for index1043 = 0; index1043 < ((((payload1040).payload).graph).type_nodes).length(); index1043 = index1043 + 1 {
+                                                let iter_elem : @types.SchemaTypeNode = ((((payload1040).payload).graph).type_nodes)[(index1043)]
+                                                let iter_base = address1042 + (index1043 * 144);
                                                 __wit_bindgen_lower_t56((iter_base) + 0, iter_elem)
 
                                           }
 
-                                          let address1043 = mbt_ffi_malloc((((payload1040).graph).defs).length() * 24);
-                                          for index1044 = 0; index1044 < (((payload1040).graph).defs).length(); index1044 = index1044 + 1 {
-                                                let iter_elem : @types.SchemaTypeDef = (((payload1040).graph).defs)[(index1044)]
-                                                let iter_base = address1043 + (index1044 * 24);
+                                          let address1044 = mbt_ffi_malloc(((((payload1040).payload).graph).defs).length() * 24);
+                                          for index1045 = 0; index1045 < ((((payload1040).payload).graph).defs).length(); index1045 = index1045 + 1 {
+                                                let iter_elem : @types.SchemaTypeDef = ((((payload1040).payload).graph).defs)[(index1045)]
+                                                let iter_base = address1044 + (index1045 * 24);
                                                 __wit_bindgen_lower_t18((iter_base) + 0, iter_elem)
 
                                           }
 
-                                          let address1045 = mbt_ffi_malloc((((payload1040).value).value_nodes).length() * 32);
-                                          for index1046 = 0; index1046 < (((payload1040).value).value_nodes).length(); index1046 = index1046 + 1 {
-                                                let iter_elem : @types.SchemaValueNode = (((payload1040).value).value_nodes)[(index1046)]
-                                                let iter_base = address1045 + (index1046 * 32);
+                                          let address1046 = mbt_ffi_malloc(((((payload1040).payload).value).value_nodes).length() * 32);
+                                          for index1047 = 0; index1047 < ((((payload1040).payload).value).value_nodes).length(); index1047 = index1047 + 1 {
+                                                let iter_elem : @types.SchemaValueNode = ((((payload1040).payload).value).value_nodes)[(index1047)]
+                                                let iter_base = address1046 + (index1047 * 32);
                                                 __wit_bindgen_lower_t76((iter_base) + 0, iter_elem)
 
                                           }
-                                          cleanup_list.push(address1041)
-                                          cleanup_list.push(address1043)
-                                          cleanup_list.push(address1045)
+                                          cleanup_list.push(ptr1041)
+                                          cleanup_list.push(address1042)
+                                          cleanup_list.push(address1044)
+                                          cleanup_list.push(address1046)
 
-                                          ((5), address1041, (((payload1040).graph).type_nodes).length(), address1043, (((payload1040).graph).defs).length(), ((payload1040).graph).root, address1045, (((payload1040).value).value_nodes).length(), ((payload1040).value).root)
+                                          ((5), ptr1041, (payload1040).name.length(), address1042, ((((payload1040).payload).graph).type_nodes).length(), address1044, ((((payload1040).payload).graph).defs).length(), (((payload1040).payload).graph).root, address1046, ((((payload1040).payload).value).value_nodes).length(), (((payload1040).payload).value).root)
                                     }
                               }
 
-                              ((1), lowered1047, lowered1048, lowered1049, lowered1050, lowered1051, lowered1052, lowered1053, lowered1054, lowered1055, 0, 0)
+                              ((1), lowered1048, lowered1049, lowered1050, lowered1051, lowered1052, lowered1053, lowered1054, lowered1055, lowered1056, lowered1057, lowered1058)
                         }
                   }
 
-                  wasmExportAsyncInvokeToolMiddlewareTaskReturn(lowered1056, lowered1057, lowered1058, lowered1059, lowered1060, lowered1061, lowered1062, lowered1063, lowered1064, lowered1065, lowered1066, lowered1067)
+                  wasmExportAsyncInvokeToolMiddlewareTaskReturn(lowered1059, lowered1060, lowered1061, lowered1062, lowered1063, lowered1064, lowered1065, lowered1066, lowered1067, lowered1068, lowered1069, lowered1070)
 
                   cleanup_list.each(mbt_ffi_free)
 
@@ -22312,26 +22319,41 @@ fn __wit_bindgen_lower_t531(ptr : Int, value : @common.ToolMiddleware) -> Unit {
       mbt_ffi_store32((ptr) + 4, (value).name.length())
       mbt_ffi_store32((ptr) + 0, ptr0)
 
+      let ptr1 = mbt_ffi_str2ptr((value).version)
+      mbt_ffi_store32((ptr) + 12, (value).version.length())
+      mbt_ffi_store32((ptr) + 8, ptr1)
+
       let address = mbt_ffi_malloc(((value).aliases).length() * 8);
       for index = 0; index < ((value).aliases).length(); index = index + 1 {
             let iter_elem : String = ((value).aliases)[(index)]
             let iter_base = address + (index * 8);
 
-            let ptr1 = mbt_ffi_str2ptr(iter_elem)
+            let ptr2 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32((iter_base) + 4, iter_elem.length())
-            mbt_ffi_store32((iter_base) + 0, ptr1)
+            mbt_ffi_store32((iter_base) + 0, ptr2)
 
       }
-      mbt_ffi_store32((ptr) + 12, ((value).aliases).length())
-      mbt_ffi_store32((ptr) + 8, address)
-      __wit_bindgen_lower_t495((ptr) + 16, (value).doc)
-      __wit_bindgen_lower_t530((ptr) + 40, (value).scope)
+      mbt_ffi_store32((ptr) + 20, ((value).aliases).length())
+      mbt_ffi_store32((ptr) + 16, address)
+      __wit_bindgen_lower_t495((ptr) + 24, (value).doc)
+      __wit_bindgen_lower_t530((ptr) + 48, (value).scope)
 
 }
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t532(ptr : Int, value : @common.ToolError) -> Unit {
+fn __wit_bindgen_lower_t532(ptr : Int, value : @common.CustomToolError) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t79((ptr) + 8, (value).payload)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t533(ptr : Int, value : @common.ToolError) -> Unit {
 
       match value {
             InvalidToolName(payload) => {
@@ -22390,7 +22412,7 @@ fn __wit_bindgen_lower_t532(ptr : Int, value : @common.ToolError) -> Unit {
             }
             CustomError(payload9) => {
                   mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t79((ptr) + 4, payload9)
+                  __wit_bindgen_lower_t532((ptr) + 4, payload9)
 
                   ()
             }

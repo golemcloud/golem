@@ -68,6 +68,14 @@ fn reset_generated_middlewares() -> Unit raise {
 }
 
 ///|
+test "generated middleware keeps independently authored versions" {
+  reset_generated_middlewares()
+  assert_eq(get_registered_tool_middleware("policy").unwrap().version, "1.2.3")
+  assert_eq(get_registered_tool_middleware("adapter").unwrap().version, "2.0.0")
+  assert_eq(get_registered_tool_middleware("audit").unwrap().version, "3.1.4")
+}
+
+///|
 #warnings("-unused_async")
 fn counted_source_stream(drops : Ref[Int]) -> @async-core.Stream[Byte] {
   let emitted = Ref(false)
@@ -304,9 +312,10 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
             None => fail("generated custom-error dispatch lost stdin")
           }
           Err(
-            @toolCommon.ToolError::CustomError(
-              @authoring.run_error_payload_for_tests("boom"),
-            ),
+            @toolCommon.ToolError::CustomError({
+              name: "broken",
+              payload: @authoring.run_error_payload_for_tests("boom"),
+            }),
           )
         },
         no_raw_drop,
@@ -321,7 +330,9 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
       )
       match result {
         Err(@toolCommon.ToolError::CustomError(payload)) => {
-          let decoded = @authoring.decode_run_error_payload_for_tests(payload)
+          let decoded = @authoring.decode_run_error_payload_for_tests(
+            payload.payload,
+          )
           assert_true(decoded is @authoring.RunError::Broken("boom"))
         }
         _ => fail("generated custom error did not round-trip")
@@ -336,7 +347,12 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
             Some(stdin) => stdin.drop_sync()
             None => fail("generated malformed-error dispatch lost stdin")
           }
-          Err(@toolCommon.ToolError::CustomError(generated_result(())))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: "broken",
+              payload: generated_result(()),
+            }),
+          )
         },
         no_raw_drop,
         group,

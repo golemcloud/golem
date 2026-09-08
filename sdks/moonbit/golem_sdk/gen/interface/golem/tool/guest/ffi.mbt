@@ -10,7 +10,7 @@ pub fn wasmExportAsyncInvokeGolemToolGuest(event_raw : Int, waitable : Int, code
 pub fn wasmExportDiscoverTools() -> Int {
 
       let (result) : (Result[Array[@common.Tool], @common.ToolError]) = discover_tools();
-      let return_area = mbt_ffi_malloc(40)
+      let return_area = mbt_ffi_malloc(48)
 
       match result {
             Ok(payload) => {
@@ -30,7 +30,7 @@ pub fn wasmExportDiscoverTools() -> Int {
             }
             Err(payload0) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t532((return_area) + 4, payload0)
+                  __wit_bindgen_lower_t533((return_area) + 4, payload0)
 
                   ()
             }
@@ -2456,9 +2456,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
 
                         }
                         5 => {
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
 
-                              for index91 = 0; index91 < (mbt_ffi_load32((p0) + 12)); index91 = index91 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 8)) + (index91 * 144)
+                              for index91 = 0; index91 < (mbt_ffi_load32((p0) + 20)); index91 = index91 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index91 * 144)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -3138,10 +3139,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
 
-                              for index92 = 0; index92 < (mbt_ffi_load32((p0) + 20)); index92 = index92 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index92 * 24)
+                              for index92 = 0; index92 < (mbt_ffi_load32((p0) + 28)); index92 = index92 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 24)) + (index92 * 24)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                     match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -3154,10 +3155,10 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 24))
 
-                              for index93 = 0; index93 < (mbt_ffi_load32((p0) + 32)); index93 = index93 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 28)) + (index93 * 32)
+                              for index93 = 0; index93 < (mbt_ffi_load32((p0) + 40)); index93 = index93 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 36)) + (index93 * 32)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -3256,7 +3257,7 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 28))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 36))
 
                         }
                         _ => panic()
@@ -3274,7 +3275,7 @@ pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
       let result = mbt_ffi_ptr2str(p0, p1)
 
       let (result0) : (Result[@common.Tool, @common.ToolError]) = get_tool(result);
-      let return_area = mbt_ffi_malloc(40)
+      let return_area = mbt_ffi_malloc(48)
 
       match result0 {
             Ok(payload) => {
@@ -3285,7 +3286,7 @@ pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
             }
             Err(payload1) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  __wit_bindgen_lower_t532((return_area) + 4, payload1)
+                  __wit_bindgen_lower_t533((return_area) + 4, payload1)
 
                   ()
             }
@@ -6233,9 +6234,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
 
                         }
                         5 => {
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
 
-                              for index90 = 0; index90 < (mbt_ffi_load32((p0) + 12)); index90 = index90 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 8)) + (index90 * 144)
+                              for index90 = 0; index90 < (mbt_ffi_load32((p0) + 20)); index90 = index90 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index90 * 144)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -6915,10 +6917,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 8))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
 
-                              for index91 = 0; index91 < (mbt_ffi_load32((p0) + 20)); index91 = index91 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 16)) + (index91 * 24)
+                              for index91 = 0; index91 < (mbt_ffi_load32((p0) + 28)); index91 = index91 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 24)) + (index91 * 24)
                                     mbt_ffi_free(mbt_ffi_load32((iter_base) + 0))
 
                                     match (mbt_ffi_load8_u((iter_base) + 8)) {
@@ -6931,10 +6933,10 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 16))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 24))
 
-                              for index92 = 0; index92 < (mbt_ffi_load32((p0) + 32)); index92 = index92 + 1 {
-                                    let iter_base = (mbt_ffi_load32((p0) + 28)) + (index92 * 32)
+                              for index92 = 0; index92 < (mbt_ffi_load32((p0) + 40)); index92 = index92 + 1 {
+                                    let iter_base = (mbt_ffi_load32((p0) + 36)) + (index92 * 32)
 
                                     match (mbt_ffi_load8_u((iter_base) + 0)) {
                                           0 => ()
@@ -7033,7 +7035,7 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
                                     }
 
                               }
-                              mbt_ffi_free(mbt_ffi_load32((p0) + 28))
+                              mbt_ffi_free(mbt_ffi_load32((p0) + 36))
 
                         }
                         _ => panic()
@@ -7055,7 +7057,7 @@ fn invoke_task_return(return_result: Ref[Result[@common.InvocationResult, @commo
 
                   let cleanup_list : Array[Int] = []
 
-                  let (lowered302,lowered303,lowered304,lowered305,lowered306,lowered307,lowered308,lowered309,lowered310,lowered311,lowered312,lowered313) = match return_value {
+                  let (lowered305,lowered306,lowered307,lowered308,lowered309,lowered310,lowered311,lowered312,lowered313,lowered314,lowered315,lowered316) = match return_value {
                         Ok(payload) => {
 
                               let (lowered, lowered262, lowered263, lowered264, lowered265, lowered266, lowered267, lowered268, lowered269) = match ((payload).result) {
@@ -7111,13 +7113,13 @@ fn invoke_task_return(return_result: Ref[Result[@common.InvocationResult, @commo
                         }
                         Err(payload274) => {
 
-                              let (lowered293,lowered294,lowered295,lowered296,lowered297,lowered298,lowered299,lowered300,lowered301) = match payload274 {
+                              let (lowered294,lowered295,lowered296,lowered297,lowered298,lowered299,lowered300,lowered301,lowered302,lowered303,lowered304) = match payload274 {
                                     InvalidToolName(payload275) => {
 
                                           let ptr = mbt_ffi_str2ptr(payload275)
                                           cleanup_list.push(ptr)
 
-                                          ((0), ptr, payload275.length(), 0, 0, 0, 0, 0, 0)
+                                          ((0), ptr, payload275.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     InvalidCommandPath(payload276) => {
 
@@ -7134,67 +7136,70 @@ fn invoke_task_return(return_result: Ref[Result[@common.InvocationResult, @commo
                                           }
                                           cleanup_list.push(address278)
 
-                                          ((1), address278, (payload276).length(), 0, 0, 0, 0, 0, 0)
+                                          ((1), address278, (payload276).length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     InvalidInput(payload280) => {
 
                                           let ptr281 = mbt_ffi_str2ptr(payload280)
                                           cleanup_list.push(ptr281)
 
-                                          ((2), ptr281, payload280.length(), 0, 0, 0, 0, 0, 0)
+                                          ((2), ptr281, payload280.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     ConstraintViolation(payload282) => {
 
                                           let ptr283 = mbt_ffi_str2ptr(payload282)
                                           cleanup_list.push(ptr283)
 
-                                          ((3), ptr283, payload282.length(), 0, 0, 0, 0, 0, 0)
+                                          ((3), ptr283, payload282.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     InvalidResult(payload284) => {
 
                                           let ptr285 = mbt_ffi_str2ptr(payload284)
                                           cleanup_list.push(ptr285)
 
-                                          ((4), ptr285, payload284.length(), 0, 0, 0, 0, 0, 0)
+                                          ((4), ptr285, payload284.length(), 0, 0, 0, 0, 0, 0, 0, 0)
                                     }
                                     CustomError(payload286) => {
 
-                                          let address287 = mbt_ffi_malloc((((payload286).graph).type_nodes).length() * 144);
-                                          for index288 = 0; index288 < (((payload286).graph).type_nodes).length(); index288 = index288 + 1 {
-                                                let iter_elem : @types.SchemaTypeNode = (((payload286).graph).type_nodes)[(index288)]
-                                                let iter_base = address287 + (index288 * 144);
+                                          let ptr287 = mbt_ffi_str2ptr((payload286).name)
+
+                                          let address288 = mbt_ffi_malloc(((((payload286).payload).graph).type_nodes).length() * 144);
+                                          for index289 = 0; index289 < ((((payload286).payload).graph).type_nodes).length(); index289 = index289 + 1 {
+                                                let iter_elem : @types.SchemaTypeNode = ((((payload286).payload).graph).type_nodes)[(index289)]
+                                                let iter_base = address288 + (index289 * 144);
                                                 __wit_bindgen_lower_t56((iter_base) + 0, iter_elem)
 
                                           }
 
-                                          let address289 = mbt_ffi_malloc((((payload286).graph).defs).length() * 24);
-                                          for index290 = 0; index290 < (((payload286).graph).defs).length(); index290 = index290 + 1 {
-                                                let iter_elem : @types.SchemaTypeDef = (((payload286).graph).defs)[(index290)]
-                                                let iter_base = address289 + (index290 * 24);
+                                          let address290 = mbt_ffi_malloc(((((payload286).payload).graph).defs).length() * 24);
+                                          for index291 = 0; index291 < ((((payload286).payload).graph).defs).length(); index291 = index291 + 1 {
+                                                let iter_elem : @types.SchemaTypeDef = ((((payload286).payload).graph).defs)[(index291)]
+                                                let iter_base = address290 + (index291 * 24);
                                                 __wit_bindgen_lower_t18((iter_base) + 0, iter_elem)
 
                                           }
 
-                                          let address291 = mbt_ffi_malloc((((payload286).value).value_nodes).length() * 32);
-                                          for index292 = 0; index292 < (((payload286).value).value_nodes).length(); index292 = index292 + 1 {
-                                                let iter_elem : @types.SchemaValueNode = (((payload286).value).value_nodes)[(index292)]
-                                                let iter_base = address291 + (index292 * 32);
+                                          let address292 = mbt_ffi_malloc(((((payload286).payload).value).value_nodes).length() * 32);
+                                          for index293 = 0; index293 < ((((payload286).payload).value).value_nodes).length(); index293 = index293 + 1 {
+                                                let iter_elem : @types.SchemaValueNode = ((((payload286).payload).value).value_nodes)[(index293)]
+                                                let iter_base = address292 + (index293 * 32);
                                                 __wit_bindgen_lower_t76((iter_base) + 0, iter_elem)
 
                                           }
-                                          cleanup_list.push(address287)
-                                          cleanup_list.push(address289)
-                                          cleanup_list.push(address291)
+                                          cleanup_list.push(ptr287)
+                                          cleanup_list.push(address288)
+                                          cleanup_list.push(address290)
+                                          cleanup_list.push(address292)
 
-                                          ((5), address287, (((payload286).graph).type_nodes).length(), address289, (((payload286).graph).defs).length(), ((payload286).graph).root, address291, (((payload286).value).value_nodes).length(), ((payload286).value).root)
+                                          ((5), ptr287, (payload286).name.length(), address288, ((((payload286).payload).graph).type_nodes).length(), address290, ((((payload286).payload).graph).defs).length(), (((payload286).payload).graph).root, address292, ((((payload286).payload).value).value_nodes).length(), (((payload286).payload).value).root)
                                     }
                               }
 
-                              ((1), lowered293, lowered294, lowered295, lowered296, lowered297, lowered298, lowered299, lowered300, lowered301, 0, 0)
+                              ((1), lowered294, lowered295, lowered296, lowered297, lowered298, lowered299, lowered300, lowered301, lowered302, lowered303, lowered304)
                         }
                   }
 
-                  wasmExportAsyncInvokeGolemToolGuestTaskReturn(lowered302, lowered303, lowered304, lowered305, lowered306, lowered307, lowered308, lowered309, lowered310, lowered311, lowered312, lowered313)
+                  wasmExportAsyncInvokeGolemToolGuestTaskReturn(lowered305, lowered306, lowered307, lowered308, lowered309, lowered310, lowered311, lowered312, lowered313, lowered314, lowered315, lowered316)
 
                   cleanup_list.each(mbt_ffi_free)
 
@@ -11852,7 +11857,18 @@ fn __wit_bindgen_lower_t527(ptr : Int, value : @common.Tool) -> Unit {
 
 ///|
 #doc(hidden)
-fn __wit_bindgen_lower_t532(ptr : Int, value : @common.ToolError) -> Unit {
+fn __wit_bindgen_lower_t532(ptr : Int, value : @common.CustomToolError) -> Unit {
+
+      let ptr0 = mbt_ffi_str2ptr((value).name)
+      mbt_ffi_store32((ptr) + 4, (value).name.length())
+      mbt_ffi_store32((ptr) + 0, ptr0)
+      __wit_bindgen_lower_t79((ptr) + 8, (value).payload)
+
+}
+
+///|
+#doc(hidden)
+fn __wit_bindgen_lower_t533(ptr : Int, value : @common.ToolError) -> Unit {
 
       match value {
             InvalidToolName(payload) => {
@@ -11911,7 +11927,7 @@ fn __wit_bindgen_lower_t532(ptr : Int, value : @common.ToolError) -> Unit {
             }
             CustomError(payload9) => {
                   mbt_ffi_store8((ptr) + 0, (5))
-                  __wit_bindgen_lower_t79((ptr) + 4, payload9)
+                  __wit_bindgen_lower_t532((ptr) + 4, payload9)
 
                   ()
             }

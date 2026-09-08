@@ -100,6 +100,7 @@ interface common {
 
   record tool-middleware {
     name:    string,
+    version: string,
     aliases: list<string>,
     doc:     doc,
     scope:   tool-middleware-scope,
@@ -375,7 +376,14 @@ interface common {
     body:  string,
   }
 
-  // Invocation contract — shared between guest and host
+  // Invocation contract — shared between guest and host.
+  record custom-tool-error {
+    /// The selected declared error-case name, independent of payload shape.
+    name: string,
+    /// Unit for a payloadless error; otherwise the declared payload type.
+    payload: typed-schema-value,
+  }
+
   variant tool-error {
     invalid-tool-name(string),
     invalid-command-path(list<string>),
@@ -386,12 +394,9 @@ interface common {
     /// does not match the body's declared result schema; see §6.1
     /// transparency invariant).
     invalid-result(string),
-    /// Tool-defined failure. Mirrors `golem:agent/common`'s
-    /// `agent-error::custom-error`: the payload is a self-contained
-    /// `typed-schema-value` carrying the error value. Producers SHOULD
-    /// shape it so its root type matches one of the body's declared
-    /// `error-case` payload types.
-    custom-error(typed-schema-value),
+    /// Tool-defined failure identified by its declared case name. Consumers
+    /// preserve unfamiliar names and their typed payload when forwarding.
+    custom-error(custom-tool-error),
   }
 
   record invocation-result {

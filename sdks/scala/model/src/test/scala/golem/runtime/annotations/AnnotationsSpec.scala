@@ -36,8 +36,8 @@ object AnnotationsSpec extends ZIOSpecDefault {
         val a6  = new agentDefinition("MyAgent", DurabilityMode.Durable)
         val a7  = new agentDefinition()
         val a8  = new agentDefinition("Custom")
-        val a9  = new toolMiddleware("policy", Array("guard"))
-        val a10 = new universalToolMiddleware("audit", Array("observe"))
+        val a9  = new toolMiddleware("policy", "1.2.3", Array("guard"))
+        val a10 = new universalToolMiddleware("audit", "2.3.4", Array("observe"))
 
         assertTrue(
           a1.value == "desc",
@@ -48,6 +48,8 @@ object AnnotationsSpec extends ZIOSpecDefault {
           a7.typeName == "",
           a7.mode == DurabilityMode.Durable,
           a8.typeName == "Custom",
+          a9.version == "1.2.3",
+          a10.version == "2.3.4",
           a8.mode == DurabilityMode.Durable,
           a9.name == "policy",
           a9.aliases.sameElements(Array("guard")),

@@ -407,7 +407,7 @@ pub fn[E] RawToolInvocation::decode_input(
       Err(ConstraintViolation(message))
     @toolCommon.ToolError::InvalidResult(message) => Err(InvalidResult(message))
     @toolCommon.ToolError::CustomError(value) => {
-      @model.drop_wit_capabilities(value.value)
+      @model.drop_wit_capabilities(value.payload.value)
       Err(
         InvalidResult("canonical input decoding returned a custom tool error"),
       )
@@ -498,7 +498,7 @@ pub fn[T : @schema.IntoSchema, E] RawToolInvocation::typed_result_value_with_std
 pub fn[E] RawToolInvocation::encode_handler_error(
   self : RawToolInvocation,
   error : ToolInvokeError[E],
-  encode_custom_error : (E) -> Result[@model.TypedSchemaValue, String],
+  encode_custom_error : (E) -> Result[(String, @model.TypedSchemaValue), String],
 ) -> ToolInvokeError[RawTypedSchemaValue] {
   match error {
     InvalidToolName(name) => InvalidToolName(name)
@@ -507,18 +507,19 @@ pub fn[E] RawToolInvocation::encode_handler_error(
     ConstraintViolation(message) => ConstraintViolation(message)
     InvalidResult(message) => InvalidResult(message)
     Tool(error) => {
-      let typed = match encode_custom_error(error) {
-        Ok(typed) => typed
+      let (name, typed) = match encode_custom_error(error) {
+        Ok(named) => named
         Err(message) => return InvalidResult(message)
       }
       match @toolCore.encode_typed_input(typed) {
-        Ok(encoded) => Tool(self.context.own_raw_typed_schema_value(encoded))
+        Ok(encoded) => UnknownToolError({ name, payload: encoded, })
         Err(message) => {
           @model.drop_owned_capabilities(typed.value)
           InvalidResult("failed to encode middleware custom error: \{message}")
         }
       }
     }
+    UnknownToolError(error) => UnknownToolError(error)
   }
 }
 
@@ -567,8 +568,7 @@ pub async fn UnderlyingTool::invoke_raw(
             ConstraintViolation(message)
           @toolCommon.ToolError::InvalidResult(message) =>
             InvalidResult(message)
-          @toolCommon.ToolError::CustomError(value) =>
-            Tool(self.ownership.own_raw_typed_schema_value(value))
+          @toolCommon.ToolError::CustomError(error) => UnknownToolError(error)
         },
       )
   }
@@ -589,8 +589,10 @@ pub fn encode_raw_tool_error(
     InvalidResult(message) => @toolCommon.ToolError::InvalidResult(message)
     Tool(value) =>
       match value.take_for_final(context) {
-        Ok(value) => @toolCommon.ToolError::CustomError(value)
+        Ok(value) =>
+          @toolCommon.ToolError::CustomError({ name: "custom", payload: value, })
         Err(message) => @toolCommon.ToolError::InvalidResult(message)
       }
+    UnknownToolError(error) => @toolCommon.ToolError::CustomError(error)
   }
 }
