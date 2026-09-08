@@ -1129,6 +1129,75 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
 }
 
 #[test]
+fn shard_epoch_protobuf_roundtrip_and_legacy_default() {
+    fn started(shard_epoch: Option<u64>) -> OplogEntry {
+        OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc().rounded(),
+            idempotency_key: IdempotencyKey::new("shard-epoch".to_string()),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "test".to_string(),
+                input: SchemaValue::Record { fields: Vec::new() },
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            wallet_pin: None,
+            shard_epoch,
+        }
+    }
+
+    // Round-trips on disk, which is the channel that matters for replay. Compared field by
+    // field rather than whole-entry: an inline payload is re-represented as `SerializedInline`
+    // by the codec, so the decoded entry is deliberately not equal to the one that went in.
+    for expected in [Some(9u64), None] {
+        let entry = started(expected);
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+        match decoded {
+            OplogEntry::AgentInvocationStarted { shard_epoch, .. } => {
+                assert_eq!(
+                    shard_epoch, expected,
+                    "shard epoch after a desert round trip"
+                );
+            }
+            other => panic!("expected raw invocation-started entry, got {other:?}"),
+        }
+    }
+
+    // And on the raw protobuf, which is the oplog-processor-plugin channel.
+    let entry = started(Some(9));
+    let mut raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    match OplogEntry::try_from(raw_proto.clone()).unwrap() {
+        OplogEntry::AgentInvocationStarted { shard_epoch, .. } => {
+            assert_eq!(shard_epoch, Some(9));
+        }
+        other => panic!("expected raw invocation-started entry, got {other:?}"),
+    }
+
+    // An entry from before the fence existed carries no epoch, and must decode as absent rather
+    // than as epoch zero - zero is a real epoch, held by the first owner of every shard.
+    if let Some(
+        golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::AgentInvocationStarted(
+            params,
+        ),
+    ) = &mut raw_proto.entry
+    {
+        params.shard_epoch = None;
+    } else {
+        panic!("expected raw invocation-started protobuf entry");
+    }
+    match OplogEntry::try_from(raw_proto).unwrap() {
+        OplogEntry::AgentInvocationStarted { shard_epoch, .. } => {
+            assert_eq!(shard_epoch, None);
+        }
+        other => panic!("expected raw invocation-started entry, got {other:?}"),
+    }
+}
+
+#[test]
 fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
     let pinned_card_ids = vec![CardId::new(), CardId::new()];
     let scope_card_id = CardId::new();
@@ -1153,6 +1222,7 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
             pinned_card_ids: pinned_card_ids.clone(),
             scope_card_id: Some(scope_card_id),
         }),
+        shard_epoch: None,
     };
 
     let mut raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =

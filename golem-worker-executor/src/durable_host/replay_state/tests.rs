@@ -237,6 +237,7 @@ fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
         trace_states: Vec::new(),
         invocation_context: Vec::new(),
         wallet_pin: Some(wallet_pin),
+        shard_epoch: None,
     }
 }
 
