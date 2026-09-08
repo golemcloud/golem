@@ -19,10 +19,7 @@ const sourceWit = resolve(packageDir, '../../wit');
 const typesDir = join(packageDir, 'types');
 const temporaryDir = join(packageDir, '.generated-types');
 const mergedTypesDir = join(temporaryDir, 'merged');
-const preservedDeclarations = [
-  'node-sqlite-extensions.d.ts',
-  'wasm-rquickjs-execution.d.ts',
-];
+const preservedDeclarations = ['node-sqlite-extensions.d.ts', 'wasm-rquickjs-execution.d.ts'];
 
 function filesBelow(root) {
   if (!existsSync(root)) return [];

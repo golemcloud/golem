@@ -66,6 +66,7 @@ use golem_common::schema::tool::validation::validate_tool;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use itertools::Itertools;
 use std::collections::HashSet;
