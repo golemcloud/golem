@@ -23,13 +23,10 @@ use tracing::trace;
 pub struct Rebalance {
     assignments: Assignments,
     unassignments: Unassignments,
-    /// The ownership epoch each assigned shard takes when this plan is applied, decided here
-    /// rather than at apply time.
-    ///
-    /// The plan is pushed to the executors before it is applied to the state, so the epoch has to
-    /// be known before the apply: predicting it at the push and minting it again at the apply are
-    /// two chances to disagree. A shard is assigned to at most one executor in a plan, so one
-    /// entry per shard is enough.
+    /// The ownership epoch each assigned shard takes when this plan is applied, decided against
+    /// the state the plan was computed from. `apply_rebalance` stores it as long as it is still
+    /// above the epoch recorded for the shard, and mints a fresh one otherwise. A shard is
+    /// assigned to at most one executor in a plan, so one entry per shard is enough.
     assigned_epochs: BTreeMap<ShardId, ShardEpoch>,
 }
 

@@ -486,9 +486,8 @@ impl ShardLeaseState {
     /// restarted instance's shards inline, so between the plan and this apply the recorded epoch
     /// can have caught up with the planned one. Storing it anyway would leave two live executors
     /// believing they hold the same shard at the same epoch, which is exactly the pair an oplog
-    /// fence cannot tell apart, so a fresh one is minted instead. Nothing has been told the
-    /// planned epoch yet: the pushes go out from the state this writes, so they carry whichever
-    /// epoch is stored here.
+    /// fence cannot tell apart, so a fresh one is minted instead. The pushes go out from the
+    /// state this writes, so they carry whichever epoch is stored here.
     pub fn apply_rebalance(&mut self, rebalance: &Rebalance) {
         for (executor_id, shard_ids) in &rebalance.get_assignments().assignments {
             if !self.has_executor(*executor_id) {
@@ -1182,12 +1181,9 @@ mod tests {
     }
 
     #[test]
-    // `Register` writes outside the loop, so between the moment a plan's epochs are decided and
-    // the moment the plan is applied, a restarted instance registering at a known address can
-    // inherit the same shard and mint the same epoch inline. Storing the carried epoch then would
-    // leave two live executors on the same `(shard, epoch)`, which is exactly the pair an oplog
-    // fence cannot tell apart. The push goes out from what this stores, so re-minting here is all
-    // that is needed - nothing has been told the planned epoch.
+    // Between the plan and the apply, a restarted instance registering at a known address can
+    // inherit the same shard and mint the same epoch inline. Storing the planned epoch then would
+    // put two live executors on one `(shard, epoch)`, so `apply_rebalance` mints a fresh one.
     fn a_planned_epoch_overtaken_before_the_apply_is_re_minted() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1, 2, 3]), (2, 2, &[])]);
 

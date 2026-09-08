@@ -506,12 +506,12 @@ impl ShardManagement {
             debug!(rebalance=%rebalance, "Applying rebalance plan");
 
             // The plan is applied and persisted *before* anything is sent, and every delivery
-            // below is then read off the stored state. Two things rest on that order. A delivery
-            // names the revision it really lands at, rather than predicting one that a renewal
-            // persisting in the meantime would consume. And a renewal served while the fan-out is
-            // still in flight reads that same stored state, so a losing executor is handed a set
-            // that already excludes the shard being moved - which matters because a revoke is a
-            // delta with no revision of its own, so nothing else could order it against a grant.
+            // below is read off the stored state. Two things rest on that order. A delivery names
+            // a revision the store already holds, so no renewal persisting meanwhile can get ahead
+            // of it. And a renewal served while the fan-out is in flight reads that same stored
+            // state, so a losing executor is handed a set that already excludes the shard being
+            // moved - a revoke is a delta with no revision of its own, so nothing else could order
+            // it against a grant.
             self.mutate_and_persist(|current_shard_state| {
                 current_shard_state.apply_rebalance(&rebalance)
             })
@@ -541,10 +541,10 @@ impl ShardManagement {
             )
             .await?;
 
-            // Both halves are repaired the same way, and repaired forwards: the store already
-            // holds the new ownership, so an executor that missed a delivery needs the set it is
-            // now recorded as holding, not a rollback of the plan. Its own next renewal carries
-            // that same set, which bounds the repair even if the push fails again.
+            // Both halves are repaired the same way: the store already holds the new ownership,
+            // so an executor that missed a delivery is pushed the set it is recorded as holding.
+            // Its own next renewal carries that same set, which bounds the repair even if the push
+            // fails again.
             let mut needs_retry = false;
             let unreached: BTreeSet<ExecutorId> = failures
                 .failed_unassignments
@@ -694,10 +694,9 @@ impl ShardManagement {
     /// Revokes the shards that moved away from their old owners, then pushes every executor that
     /// needs one its complete shard set.
     ///
-    /// Both are taken from `shard_state`, which is the state the plan has *already* been persisted
-    /// into. So a push names the revision it lands at instead of a predicted one, and a revoke -
-    /// which carries no revision and so cannot be ordered against anything - only ever names a
-    /// shard the store has already moved away.
+    /// Both are taken from `shard_state`, the state the plan has already been persisted into. So
+    /// a push names a revision the store holds, and a revoke - which carries no revision and so
+    /// cannot be ordered against anything - only ever names a shard the store has already moved.
     ///
     /// Revokes complete before any push goes out: a losing executor must have dropped a shard
     /// before its new owner is told it holds it.

@@ -89,7 +89,7 @@ impl TestPersistence {
     /// The state that was stored carrying `revision`, if any write ever stored one.
     ///
     /// A delivery names the revision of the state it was read from, so this is how a test checks
-    /// that such a state really existed rather than being predicted for a write still to come.
+    /// that such a state was really stored.
     async fn state_at(&self, revision: ShardLeaseRevision) -> Option<ShardLeaseState> {
         self.writes
             .lock()
@@ -787,18 +787,19 @@ async fn a_renewal_served_during_the_revoke_fan_out_does_not_hand_the_shard_back
         .await
         .pop()
         .expect("the gaining executor should have been pushed its set");
-    let stored = persistence.state_at(last_push.revision).await.expect(
-        "the push must name a revision the store really held, not one predicted for a later write",
-    );
+    let stored = persistence
+        .state_at(last_push.revision)
+        .await
+        .expect("the push must name a revision the store really held");
     assert_eq!(shards_at(&stored, new_pod), shard_ids(&[0, 1]));
 
     join_set.abort_all();
 }
 
 #[test]
-// The plan is stored before it is pushed, so a transient assign failure does not roll the shards
-// back to unassigned: the store already records the new owner. The executor that missed its push
-// is queued for a full one instead, and the next loop delivers the set it is recorded as holding.
+// The plan is stored before it is pushed, so the store records the new owner whether or not the
+// push lands. The executor that missed its push is queued for a full one, and the next loop
+// delivers the set it is recorded as holding.
 async fn failed_assignment_is_retried_with_a_full_push() {
     let old_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
@@ -837,10 +838,9 @@ async fn failed_assignment_is_retried_with_a_full_push() {
 }
 
 #[test]
-// A revoke carries no revision, so it is only ever sent for a shard the store has already moved -
-// which means a failed one cannot be undone by rolling the plan back. The old owner is queued for
-// a full push instead, which tells it the set it is now recorded as holding, and the pass converges
-// without another shard-manager event.
+// A revoke carries no revision, so it is only ever sent for a shard the store has already moved.
+// An old owner whose revoke did not reach it is queued for a full push, which tells it the set it
+// is recorded as holding, and the pass converges without another shard-manager event.
 async fn failed_revoke_is_repaired_by_a_full_push() {
     let old_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
@@ -1671,11 +1671,10 @@ async fn a_demoted_leaders_fenced_write_fails_before_any_executor_command() {
 }
 
 #[test]
-// `register_executor` persists the lease and only then
-// acknowledges, so a registration whose write is refused is refused to the executor too. Nothing
-// is stored, nothing is pushed, and the leader whose fenced write was rejected stops - the write
-// happens outside the loop now, so the error reaches the loop through the fail-stop slot rather
-// than out of the pass that would otherwise have performed it.
+// `register_executor` persists the lease and only then acknowledges, so a registration whose write
+// is refused is refused to the executor too. Nothing is stored, nothing is pushed, and the leader
+// whose fenced write was rejected stops: the write happens outside the loop, so the error reaches
+// the loop through the fail-stop slot.
 async fn a_registration_is_refused_when_its_persist_fails_and_stops_the_leader() {
     let existing_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
@@ -2165,8 +2164,7 @@ async fn an_expired_lease_is_reclaimed_within_one_tick() {
 
 #[test]
 // A graceful shutdown hands the lease back and the shards with it. `Deregister` deliberately does
-// not notify the loop, so the tick is what has to
-// re-home them, and it bounds the hand-off by one period.
+// not notify the loop, so the tick is what re-homes them, and it bounds the hand-off by one period.
 async fn deregistering_an_executor_re_homes_its_shards_within_one_tick() {
     let leaving_pod = pod(1, 9000);
     let staying_pod = pod(2, 9001);

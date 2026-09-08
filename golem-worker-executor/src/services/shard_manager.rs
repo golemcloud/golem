@@ -110,13 +110,11 @@ pub struct GrpcShardManagerService {
     /// The cadence the last granted lease implied (`TTL / 3`), which caps the
     /// backoff so a retry never waits longer than the lease it is saving.
     granted_cadence: RwLock<Option<Duration>>,
-    /// Announced after a re-registration installs a fresh grant.
+    /// Fired when a re-registration or a corrected renewal replaces the shard assignment.
     ///
-    /// Weak, following `LazyWorkerActivator`: the hook closes over the whole service graph, and
-    /// that graph owns this service, so a strong reference here would be a cycle - nothing would
-    /// ever free the engine, the caches or the pools, and the `me` weak reference below would
-    /// never be able to observe a drop. `WorkerExecutorImpl` holds the strong one, so the hook
-    /// lives exactly as long as the executor that can serve it.
+    /// Weak, following `LazyWorkerActivator`: the hook closes over the service graph that owns
+    /// this service, so a strong reference here would be a cycle nothing could free.
+    /// `WorkerExecutorImpl` holds the strong one, so the hook lives as long as the executor.
     assignment_changed_hook: RwLock<Option<Weak<ShardAssignmentChangedHookFn>>>,
 }
 
@@ -229,12 +227,11 @@ impl GrpcShardManagerService {
                         break;
                     }
                 };
-                // Raced against the token as well, not just the sleep before it. A renewal is a
-                // gRPC round trip that can be followed by a re-registration and a full agent
-                // recovery, so a termination signal arriving while one runs would otherwise not
-                // be seen until it finished - past the grace `main` waits, which is exactly the
-                // window the deregister below has to be sent in. Abandoning a renewal midway
-                // costs nothing here: the process is stopping and handing the lease back.
+                // Raced against the token as well, not just the sleep before it: a renewal can
+                // be followed by a re-registration and a full agent recovery, and a termination
+                // signal arriving meanwhile has to be seen inside the grace `main` waits, which
+                // is the window the deregister below must be sent in. Abandoning the renewal
+                // costs nothing: the process is stopping and handing the lease back.
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
                         svc.deregister().await;
@@ -708,10 +705,9 @@ mod tests {
     }
 
     #[test]
-    // The hook closes over the whole service graph, and that graph owns this service, so a strong
-    // reference here would be a cycle: the engine, the caches and the pools would never be freed
-    // and `me` could never observe a drop. `WorkerExecutorImpl` owns the hook - this only borrows
-    // it, the same arrangement `LazyWorkerActivator` uses for the worker activator.
+    // The hook closes over the service graph that owns this service, so a strong reference here
+    // would be a cycle nothing could free. `WorkerExecutorImpl` owns the hook; this only borrows
+    // it.
     async fn the_service_only_borrows_the_assignment_changed_hook() {
         let mock = Arc::new(MockShardManager::new());
         let (service, _shard_service) = make_service(mock, Shutdown::new());

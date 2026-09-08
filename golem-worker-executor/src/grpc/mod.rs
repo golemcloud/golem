@@ -116,9 +116,8 @@ pub struct WorkerExecutorImpl<
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
-    /// Same arrangement for the assignment-changed hook: the shard manager service keeps a Weak
-    /// to it, because the hook closes over the service graph that owns that service. Holding the
-    /// strong one here ties the hook's life to the executor's rather than making a cycle of it.
+    /// Same arrangement for the assignment-changed hook: the shard manager service holds a Weak
+    /// to it (see `GrpcShardManagerService::assignment_changed_hook`); this is the strong one.
     _assignment_changed_hook: ShardAssignmentChangedHook,
     ctx: PhantomData<Ctx>,
 }
@@ -167,8 +166,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // A re-registration after `LeaseNotFound`, and a renewal that corrected the set, must
         // announce the new assignment exactly as this function and `assign_shards_internal` do.
         // The renewal loop cannot name `Ctx`, so it is handed this hook — installed before
-        // `register`, which is what starts that loop. The executor owns it and the service
-        // borrows it weakly, so closing over the service graph here is not a reference cycle.
+        // `register`, which is what starts that loop.
         let hook_services = services.clone();
         let assignment_changed_hook: ShardAssignmentChangedHook = Arc::new(move || {
             let services = hook_services.clone();
