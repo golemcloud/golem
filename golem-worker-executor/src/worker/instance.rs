@@ -420,7 +420,7 @@ impl OwnerExecution {
     }
 
     pub async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let index = self.oplog.add(entry).await;
+        let index = self.oplog.add(entry).await.expect("oplog write");
         self.commit(CommitLevel::Always).await;
         index
     }

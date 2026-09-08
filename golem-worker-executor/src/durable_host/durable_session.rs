@@ -5056,7 +5056,7 @@ mod tests {
     #[async_trait::async_trait]
     impl DurableStreamConsumerJournal for TestConsumerJournal {
         async fn commit(&self) -> Result<(), String> {
-            self.0.commit(CommitLevel::Always).await;
+            self.0.commit(CommitLevel::Always).await.unwrap();
             Ok(())
         }
     }
@@ -5119,6 +5119,7 @@ mod tests {
                 Vec::new(),
             ))
             .await
+            .expect("oplog write")
     }
 
     #[test]
@@ -5693,7 +5694,7 @@ mod tests {
     #[async_trait::async_trait]
     impl DurableStreamConsumerJournal for RecordingConsumerJournal {
         async fn commit(&self) -> Result<(), String> {
-            self.oplog.commit(CommitLevel::Always).await;
+            self.oplog.commit(CommitLevel::Always).await.unwrap();
             self.commits.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
@@ -6643,7 +6644,10 @@ mod tests {
         assert_eq!(intents[0].reason, StreamCancelReasonV1::GuestDrop);
 
         for _ in 0..2050 {
-            oplog.add(OplogEntry::interrupted()).await;
+            oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         drop(guest.current_control_metadata().await.unwrap());
         oplog.take_read_ranges();
@@ -7124,7 +7128,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
@@ -7631,7 +7636,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         streams
             .append_record(StreamSessionRecordV1::Attached(
                 golem_common::base_model::durable_stream::StreamSessionAttachedRecordV1 {
@@ -7736,7 +7742,10 @@ mod tests {
         assert_eq!(producer_oplog.current_oplog_index().await, producer_length);
 
         for _ in 0..2050 {
-            consumer_oplog.add(OplogEntry::interrupted()).await;
+            consumer_oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         assert_eq!(
             streams
@@ -8110,7 +8119,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
@@ -8452,7 +8462,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         let streams = DurableSessionStreams::new(
             producer.clone(),
             oplog.clone(),
@@ -8836,7 +8847,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         streams
             .append_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
@@ -8966,7 +8978,10 @@ mod tests {
         let streams =
             DurableSessionStreams::new(producer, oplog.clone(), identity.invocation.clone(), []);
         for _ in 0..2050 {
-            oplog.add(OplogEntry::interrupted()).await;
+            oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         assert!(
             streams
@@ -8999,11 +9014,15 @@ mod tests {
                     },
                 ))),
             })
-            .await;
+            .await
+            .expect("oplog write");
         // No commit: another local append must already be visible.
         assert_eq!(streams.caller_attempt_id().await.unwrap(), attempt_id);
         assert_eq!(oplog.take_read_ranges(), vec![(index, 1)]);
-        oplog.commit(CommitLevel::Always).await;
+        oplog
+            .commit(CommitLevel::Always)
+            .await
+            .expect("oplog write");
         assert_eq!(
             streams.clone().caller_attempt_id().await.unwrap(),
             attempt_id
@@ -9026,7 +9045,10 @@ mod tests {
         .unwrap();
         let streams = DurableSessionStreams::new(producer, oplog.clone(), identity.invocation, []);
         for _ in 0..2050 {
-            oplog.add(OplogEntry::interrupted()).await;
+            oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         streams.recover_session_mappings().await.unwrap();
         assert_eq!(
@@ -9035,7 +9057,10 @@ mod tests {
         );
         streams.clone().recover_session_mappings().await.unwrap();
         assert!(oplog.take_read_ranges().is_empty());
-        let next = oplog.add(OplogEntry::interrupted()).await;
+        let next = oplog
+            .add(OplogEntry::interrupted())
+            .await
+            .expect("oplog write");
         streams.recover_session_mappings().await.unwrap();
         assert_eq!(oplog.take_read_ranges(), vec![(next, 1)]);
     }
@@ -9141,7 +9166,8 @@ mod tests {
                     },
                 ))),
             })
-            .await;
+            .await
+            .expect("oplog write");
 
         assert_eq!(
             streams.persisted_finished().await.unwrap(),

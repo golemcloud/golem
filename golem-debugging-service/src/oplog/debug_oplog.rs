@@ -79,14 +79,18 @@ impl Oplog for DebugOplog {
     // live-repair an incomplete durable call
     // (`DebugContext::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS` is `false`), so no repaired
     // `Start`/`End` pair is ever created against a `NONE` index during replay.
-    async fn add(&self, _entry: OplogEntry) -> OplogIndex {
-        OplogIndex::NONE
+    async fn add(
+        &self,
+        _entry: OplogEntry,
+    ) -> Result<OplogIndex, golem_worker_executor::services::oplog::OplogError> {
+        Ok(OplogIndex::NONE)
     }
 
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, golem_worker_executor::services::oplog::OplogError>
+    {
         Ok(make_batch(OplogIndex::NONE)
             .into_iter()
             .map(|record| (OplogIndex::NONE, record.into_inline_entry()))
@@ -94,7 +98,7 @@ impl Oplog for DebugOplog {
     }
 
     fn enqueue_add(&self, _entry: OplogEntry) -> OplogAddReceipt {
-        Box::pin(async { OplogIndex::NONE })
+        Box::pin(async { Ok(OplogIndex::NONE) })
     }
 
     // Mirrors `add`: a debugging session never writes to the oplog, so both entries are built (to
@@ -103,9 +107,9 @@ impl Oplog for DebugOplog {
         &self,
         _start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), golem_worker_executor::services::oplog::OplogError> {
         let _second = make_second(OplogIndex::NONE);
-        (OplogIndex::NONE, OplogIndex::NONE)
+        Ok((OplogIndex::NONE, OplogIndex::NONE))
     }
 
     // Mirrors `add`: a debugging session never writes to the oplog, so this builds the `Start` (to
@@ -114,9 +118,9 @@ impl Oplog for DebugOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
         let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(OrderedOplogStart {
             index,
             entry,
@@ -127,7 +131,7 @@ impl Oplog for DebugOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
         let (serialized_request, build_start) = build_request(OplogIndex::NONE)?;
         self.add_start_with_reserved_raw_payload(serialized_request, build_start)
             .await
@@ -138,8 +142,12 @@ impl Oplog for DebugOplog {
     }
 
     // There is no need to commit anything to the indexed storage
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        BTreeMap::new()
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, golem_worker_executor::services::oplog::OplogError>
+    {
+        Ok(BTreeMap::new())
     }
 
     // Current Oplog Index acts as the Replay Target

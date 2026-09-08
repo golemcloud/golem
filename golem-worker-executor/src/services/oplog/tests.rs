@@ -1501,8 +1501,8 @@ async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
     let durable = open(AgentMode::Durable, "durable-threshold").await;
     let ephemeral = open(AgentMode::Ephemeral, "ephemeral-threshold").await;
     for oplog in [&durable, &ephemeral] {
-        oplog.add(OplogEntry::suspend().rounded()).await;
-        oplog.add(OplogEntry::exited().rounded()).await;
+        oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
+        oplog.add(OplogEntry::exited().rounded()).await.unwrap();
     }
 
     assert_eq!(durable.length().await, 0);
@@ -1662,9 +1662,12 @@ async fn retried_append_many_accepts_only_the_same_serialized_batch(_tracing: &T
     indexed_storage.reset_append_observations();
     indexed_storage.inject_append_many_failure(InjectedAppendFailure::CommitThenIndeterminate);
 
-    oplog.add(OplogEntry::suspend()).await;
-    oplog.add(OplogEntry::exited()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
+    oplog.add(OplogEntry::exited()).await.expect("oplog write");
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
     assert_eq!(indexed_storage.append_many_attempts(), 1);
@@ -1682,8 +1685,11 @@ async fn indeterminate_append_before_write_retries_after_empty_read_back(_tracin
     indexed_storage.inject_append_many_failure(InjectedAppendFailure::IndeterminateBeforeWrite);
 
     let entry = OplogEntry::suspend().rounded();
-    oplog.add(entry.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(entry.clone()).await.expect("oplog write");
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert_eq!(indexed_storage.append_many_attempts(), 2);
     assert_eq!(indexed_storage.reads(), 1);
@@ -1705,8 +1711,11 @@ async fn exhausted_retries_after_committed_indeterminate_append_reconcile(_traci
         InjectedAppendFailure::TransientBeforeWrite,
     ]);
 
-    oplog.add(OplogEntry::suspend()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert_eq!(indexed_storage.append_many_attempts(), 3);
     assert_eq!(indexed_storage.reads(), 3);
@@ -1727,8 +1736,11 @@ async fn permanent_retry_failure_after_committed_indeterminate_append_reconciles
         InjectedAppendFailure::PermanentBeforeWrite,
     ]);
 
-    oplog.add(OplogEntry::suspend()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert_eq!(indexed_storage.append_many_attempts(), 2);
     assert_eq!(indexed_storage.reads(), 2);
@@ -1751,8 +1763,11 @@ async fn reconciliation_retries_read_failures_without_resubmitting_append(_traci
             "connection lost during read-back".to_string(),
         ));
 
-    oplog.add(OplogEntry::suspend()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert_eq!(indexed_storage.append_many_attempts(), 1);
     assert_eq!(indexed_storage.reads(), 2);
@@ -1768,8 +1783,11 @@ async fn conflict_after_initially_empty_reconciliation_accepts_exact_batch(_trac
     indexed_storage.inject_append_many_failure(InjectedAppendFailure::CommitThenIndeterminate);
     indexed_storage.hidden_reads.store(1, Ordering::Relaxed);
 
-    oplog.add(OplogEntry::suspend()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert_eq!(indexed_storage.append_many_attempts(), 2);
     assert_eq!(indexed_storage.reads(), 2);
@@ -1812,9 +1830,12 @@ async fn direct_identical_append_conflict_from_second_writer_remains_fatal(_trac
         )
         .await;
     let entry = OplogEntry::suspend();
-    first_oplog.add(entry.clone()).await;
-    second_oplog.add(entry).await;
-    first_oplog.commit(CommitLevel::Always).await;
+    first_oplog.add(entry.clone()).await.expect("oplog write");
+    second_oplog.add(entry).await.expect("oplog write");
+    first_oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     indexed_storage.reset();
     indexed_storage.reset_append_observations();
 
@@ -1834,8 +1855,8 @@ async fn incomplete_read_back_after_indeterminate_append_remains_fatal(_tracing:
     indexed_storage
         .inject_append_many_failure(InjectedAppendFailure::CommitPrefixThenIndeterminate);
 
-    oplog.add(OplogEntry::suspend()).await;
-    oplog.add(OplogEntry::exited()).await;
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
+    oplog.add(OplogEntry::exited()).await.expect("oplog write");
     assert_panics(oplog.commit(CommitLevel::Always)).await;
 
     assert_eq!(indexed_storage.append_many_attempts(), 1);
@@ -1852,7 +1873,7 @@ async fn differing_read_back_after_indeterminate_append_remains_fatal(_tracing: 
     indexed_storage
         .inject_append_many_failure(InjectedAppendFailure::CommitDifferentThenIndeterminate);
 
-    oplog.add(OplogEntry::suspend()).await;
+    oplog.add(OplogEntry::suspend()).await.expect("oplog write");
     assert_panics(oplog.commit(CommitLevel::Always)).await;
 
     assert_eq!(indexed_storage.append_many_attempts(), 1);
@@ -1899,10 +1920,10 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     let entry3 = OplogEntry::exited().rounded();
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -2167,7 +2188,7 @@ async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracin
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     assert_eq!(added.len(), 4);
     for (_, entry) in added {
@@ -2400,12 +2421,12 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let entry4 = OplogEntry::interrupted().rounded();
     let entry5 = OplogEntry::no_op().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
-    oplog.add(entry4.clone()).await;
-    oplog.add(entry5.clone()).await; // uncommitted entries
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    oplog.add(entry4.clone()).await.unwrap();
+    oplog.add(entry5.clone()).await.unwrap(); // uncommitted entries
 
     let read_count = indexed_storage.read_count();
     let buffered_entries = oplog
@@ -2506,10 +2527,10 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let entry3 = OplogEntry::exited().rounded();
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -2594,11 +2615,11 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
     let entry3 = OplogEntry::exited().rounded();
     let entry4 = OplogEntry::interrupted().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
-    oplog.add(entry4.clone()).await; // uncommitted
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    oplog.add(entry4.clone()).await.unwrap(); // uncommitted
 
     let entries = oplog
         .read_exact(OplogIndex::INITIAL, 4)
@@ -2658,10 +2679,10 @@ async fn ephemeral_read_exact_committed_only(_tracing: &Tracing) {
     let entry2 = OplogEntry::exited().rounded();
     let entry3 = OplogEntry::interrupted().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // All committed, no buffer entries
     let entries = oplog
@@ -2721,8 +2742,8 @@ async fn ephemeral_read_exact_uncommitted_only(_tracing: &Tracing) {
     let entry1 = OplogEntry::suspend().rounded();
     let entry2 = OplogEntry::exited().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
     // No commit — entries only in the buffer
 
     let entries = oplog
@@ -2790,16 +2811,16 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
             retry_policy_state: None,
         }
         .rounded();
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
         entries.push(entry);
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Add 2 more uncommitted
     let uncommitted1 = OplogEntry::interrupted().rounded();
     let uncommitted2 = OplogEntry::suspend().rounded();
-    oplog.add(uncommitted1.clone()).await;
-    oplog.add(uncommitted2.clone()).await;
+    oplog.add(uncommitted1.clone()).await.unwrap();
+    oplog.add(uncommitted2.clone()).await.unwrap();
     entries.push(uncommitted1);
     entries.push(uncommitted2);
 
@@ -2898,15 +2919,15 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
     let initial_oplog_idx = oplog.current_oplog_index().await;
 
     for entry in &entries {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Add 2 uncommitted entries
     let uncommitted1 = OplogEntry::interrupted().rounded();
     let uncommitted2 = OplogEntry::suspend().rounded();
-    oplog.add(uncommitted1.clone()).await;
-    oplog.add(uncommitted2.clone()).await;
+    oplog.add(uncommitted1.clone()).await.unwrap();
+    oplog.add(uncommitted2.clone()).await.unwrap();
     entries.push(uncommitted1);
     entries.push(uncommitted2);
 
@@ -3004,7 +3025,7 @@ async fn ephemeral_read_exact_zero_returns_empty(_tracing: &Tracing) {
         )
         .await;
 
-    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
 
     let entries = oplog.read_exact(OplogIndex::INITIAL, 0).await;
     assert!(entries.is_empty());
@@ -3100,9 +3121,9 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         description: desc.clone(),
     }
     .rounded();
-    oplog.add(entry4.clone()).await;
+    oplog.add(entry4.clone()).await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
     let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
@@ -3446,9 +3467,9 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         description: desc.clone(),
     }
     .rounded();
-    oplog.add(entry4.clone()).await;
+    oplog.add(entry4.clone()).await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
     let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
@@ -3681,8 +3702,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
             durable_function_type: DurableFunctionType::ReadLocal,
         }
         .rounded();
-        oplog.add(entry.clone()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(entry.clone()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         entries.push(entry);
     }
 
@@ -3841,13 +3862,13 @@ async fn read_from_archive_impl(use_blob: bool) {
     let initial_oplog_idx = oplog.current_oplog_index().await;
 
     for entry in &entries {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     let uncommitted1 = OplogEntry::interrupted().rounded();
     let uncommitted2 = OplogEntry::suspend().rounded();
-    oplog.add(uncommitted1.clone()).await;
-    oplog.add(uncommitted2.clone()).await;
+    oplog.add(uncommitted1.clone()).await.unwrap();
+    oplog.add(uncommitted2.clone()).await.unwrap();
 
     entries.push(uncommitted1);
     entries.push(uncommitted2);
@@ -4145,7 +4166,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             default_execution_status(AgentMode::Ephemeral),
         )
         .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let read_before_archive = oplog_service
         .read_exact(
@@ -4542,8 +4563,8 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
         )
         .await;
 
-    oplog.add(OplogEntry::no_op()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(OplogEntry::no_op()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
     if agent_mode == AgentMode::Ephemeral {
         EphemeralOplog::try_archive(&oplog)
             .await
@@ -4654,9 +4675,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let initial_oplog_idx = oplog.current_oplog_index().await;
 
     for entry in &entries {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -4746,12 +4767,12 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .collect();
 
     for (n, entry) in entries.iter().enumerate() {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
         if n % 100 == 0 {
-            oplog.commit(CommitLevel::Always).await;
+            oplog.commit(CommitLevel::Always).await.unwrap();
         }
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -4838,8 +4859,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             }
             .rounded(),
         )
-        .await;
-    oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(oplog);
 
     let entry1 = oplog_service
@@ -5008,9 +5030,9 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             .collect();
 
         for entry in &entries {
-            oplog.add(entry.clone()).await;
+            oplog.add(entry.clone()).await.unwrap();
         }
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
@@ -5145,9 +5167,9 @@ async fn scheduled_archive_impl(use_blob: bool) {
             )
             .await;
         for entry in &entries {
-            oplog.add(entry.clone()).await;
+            oplog.add(entry.clone()).await.unwrap();
         }
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
 
         let result = MultiLayerOplog::try_archive(&oplog).await;
         drop(oplog);
@@ -5341,7 +5363,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             "test".to_string(),
                             "test".to_string(),
                         ))
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
             2 => {
@@ -5360,7 +5383,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             "test".to_string(),
                             "test".to_string(),
                         ))
-                        .await;
+                        .await
+                        .unwrap();
                 }
 
                 debug!("[{r:?}] => archiving {agent_id} to tertiary layer");
@@ -5375,7 +5399,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             "test".to_string(),
                             "test".to_string(),
                         ))
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
             _ => unreachable!(),
@@ -5481,7 +5506,7 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
                 default_execution_status(mode),
             )
             .await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         owned_agent_id
     };
 
@@ -5588,7 +5613,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
             default_execution_status(AgentMode::Durable),
         )
         .await;
-    initial_oplog.commit(CommitLevel::Always).await;
+    initial_oplog.commit(CommitLevel::Always).await.unwrap();
     drop(initial_oplog);
 
     // Wait for the weak reference to become invalid so the cache entry is evicted
@@ -5632,10 +5657,10 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
                 // different oplog instances (due to the get_or_open race), they'll
                 // have independent last_committed_idx and produce duplicate ids,
                 // causing a unique key violation on commit.
-                oplog.add(OplogEntry::suspend()).await;
-                // Use fallible_add pattern: commit can panic on unique key violation;
+                oplog.add(OplogEntry::suspend()).await.unwrap();
+                // `add` is fallible now: commit can panic on unique key violation;
                 // we use the Oplog trait method directly and let it propagate.
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
 
                 tokio::task::yield_now().await;
             }
@@ -5852,8 +5877,8 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             default_execution_status(AgentMode::Ephemeral),
         )
         .await;
-    durable_oplog.commit(CommitLevel::Always).await;
-    ephemeral_oplog.commit(CommitLevel::Always).await;
+    durable_oplog.commit(CommitLevel::Always).await.unwrap();
+    ephemeral_oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Both namespaces report the oplog exists, independently.
     assert!(
@@ -5950,7 +5975,7 @@ async fn make_workers(
                 default_execution_status(mode),
             )
             .await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         out.push(owned_agent_id);
     }
     out
@@ -6316,7 +6341,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
         .unwrap();
     assert_eq!(start_idx, last_oplog_idx.next());
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Read back from the service (storage), so the payload reference carries no in-memory cache and
     // the download must hit blob storage.
@@ -6402,7 +6427,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
     // Inline payloads are already durable: waiting is a no-op.
     pending.wait().await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, start_idx, 1)
@@ -6532,7 +6557,7 @@ async fn multilayer_reserved_start_delegates_to_primary_and_tracks_last_index(_t
 
     first_pending.wait().await.unwrap();
     second_pending.wait().await.unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, first_idx, 2)
@@ -6855,7 +6880,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     assert_eq!(small_idx, large_idx.next());
     small_pending.wait().await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Read back through the service stack (no in-memory cache).
     let entries = oplog_service

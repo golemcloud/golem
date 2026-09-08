@@ -254,7 +254,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                state.oplog.add(*entry).await;
+                                state.oplog.add(*entry).await.expect("oplog write");
                                 state
                                     .commit_and_update_state(CommitLevel::Always, None)
                                     .await;
@@ -585,7 +585,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         commit_level: CommitLevel,
         committed: Option<oneshot::Sender<()>>,
     ) -> bool {
-        let new_entries = self.oplog.commit(commit_level).await;
+        let new_entries = self.oplog.commit(commit_level).await.expect("oplog write");
         if let Some(committed) = committed {
             let _ = committed.send(());
         }

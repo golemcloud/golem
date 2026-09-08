@@ -1669,7 +1669,10 @@ impl DurableStreamProducer {
         let commit: DurableStreamCommit = Arc::new(move |committed| {
             let oplog = commit_oplog.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog
+                    .commit(CommitLevel::Always)
+                    .await
+                    .expect("oplog write");
                 if let Some(committed) = committed {
                     let _ = committed.send(());
                 }
@@ -1732,10 +1735,9 @@ impl DurableStreamProducer {
                 covered = oplog_index;
                 match entry {
                     OplogEntry::StreamRegistered { record, .. } => {
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                        let record = oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                         if matches!(
                             &record.coordinate,
                             StreamRegistrationCoordinateV1::Nested { .. }
@@ -1758,10 +1760,9 @@ impl DurableStreamProducer {
                         }
                     }
                     OplogEntry::StreamItems { record, .. } => {
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                        let record = oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                         index.apply_item_batch(
                             oplog_index,
                             std::mem::take(&mut pending_nested_registrations),
@@ -1778,10 +1779,9 @@ impl DurableStreamProducer {
                                     .to_string(),
                             ));
                         }
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                        let record = oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                         index.apply_end(oplog_index, record, producer_fingerprint)?;
                     }
                     OplogEntry::StreamCancel { record, .. } => {
@@ -1791,10 +1791,9 @@ impl DurableStreamProducer {
                                     .to_string(),
                             ));
                         }
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                        let record = oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                         index.apply_cancel(oplog_index, record, producer_fingerprint)?;
                     }
                     OplogEntry::StreamSession { record, .. } => {
@@ -1804,10 +1803,9 @@ impl DurableStreamProducer {
                                     .to_string(),
                             ));
                         }
-                        let record = oplog
-                            .download_payload(record)
-                            .await
-                            .map_err(DurableStreamProducerError::Oplog)?;
+                        let record = oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                         index.apply_session_references(&record)?;
                         index.apply_result_offset(oplog_index, &record);
                         index.apply_deletion_record(
@@ -2194,7 +2192,8 @@ impl DurableStreamProducer {
             .add(OplogEntry::stream_session(OplogPayload::Inline(Box::new(
                 record,
             ))))
-            .await;
+            .await
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         if let Some(key) = result_key {
             index.invocation_results.entry(key).or_insert(oplog_index);
         }
@@ -2238,7 +2237,7 @@ impl DurableStreamProducer {
                     .oplog
                     .download_payload(record)
                     .await
-                    .map_err(DurableStreamProducerError::Oplog)?;
+                    .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
                 match record {
                     StreamSessionRecordV1::ConsumerItemValue(record)
                         if record.session_key == key.session_key
@@ -2319,7 +2318,8 @@ impl DurableStreamProducer {
             .add(OplogEntry::stream_session(OplogPayload::Inline(Box::new(
                 record,
             ))))
-            .await;
+            .await
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
         self.notify_session_records_changed();
         Ok(false)
@@ -2375,7 +2375,8 @@ impl DurableStreamProducer {
                 .add(OplogEntry::stream_session(OplogPayload::Inline(Box::new(
                     record,
                 ))))
-                .await;
+                .await
+                .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
             self.commit().await;
             *index = updated;
         }
@@ -2529,7 +2530,7 @@ impl DurableStreamProducer {
                 ))]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -2541,7 +2542,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         index.apply_registration(
             oplog_index,
             record.clone(),
@@ -2668,26 +2669,24 @@ impl DurableStreamProducer {
                 result
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
 
         let mut prepared = None;
         let mut registrations = Vec::with_capacity(requests.len());
         for (oplog_index, entry) in entries {
             match entry {
                 OplogEntry::StreamRegistered { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     registrations.push((oplog_index, record));
                 }
                 OplogEntry::StreamSession { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     match record {
                         StreamSessionRecordV1::Prepared(record) => prepared = Some(record),
                         StreamSessionRecordV1::Attached(_) => {}
@@ -2859,7 +2858,7 @@ impl DurableStreamProducer {
                     ))]
                 }))
                 .await
-                .map_err(DurableStreamProducerError::Oplog)?;
+                .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
             self.commit().await;
             let (oplog_index, entry) = entries.pop().ok_or_else(|| {
                 DurableStreamProducerError::CorruptHistory(
@@ -2983,7 +2982,7 @@ impl DurableStreamProducer {
                 result
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
 
         let mut handles = Vec::new();
@@ -2991,11 +2990,10 @@ impl DurableStreamProducer {
         for (oplog_index, entry) in entries {
             match entry {
                 OplogEntry::StreamRegistered { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     handles.push(record.handle.clone());
                     index.apply_registration(
                         oplog_index,
@@ -3013,11 +3011,10 @@ impl DurableStreamProducer {
                         );
                 }
                 OplogEntry::StreamSession { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     index.apply_session_references(&record)?;
                     index.apply_result_offset(oplog_index, &record);
                     session_record = Some(record);
@@ -3659,7 +3656,7 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
 
         let mut pending_registrations = Vec::new();
@@ -3667,19 +3664,17 @@ impl DurableStreamProducer {
         for (oplog_index, entry) in entries {
             match entry {
                 OplogEntry::StreamRegistered { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     pending_registrations.push((oplog_index, record));
                 }
                 OplogEntry::StreamItems { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     committed_item = Some((oplog_index, record));
                 }
                 OplogEntry::StreamSession { .. } => {}
@@ -3759,7 +3754,7 @@ impl DurableStreamProducer {
                 })]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -3771,7 +3766,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         let event = index.apply_end(oplog_index, record, self.producer_fingerprint)?;
         let bus = self.bus(stream_id)?;
         drop(index);
@@ -3884,7 +3879,7 @@ impl DurableStreamProducer {
                 })]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -3896,7 +3891,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         let event = index.apply_end(oplog_index, record, self.producer_fingerprint)?;
         let offset = event.offset;
         let bus = self.bus(stream_id)?;
@@ -4004,7 +3999,7 @@ impl DurableStreamProducer {
                 })]
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
         let (oplog_index, entry) = entries
             .pop()
@@ -4016,7 +4011,7 @@ impl DurableStreamProducer {
             .oplog
             .download_payload(record)
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         let event = index.apply_cancel(oplog_index, record, self.producer_fingerprint)?;
         let offset = event.offset;
         let bus = self.bus(stream_id)?;
@@ -4305,18 +4300,17 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
 
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
             match entry {
                 OplogEntry::StreamEnd { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     terminal_events.push(index.apply_end(
                         oplog_index,
                         record,
@@ -4324,11 +4318,10 @@ impl DurableStreamProducer {
                     )?);
                 }
                 OplogEntry::StreamCancel { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     terminal_events.push(index.apply_cancel(
                         oplog_index,
                         record,
@@ -4336,11 +4329,10 @@ impl DurableStreamProducer {
                     )?);
                 }
                 OplogEntry::StreamSession { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     let StreamSessionRecordV1::Finished(record) = record else {
                         return Err(DurableStreamProducerError::CorruptHistory(
                             "session finish batch contains an unexpected session record"
@@ -5252,7 +5244,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 .oplog_service
                 .download_payload(&consumer, AgentMode::Durable, record)
                 .await
-                .map_err(DurableStreamProducerError::Oplog)?;
+                .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
             match record {
                 StreamSessionRecordV1::ConsumerItemValue(record)
                     if record.session_key == key.session_key
@@ -5720,17 +5712,16 @@ impl DurableStreamProducer {
                 records
             }))
             .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
             match entry {
                 OplogEntry::StreamCancel { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     terminal_events.push(index.apply_cancel(
                         oplog_index,
                         record,
@@ -5738,11 +5729,10 @@ impl DurableStreamProducer {
                     )?);
                 }
                 OplogEntry::StreamSession { record, .. } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let record =
+                        self.oplog.download_payload(record).await.map_err(|error| {
+                            DurableStreamProducerError::Oplog(error.to_string())
+                        })?;
                     index.apply_deletion_record(
                         &record,
                         self.environment_id,
@@ -5821,7 +5811,8 @@ impl DurableStreamProducer {
             .add(OplogEntry::stream_session(OplogPayload::Inline(Box::new(
                 record.clone(),
             ))))
-            .await;
+            .await
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
         self.commit().await;
         index.apply_deletion_record(
             &record,
@@ -6601,14 +6592,17 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl Oplog for TestOplog {
-        async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        async fn add(
+            &self,
+            entry: OplogEntry,
+        ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
             let mut state = self.state.lock().unwrap();
             let index = state
                 .entries
                 .last_key_value()
                 .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
             state.entries.insert(index, entry);
-            index
+            Ok(index)
         }
 
         fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
@@ -6618,7 +6612,7 @@ pub(crate) mod tests {
                 .last_key_value()
                 .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
             state.entries.insert(index, entry);
-            Box::pin(async move { index })
+            Box::pin(async move { Ok(index) })
         }
 
         async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -6628,20 +6622,23 @@ pub(crate) mod tests {
             (before - state.entries.len()) as u64
         }
 
-        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        async fn commit(
+            &self,
+            _level: CommitLevel,
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
             let mut state = self.state.lock().unwrap();
             let committed = state
                 .entries
                 .iter()
                 .filter(|(index, _)| **index > state.committed)
                 .map(|(index, entry)| (*index, entry.clone()))
-                .collect();
+                .collect::<BTreeMap<OplogIndex, OplogEntry>>();
             state.committed = state
                 .entries
                 .last_key_value()
                 .map_or(state.committed, |(index, _)| *index);
             state.commit_count += 1;
-            committed
+            Ok(committed)
         }
 
         async fn current_oplog_index(&self) -> OplogIndex {
@@ -6763,9 +6760,9 @@ pub(crate) mod tests {
             &self,
             serialized_request: Vec<u8>,
             build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
             let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
-            let index = self.add(entry.clone()).await;
+            let index = self.add(entry.clone()).await?;
             Ok(OrderedOplogStart {
                 index,
                 entry,
@@ -6776,7 +6773,7 @@ pub(crate) mod tests {
         async fn add_start_with_indexed_reserved_raw_payload(
             &self,
             build_request: crate::services::oplog::IndexedReservedStartBuilder,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
             let mut state = self.state.lock().unwrap();
             let index = state
                 .entries
@@ -6796,10 +6793,10 @@ pub(crate) mod tests {
             &self,
             start: OplogEntry,
             make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
-            let first = self.add(start).await;
-            let second = self.add(make_second(first)).await;
-            (first, second)
+        ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
+            let first = self.add(start).await?;
+            let second = self.add(make_second(first)).await?;
+            Ok((first, second))
         }
     }
 
@@ -6807,7 +6804,7 @@ pub(crate) mod tests {
     async fn test_oplog_read_exact_includes_uncommitted_entries() {
         let oplog = TestOplog::default();
         let entry = OplogEntry::interrupted();
-        let index = oplog.add(entry.clone()).await;
+        let index = oplog.add(entry.clone()).await.unwrap();
 
         let entries = oplog.read_exact(index, 1).await;
 
@@ -6817,7 +6814,7 @@ pub(crate) mod tests {
     #[test]
     async fn test_oplog_read_exact_rejects_incomplete_range() {
         let oplog = TestOplog::default();
-        let index = oplog.add(OplogEntry::interrupted()).await;
+        let index = oplog.add(OplogEntry::interrupted()).await.unwrap();
 
         let result = std::panic::AssertUnwindSafe(oplog.read_exact(index, 2))
             .catch_unwind()
@@ -7322,7 +7319,10 @@ pub(crate) mod tests {
                 .unwrap();
         }
         for _ in 0..2050 {
-            oplog.add(OplogEntry::interrupted()).await;
+            oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         assert!(
             producer.index.lock().await.streams[&handle.stream_id]
@@ -7547,7 +7547,10 @@ pub(crate) mod tests {
             .unwrap()
             .value;
         for _ in 0..2050 {
-            oplog.add(OplogEntry::interrupted()).await;
+            oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         producer
             .end(handle.stream_id, 3, StreamEndResultV1::Ok)
@@ -8538,7 +8541,7 @@ pub(crate) mod tests {
             let oplog = oplog_for_commit.clone();
             let batches = batches_for_commit.clone();
             Box::pin(async move {
-                let committed_entries = oplog.commit(CommitLevel::Always).await;
+                let committed_entries = oplog.commit(CommitLevel::Always).await.unwrap();
                 batches
                     .lock()
                     .unwrap()
@@ -8574,7 +8577,8 @@ pub(crate) mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         producer
             .append_session_record(StreamSessionRecordV1::ConsumerTerminal(
                 golem_common::model::durable_stream::StreamConsumerTerminalRecordV1 {
@@ -8783,7 +8787,7 @@ pub(crate) mod tests {
                 let oplog = oplog.clone();
                 let commit_reached = commit_reached.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog.commit(CommitLevel::Always).await.unwrap();
                     if let Some(committed) = committed {
                         let _ = committed.send(());
                     }
@@ -9294,7 +9298,7 @@ pub(crate) mod tests {
             }))
             .await
             .unwrap();
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(producer);
 
         assert!(matches!(
@@ -9435,7 +9439,7 @@ pub(crate) mod tests {
             }))
             .await
             .unwrap();
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(producer);
 
         assert!(
@@ -9485,7 +9489,7 @@ pub(crate) mod tests {
             }))
             .await
             .unwrap();
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(producer);
 
         assert!(matches!(
@@ -9879,7 +9883,7 @@ pub(crate) mod tests {
                 let oplog = oplog.clone();
                 let commit_reached = commit_reached.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog.commit(CommitLevel::Always).await.unwrap();
                     if let Some(committed) = committed {
                         let _ = committed.send(());
                     }

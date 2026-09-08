@@ -31,7 +31,7 @@ impl OrderedAppend {
     async fn wait(self) -> Result<(), WorkerExecutorError> {
         match self {
             Self::Receipt(receipt) => {
-                receipt.await;
+                receipt.await?;
                 Ok(())
             }
             Self::Task(task) => task.await.map_err(|err| {
@@ -87,7 +87,7 @@ impl CompletionMarkerRecorder {
                 let _ = done.send(Err(error));
                 return;
             }
-            let marker_idx = marker_append.await;
+            let marker_idx = marker_append.await.expect("oplog write");
             match kind {
                 CompletionMarkerKind::Delivered => {
                     replay_state.record_delivered_completion(start_idx, marker_idx)

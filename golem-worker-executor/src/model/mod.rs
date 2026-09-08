@@ -506,7 +506,7 @@ impl TrapType {
                             //
                             // `WorkerExecutorError::Runtime` is intentionally NOT
                             // mapped here: it is also used as a generic transient
-                            // error wrapper (e.g. for `Oplog::fallible_add`
+                            // error wrapper (e.g. for an `OplogError::Storage`
                             // failures) and must remain retriable via the default
                             // policy path (`AgentError::Unknown`).
                             Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
@@ -1019,7 +1019,10 @@ mod tests {
 
         // An interrupt, not an error: no `Error` entry may be appended to an oplog that belongs
         // to another executor now.
-        assert!(matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)));
+        assert!(matches!(
+            trap,
+            TrapType::Interrupt(InterruptKind::ShardLost)
+        ));
 
         // Callers are told what they can act on, which is the same thing as for a lapsed lease.
         assert!(matches!(
@@ -1070,7 +1073,7 @@ mod tests {
     #[test]
     fn runtime_error_falls_back_to_unknown_and_is_policy_retriable() {
         // `WorkerExecutorError::Runtime` is a generic transient-error wrapper
-        // (used e.g. for `Oplog::fallible_add` failures). It must not be
+        // (used e.g. for `OplogError::Storage` failures). It must not be
         // classified as `InternalError` (non-retriable); it must fall through
         // to `AgentError::Unknown` so the configured retry policy applies.
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(

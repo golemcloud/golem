@@ -23,7 +23,7 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, PendingUpload,
+    OplogAddReceipt, OplogConstructor, OplogError, OplogService, OrderedOplogStart, PendingUpload,
     ReservedPayload, ReservedRawStartBuilder, cursor_value, next_scan_cursor, scan_modes,
 };
 use crate::storage::indexed::{
@@ -917,29 +917,29 @@ struct PrimaryOplog {
 enum OplogJob {
     Add {
         entry: OplogEntry,
-        done: tokio::sync::oneshot::Sender<OplogIndex>,
+        done: tokio::sync::oneshot::Sender<Result<OplogIndex, OplogError>>,
     },
     AddDurableStreamBatch {
         make_batch: DurableStreamBatchBuilder,
-        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
+        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, OplogError>>,
     },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+        done: tokio::sync::oneshot::Sender<Result<(OplogIndex, OplogIndex), OplogError>>,
     },
     AddStart {
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, OplogError>>,
     },
     AddIndexedStart {
         build_request: IndexedReservedStartBuilder,
-        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, OplogError>>,
     },
     Commit {
         level: CommitLevel,
-        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
+        done: tokio::sync::oneshot::Sender<Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>>,
     },
     DropPrefix {
         last_dropped_id: OplogIndex,
@@ -1048,7 +1048,7 @@ impl PrimaryOplog {
                         if state.over_commit_threshold() {
                             state.commit(CommitLevel::Always).await;
                         }
-                        let _ = done.send(idx);
+                        let _ = done.send(Ok(idx));
                     }
                     OplogJob::AddDurableStreamBatch { make_batch, done } => {
                         record_oplog_call("add_durable_stream_batch");
@@ -1079,7 +1079,7 @@ impl PrimaryOplog {
                         if result.is_ok() && state.over_commit_threshold() {
                             state.commit(CommitLevel::Always).await;
                         }
-                        let _ = done.send(result);
+                        let _ = done.send(result.map_err(OplogError::from));
                     }
                     OplogJob::AddPair {
                         start,
@@ -1093,7 +1093,7 @@ impl PrimaryOplog {
                         if state.over_commit_threshold() {
                             state.commit(CommitLevel::Always).await;
                         }
-                        let _ = done.send((first_idx, second_idx));
+                        let _ = done.send(Ok((first_idx, second_idx)));
                     }
                     OplogJob::AddStart {
                         serialized_request,
@@ -1136,7 +1136,7 @@ impl PrimaryOplog {
                         if result.is_ok() && state.over_commit_threshold() {
                             state.commit(CommitLevel::Always).await;
                         }
-                        let _ = done.send(result);
+                        let _ = done.send(result.map_err(OplogError::from));
                     }
                     OplogJob::AddIndexedStart {
                         build_request,
@@ -1163,11 +1163,11 @@ impl PrimaryOplog {
                         if result.is_ok() && state.over_commit_threshold() {
                             state.commit(CommitLevel::Always).await;
                         }
-                        let _ = done.send(result);
+                        let _ = done.send(result.map_err(OplogError::from));
                     }
                     OplogJob::Commit { level, done } => {
                         let result = state.commit(level).await;
-                        let _ = done.send(result);
+                        let _ = done.send(Ok(result));
                     }
                     OplogJob::DropPrefix {
                         last_dropped_id,
@@ -1721,7 +1721,7 @@ impl Oplog for PrimaryOplog {
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         self.run_job(|done| OplogJob::AddDurableStreamBatch { make_batch, done })
             .await
     }
@@ -1730,7 +1730,7 @@ impl Oplog for PrimaryOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         self.run_job(|done| OplogJob::AddPair {
             start,
             make_second,
@@ -1747,7 +1747,10 @@ impl Oplog for PrimaryOplog {
         .await
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         self.run_job(|done| OplogJob::Commit { level, done }).await
     }
 
@@ -1804,11 +1807,12 @@ impl Oplog for PrimaryOplog {
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
         record_oplog_call("wait_for_replicas");
 
-        self.run_job(|done| OplogJob::Commit {
-            level: CommitLevel::Always,
-            done,
-        })
-        .await;
+        let _ = self
+            .run_job(|done| OplogJob::Commit {
+                level: CommitLevel::Always,
+                done,
+            })
+            .await;
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         let replicas = replicas.min(reader.replicas);
         match reader
@@ -1902,7 +1906,7 @@ impl Oplog for PrimaryOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         // ORDERING (Start determinism): the job is enqueued synchronously here — there is no
         // `.await` between a subtask initiating its durable operation and this send — and the
         // actor assigns `Start` indices strictly in job order, so initiation order becomes
@@ -1919,7 +1923,7 @@ impl Oplog for PrimaryOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         self.run_job(|done| OplogJob::AddIndexedStart {
             build_request,
             done,

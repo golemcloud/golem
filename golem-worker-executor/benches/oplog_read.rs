@@ -175,9 +175,9 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
         .await;
 
     for value in 1..initial_entries {
-        oplog.add(entry(value)).await;
+        oplog.add(entry(value)).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     Fixture {
         oplog,
@@ -195,7 +195,7 @@ async fn primary_fixture() -> Fixture {
 async fn buffered_fixture() -> Fixture {
     let fixture = open_fixture(ENTRY_COUNT - 8).await;
     for value in ENTRY_COUNT - 8..ENTRY_COUNT {
-        fixture.oplog.add(entry(value)).await;
+        fixture.oplog.add(entry(value)).await.unwrap();
     }
     fixture
 }
@@ -225,9 +225,9 @@ async fn cross_tier_fixture() -> Fixture {
         Some(true)
     );
     for value in ARCHIVE_BOUNDARY..ENTRY_COUNT {
-        fixture.oplog.add(entry(value)).await;
+        fixture.oplog.add(entry(value)).await.unwrap();
     }
-    fixture.oplog.commit(CommitLevel::Always).await;
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
     fixture
 }
 

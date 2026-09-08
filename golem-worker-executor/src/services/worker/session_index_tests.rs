@@ -235,6 +235,7 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecordV1) -> Opl
     oplog
         .add(DurableStreamOplogRecord::Session(Box::new(record)).into_inline_entry())
         .await
+        .expect("oplog write")
 }
 
 async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
@@ -243,6 +244,7 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
             timestamp: Timestamp::now_utc(),
         })
         .await
+        .expect("oplog write")
 }
 
 async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {
@@ -255,6 +257,7 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> O
             Vec::new(),
         ))
         .await
+        .expect("oplog write")
 }
 
 fn attached_record(
@@ -342,7 +345,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         }),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     storage.reset();
     let metadata = service
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
@@ -399,7 +405,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             .finished
             .is_none()
     );
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     storage.reset();
     let metadata = reopened
         .lookup_durable_stream_control_metadata(&id, AgentMode::Durable, &key)
@@ -444,7 +453,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             }
         }
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let status = AgentStatusRecord {
         oplog_idx: oplog.current_oplog_index().await,
         has_durable_stream_history: true,
@@ -496,7 +508,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         active.push(prepared.attempt.session_key.clone());
         append_session(oplog.as_ref(), record).await;
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let recovery = reopened
         .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
         .await
@@ -561,7 +576,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         "raw preparation must be visible before commit"
     );
     assert_eq!(cache.dirty, HashSet::from([raw_key]));
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     storage.reset();
     cache
         .refresh(
@@ -591,7 +609,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         )
         .await;
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let recovery = reopened
         .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
         .await
@@ -638,7 +659,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         )
         .await;
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     assert!(
         restarted
             .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
@@ -681,7 +705,10 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         .await;
         historical.push((attempt, offset));
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert_eq!(
         restarted
@@ -791,7 +818,10 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
         mappings.push(mapping);
         attachments.push(attachment);
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let mut cache = crate::worker::DurableTopologyRecoveryCache::default();
     cache
         .refresh(
@@ -859,7 +889,10 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
         cache.sessions.is_empty(),
         "raw closure must retire resident recovery work"
     );
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     assert!(
         service
             .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
@@ -892,7 +925,10 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
         )
         .await;
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     cache
         .refresh(
             oplog.as_ref(),
@@ -1111,7 +1147,10 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
         .await;
         bounded.insert(key, completed(prepared.as_u64(), finished.as_u64()));
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let horizon = oplog.current_oplog_index().await;
     assert!(horizon.as_u64() > 1024);
     assert!(bounded.iter().count() <= 128);
@@ -1153,7 +1192,10 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
         )
         .await;
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let first_horizon = oplog.current_oplog_index().await;
     let status_at_first_horizon = AgentStatusRecord {
         oplog_idx: first_horizon,
@@ -1197,7 +1239,10 @@ async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
         }),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let mut later_status = status_at_first_horizon;
     later_status.oplog_idx = finished;
 
@@ -1328,7 +1373,10 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         }),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     let producer = DurableStreamProducer::load(
         oplog.clone(),
@@ -1373,7 +1421,10 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
 
     // No Worker/status actor participates: draining the buffer must not reset raw authority
     // back to the older published status used when this oplog was constructed.
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     assert_eq!(
         oplog_service.get_last_index(&id, AgentMode::Durable).await,
         resumed
@@ -1429,7 +1480,10 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
         ),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     let resumed_attempt = AttemptId::fresh();
     let resumed = append_session(
@@ -1452,7 +1506,10 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
         }),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     drop(oplog);
 
     let reopened = oplog_service
@@ -1501,7 +1558,10 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
         ),
     )
     .await;
-    first.commit(CommitLevel::Always).await;
+    first
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     assert_eq!(
         first
             .raw_durable_stream_session_status(&session_key)
@@ -1544,7 +1604,10 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
         }),
     )
     .await;
-    second.commit(CommitLevel::Always).await;
+    second
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     let observed = first
         .raw_durable_stream_session_status(&session_key)
@@ -1585,7 +1648,10 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
         }),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     assert!(
         oplog
             .raw_durable_stream_session_status(&session_key)
@@ -1621,7 +1687,10 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
     );
     assert_eq!(buffered.attachment_attached, Some(false));
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let committed = oplog
         .raw_durable_stream_session_status(&session_key)
         .await
@@ -1657,7 +1726,10 @@ async fn persisted_exact_horizon_rejects_newer_index_and_offsets_hide_newer_atta
         ),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     service
         .stream_session_index
         .catch_up(&id, AgentMode::Durable, attached_idx)
@@ -1743,7 +1815,10 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
         }),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&oplog).await,
         Some(true)
@@ -1845,7 +1920,10 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     for _ in 0..2048 {
         append_noop(oplog.as_ref()).await;
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
     let horizon = oplog.current_oplog_index().await;
     service
         .stream_session_index
@@ -1930,7 +2008,10 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
     append_session(oplog.as_ref(), second.clone()).await;
     append_session(oplog.as_ref(), first).await;
     append_session(oplog.as_ref(), second).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
 
     assert!(
         oplog

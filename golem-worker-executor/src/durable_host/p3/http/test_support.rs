@@ -119,44 +119,47 @@ impl FrameTestOplog {
 
 #[async_trait]
 impl Oplog for FrameTestOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
-        OplogIndex::from_u64(entries.len() as u64)
+        Ok(OplogIndex::from_u64(entries.len() as u64))
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
         let index = OplogIndex::from_u64(entries.len() as u64);
-        Box::pin(async move { index })
+        Box::pin(async move { Ok(index) })
     }
 
     async fn add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
         let second_idx = OplogIndex::from_u64(entries.len() as u64);
-        (first_idx, second_idx)
+        Ok((first_idx, second_idx))
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         _serialized_request: Vec<u8>,
         _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         unimplemented!()
     }
 
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         _build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         unimplemented!()
     }
 
@@ -164,8 +167,11 @@ impl Oplog for FrameTestOplog {
         0
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        BTreeMap::new()
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+        Ok(BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
