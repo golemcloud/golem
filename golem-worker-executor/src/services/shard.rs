@@ -291,7 +291,7 @@ fn sharding_not_ready_error() -> WorkerExecutorError {
 
 /// The self-fence. Surfaced as `ShardingNotReady` because the worker service
 /// already answers that arm by refreshing its routing table and retrying
-/// (`golem-worker-service/src/service/worker/routing_logic.rs:388`), which is
+/// (the `ShardingNotReady` arm of the worker service's `routing_logic`), which is
 /// exactly what a caller should do when an executor's shard lease has lapsed.
 fn shard_lease_expired_error() -> WorkerExecutorError {
     WorkerExecutorError::ShardingNotReady

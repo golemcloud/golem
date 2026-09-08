@@ -165,7 +165,7 @@ pub struct ShardLeaseGrant {
 }
 
 /// The acknowledgement of a registration: the granted lease plus the cluster shard count, which
-/// only `Register` carries.
+/// the renewal response does not carry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegisterAck {
     pub number_of_shards: usize,
@@ -439,8 +439,8 @@ impl ShardLeaseState {
         epoch
     }
 
-    /// Records an assignment whose epoch was decided earlier, by [`Self::next_epoch_for`] against
-    /// the state this assignment is applied to.
+    /// Records `epoch` for `shard_id`. [`Self::assign_shard`] is the only caller, and mints the
+    /// epoch with [`Self::next_epoch_for`] immediately before.
     fn assign_shard_with_epoch(
         &mut self,
         executor_id: ExecutorId,
@@ -478,15 +478,14 @@ impl ShardLeaseState {
             .map(|entry| entry.epoch)
     }
 
-    /// Applies `rebalance`, and reports the executors whose push is now stale and has to be
-    /// repeated.
+    /// Applies `rebalance` to this state.
     ///
     /// Every assigned shard's epoch is minted here, against the state as it is at the apply:
     /// strictly above the highest epoch ever recorded for that shard, including one that a
     /// `Register` - which writes outside the loop and transfers a restarted instance's shards
     /// inline - raised between the plan and this apply. Two live executors on the same
-    /// `(shard, epoch)` is the pair an oplog fence cannot tell apart, and minting only at the
-    /// point of storage is what rules it out: the pushes go out from the state this writes, so
+    /// `(shard, epoch)` would make the epoch worthless as an ownership token, and minting only at
+    /// the point of storage is what rules it out: the pushes go out from the state this writes, so
     /// no executor is ever told an epoch the store does not hold.
     pub fn apply_rebalance(&mut self, rebalance: &Rebalance) {
         for (executor_id, shard_ids) in &rebalance.get_assignments().assignments {
@@ -661,10 +660,12 @@ impl Assignments {
     }
 
     pub fn unassign(&mut self, executor_id: ExecutorId, shard_id: ShardId) {
-        self.assignments
-            .entry(executor_id)
-            .or_default()
-            .remove(&shard_id);
+        if let Some(shard_ids) = self.assignments.get_mut(&executor_id) {
+            shard_ids.remove(&shard_id);
+            if shard_ids.is_empty() {
+                self.assignments.remove(&executor_id);
+            }
+        }
     }
 
     pub fn new() -> Self {

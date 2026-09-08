@@ -477,9 +477,8 @@ impl ShardManagement {
                 full_assignment_requests = full_assignment_requests.iter().join(", "),
                 "Shard management loop woken up",
             );
-            // The write lock is held while the reaping and the executor changes are applied and
-            // persisted and the plan is computed. It is released before the plan is applied, so a
-            // renewal is never queued behind a whole pass.
+            // The write lock is taken twice, for the plan and for its apply, and is free during the
+            // fan-out, so a renewal is never queued behind the executor round trips.
             let now = Utc::now();
             let (rebalance, full_assignment_executors) = self
                 .mutate_and_persist(|current_shard_state| {
@@ -534,12 +533,16 @@ impl ShardManagement {
             let shard_state_snapshot = self.shard_state.read().await.clone();
             let addrs = shard_state_snapshot.executor_addrs();
 
-            // One fan-out for both reasons an executor needs its set: it gained shards in this
-            // plan, or it is owed an authoritative copy after a registration or a failed delivery.
+            // One fan-out for every reason an executor needs its set: it gained shards in this
+            // plan; it lost some - a revoke is a delta stamped with the latest revision, and only
+            // the full set sent alongside it makes the rest of that executor's picture current at
+            // that revision; or it is owed an authoritative copy after a registration or a failed
+            // delivery.
             let push_to: BTreeSet<ExecutorId> = rebalance
                 .get_assignments()
                 .assignments
                 .keys()
+                .chain(rebalance.get_unassignments().unassignments.keys())
                 .copied()
                 .chain(full_assignment_executors.iter().copied())
                 .collect();
@@ -879,8 +882,8 @@ fn apply_executor_changes(
     full_assignment_executors
 }
 
-/// The executors an operation of the pass did not reach. The shard sets they were about are read
-/// back from the plan, which is where they came from.
+/// The executors an operation of the pass did not reach. Each is queued for a full push of the
+/// set the store records for it.
 #[derive(Debug)]
 struct RebalanceFailures {
     failed_assignments: BTreeSet<ExecutorId>,

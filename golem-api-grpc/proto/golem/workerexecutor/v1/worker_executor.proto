@@ -190,10 +190,7 @@ message AssignShardsRequest {
   // The executor's complete shard set with epochs: hold exactly these, drop
   // everything else.
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
-  // How long the executor's shard lease lasts from the moment this push is
-  // received; past it the executor stops admitting work for these shards. A
-  // duration rather than an absolute time so that the two machines' clocks
-  // are never compared: the executor anchors it to its own clock on receipt.
+  // See golem.shardmanager.v1.RegisterSuccess.lease_ttl.
   google.protobuf.Duration lease_ttl = 3;
   // Total number of shards in the cluster; never 0 — the executor divides by
   // it in check_worker.

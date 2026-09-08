@@ -1038,7 +1038,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 
     /// Full replace: the request carries this executor's complete
-    /// shard set with epochs, the lease expiry, and the cluster's shard count.
+    /// shard set with epochs, the lease TTL, and the cluster's shard count.
     /// Anything absent from the set is dropped, and any agent whose shard went
     /// away is restarted.
     async fn assign_shards_internal(
@@ -1061,8 +1061,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        // Anchored to this executor's clock at receipt, so the shard manager's
-        // clock is never compared against ours.
         let expires_at = golem_common::model::protobuf::lease_expiry_from_ttl(
             request.lease_ttl,
             chrono::Utc::now(),

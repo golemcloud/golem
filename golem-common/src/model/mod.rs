@@ -523,8 +523,9 @@ pub struct RoutingTableEntry {
 ///
 /// The epoch advances only when a shard changes owner, never on a lease
 /// renewal, so an executor can assert the set it believes it holds without the
-/// assertion racing the manager. This is the executor's own newtype; it never
-/// imports the shard manager's `sharding::model::ShardEpoch`.
+/// assertion racing the manager. A newtype of this crate's own: the shard
+/// manager keeps a twin in `sharding::model`, and the wire's `u64` is the only
+/// bridge between them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShardEpoch(pub u64);
 

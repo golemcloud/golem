@@ -53,6 +53,10 @@ struct TestPersistence {
     /// it reaches the store. Writes past the end of the script always succeed.
     injected: Arc<Mutex<VecDeque<Option<ShardManagerError>>>>,
     gate: Arc<Mutex<Option<WriteGate>>>,
+    /// The `latest` revision of every `compact` call, in order.
+    compactions: Arc<Mutex<Vec<ExternalRevision>>>,
+    /// While set, every `compact` call is refused.
+    fail_compactions: Arc<Mutex<bool>>,
 }
 
 /// Suspends a single write: `entered` fires when it is reached, then it waits for `release`.
@@ -79,7 +83,22 @@ impl TestPersistence {
             attempts: Arc::new(Mutex::new(0)),
             injected: Arc::new(Mutex::new(VecDeque::new())),
             gate: Arc::new(Mutex::new(None)),
+            compactions: Arc::new(Mutex::new(Vec::new())),
+            fail_compactions: Arc::new(Mutex::new(false)),
         }
+    }
+
+    /// The store's compare-and-swap revision, which a compaction after a pass must name.
+    async fn external_revision(&self) -> ExternalRevision {
+        self.store.lock().await.revision
+    }
+
+    async fn compactions(&self) -> Vec<ExternalRevision> {
+        self.compactions.lock().await.clone()
+    }
+
+    async fn fail_compactions(&self, fail: bool) {
+        *self.fail_compactions.lock().await = fail;
     }
 
     async fn latest(&self) -> ShardLeaseState {
@@ -160,6 +179,16 @@ impl RoutingTablePersistence for TestPersistence {
     async fn read(&self) -> Result<(ShardLeaseState, ExternalRevision), ShardManagerError> {
         let store = self.store.lock().await;
         Ok((store.shard_state.clone(), store.revision))
+    }
+
+    async fn compact(&self, latest: ExternalRevision) -> Result<(), ShardManagerError> {
+        self.compactions.lock().await.push(latest);
+        if *self.fail_compactions.lock().await {
+            return Err(ShardManagerError::Internal(
+                "compaction refused by the test".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -451,6 +480,18 @@ fn balanced_pair() -> ShardLeaseState {
     )
 }
 
+/// Waits until the loop has attempted more than `count` compactions.
+async fn wait_for_compactions_beyond(persistence: &TestPersistence, count: usize) {
+    let started = Instant::now();
+    while persistence.compactions().await.len() <= count {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the loop should have run a pass, and compacted after it, by now"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn wait_for_local_assignment(
     worker_executors: &TestWorkerExecutors,
     pod: Pod,
@@ -516,7 +557,7 @@ async fn start_shard_management(
     .await
     .expect("failed to create shard management");
 
-    // A write count is no longer a barrier: a balanced startup pass re-grants the leases it found
+    // A write count is not a barrier here: a balanced startup pass re-grants the leases it found
     // healthy in one write and then, thanks to the no-op guard, writes nothing at all. What always
     // happens is the authoritative push to every healthy executor, and it is the last thing the
     // pass does - so waiting for one push per executor is waiting for the pass to finish.
@@ -826,6 +867,24 @@ async fn a_renewal_served_during_the_revoke_fan_out_does_not_hand_the_shard_back
         .expect("the revoke must name a revision the store really held");
     assert_eq!(shards_at(&stored, old_pod), shard_ids(&[2, 3]));
 
+    // ...and, in the same pass, its full set at that same revision. A revoke is a delta: writing
+    // the latest revision on the executor asserts that the rest of its picture is current too,
+    // and the full push is what makes that true.
+    let losers_push = worker_executors
+        .pushes_to(old_pod)
+        .await
+        .pop()
+        .expect("the losing executor should have been pushed its full set in the same pass");
+    assert_eq!(
+        losers_push
+            .shard_epochs
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        shard_ids(&[2, 3])
+    );
+    assert_eq!(losers_push.revision, revoke_revision);
+
     join_set.abort_all();
 }
 
@@ -941,7 +1000,7 @@ async fn failed_reconnect_reconciliation_is_retried() {
     worker_executors
         .set_local_assignment(existing_pod, &[0])
         .await;
-    // The full-replace push *is* the reconciliation now, so a failed assign to this pod is what
+    // The full-replace push is the reconciliation, so a failed assign to this pod is what
     // the retry path has to recover from.
     worker_executors
         .fail_next_assignments(existing_pod, 1)
@@ -1055,7 +1114,7 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
     assert!(shard_state.pending_rebalance.is_empty());
     assert!(shard_state.get_unassigned_shards().is_empty());
 
-    // The push that reconciled the restarted instance carried the epochs it is now fenced on,
+    // The push that reconciled the restarted instance carried the epochs it now holds,
     // and the cluster shard count its routing needs - not just the shard ids.
     let last_push = worker_executors
         .pushes_to(restarted_pod)
@@ -1716,7 +1775,8 @@ async fn a_demoted_leaders_fenced_write_fails_before_any_executor_command() {
         "the loop ended, but not with the lost fence that ended it: {err:#}"
     );
 
-    // The ordering under test: persist before apply, so an unpersisted plan is never applied.
+    // The ordering under test: persist before send, so a refused plan is never commanded to an
+    // executor.
     let after = worker_executors.commands_sent().await;
     assert_eq!(
         after,
@@ -2187,6 +2247,67 @@ async fn past_expiries_do_not_evict_a_healthy_cluster_on_restart() {
 }
 
 #[test]
+// Compaction runs after every pass and names the revision the state was last stored at. A backend
+// that refuses it costs history, not the leader: the loop carries on and serves the next pass.
+async fn the_loop_compacts_after_each_pass_and_carries_on_when_compaction_fails() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, persistence, mut join_set) =
+        new_shard_management(balanced_pair(), worker_executors.clone()).await;
+
+    let after_startup = persistence.compactions().await;
+    assert_eq!(
+        after_startup.last().copied(),
+        Some(persistence.external_revision().await),
+        "the startup pass compacts to the revision it left the store at"
+    );
+
+    // A pass whose compaction is refused.
+    persistence.fail_compactions(true).await;
+    let new_pod = pod(3, 9002);
+    shard_management
+        .register_executor(
+            executor(3),
+            ExecutorAddr::from(new_pod),
+            Some("worker-executor-2".to_string()),
+        )
+        .await
+        .expect("the registration should have been persisted");
+    wait_for_compactions_beyond(&persistence, after_startup.len()).await;
+    wait_for_quiescence(&persistence).await;
+    let refused = persistence.compactions().await;
+    assert!(
+        refused.len() > after_startup.len(),
+        "the pass the registration woke up must still have attempted a compaction"
+    );
+
+    // ...does not stop the loop: the next pass runs, and its compaction names the newest revision.
+    persistence.fail_compactions(false).await;
+    let another_pod = pod(4, 9003);
+    shard_management
+        .register_executor(
+            executor(4),
+            ExecutorAddr::from(another_pod),
+            Some("worker-executor-3".to_string()),
+        )
+        .await
+        .expect("a registration after a refused compaction must still be served");
+    wait_for_compactions_beyond(&persistence, refused.len()).await;
+    wait_for_quiescence(&persistence).await;
+    let compactions = persistence.compactions().await;
+    assert!(
+        compactions.len() > refused.len(),
+        "the loop is still running"
+    );
+    assert_eq!(
+        compactions.last().copied(),
+        Some(persistence.external_revision().await),
+        "each pass compacts to the revision it left the store at"
+    );
+
+    join_set.abort_all();
+}
+
+#[test]
 // The lease paths never wake the loop, so the timer is the only thing that can notice an expiry in
 // a cluster where nothing else is happening. Without it a lapsed lease is held forever and its
 // shards are never re-homed.
@@ -2286,8 +2407,8 @@ async fn deregistering_an_executor_re_homes_its_shards_within_one_tick() {
     assert_eq!(after.epoch_for_shard(ShardId::new(0)), Some(ShardEpoch(1)));
     assert_eq!(after.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(0)));
     // Nothing is sent to the executor that left: it asked to be released because it is shutting
-    // down, and the manager holds no lease to revoke against any more. Its epochs have advanced
-    // under it, which is what fences it if it comes back believing it still owns those shards.
+    // down, and the manager holds no lease to revoke against any more. If it comes back claiming
+    // those shards, its renewal is refused with `ShardLeaseNotFound` and it re-registers.
     assert!(
         worker_executors.pushes_to(leaving_pod).await.len() <= 1,
         "the deregistered executor was pushed a new set after it had left"

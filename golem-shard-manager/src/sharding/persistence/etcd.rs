@@ -78,8 +78,8 @@ impl EtcdRoutingTablePersistence {
         ))
     }
 
-    /// Builds a persistence over a client `run()` opened before campaigning, so its checks
-    /// against the stored state happen while another replica still holds leadership.
+    /// Builds a persistence over `client`, the connection `run()` opened before campaigning and
+    /// already used for the pre-election shard-count read, so one connection serves both.
     pub fn with_client(
         client: Client,
         number_of_shards: usize,

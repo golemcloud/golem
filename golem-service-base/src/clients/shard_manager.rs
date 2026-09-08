@@ -74,7 +74,9 @@ pub trait ShardManager: Send + Sync {
     ) -> Result<ShardLease, ShardLeaseError>;
 
     /// Releases the shard lease on a graceful shutdown. Lenient by contract: a
-    /// stale entry, or an unknown executor, never fails a shutdown.
+    /// stale entry, or an unknown executor, never fails a shutdown. One attempt,
+    /// like `renew_shard_lease`: it runs inside the grace the executor's `main`
+    /// waits, and a retry could not fit in it.
     async fn deregister(
         &self,
         executor_id: Uuid,

@@ -46,9 +46,9 @@ const MAX_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// shutdown arm can fire.
 pub type RenewalDelay = Option<Duration>;
 
-/// Fired after a re-registration installs a fresh shard grant, so running
-/// agents are recovered for the new set exactly as the initial registration and
-/// `assign_shards_internal` do. Installed by
+/// Fired when a re-registration or a corrected renewal replaces this executor's
+/// shard assignment, so running agents are recovered for the new set exactly as
+/// the initial registration and `assign_shards_internal` do. Installed by
 /// `WorkerExecutorImpl::new`, which is the only place that can name `Ctx`.
 pub type ShardAssignmentChangedHookFn =
     dyn Fn() -> BoxFuture<'static, Result<(), anyhow::Error>> + Send + Sync;
@@ -204,7 +204,7 @@ impl GrpcShardManagerService {
         }
     }
 
-    /// Structurally the quota renewal loop (`services/quota.rs:468-490`): a
+    /// Structurally the quota renewal loop (`GrpcQuotaService::start_renewal_loop`): a
     /// weak self-reference so the loop never keeps the service alive, and a
     /// `select!` over the shutdown token and the sleep. It differs in two
     /// places: the cadence is re-derived from each granted expiry rather than
@@ -844,6 +844,36 @@ mod tests {
     }
 
     #[test]
+    // A shard count of zero would reach `ShardId::from_agent_id`, which divides by it, on the
+    // first routing decision. The registration refuses it, so a misconfigured manager fails this
+    // executor at startup rather than aborting it later - and installs nothing.
+    async fn a_registration_granting_zero_shards_is_refused() {
+        let expiry = Utc::now() + ChronoDuration::seconds(60);
+        let mock = Arc::new(MockShardManager::new().with_register(move |_| {
+            Ok(ShardRegistration {
+                number_of_shards: 0,
+                lease: ShardLease {
+                    shard_epochs: BTreeMap::new(),
+                    expires_at: Some(expiry),
+                    revision: ShardLeaseRevision(1),
+                },
+            })
+        }));
+        let (service, shard_service) = make_service(mock, Shutdown::new());
+
+        let result = service.register(PORT, None).await;
+
+        assert!(
+            matches!(&result, Err(ShardManagerError::ConversionError(message)) if message.contains("must not be 0")),
+            "a zero shard count must be refused, got {result:?}"
+        );
+        assert!(
+            shard_service.try_get_current_assignment().is_none(),
+            "a refused registration must install nothing"
+        );
+    }
+
+    #[test]
     // A manager that accepts the renewal and never answers must not hold the loop: the RPC has a
     // deadline derived from the lease, after which the pass counts as failed and backs off, so
     // the loop keeps renewing (and can still re-register) instead of parking until the transport
@@ -1253,9 +1283,9 @@ mod tests {
         }));
         let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
         let agent = agent_on_shard(0);
-        // The window has to outlast a descheduling of this thread: the suite runs
-        // ~1550 tests in parallel and the assert below is only meaningful while the
-        // granted lease is still live. One second of slack, not sixty milliseconds.
+        // The window has to outlast a descheduling of this thread under a loaded
+        // test run: the assert below is only meaningful while the granted lease is
+        // still live, so it gets a second of slack.
         shard_service.register(
             SHARDS,
             &epochs([(0, 1)]),
