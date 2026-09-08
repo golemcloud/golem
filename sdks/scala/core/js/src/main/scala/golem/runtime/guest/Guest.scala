@@ -19,10 +19,12 @@ package golem.runtime.guest
 import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.host.js.{JsSnapshot, PrincipalConverter}
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
-import golem.host.js.tool.{JsInvocationResult, JsTool, JsWasiInputStream}
+import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.runtime.autowire.AgentRegistry
 import golem.runtime.rpc.SchemaRpcCodec
-import golem.runtime.tool.ToolRegistry
+import golem.runtime.tool.{JsToolInputStream, JsToolOutputStream, ToolRegistry}
+import golem.schema.AgentStreamOwnership
+import golem.tool.{ToolInputStream, ToolOutputStream}
 import golem.tool.wire.WitToolError
 import golem.FutureInterop
 import zio.blocks.schema.json.Json
@@ -33,6 +35,7 @@ import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 import scala.scalajs.js.typedarray.Uint8Array
+import scala.util.control.NonFatal
 
 /**
  * Scala.js implementation of the mandatory Golem JS guest exports.
@@ -155,9 +158,6 @@ object Guest {
       resultPromise.`catch`[js.Any](onRejected)
     }
 
-  private def rejectToolError[A](error: WitToolError): js.Promise[A] =
-    js.Promise.reject(ToolWireInterop.toolErrorToJs(error)).asInstanceOf[js.Promise[A]]
-
   private def discoverTools(): js.Array[JsTool] =
     ToolRegistry.allTools.map(ToolWireInterop.toolToJs).toJSArray
 
@@ -171,36 +171,57 @@ object Guest {
     toolName: String,
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
-    stdin: js.UndefOr[JsWasiInputStream],
+    stdin: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream],
+    stdout: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter],
     principal: js.Dynamic
-  ): js.Promise[JsInvocationResult] =
-    ToolRegistry.getInvoker(toolName) match {
-      case None =>
-        rejectToolError(WitToolError.InvalidToolName(toolName))
-      case Some(invoker) =>
+  ): js.Promise[JsInvocationResult] = {
+    val inputOwnership = new AgentStreamOwnership
+    val scalaStdin     = stdin.toOption.map(new JsToolInputStream(_))
+    val scalaStdout    = stdout.toOption.map(new JsToolOutputStream(_))
+    val invoked        =
+      try {
         val decodedInput =
-          try Right(SchemaWireInterop.typedFromJs(input))
+          try Right(AgentStreamOwnership.capture(inputOwnership)(SchemaWireInterop.typedFromJs(input)))
           catch {
-            case t: Throwable =>
-              Left(WitToolError.InvalidInput(s"malformed invocation input: ${String.valueOf(t.getMessage)}"))
+            case NonFatal(error) =>
+              Left(WitToolError.InvalidInput(s"malformed invocation input: ${String.valueOf(error.getMessage)}"))
           }
         decodedInput match {
-          case Left(error) => rejectToolError(error)
+          case Left(error) => Future.successful(Left(error))
           case Right(in)   =>
-            val scalaPrincipal = PrincipalConverter.fromJs(principal)
-            // A `Left` (declared tool error) is surfaced as a rejection carrying
-            // the wire-encoded `tool-error`; a failed Future (user code error)
-            // propagates as an unhandled rejection so it becomes a WASM trap.
-            FutureInterop.toPromise(
-              invoker(commandPath.toList, in, stdin.toOption, scalaPrincipal).map {
-                case Right(res) =>
-                  JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined, res.stdout.orUndefined)
-                case Left(error) =>
-                  throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
-              }
-            )
+            ToolRegistry.getInvoker(toolName) match {
+              case None          => Future.successful(Left(WitToolError.InvalidToolName(toolName)))
+              case Some(invoker) =>
+                val scalaPrincipal = PrincipalConverter.fromJs(principal)
+                invoker(commandPath.toList, in, scalaStdin, scalaStdout, scalaPrincipal)
+            }
         }
+      } catch {
+        case NonFatal(error) => Future.failed(error)
+      }
+
+    // A `Left` (declared tool error) is surfaced as a rejection carrying the
+    // wire-encoded `tool-error`; a failed Future (user code error) propagates as
+    // an unhandled rejection so it becomes a WASM trap.
+    val encoded = invoked.map {
+      case Right(res) =>
+        JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
+      case Left(error) =>
+        throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
     }
+    val cleanup = List(
+      () => inputOwnership.close(),
+      () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
+      () => scalaStdout.map(_.close()).getOrElse(Future.successful(()))
+    )
+    val completed = encoded.transformWith { result =>
+      Future
+        .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
+        .flatMap(_ => Future.fromTry(result))
+    }
+
+    FutureInterop.toPromise(completed)
+  }
 
   // `get-definition` and `discover-agent-types` are synchronous WIT exports, so they
   // must return their values directly (and signal errors by throwing) instead of
@@ -271,13 +292,15 @@ object Guest {
           commandPath: js.Array[String],
           input: js.Dynamic,
           stdin: js.UndefOr[js.Any],
+          stdout: js.UndefOr[js.Any],
           principal: js.Dynamic
         ) =>
           invokeTool(
             toolName,
             commandPath,
             input.asInstanceOf[JsTypedSchemaValue],
-            stdin.asInstanceOf[js.UndefOr[JsWasiInputStream]],
+            stdin.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream]],
+            stdout.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter]],
             principal
           )
       )

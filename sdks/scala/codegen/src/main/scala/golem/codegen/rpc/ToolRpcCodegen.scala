@@ -159,6 +159,33 @@ object ToolRpcCodegen {
     private def paramDecl(param: Param): String =
       s"${param.ident}: ${ToolProjectionRendering.paramType(param, AmbientClient)}"
 
+    private def keptLeafParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
+      (inheritedRootParams(tool, m) ++ m.params).filter { p =>
+        !p.isPrincipal && !p.isStdout && !omittedMatches(tool, m, p, omitted)
+      }
+
+    private def keptSubtreeParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
+      (inheritedRootParams(tool, m) ++ m.params).filter { p =>
+        !p.isPrincipal && !omittedMatches(tool, m, p, omitted)
+      }
+
+    private def okResultType(okType: Option[String], hasStdout: Boolean): String =
+      (okType, hasStdout) match {
+        case (Some(ok), true)  => ok
+        case (None, true)      => "_root_.scala.Unit"
+        case (Some(ok), false) => ok
+        case (None, false)     => "_root_.scala.Unit"
+      }
+
+    private def leafReturnType(shape: LeafReturn, hasStdout: Boolean): String = {
+      val err = shape.errType.getOrElse("_root_.scala.Nothing")
+      val ok  = okResultType(shape.okType, hasStdout)
+      if (hasStdout)
+        s"_root_.scala.Either[_root_.golem.tool.ToolError[$err], _root_.golem.tool.ToolInvocation[$err, $ok]]"
+      else
+        s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[$err], $ok]]"
+    }
+
     private def valueEntry(tool: Tool, method: Method, param: Param): String =
       ToolProjectionRendering.valueEntry(projected(tool, method, param), AmbientClient)
 
@@ -195,7 +222,7 @@ object ToolRpcCodegen {
     ): String = {
       val kept    = keptLeafParams(tool, m, omitted)
       val stdin   = m.params.find(_.isStdin)
-      val retType = ToolProjectionRendering.returnType(shape, AmbientClient)
+      val retType = leafReturnType(shape, shape.hasStdout)
 
       val schemaPath = m.localCommandPath
 
@@ -234,18 +261,35 @@ $indent      _root_.golem.tool.ToolClientRuntime.buildDynamicInput($desc, ${Tool
         shape.errType.map(errorSchemaVal)
       )
 
-      val decodeExpr = ToolProjectionRendering.decodeExpression(AmbientClient, shape, "__r")
+      val decodeExpr = (shape.okType, shape.hasStdout) match {
+        case (Some(ok), true) =>
+          s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        case (None, true) =>
+          "_root_.golem.tool.ToolClientRuntime.decodeUnitResult(__r)"
+        case (Some(ok), false) =>
+          s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        case (None, false) =>
+          "_root_.golem.tool.ToolClientRuntime.decodeUnitResult(__r)"
+      }
 
       val paramDecls = kept.map(paramDecl).mkString(", ")
+
+      val invocationExpr =
+        if (shape.hasStdout) {
+          val decodeError = shape.errType match {
+            case Some(err) => s"${errorSchemaVal(err)}.fromErrorPayloadValue(_)"
+            case None      => "_ => _root_.scala.Left(\"unexpected remote tool error\")"
+          }
+          s"_root_.golem.tool.ToolClientRuntime.start(__transport, $commandPathExpr, __input, $stdinExpr, $decodeError)(__r => $decodeExpr)"
+        } else
+          s"_root_.golem.tool.ToolClientRuntime.complete(\n$indent    $runExpr\n$indent  )(__r => $decodeExpr)"
 
       s"""${indent}def ${m.name}($paramDecls): $retType = {
 $indent  val __params = _root_.golem.tool.ToolClientRuntime.encodeParams(${listExpr(valueEntries, s"$indent ")})
 $indent  val __input = __params.flatMap { __values =>
 $indent    $inputExpr
 $indent  }
-$indent  _root_.golem.tool.ToolClientRuntime.complete(
-$indent    $runExpr
-$indent  )(__r => $decodeExpr)
+$indent  $invocationExpr
 $indent}"""
     }
 
@@ -327,7 +371,7 @@ $indent}"""
         case shape: LeafReturn =>
           val kept = keptLeafParams(tool, m, Nil)
           Some(
-            s"  def ${m.name}(${kept.map(paramDecl).mkString(", ")}): ${ToolProjectionRendering.returnType(shape, AmbientClient)}"
+            s"  def ${m.name}(${kept.map(paramDecl).mkString(", ")}): ${leafReturnType(shape, shape.hasStdout)}"
           )
       }
 

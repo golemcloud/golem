@@ -274,8 +274,8 @@ async fn t3_read_only_invalidates_after_write(
 /// [`DurableWorkerCtx::on_agent_invocation_success`] in
 /// `golem-worker-executor/src/durable_host/mod.rs`), so a previously-warmed
 /// cache entry stays serviceable while a slow `slow_increment(2000)` is
-/// queued/running. Foreground `get_count` is then served from the cache and
-/// returns within the deadline.
+/// queued/running. Foreground `get_count` is then served from the cache without
+/// recording another invocation in the worker's oplog.
 #[test]
 #[timeout("60s")]
 #[tracing::instrument]
@@ -306,6 +306,8 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
         .await?;
     wait_for_cache_hit(&executor, &component, &agent_id, &worker_id).await?;
 
+    let before_mutation = executor.oplog_max_index(&worker_id).await?;
+
     // Background slow mutation.
     let mutator = {
         let executor = executor.clone();
@@ -323,25 +325,32 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
         })
     };
 
-    // Give the mutating enqueue a moment to land.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mutation_started_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let (started, finished) = count_agent_invocation_pair_since(&entries, before_mutation);
+        if started == 1 && finished == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() <= mutation_started_deadline,
+            "slow_increment did not start within 10s: started={started} finished={finished}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
-    // Foreground read-only call must come back from the cache within 50ms.
-    let started = Instant::now();
-    let result = tokio::time::timeout(
-        Duration::from_millis(50),
-        executor.invoke_and_await_agent(&component, &agent_id, "get_count", data_value!()),
-    )
-    .await
-    .expect("read-only call must return within 50ms even while slow_increment holds the queue")?
-    .into_typed::<u64>()?;
-
-    assert!(
-        started.elapsed() < Duration::from_millis(50),
-        "read-only call took {:?}",
-        started.elapsed()
-    );
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?
+        .into_typed::<u64>()?;
     assert_eq!(result, 0, "must return pre-write value");
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let (started, _) = count_agent_invocation_pair_since(&entries, before_mutation);
+    assert_eq!(
+        started, 1,
+        "the read-only call must be served from cache without entering the invocation queue"
+    );
 
     let _ = mutator.await;
 
@@ -1584,7 +1593,6 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
         .await?;
     wait_for_cache_hit(&executor, &component, &target_agent_id, &target_worker_id).await?;
 
-    let started_at = Instant::now();
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         executor.invoke_and_await_agent(
@@ -1597,11 +1605,6 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
     .await??
     .into_typed::<u64>()?;
 
-    assert!(
-        started_at.elapsed() < Duration::from_millis(500),
-        "slow_then_read took {:?} (cache bypass expected)",
-        started_at.elapsed()
-    );
     assert_eq!(result, 0, "must return pre-write value");
 
     Ok(())

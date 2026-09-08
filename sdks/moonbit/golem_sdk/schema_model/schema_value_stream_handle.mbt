@@ -71,7 +71,7 @@ fn GuestSchemaValueStreamHandle::release(
 ///|
 async fn GuestSchemaValueStreamHandle::prepare_outgoing(
   self : GuestSchemaValueStreamHandle,
-) -> Unit raise SchemaModelError {
+) -> Unit {
   match self.take() {
     None =>
       raise EncodeError(
@@ -80,6 +80,7 @@ async fn GuestSchemaValueStreamHandle::prepare_outgoing(
     Some(Wrapped(value)) => self.cell = Some(Wrapped(value))
     Some(Native(reader)) => {
       let wrapped = @types.SchemaValueStream::wrap(reader) catch {
+        @async-core.Cancelled::Cancelled as err => raise err
         e => raise EncodeError("failed wrapping schema value stream: \{e}")
       }
       self.cell = Some(Wrapped(wrapped))
@@ -88,28 +89,38 @@ async fn GuestSchemaValueStreamHandle::prepare_outgoing(
 }
 
 ///|
-pub async fn GuestSchemaValueStreamHandle::take_or_unwrap_native(
+pub async fn GuestSchemaValueStreamHandle::read_native(
   self : GuestSchemaValueStreamHandle,
-) -> @async-core.Stream[@types.SchemaValueTree] raise SchemaModelError {
-  match self.take() {
+) -> FixedArray[@types.SchemaValueTree]? {
+  let reader = match self.take() {
     None =>
-      raise DecodeError(
+      raise SchemaValueStreamReadError::Ownership(
         "schema-value-stream handle was already transferred; an owned stream can only be received once",
       )
     Some(Native(reader)) => reader
     Some(Wrapped(value)) =>
       @types.SchemaValueStream::unwrap(value) catch {
-        e => raise DecodeError("failed unwrapping schema value stream: \{e}")
+        @async-core.Cancelled::Cancelled as err => raise err
+        e =>
+          raise SchemaValueStreamReadError::Transport(
+            "failed unwrapping schema value stream: \{repr(e)}",
+          )
       }
   }
-}
-
-///|
-pub fn GuestSchemaValueStreamHandle::put_native(
-  self : GuestSchemaValueStreamHandle,
-  reader : @async-core.Stream[@types.SchemaValueTree],
-) -> Unit {
+  let result = {
+    errdefer {
+      self.cell = Some(Native(reader))
+    }
+    reader.read(1) catch {
+      @async-core.Cancelled::Cancelled as err => raise err
+      e =>
+        raise SchemaValueStreamReadError::Transport(
+          "failed reading schema value stream: \{repr(e)}",
+        )
+    }
+  }
   self.cell = Some(Native(reader))
+  result
 }
 
 ///|

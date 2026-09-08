@@ -17,6 +17,7 @@ use super::entity_slot::{EntitySlot, EntitySlotRegistration};
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
 use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
@@ -27,22 +28,21 @@ use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::entity::{
-    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability, OwnerRuntime,
+    EntityActivation, EntityInvocationScope, ExecutableTarget, FilesystemCapability,
+    InvocationExecutionMode, OwnerRuntime,
 };
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::component::Component as ComponentMetadata;
-use std::collections::HashSet;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use tokio::sync::watch;
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
-use wasmtime::{Store, StoreMemory, UpdateDeadline};
+use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LinearMemoryEnumerationError {
@@ -117,14 +117,50 @@ pub struct OwnerExecution {
     replay: tokio::sync::RwLock<Option<ReplayState>>,
     commit: Arc<OwnerCommitController>,
     lane: OwnerLane,
-    historical_reconstructions: watch::Sender<usize>,
-    historical_reconstruction_bodies: watch::Sender<HashSet<OplogIndex>>,
+    primary_tail_work: crate::durable_host::tail_work::TailWorkTracker,
+    tool_operations: Arc<OwnerToolOperations>,
+    deferred_tool_admission: Arc<DeferredAdmissionTable>,
+    reached_oplog_marker: AtomicU64,
+    #[cfg(feature = "test-utils")]
+    monotonic_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
+    #[cfg(feature = "test-utils")]
+    wall_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
+    #[cfg(feature = "test-utils")]
+    skip_monotonic_clock_now_durability: AtomicBool,
+    #[cfg(feature = "test-utils")]
+    skip_wall_clock_now_durability: AtomicBool,
 }
 
-pub(crate) struct HistoricalReconstruction {
-    active: watch::Sender<usize>,
-    active_bodies: watch::Sender<HashSet<OplogIndex>>,
-    body: Option<OplogIndex>,
+#[cfg(feature = "test-utils")]
+struct ClockNowGate {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+#[cfg(feature = "test-utils")]
+pub struct ClockNowGateHandle {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ClockNowGate>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ClockNowGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered)
+            .await
+            .expect("clock now gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Drop for ClockNowGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
 }
 
 impl OwnerExecution {
@@ -134,16 +170,25 @@ impl OwnerExecution {
         commit: Arc<OwnerCommitController>,
     ) -> Self {
         let lane = OwnerLane::new(owner_id.clone());
-        let (historical_reconstructions, _) = watch::channel(0);
-        let (historical_reconstruction_bodies, _) = watch::channel(HashSet::new());
+        let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
         Self {
             owner_id,
             oplog,
             replay: tokio::sync::RwLock::new(None),
             commit,
             lane,
-            historical_reconstructions,
-            historical_reconstruction_bodies,
+            tool_operations: OwnerToolOperations::new(),
+            primary_tail_work,
+            deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
+            reached_oplog_marker: AtomicU64::new(OplogIndex::NONE.into()),
+            #[cfg(feature = "test-utils")]
+            monotonic_clock_now_gate: Mutex::new(None),
+            #[cfg(feature = "test-utils")]
+            wall_clock_now_gate: Mutex::new(None),
+            #[cfg(feature = "test-utils")]
+            skip_monotonic_clock_now_durability: AtomicBool::new(false),
+            #[cfg(feature = "test-utils")]
+            skip_wall_clock_now_durability: AtomicBool::new(false),
         }
     }
 
@@ -159,35 +204,32 @@ impl OwnerExecution {
         self.lane.clone()
     }
 
-    pub(crate) fn register_historical_reconstruction(
+    pub fn tool_operation_metadata(&self) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.metadata()
+    }
+
+    pub(crate) fn tool_operations(&self) -> Arc<OwnerToolOperations> {
+        self.tool_operations.clone()
+    }
+
+    pub(crate) fn primary_tail_work_tracker(
         &self,
-        start_index: OplogIndex,
-    ) -> HistoricalReconstruction {
-        self.historical_reconstructions
-            .send_modify(|active| *active += 1);
-        self.historical_reconstruction_bodies.send_modify(|active| {
-            assert!(
-                active.insert(start_index),
-                "entity body reconstruction at {start_index} was registered twice"
-            );
-        });
-        HistoricalReconstruction {
-            active: self.historical_reconstructions.clone(),
-            active_bodies: self.historical_reconstruction_bodies.clone(),
-            body: Some(start_index),
-        }
+    ) -> crate::durable_host::tail_work::TailWorkTracker {
+        self.primary_tail_work.clone()
     }
 
-    pub(crate) fn historical_reconstruction_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
-        self.historical_reconstruction_bodies.subscribe()
+    pub(crate) fn deferred_tool_admission(&self) -> Arc<DeferredAdmissionTable> {
+        self.deferred_tool_admission.clone()
     }
 
-    pub(crate) async fn wait_for_historical_reconstructions(&self) {
-        let mut active = self.historical_reconstructions.subscribe();
-        active
-            .wait_for(|active| *active == 0)
-            .await
-            .expect("owner execution retains the reconstruction tracker");
+    pub(crate) fn mark_reached_oplog_marker(&self, marker: OplogIndex) {
+        self.reached_oplog_marker
+            .store(marker.into(), Ordering::Release);
+    }
+
+    pub fn reached_oplog_marker(&self) -> Option<OplogIndex> {
+        let marker = OplogIndex::from_u64(self.reached_oplog_marker.load(Ordering::Acquire));
+        (marker != OplogIndex::NONE).then_some(marker)
     }
 
     pub(crate) async fn begin_replay_generation(
@@ -208,11 +250,19 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        let replay = ReplayState::new(
+        if let Some(replay) = self.replay.read().await.as_ref() {
+            replay.ensure_reconstruction_claims_empty()?;
+        }
+        self.tool_operations.begin_generation()?;
+        self.deferred_tool_admission.begin_generation()?;
+        self.reached_oplog_marker
+            .store(OplogIndex::NONE.into(), Ordering::Release);
+        let replay = ReplayState::new_for_owner(
             self.owner_id.clone(),
             self.oplog.clone(),
             deleted_regions,
             initial_snapshot_skip_end,
+            self.tool_operations.clone(),
         )
         .await?;
         *self.replay.write().await = Some(replay.clone());
@@ -228,6 +278,143 @@ impl OwnerExecution {
         })
     }
 
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_drain_terminal_clamp_then_reconstruction_barrier(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send + 'static>>, WorkerExecutorError> {
+        let replay = self.replay().await?;
+        replay
+            .test_drain_terminal_clamp_then_reconstruction_barrier(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_drain_reconstruction_terminal(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_drain_reconstruction_terminal(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_clamp_after_claim(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_clamp_after_claim(start_index)
+            .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.is_live_published())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_replay_is_settling(&self) -> Result<bool, WorkerExecutorError> {
+        Ok(self.replay().await?.test_is_settling())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_wait_for_tool_owner_failure(
+        &self,
+    ) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.wait_for_owner_failure().await;
+        self.tool_operation_metadata()
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_monotonic_clock_now(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        *self.monotonic_clock_now_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_wall_clock_now(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        *self.wall_clock_now_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_skip_next_monotonic_clock_now_durability(&self) {
+        self.skip_monotonic_clock_now_durability
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_skip_next_wall_clock_now_durability(&self) {
+        self.skip_wall_clock_now_durability
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
+        self.skip_monotonic_clock_now_durability
+            .swap(false, Ordering::AcqRel)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
+        self.skip_wall_clock_now_durability
+            .swap(false, Ordering::AcqRel)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_before_monotonic_clock_now(&self) {
+        let gate = self.monotonic_clock_now_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("monotonic-clock now gate was closed")
+                .forget();
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_before_wall_clock_now(&self) {
+        let gate = self.wall_clock_now_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("wall-clock now gate was closed")
+                .forget();
+        }
+    }
+
     pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
         self.commit.commit_and_update_state(level).await.0
     }
@@ -236,30 +423,6 @@ impl OwnerExecution {
         let index = self.oplog.add(entry).await;
         self.commit(CommitLevel::Always).await;
         index
-    }
-}
-
-impl Drop for HistoricalReconstruction {
-    fn drop(&mut self) {
-        self.body_settled();
-        self.active.send_modify(|active| {
-            *active = active
-                .checked_sub(1)
-                .expect("historical reconstruction count underflowed");
-        });
-    }
-}
-
-impl HistoricalReconstruction {
-    pub(crate) fn body_settled(&mut self) {
-        if let Some(start_index) = self.body.take() {
-            self.active_bodies.send_modify(|active| {
-                assert!(
-                    active.remove(&start_index),
-                    "entity body reconstruction at {start_index} was not registered"
-                );
-            });
-        }
     }
 }
 
@@ -612,6 +775,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
+                scope
+                    .map(EntityInvocationScope::mode)
+                    .unwrap_or(InvocationExecutionMode::Live),
                 self.filesystem,
                 component_metadata,
                 self.activation.clone(),
@@ -664,9 +830,54 @@ pub struct HostedInstance<Ctx: WorkerCtx> {
     _component_charge: Option<WorkerComponentCharge>,
 }
 
+pub trait EntityInvocationBody<Ctx: WorkerCtx, R>: Send + 'static {
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>;
+}
+
+pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
+
+impl<Ctx, R, F> EntityInvocationBody<Ctx, R> for ClosureEntityInvocationBody<F>
+where
+    Ctx: WorkerCtx,
+    F: Send + 'static,
+    F: for<'a> FnOnce(
+        &'a Instance,
+        &'a mut Store<Ctx>,
+    )
+        -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
+{
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>> {
+        self.0(instance, store)
+    }
+}
+
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     pub(crate) fn into_parts(self) -> (Instance, Store<Ctx>) {
         (self.instance, self.store.into_inner())
+    }
+
+    pub(crate) async fn prepare_tool_parent_end(
+        &mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::prepare_tool_parent_end(&mut self.store.as_context_mut(), parent)
+            .await
+    }
+
+    pub(crate) async fn settle_tool_children(
+        &mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::settle_tool_children(&mut self.store.as_context_mut(), parent)
+            .await
     }
 
     /// Runs one entity export with an installed invocation scope and then destroys its Store.
@@ -693,7 +904,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .as_ref()
                 .ok_or_else(|| WorkerExecutorError::runtime("Entity instance has no slot"))?
                 .register(&scope)?;
-            self.invoke_scoped_inner(scope, &registration, invoke).await
+            self.invoke_scoped_inner(scope, &registration, ClosureEntityInvocationBody(invoke))
+                .await
         })
         .await
         .map_err(|error| {
@@ -705,23 +917,20 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         })?
     }
 
-    pub(crate) async fn invoke_scoped_registered<R, F>(
-        self,
+    pub(crate) async fn invoke_scoped_registered_retained<R, F>(
+        mut self,
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> (Result<R, WorkerExecutorError>, Self)
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
     {
-        self.invoke_scoped_inner(scope, registration, invoke).await
+        let result = self
+            .invoke_scoped_inner_retained(scope, registration, invoke)
+            .await;
+        (result, self)
     }
 
     async fn invoke_scoped_inner<R, F>(
@@ -732,13 +941,21 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     ) -> Result<R, WorkerExecutorError>
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
+    {
+        self.invoke_scoped_inner_retained(scope, registration, invoke)
+            .await
+    }
+
+    async fn invoke_scoped_inner_retained<R, F>(
+        &mut self,
+        scope: EntityInvocationScope,
+        registration: &EntitySlotRegistration,
+        invoke: F,
+    ) -> Result<R, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: EntityInvocationBody<Ctx, R>,
     {
         let OwnerRuntime::Entity(entity) = &self.runtime else {
             return Err(WorkerExecutorError::runtime(
@@ -757,6 +974,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
 
         registration
             .attach_linear_memory(self.store.data().durable_ctx().linear_memory_tracker())?;
+        let execution_mode = scope.mode();
+        let body_hook = self.store.data().entity_invocation_body_hook();
 
         match self.store.data().entity_invocation_scope() {
             Some(installed) if installed != &scope => {
@@ -770,9 +989,27 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .data_mut()
                 .set_entity_invocation_scope(Some(scope))?,
         }
-        let result = std::panic::AssertUnwindSafe(invoke(&self.instance, &mut self.store))
-            .catch_unwind()
-            .await;
+        if let Some(hook) = body_hook.as_ref() {
+            hook.before_invocation(execution_mode).await;
+        }
+        let mut result =
+            std::panic::AssertUnwindSafe(invoke.invoke(&self.instance, &mut self.store))
+                .catch_unwind()
+                .await;
+        if result.is_ok()
+            && let Some(hook) = body_hook.as_ref()
+        {
+            hook.before_completion(execution_mode).await;
+        }
+        if execution_mode == InvocationExecutionMode::ReplayingCompleted
+            && let Ok(Ok(response)) = &mut result
+            && let Some(response) = (response as &mut dyn std::any::Any)
+                .downcast_mut::<golem_common::model::oplog::HostResponseEntityInvocation>(
+            )
+            && let Some(hook) = body_hook
+        {
+            hook.mutate_completed_reconstruction_response(response);
+        }
         let cleanup = self.finish_scoped_invocation();
 
         match result {
@@ -795,9 +1032,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     }
 
     fn finish_scoped_invocation(&mut self) -> Result<(), WorkerExecutorError> {
-        let scope_cleanup = self.store.data_mut().set_entity_invocation_scope(None);
-        self.store.data().set_suspended();
-        scope_cleanup
+        self.store.data_mut().set_entity_invocation_scope(None)
     }
 }
 

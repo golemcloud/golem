@@ -57,6 +57,7 @@ struct PendingInputRange {
 struct InputState {
     next_offset: u64,
     terminal: bool,
+    consumer_cancelled: bool,
     discard_next_offset: Option<u64>,
     pending_ranges: HashMap<u64, PendingInputRange>,
     pending_acks: VecDeque<u64>,
@@ -1179,17 +1180,28 @@ impl InvocationSessionState {
         Ok(())
     }
 
+    /// Applies an input cancellation. `by_consumer` distinguishes the consumer's cancellation
+    /// (a server response) from the producer's own cancellation request.
+    ///
+    /// The consumer decides to stop while producer frames may still be in flight, so its
+    /// cancellation races with the producer's terminal in both directions: producer events that
+    /// arrive after the consumer cancellation are discarded (`discard_next_offset`), and a
+    /// consumer cancellation that arrives after the producer already published its terminal is
+    /// accepted once, abandoning every unacknowledged producer event from `offset` onward.
     fn cancel_input(
         &mut self,
         stream_id: u64,
         offset: u64,
-        discard_in_flight: bool,
+        by_consumer: bool,
     ) -> Result<(), String> {
         let state = self
             .inputs
             .get_mut(&stream_id)
             .ok_or_else(|| format!("input stream {stream_id} is unknown"))?;
-        ensure_open(state.terminal, stream_id)?;
+        ensure_open(
+            state.consumer_cancelled || (state.terminal && !by_consumer),
+            stream_id,
+        )?;
         let accepted_offset = state
             .pending_acks
             .front()
@@ -1200,8 +1212,11 @@ impl InvocationSessionState {
                 "input stream {stream_id} expected cancellation offset {accepted_offset}, got {offset}"
             ));
         }
-        if discard_in_flight {
-            state.discard_next_offset = Some(state.next_offset);
+        if by_consumer {
+            state.consumer_cancelled = true;
+            if !state.terminal {
+                state.discard_next_offset = Some(state.next_offset);
+            }
         }
         state.next_offset = offset;
         state.pending_ranges.clear();
@@ -3313,6 +3328,55 @@ mod tests {
                 }),
             ))
             .unwrap();
+        state.validate_response(&result(scalar(2))).unwrap();
+        state.validate_response(&success()).unwrap();
+    }
+
+    #[test]
+    fn input_consumer_cancellation_may_race_with_the_producer_terminal() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(stream(7)))
+            .unwrap();
+        state
+            .validate_response(&accepted_with_inputs(&[7]))
+            .unwrap();
+        state
+            .validate_public_request(&input_item(0, Payload::Value(scalar(1))))
+            .unwrap();
+        state
+            .validate_response(&input_ack(7, 0, durable_offset(1)))
+            .unwrap();
+        state
+            .validate_public_request(&input_item(1, Payload::Value(scalar(2))))
+            .unwrap();
+        state
+            .validate_public_request(&public_request(
+                public_invocation_request::Request::InputEnd(InputStreamEnd {
+                    transport_stream_id: 7,
+                    sequence: 2,
+                    ..Default::default()
+                }),
+            ))
+            .unwrap();
+
+        let cancellation = response(invocation_response::Response::StreamCancel(cancel(
+            7,
+            StreamCancelRole::InputConsumer,
+            1,
+        )));
+        state.validate_response(&cancellation).unwrap();
+        assert!(
+            state.validate_response(&cancellation).is_err(),
+            "an input stream must not accept the consumer cancellation more than once"
+        );
+        assert!(
+            state
+                .validate_response(&input_ack(7, 1, durable_offset(2)))
+                .is_err(),
+            "events abandoned by the consumer cancellation are never acknowledged"
+        );
+        assert!(state.all_inputs_terminal());
         state.validate_response(&result(scalar(2))).unwrap();
         state.validate_response(&success()).unwrap();
     }

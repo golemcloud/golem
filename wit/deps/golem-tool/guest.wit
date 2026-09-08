@@ -10,6 +10,7 @@ package golem:tool@0.1.0;
 /// rules and is independent of the tool calling convention.
 interface guest {
   use common.{tool, tool-error, invocation-result};
+  use host.{byte-stream-item, tool-stdout-writer};
   use golem:core/types@2.0.0.{typed-schema-value};
   use golem:agent/common@2.0.0.{principal};
 
@@ -34,8 +35,15 @@ interface guest {
   /// the body's schema.
   ///
   /// `stdin` is supplied when the selected body declared a stdin
-  /// `stream-spec`. The callee consumes the stream for the duration of the
-  /// call; dropping its reader closes further consumption.
+  /// `stream-spec`. Clean EOF is underlying stream closure. A final failed
+  /// item reports recoverable source failure, abandonment, resource
+  /// exhaustion, or cancellation before closure. Dropping the reader closes
+  /// further consumption.
+  ///
+  /// `stdout` is supplied when the selected body declared a stdout
+  /// `stream-spec`. The implementation writes while this function is still
+  /// running and explicitly finishes or fails the endpoint. Dropping an open
+  /// writer abandons it. The first selected terminal is immutable.
   ///
   /// `principal` carries the caller's authenticated identity for
   /// authorization and audit, identical in semantics to the parameter
@@ -44,7 +52,8 @@ interface guest {
     tool-name:    string,
     command-path: list<string>,
     input:        typed-schema-value,
-    stdin:        option<stream<u8>>,
+    stdin:        option<stream<byte-stream-item>>,
+    stdout:       option<own<tool-stdout-writer>>,
     principal:    principal,
   ) -> result<invocation-result, tool-error>;
 }

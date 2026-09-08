@@ -18,6 +18,7 @@ priv struct EventLoop {
   wakeups : Map[WaitableSet, TaskWakeup]
   tasks : Map[WaitableSet, Coroutine]
   owned_coroutines : Map[WaitableSet, @set.Set[Coroutine]]
+  owned_failure : Map[WaitableSet, Bool]
   finished : Map[WaitableSet, Bool]
   resolved : Map[WaitableSet, Bool]
   cancellations : Map[WaitableSet, TaskCancellation]
@@ -75,6 +76,7 @@ fn clear_subscribers(waitable_set : WaitableSet) -> Unit {
 fn finish_waitableset(waitable_set : WaitableSet) -> Unit {
   ev.tasks.remove(waitable_set)
   ev.owned_coroutines.remove(waitable_set)
+  ev.owned_failure.remove(waitable_set)
   ev.finished.remove(waitable_set)
   ev.resolved.remove(waitable_set)
   ev.cancellations.remove(waitable_set)
@@ -101,6 +103,34 @@ fn acknowledge_cancellation(waitable_set : WaitableSet) -> Unit {
     Running | Suspend(_) => return
   }
   ev.cancellations.set(waitable_set, Acknowledged)
+}
+
+///|
+/// Start unwinding an operation after one of its runtime-owned children fails.
+/// This cancellation is internal: only a host `TaskCancelled` event populates
+/// `ev.cancellations` and may acknowledge cancellation with `task_cancel`.
+fn begin_owned_failure_drain(
+  waitable_set : WaitableSet,
+  failed : Coroutine,
+) -> Unit {
+  if ev.owned_failure.get(waitable_set) is Some(true) {
+    return
+  }
+  ev.owned_failure.set(waitable_set, true)
+  if ev.tasks.get(waitable_set) is Some(root) &&
+    !physical_equal(root, failed) {
+    match root.state {
+      Running | Suspend(_) => root.cancel()
+      Done | Fail(_) => ()
+    }
+  }
+  if ev.owned_coroutines.get(waitable_set) is Some(owned) {
+    owned.each(fn(coro) {
+      if !physical_equal(coro, failed) {
+        coro.cancel()
+      }
+    })
+  }
 }
 
 ///|
@@ -137,12 +167,16 @@ fn next_callback(waitable_set : WaitableSet) -> Int {
   }
   acknowledge_cancellation(waitable_set)
   if ev.finished.get(waitable_set) is Some(true) && no_more_work(waitable_set) {
+    let owned_failed = ev.owned_failure.get(waitable_set) is Some(true)
     let resolved = ev.resolved.get(waitable_set) is Some(true)
     let failed = match ev.tasks.get(waitable_set) {
       Some(coro) => coro.state is Fail(_)
       None => false
     }
     finish_waitableset(waitable_set)
+    if owned_failed {
+      abort("component task-owned coroutine failed after cleanup")
+    }
     if !resolved {
       if failed {
         abort("async export failed before task return")
@@ -253,6 +287,7 @@ let ev : EventLoop = {
   wakeups: Map([]),
   tasks: Map([]),
   owned_coroutines: Map([]),
+  owned_failure: Map([]),
   finished: Map([]),
   resolved: Map([]),
   cancellations: Map([]),
@@ -277,12 +312,22 @@ pub fn spawn_component_task_current(f : async () -> Unit) -> Unit {
     async fn() -> Unit {
       let coro = current_coroutine()
       defer owned.remove(coro)
-      f()
+      f() catch {
+        Cancelled::Cancelled as err if is_being_cancelled() => raise err
+        err => {
+          begin_owned_failure_drain(waitable_set, coro)
+          raise err
+        }
+      }
     },
     waitable_set,
     Some(spawn_component_task_current),
   )
   owned.add(coro)
+  if ev.owned_failure.get(waitable_set) is Some(true) ||
+    ev.cancellations.get(waitable_set) is Some(_) {
+    coro.cancel()
+  }
 }
 
 ///|

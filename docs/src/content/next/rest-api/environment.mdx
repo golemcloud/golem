@@ -1,5 +1,29 @@
 # Environment API
 
+## Upload a content-addressed initial agent file for deployment in this environment
+Path|Method|Protected
+---|---|---
+`/v1/envs/{environment_id}/initial-agent-files`|POST|Yes
+
+
+
+
+
+**Request Form**: `multipart/form-data`
+
+> Make sure to include `Content-Type: multipart/form-data` Header
+
+**Field `file`**: string binary
+
+**Example Response JSON**
+
+```json copy
+{
+  "contentHash": "string",
+  "size": 0
+}
+```
+
 ## List all application environments
 Path|Method|Protected
 ---|---|---
@@ -253,6 +277,15 @@ Path|Method|Protected
       "domain": "string",
       "hash": "string"
     }
+  ],
+  "remoteTools": [
+    {
+      "name": "string",
+      "hash": "string"
+    }
+  ],
+  "publishedTools": [
+    "string"
   ]
 }
 ```
@@ -372,6 +405,8 @@ Path|Method|Protected
       }
     }
   ],
+  "publishTools": [],
+  "remoteTools": [],
   "replaceIncompatibleAgentSecrets": false
 }
 ```
@@ -429,6 +464,15 @@ Path|Method|Protected
       "domain": "string",
       "hash": "string"
     }
+  ],
+  "remoteTools": [
+    {
+      "name": "string",
+      "hash": "string"
+    }
+  ],
+  "publishedTools": [
+    "string"
   ]
 }
 ```
@@ -1379,6 +1423,7 @@ Path|Method|Protected
   "values": [
     {
       "deploymentRevision": 0,
+      "releaseId": "829d5913-a352-42a5-be6f-1526f30c0c85",
       "definition": {
         "version": "string",
         "commands": {
@@ -1820,7 +1865,8 @@ Path|Method|Protected
       },
       "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
       "ownerAccountEmail": "string",
-      "metadataVersion": "string"
+      "metadataVersion": "string",
+      "metadataDigest": "string"
     }
   ]
 }
@@ -1842,6 +1888,7 @@ Path|Method|Protected
 ```json copy
 {
   "deploymentRevision": 0,
+  "releaseId": "829d5913-a352-42a5-be6f-1526f30c0c85",
   "definition": {
     "version": "string",
     "commands": {
@@ -2289,7 +2336,8 @@ Path|Method|Protected
   },
   "ownerAccountId": "2936251c-eefb-44ec-9d94-a810fc3cf72b",
   "ownerAccountEmail": "string",
-  "metadataVersion": "string"
+  "metadataVersion": "string",
+  "metadataDigest": "string"
 }
 ```
 ## Environment API Errors

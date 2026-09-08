@@ -1,0 +1,17 @@
+[package]
+name = "golem_it_tool_streaming_rust_provider"
+version = "0.0.1"
+edition = "2024"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+futures-concurrency = "7.6.3"
+golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+wasi = { version = "=0.14.7+wasi-0.2.4" }

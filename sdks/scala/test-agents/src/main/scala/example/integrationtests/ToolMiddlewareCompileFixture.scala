@@ -21,7 +21,7 @@ import golem.runtime.annotations.{arg, error, toolDefinition, toolMiddleware, un
 import golem.schema.TypedSchemaValue
 import golem.tool.{
   ToolInvokeError,
-  ToolInvokeResult,
+  ToolMiddlewareResult,
   UniversalToolMiddleware,
   UniversalToolMiddlewareInvocation,
   UniversalToolUnderlying
@@ -123,6 +123,6 @@ final class MiddlewareFixtureUniversal extends UniversalToolMiddleware {
   def invoke(
     invocation: UniversalToolMiddlewareInvocation,
     underlying: UniversalToolUnderlying
-  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
 }

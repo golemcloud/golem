@@ -48,6 +48,7 @@ use golem_common::model::component::{
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
+use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
 };
@@ -190,6 +191,7 @@ impl TestDsl for TestWorkerExecutor {
         name: &str,
         unique: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<ToolName, BTreeMap<AgentTypeName, ToolBindingInput>>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         if agent_type_provision_configs
@@ -197,6 +199,11 @@ impl TestDsl for TestWorkerExecutor {
             .any(|c| !c.plugin_installations.is_empty())
         {
             return Err(anyhow!("Plugins aren't supported in worker executor tests"));
+        }
+        if !tool_agent_bindings.is_empty() {
+            return Err(anyhow!(
+                "Tool agent bindings must be installed through the worker executor test deployment state"
+            ));
         }
 
         let component_directory = &self.deps.component_directory;

@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/tool-core"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/host",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
@@ -28,11 +29,11 @@ pub fn decode_typed_value(@types.TypedSchemaValue, String) -> Result[@schema_mod
 
 pub fn discover_tools() -> Array[@golemcloud/golem_sdk/interface/golem/tool/common.Tool]
 
-pub async fn encode_error_payload(@schema_model.TypedSchemaValue) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn encode_error_payload(@schema_model.TypedSchemaValue) -> @types.TypedSchemaValue
 
 pub fn encode_invocation_input(@schema_model.SchemaGraph, Array[@schema_model.SchemaValue]) -> @schema_model.TypedSchemaValue
 
-pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchemaValue
 
 pub fn encode_typed_input(@schema_model.TypedSchemaValue) -> Result[@types.TypedSchemaValue, String]
 
@@ -44,13 +45,13 @@ pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/c
 
 pub fn invocation_result_stdout(@async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
-pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
-pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
-pub async fn invoke_registered_subtool(String, Array[String], Array[CanonicalInputValue], @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub async fn invoke_registered_subtool(String, Array[String], Array[CanonicalInputValue], @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
-pub async fn invoke_registered_tool(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub async fn invoke_registered_tool(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
 pub fn literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) -> @schema_model.SchemaValue raise ToolBuildError
 
@@ -64,6 +65,8 @@ pub fn[T : @schema.FromSchema] project_result_value(InvocationResult) -> Result[
 
 pub fn[T : @schema.FromSchema] project_result_with_stdout(InvocationResult) -> Result[(T, @async-core.Stream[Byte]), String]
 
+pub fn provider_stdout(@host.ToolStdoutWriter) -> ProviderStdout
+
 pub fn refine_numeric(@schema_model.SchemaGraph, String?, String?, String?) -> @schema_model.SchemaGraph raise ToolBuildError
 
 pub fn refine_path(@schema_model.SchemaGraph, @types.PathDirection?, @types.PathKind?, Array[String]?) -> @schema_model.SchemaGraph raise ToolBuildError
@@ -72,15 +75,15 @@ pub fn refine_text(@schema_model.SchemaGraph, String?, UInt?, UInt?) -> @schema_
 
 pub fn refine_url(@schema_model.SchemaGraph, Array[String]?) -> @schema_model.SchemaGraph raise ToolBuildError
 
-pub fn register_subtool_def_invoker(ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
+pub fn register_subtool_def_invoker(ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
 
 pub fn register_tool_def(ToolDef) -> Unit raise ToolBuildError
 
-pub fn register_tool_def_invoker(ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
+pub fn register_tool_def_invoker(ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
 
 pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise ToolBuildError
 
-pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
+pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]) -> Unit raise ToolBuildError
 
 pub fn reject_decoded_invocation(Array[CanonicalInputValue], @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
 
@@ -115,6 +118,13 @@ pub suberror ToolBuildError {
   UnresolvedValueIsLiteral(String)
 } derive(Eq, @debug.Debug)
 pub fn ToolBuildError::schema_model(String) -> Self
+
+pub(all) suberror ToolStreamError {
+  Cancelled
+  Abandoned
+  ResourceExhausted
+  Failed(String)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct CanonicalInputField {
@@ -234,6 +244,18 @@ pub(all) struct PositionalsDef {
   fixed : Array[PositionalDef]
   tail : TailPositionalDef?
 }
+
+pub struct ProviderStdout {
+  // private fields
+}
+pub fn ProviderStdout::drop(Self) -> Unit
+pub async fn ProviderStdout::fail(Self, ToolStreamError) -> Unit
+pub async fn ProviderStdout::finish(Self) -> Unit
+pub fn ProviderStdout::is_open(Self) -> Bool
+pub async fn ProviderStdout::write(Self, ArrayView[Byte]) -> Int
+pub async fn ProviderStdout::write_all(Self, ArrayView[Byte]) -> Bool
+pub async fn ProviderStdout::write_all_bytes(Self, BytesView) -> Bool
+pub async fn ProviderStdout::write_bytes(Self, BytesView) -> Int
 
 pub(all) enum RefDef {
   Present(String)

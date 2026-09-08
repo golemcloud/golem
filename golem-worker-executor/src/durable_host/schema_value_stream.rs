@@ -298,10 +298,20 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
                     .is_ok()
                 {
+                    let drop_event_sink = access
+                        .get()
+                        .state
+                        .dropped_call_event_sender()
+                        .expect("dropped-call event sender is always available");
+                    let runtime_teardown = access.get().stream_runtime_teardown_probe();
                     let endpoint = stream
                         .take_host_endpoint::<DurableInputEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
-                    StreamReader::new(&mut access, DurableInputProducer::new(endpoint))
+                    StreamReader::new(
+                        &mut access,
+                        DurableInputProducer::new(endpoint)
+                            .with_drop_cleanup(drop_event_sink, runtime_teardown),
+                    )
                 } else {
                     let endpoint = stream
                         .take_host_endpoint::<LiveStreamEndpoint>()

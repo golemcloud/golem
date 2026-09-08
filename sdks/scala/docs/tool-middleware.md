@@ -12,7 +12,7 @@ For each `@toolDefinition` trait, the sbt and Mill plugins generate these middle
 - `<Tool>Middleware`: the transparent middleware surface;
 - `<Tool>Middleware.Adapter[U]`: the same presented surface with a different expected underlying type `U`.
 
-Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, `Principal`, stdin, and stdout follow the generated projection for that command.
+Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, and `Principal` follow the generated projection for that command. Declared stdin becomes a `ToolMiddlewareInputHandle`; declared stdout is carried by the successful result as a `ToolMiddlewareOutputHandle`.
 
 ### Transparent middleware
 
@@ -76,7 +76,7 @@ import golem.runtime.annotations.universalToolMiddleware
 import golem.schema.TypedSchemaValue
 import golem.tool.{
   ToolInvokeError,
-  ToolInvokeResult,
+  ToolMiddlewareResult,
   UniversalToolMiddleware,
   UniversalToolMiddlewareInvocation,
   UniversalToolUnderlying
@@ -89,7 +89,7 @@ final class MiddlewareFixtureUniversal extends UniversalToolMiddleware {
   def invoke(
     invocation: UniversalToolMiddlewareInvocation,
     underlying: UniversalToolUnderlying
-  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
 }
 ```
@@ -126,15 +126,15 @@ The SDK waits for an active underlying call before revoking the handle and clean
 
 ## Stream transfer and cleanup
 
-Stdin and stdout handles follow the same invocation ownership:
+`ToolMiddlewareInputHandle` and `ToolMiddlewareOutputHandle` are transfer-only capabilities. They intentionally have no public `read`, `cancel`, `write`, `finish`, or `fail` methods. Middleware can forward and select them, but byte-level stream consumption and production belong to ordinary tool implementations and callers.
+
+The handles follow the same invocation ownership:
 
 - Passing the invocation's stdin to an underlying call transfers it exactly once. If it is never forwarded, the SDK closes it when the middleware settles.
 - Forwarding the same stream twice is SDK misuse.
 - Stdout returned from underlying calls is tracked. Intermediate, abandoned, malformed, or error-path stdout is closed best-effort.
 - Only the stdout selected in the middleware's final successful result is transferred to the caller; it remains open for the caller.
 - Cleanup is identity-based and idempotent, including when the same stdout handle appears more than once.
-
-The current Scala stream types are opaque handles. Middleware can safely forward and select them, but byte-level stream authoring is outside this API.
 
 ## Choosing a component role
 

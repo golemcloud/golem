@@ -693,6 +693,14 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
     }
 }
 
+async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
+    bytes: Vec<u8>,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || deserialize(&bytes))
+        .await
+        .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
+}
+
 #[async_trait]
 pub trait OplogOps: Oplog {
     /// Uploads a big oplog payload and returns a reference to it
@@ -707,8 +715,21 @@ pub trait OplogOps: Oplog {
         Ok(payload)
     }
 
+    /// Uploads an owned oplog payload and moves it into the in-memory cache.
+    async fn upload_payload_owned<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
+        &self,
+        data: T,
+    ) -> Result<OplogPayload<T>, String> {
+        let bytes = serialize(&data)?;
+        let raw_payload = self.upload_raw_payload(bytes).await?;
+        let payload = raw_payload.into_payload_with_cache(Arc::new(data))?;
+        Ok(payload)
+    }
+
     /// Downloads a big oplog payload by its reference
-    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
+    async fn download_payload<
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
         &self,
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
@@ -717,7 +738,7 @@ pub trait OplogOps: Oplog {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize(&bytes),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -727,7 +748,7 @@ pub trait OplogOps: Oplog {
                 ..
             } => {
                 let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
-                deserialize(&bytes)
+                deserialize_oplog_payload(bytes).await
             }
         }
     }
@@ -851,32 +872,41 @@ pub trait OplogOps: Oplog {
         invocation: AgentInvocation,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
-        self.add_agent_invocation_started_with_index(invocation, wallet_pin)
-            .await
-            .map(|(_, entry)| entry)
+        let entry = self
+            .agent_invocation_started_entry(invocation, wallet_pin)
+            .await?;
+        self.add(entry.clone()).await;
+        Ok(entry)
     }
 
     async fn add_agent_invocation_started_with_index(
         &self,
         invocation: AgentInvocation,
         wallet_pin: InvocationWalletPin,
-    ) -> Result<(OplogIndex, OplogEntry), String> {
+    ) -> Result<OplogIndex, String> {
+        let entry = self
+            .agent_invocation_started_entry(invocation, wallet_pin)
+            .await?;
+        Ok(self.add(entry).await)
+    }
+
+    async fn agent_invocation_started_entry(
+        &self,
+        invocation: AgentInvocation,
+        wallet_pin: InvocationWalletPin,
+    ) -> Result<OplogEntry, String> {
         let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
-        let payload = self.upload_payload(&invocation_payload).await?;
-        let trace_id = ctx.trace_id.clone();
-        let trace_states = ctx.trace_states.clone();
+        let payload = self.upload_payload_owned(invocation_payload).await?;
         let invocation_context = ctx.to_oplog_data();
-        let entry = OplogEntry::AgentInvocationStarted {
+        Ok(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             idempotency_key,
             payload,
-            trace_id,
-            trace_states,
+            trace_id: ctx.trace_id,
+            trace_states: ctx.trace_states,
             invocation_context,
             wallet_pin: Some(wallet_pin),
-        };
-        let index = self.add(entry.clone()).await;
-        Ok((index, entry))
+        })
     }
 
     async fn add_agent_invocation_finished(
@@ -956,7 +986,9 @@ pub trait OplogServiceOps: OplogService {
     }
 
     /// Downloads a big oplog payload by its reference
-    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
+    async fn download_payload<
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -967,7 +999,7 @@ pub trait OplogServiceOps: OplogService {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize(&bytes),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -979,7 +1011,7 @@ pub trait OplogServiceOps: OplogService {
                 let bytes = self
                     .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
                     .await?;
-                deserialize(&bytes)
+                deserialize_oplog_payload(bytes).await
             }
         }
     }

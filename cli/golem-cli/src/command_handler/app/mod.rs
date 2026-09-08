@@ -27,8 +27,8 @@ use crate::command::shared_args::{
 };
 use crate::command_handler::Handlers;
 use crate::command_handler::app::deploy_diff::{
-    DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
-    RollbackEntityDetails, RollbackQuickDiff,
+    DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, DeployableManifest,
+    RollbackDetails, RollbackDiff, RollbackEntityDetails, RollbackQuickDiff,
 };
 use crate::command_handler::app::template::TemplateHandler;
 use crate::command_handler::app::version_strategy::{ResolvedAppVersionSource, compute_version};
@@ -49,11 +49,13 @@ use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
 };
+use crate::model::component::{PendingRemoteInitialFile, ResolvedManifestComponentsAndTools};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
-    DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan, PostDeployError,
-    PostDeployResult, PostDeploySummary, UpdateStagedComponentError, build_environment_setup_plan,
-    preferred_source_language_for_setup,
+    DeployConfig, DeployError, DeployResult, DeploySummary, EnvironmentSetupPlan,
+    EnvironmentToolGrantPlanAction, EnvironmentToolGrantPlanEntry, EnvironmentToolGrantPlanView,
+    PostDeployError, PostDeployResult, PostDeploySummary, ToolPublicationPlan,
+    UpdateStagedComponentError, build_environment_setup_plan, preferred_source_language_for_setup,
 };
 use crate::model::deploy::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::deploy::{DeploymentListView, DeploymentNewView};
@@ -61,12 +63,13 @@ use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdent
 use crate::model::help::AvailableComponentNamesHelp;
 use crate::model::language::GuestLanguage;
 use crate::model::text_format::{log_fuzzy_matches, log_text_view};
+use crate::model::tool_release::ResolvedToolGrants;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{
-    AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient, ResourcesClient,
-    RetryPoliciesClient,
+    AgentSecretsClient, ApplicationClient, ComponentClient, EnvironmentClient,
+    EnvironmentToolGrantsClient, ResourcesClient, RetryPoliciesClient,
 };
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
@@ -83,6 +86,12 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment_tool_grant::{
+    EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion, EnvironmentToolGrantId,
+    EnvironmentToolGrantReconciliation, EnvironmentToolGrantWithDetails, EnvironmentToolValidation,
+};
+use golem_common::model::tool::ToolName;
+use golem_common::model::tool_release::{ToolPublication, ToolReleaseReference};
 use golem_common::schema::schema_type::SchemaType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -97,6 +106,129 @@ mod version_strategy;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
+}
+
+struct ToolGrantReconciliationPlan {
+    creations: Vec<ToolReleaseReference>,
+    reference_updates: Vec<ToolReleaseReference>,
+    deletions: Vec<EnvironmentToolGrantId>,
+    view: EnvironmentToolGrantPlanView,
+    resolved_grants: ResolvedToolGrants,
+}
+
+impl ToolGrantReconciliationPlan {
+    fn has_changes(&self) -> bool {
+        self.view.has_changes()
+    }
+
+    fn requires_access_changes(&self) -> bool {
+        !self.creations.is_empty() || !self.reference_updates.is_empty()
+    }
+
+    fn retain_access_changes(&mut self) {
+        self.deletions.clear();
+        self.view.entries.retain(|entry| {
+            matches!(
+                entry.action,
+                EnvironmentToolGrantPlanAction::Create
+                    | EnvironmentToolGrantPlanAction::UpdateReference
+            )
+        });
+    }
+
+    fn upserts(&self) -> impl Iterator<Item = &ToolReleaseReference> {
+        self.creations.iter().chain(&self.reference_updates)
+    }
+}
+
+fn tool_grant_plan_entry(
+    action: EnvironmentToolGrantPlanAction,
+    reference: &ToolReleaseReference,
+    grant_id: Option<EnvironmentToolGrantId>,
+) -> EnvironmentToolGrantPlanEntry {
+    match reference {
+        ToolReleaseReference::ById(reference) => EnvironmentToolGrantPlanEntry {
+            action,
+            release_id: Some(reference.release_id),
+            account: None,
+            name: None,
+            version: None,
+            grant_id,
+        },
+        ToolReleaseReference::ByCoordinates(reference) => EnvironmentToolGrantPlanEntry {
+            action,
+            release_id: None,
+            account: Some(reference.account.to_string()),
+            name: Some(reference.name.to_string()),
+            version: Some(reference.version.clone()),
+            grant_id,
+        },
+    }
+}
+
+fn build_tool_grant_reconciliation_plan(
+    desired: &[ToolReleaseReference],
+    current: &[EnvironmentToolGrantWithDetails],
+) -> ToolGrantReconciliationPlan {
+    let mut creations = Vec::new();
+    let mut reference_updates = Vec::new();
+    let mut reference_update_grant_ids = BTreeSet::new();
+    let mut deletions = Vec::new();
+    let mut entries = Vec::new();
+    let resolved_grants = ResolvedToolGrants::from_current(desired, current);
+
+    for reference in desired {
+        if resolved_grants.get(reference).is_none() {
+            let (action, grant_id) = if let Some(grant) =
+                ResolvedToolGrants::find_automatic_reference_mode_mismatch(current, reference)
+            {
+                reference_updates.push(reference.clone());
+                reference_update_grant_ids.insert(grant.grant.id);
+                (
+                    EnvironmentToolGrantPlanAction::UpdateReference,
+                    Some(grant.grant.id),
+                )
+            } else {
+                creations.push(reference.clone());
+                (EnvironmentToolGrantPlanAction::Create, None)
+            };
+            entries.push(tool_grant_plan_entry(action, reference, grant_id));
+        }
+    }
+
+    for grant in current {
+        if resolved_grants.contains_grant(grant.grant.id) {
+            continue;
+        }
+        if reference_update_grant_ids.contains(&grant.grant.id) {
+            deletions.push(grant.grant.id);
+            continue;
+        }
+        let action = if grant.grant.protected {
+            EnvironmentToolGrantPlanAction::RetainProtected
+        } else if grant.grant.automatic {
+            deletions.push(grant.grant.id);
+            EnvironmentToolGrantPlanAction::Delete
+        } else {
+            EnvironmentToolGrantPlanAction::RetainAdministratorManaged
+        };
+        entries.push(EnvironmentToolGrantPlanEntry {
+            action,
+            release_id: Some(grant.release.id),
+            account: Some(grant.release_owner.email.to_string()),
+            name: Some(grant.release.name.to_string()),
+            version: Some(grant.release.version.clone()),
+            grant_id: Some(grant.grant.id),
+        });
+    }
+
+    ToolGrantReconciliationPlan {
+        creations,
+        reference_updates,
+        deletions,
+        view: EnvironmentToolGrantPlanView { entries },
+        resolved_grants,
+    }
 }
 
 impl AppCommandHandler {
@@ -748,20 +880,81 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::PrepareError)?;
 
-        if !config.skip_build {
-            self.build(&build_config, vec![], &ApplicationComponentSelectMode::All)
+        let mut tool_grant_plan = self
+            .plan_tool_grant_reconciliation(&environment)
+            .await
+            .map_err(DeployError::PrepareError)?;
+        let stage_requires_grant_changes =
+            config.stage && tool_grant_plan.requires_access_changes();
+        if !tool_grant_plan.view.entries.is_empty()
+            && (!config.stage || stage_requires_grant_changes)
+        {
+            log_action("Planning", "environment tool grant reconciliation");
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
+            self.ctx
+                .log_handler()
+                .log_output(tool_grant_plan.view.clone())
+                .map_err(DeployError::PrepareError)?;
+        }
+        if stage_requires_grant_changes {
+            return Err(DeployError::PrepareError(anyhow!(
+                "Cannot stage this deployment because it requires environment tool grant changes; run a normal deployment to reconcile grants"
+            )));
+        }
+        if !config.stage {
+            self.validate_tool_grant_reconciliation(&environment, &tool_grant_plan)
                 .await
-                .map_err(DeployError::BuildError)?;
+                .map_err(DeployError::PrepareError)?;
+        }
+        let has_tool_grant_changes = !config.stage && tool_grant_plan.has_changes();
+        if !config.stage && config.plan && tool_grant_plan.requires_access_changes() {
+            log_warn_action(
+                "Planning stopped",
+                "the remaining build and deployment diff require the environment tool grant changes above; --plan does not apply them. Run the deployment without --plan to commit the grant setup and continue planning",
+            );
+            return Ok(DeploySummary::PlanOk);
+        }
+        if has_tool_grant_changes && !config.plan {
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_tool_grant_plan_apply()
+                .map_err(DeployError::PrepareError)?
+            {
+                return Err(DeployError::Cancelled);
+            }
+            self.apply_tool_grant_reconciliation(&environment, &mut tool_grant_plan)
+                .await
+                .map_err(DeployError::PrepareError)?;
+        }
+
+        if !config.skip_build {
+            self.build_with_resolved_tool_grants(
+                &build_config,
+                vec![],
+                &ApplicationComponentSelectMode::All,
+                &tool_grant_plan.resolved_grants,
+            )
+            .await
+            .map_err(DeployError::BuildError)?;
         }
 
         let Some((deploy_diff, deployment_version)) = self
-            .prepare_deployment(environment.clone(), config.full_diff)
+            .prepare_deployment(
+                environment.clone(),
+                &tool_grant_plan.resolved_grants,
+                config.full_diff,
+            )
             .await
             .map_err(DeployError::PrepareError)?
         else {
             return {
                 if config.plan {
-                    Ok(DeploySummary::PlanUpToDate)
+                    Ok(if has_tool_grant_changes {
+                        DeploySummary::PlanOk
+                    } else {
+                        DeploySummary::PlanUpToDate
+                    })
                 } else {
                     Ok(DeploySummary::DeployUpToDate(
                         self.apply_post_deploy_args(
@@ -780,25 +973,19 @@ impl AppCommandHandler {
         };
 
         if config.plan {
-            return Ok(
-                if deploy_diff.has_deployment_changes()
-                    || deploy_diff.has_environment_setup_entries_to_apply()
-                {
-                    DeploySummary::PlanOk
-                } else if deploy_diff.has_environment_setup_entries_skipped_already_exists() {
-                    DeploySummary::PlanSkippedOnly
-                } else {
-                    DeploySummary::PlanUpToDate
-                },
-            );
+            return Ok(if has_tool_grant_changes || deploy_diff.has_apply_work() {
+                DeploySummary::PlanOk
+            } else if deploy_diff.has_environment_setup_entries_skipped_already_exists() {
+                DeploySummary::PlanSkippedOnly
+            } else {
+                DeploySummary::PlanUpToDate
+            });
         }
 
-        let has_deployment_changes = deploy_diff.has_deployment_changes();
-        let has_environment_setup_apply = deploy_diff.has_environment_setup_entries_to_apply();
         let has_environment_setup_skipped =
             deploy_diff.has_environment_setup_entries_skipped_already_exists();
 
-        if !has_deployment_changes && !has_environment_setup_apply {
+        if !deploy_diff.has_apply_work() {
             return Ok(if has_environment_setup_skipped {
                 DeploySummary::DeploySkippedOnly(
                     self.apply_post_deploy_args(
@@ -880,16 +1067,19 @@ impl AppCommandHandler {
     async fn prepare_deployment(
         &self,
         environment: ResolvedEnvironmentIdentity,
+        resolved_tool_grants: &ResolvedToolGrants,
         full_diff: bool,
     ) -> anyhow::Result<Option<(DeployDiff, DeploymentVersion)>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
 
-        let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
+        let deploy_quick_diff = self
+            .deploy_quick_diff(environment, resolved_tool_grants)
+            .await?;
 
         debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
-        let deployment_is_up_to_date = deploy_quick_diff.is_up_to_date();
+        let deployment_is_up_to_date = deploy_quick_diff.is_deployment_up_to_date();
 
         let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
         debug!("deploy_diff: {:#?}", deploy_diff);
@@ -898,6 +1088,7 @@ impl AppCommandHandler {
             let plan = self.build_environment_setup_plan(&deploy_diff).await?;
             if !plan.display.has_entries_to_apply()
                 && !plan.display.has_entries_skipped_already_exists()
+                && deploy_diff.tool_publication_plan.is_empty()
             {
                 return Ok(None);
             }
@@ -911,7 +1102,10 @@ impl AppCommandHandler {
             .await?;
         debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-        if deployment_is_up_to_date && !deploy_diff.has_environment_setup_work() {
+        if deployment_is_up_to_date
+            && !deploy_diff.has_environment_setup_work()
+            && deploy_diff.tool_publication_plan.is_empty()
+        {
             return Ok(None);
         }
 
@@ -927,7 +1121,7 @@ impl AppCommandHandler {
             log_action(
                 "Comparing",
                 format!(
-                    "staging area with current deployment: {}",
+                    "staging area with current deployment (tool publications excluded): {}",
                     if stage_is_same_as_current {
                         "SAME".green()
                     } else {
@@ -956,7 +1150,7 @@ impl AppCommandHandler {
                     log_action("Diffing", "with current deployment");
                 }
 
-                if deploy_diff.has_deployment_changes() || full_diff {
+                if deploy_diff.has_deployment_request_changes() || full_diff {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
                     log_unified_diff(&unified_diffs.display_diff);
                 }
@@ -995,7 +1189,7 @@ impl AppCommandHandler {
                         "changes to be applied to the staging area and to the environment:",
                     );
                 } else if deploy_diff.has_environment_setup_entries_skipped_already_exists()
-                    && !deploy_diff.has_deployment_changes()
+                    && !deploy_diff.has_deployment_request_changes()
                 {
                     log_action(
                         "Planned",
@@ -1004,14 +1198,19 @@ impl AppCommandHandler {
                 } else {
                     log_action("Planned", "changes to be applied to the environment:");
                 }
-                if deploy_diff.has_deployment_changes() || deploy_diff.environment_setup.is_some() {
+                if deploy_diff.has_deployment_request_changes()
+                    || !deploy_diff.tool_publication_plan.is_empty()
+                    || deploy_diff.environment_setup.is_some()
+                {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
                     self.ctx.log_handler().log_output(DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
+                        tool_publications: &deploy_diff.tool_publication_plan,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
                     })?;
                 }
-                if deploy_diff.has_deployment_changes() && !deployment_version.0.is_empty() {
+                if deploy_diff.has_deployment_request_changes() && !deployment_version.0.is_empty()
+                {
                     log_action(
                         "Deployment version",
                         deployment_version.0.log_color_highlight().to_string(),
@@ -1020,8 +1219,12 @@ impl AppCommandHandler {
             }
         }
 
+        if deploy_diff.tool_publication_plan.has_conflicts() {
+            bail!("Tool publication plan contains conflicts");
+        }
+
         // Emit schema evolution warnings
-        for (component_name, new_props) in &deploy_diff.deployable_components {
+        for (component_name, new_props) in &deploy_diff.deployable_manifest.components {
             if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
                 let warnings = validate_schema_evolution(old_agent_types, &new_props.agent_types);
                 for w in &warnings {
@@ -1043,11 +1246,16 @@ impl AppCommandHandler {
     async fn deploy_quick_diff(
         &self,
         environment: ResolvedEnvironmentIdentity,
+        resolved_tool_grants: &ResolvedToolGrants,
     ) -> anyhow::Result<DeployQuickDiff> {
-        let deployable_manifest_components = self
+        let ResolvedManifestComponentsAndTools {
+            components,
+            remote_tools,
+            tools_to_publish,
+        } = self
             .ctx
             .component_handler()
-            .deployable_manifest_components(&environment)
+            .resolve_manifest_components_and_tools(&environment, resolved_tool_grants)
             .await?;
 
         let deployable_manifest_http_api_deployments = self
@@ -1064,7 +1272,7 @@ impl AppCommandHandler {
 
         let diffable_local_components = {
             let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
-            for (component_name, component_deploy_properties) in &deployable_manifest_components {
+            for (component_name, component_deploy_properties) in &components {
                 let diffable_component = self
                     .ctx
                     .component_handler()
@@ -1121,18 +1329,74 @@ impl AppCommandHandler {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
             mcp_deployments: diffable_local_mcp_deployments,
+            remote_tools: remote_tools.diffable_deployments.clone(),
+            published_tools: tools_to_publish.iter().map(ToString::to_string).collect(),
         };
 
         let local_deployment_hash = diffable_local_deployment.hash()?;
+        let tool_publication_plan = self
+            .plan_tool_publications(&environment, &components, tools_to_publish)
+            .await?;
 
         Ok(DeployQuickDiff {
             environment,
-            deployable_manifest_components,
-            deployable_manifest_http_api_deployments,
-            deployable_manifest_mcp_deployments,
+            deployable_manifest: DeployableManifest {
+                components,
+                remote_tools,
+                http_api_deployments: deployable_manifest_http_api_deployments,
+                mcp_deployments: deployable_manifest_mcp_deployments,
+            },
             diffable_local_deployment,
             local_deployment_hash,
+            tool_publication_plan,
         })
+    }
+
+    async fn plan_tool_publications(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        components: &BTreeMap<ComponentName, crate::model::component::ComponentDeployProperties>,
+        tools_to_publish: BTreeSet<ToolName>,
+    ) -> anyhow::Result<ToolPublicationPlan> {
+        if tools_to_publish.is_empty() {
+            return Ok(ToolPublicationPlan::default());
+        }
+
+        let publications = tools_to_publish
+            .iter()
+            .map(|name| {
+                let definition = components
+                    .values()
+                    .flat_map(|component| &component.tools)
+                    .find(|tool| tool.name() == Some(name.as_str()))
+                    .ok_or_else(|| anyhow!("Published tool {name} has no local definition"))?;
+                Ok(ToolPublication {
+                    name: name.clone(),
+                    definition: definition.clone(),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let result = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment_tool_grants
+            .validate_environment_tools(
+                &environment.environment_id.0,
+                &EnvironmentToolValidation {
+                    grant_reconciliation: EnvironmentToolGrantReconciliation {
+                        creations: Vec::new(),
+                        deletions: Vec::new(),
+                    },
+                    publications,
+                },
+            )
+            .await
+            .map_service_error()?;
+        Ok(ToolPublicationPlan::new(
+            tools_to_publish,
+            result.publication_plan,
+        ))
     }
 
     async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
@@ -1182,10 +1446,7 @@ impl AppCommandHandler {
 
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
-            deployable_components: deploy_quick_diff.deployable_manifest_components,
-            deployable_http_api_deployments: deploy_quick_diff
-                .deployable_manifest_http_api_deployments,
-            deployable_mcp_deployments: deploy_quick_diff.deployable_manifest_mcp_deployments,
+            deployable_manifest: deploy_quick_diff.deployable_manifest,
             diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
             local_deployment_hash: deploy_quick_diff.local_deployment_hash,
             current_deployment,
@@ -1199,6 +1460,7 @@ impl AppCommandHandler {
             diff,
             diff_stage,
             environment_setup: None,
+            tool_publication_plan: deploy_quick_diff.tool_publication_plan,
         })
     }
 
@@ -1316,7 +1578,8 @@ impl AppCommandHandler {
 
         let source_language = preferred_source_language_for_setup(
             &deploy_diff
-                .deployable_components
+                .deployable_manifest
+                .components
                 .iter()
                 .map(|(name, component)| (name.0.clone(), component.agent_types.clone()))
                 .collect(),
@@ -1333,6 +1596,113 @@ impl AppCommandHandler {
             &declared_secret_types,
             &source_language,
         )
+    }
+
+    async fn plan_tool_grant_reconciliation(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ToolGrantReconciliationPlan> {
+        let desired = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .remote_release_references()
+                .map(|(_, reference)| reference.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|reference| reference.to_release_reference().map_err(anyhow::Error::msg))
+                .collect::<anyhow::Result<Vec<_>>>()?
+        };
+        let current = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment_tool_grants
+            .list_environment_tool_grants(&environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+
+        Ok(build_tool_grant_reconciliation_plan(&desired, &current))
+    }
+
+    async fn validate_tool_grant_reconciliation(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        plan: &ToolGrantReconciliationPlan,
+    ) -> anyhow::Result<()> {
+        if plan.has_changes() {
+            self.ctx
+                .golem_clients()
+                .await?
+                .environment_tool_grants
+                .validate_environment_tools(
+                    &environment.environment_id.0,
+                    &EnvironmentToolValidation {
+                        grant_reconciliation: EnvironmentToolGrantReconciliation {
+                            creations: plan
+                                .upserts()
+                                .cloned()
+                                .map(|release| EnvironmentToolGrantCreation {
+                                    release,
+                                    automatic: true,
+                                })
+                                .collect(),
+                            deletions: plan.deletions.clone(),
+                        },
+                        publications: Vec::new(),
+                    },
+                )
+                .await
+                .map_service_error()?;
+        }
+        Ok(())
+    }
+
+    async fn apply_tool_grant_reconciliation(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        plan: &mut ToolGrantReconciliationPlan,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Applying",
+            "environment tool grant setup as a separate committed step",
+        );
+        let clients = self.ctx.golem_clients().await?;
+        let upserts = plan.upserts().cloned().collect::<Vec<_>>();
+        for release in upserts {
+            let grant = clients
+                .environment_tool_grants
+                .create_environment_tool_grant(
+                    &environment.environment_id.0,
+                    &EnvironmentToolGrantCreation {
+                        release: release.clone(),
+                        automatic: true,
+                    },
+                )
+                .await
+                .map_service_error()?;
+            plan.resolved_grants.insert(release, grant);
+        }
+        for grant_id in &plan.deletions {
+            if plan.resolved_grants.contains_grant(*grant_id) {
+                continue;
+            }
+            clients
+                .environment_tool_grants
+                .delete_environment_tool_grant(
+                    &grant_id.0,
+                    &EnvironmentToolGrantDeletion { automatic: true },
+                )
+                .await
+                .map_service_error()?;
+        }
+        log_action(
+            "Committed",
+            "environment tool grant setup; these changes remain applied if the build or deployment is later cancelled or fails",
+        );
+        Ok(())
     }
 
     async fn collect_deploy_diff_details(
@@ -2132,6 +2502,15 @@ impl AppCommandHandler {
 
         log_action("Deploying", "staged changes to the environment");
 
+        self.upload_remote_initial_files(
+            &deploy_diff.environment.environment_id,
+            &deploy_diff
+                .deployable_manifest
+                .remote_tools
+                .pending_initial_files,
+        )
+        .await?;
+
         let mut reset_fallback_applied = false;
         let mut replace_incompatible_agent_secrets = false;
         let result = loop {
@@ -2143,6 +2522,19 @@ impl AppCommandHandler {
                         current_revision: deploy_diff.current_deployment_revision(),
                         expected_deployment_hash: deploy_diff.local_deployment_hash,
                         version: deployment_version.clone(),
+                        publish_tools: deploy_diff
+                            .tool_publication_plan
+                            .tools()
+                            .iter()
+                            .cloned()
+                            .collect(),
+                        remote_tools: deploy_diff
+                            .deployable_manifest
+                            .remote_tools
+                            .deployments
+                            .values()
+                            .cloned()
+                            .collect(),
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
                             defaults.extend(
@@ -2208,6 +2600,40 @@ impl AppCommandHandler {
         })?;
 
         Ok(result)
+    }
+
+    async fn upload_remote_initial_files(
+        &self,
+        environment_id: &EnvironmentId,
+        files: &[PendingRemoteInitialFile],
+    ) -> anyhow::Result<()> {
+        if files.is_empty() {
+            return Ok(());
+        }
+
+        let clients = self.ctx.golem_clients().await?;
+        for file in files {
+            let source = tokio::fs::File::from_std(file.content.reopen()?);
+            let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(source));
+            let uploaded = clients
+                .environment
+                .upload_environment_initial_agent_file(&environment_id.0, body)
+                .await
+                .map_service_error()?;
+            let uploaded_hash =
+                golem_common::model::agent::AgentFileContentHash(uploaded.content_hash.parse()?);
+            if uploaded_hash != file.content_hash || uploaded.size != file.size {
+                bail!(
+                    "Environment initial file upload returned unexpected identity: expected {} ({} bytes), got {} ({} bytes)",
+                    file.content_hash,
+                    file.size,
+                    uploaded_hash,
+                    uploaded.size,
+                );
+            }
+        }
+
+        Ok(())
     }
 
     async fn rollback_environment(
@@ -2391,6 +2817,68 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
+        let requires_remote_release_metadata = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .requires_remote_release_bridge_metadata()
+        };
+        let resolved_tool_grants = if requires_remote_release_metadata {
+            log_action(
+                "Preparing",
+                "remote tool bridge access through the selected environment",
+            );
+            let environment = self
+                .ctx
+                .environment_handler()
+                .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+                .await?;
+            let mut plan = self.plan_tool_grant_reconciliation(&environment).await?;
+            plan.retain_access_changes();
+            self.validate_tool_grant_reconciliation(&environment, &plan)
+                .await?;
+            if plan.has_changes() {
+                log_action("Planning", "environment tool grants required by the build");
+                let _indent = self.ctx.log_handler().decorated_indent_primary();
+                self.ctx.log_handler().log_output(plan.view.clone())?;
+                if !self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_tool_grant_plan_apply()?
+                {
+                    bail!(NonSuccessfulExit);
+                }
+                self.apply_tool_grant_reconciliation(&environment, &mut plan)
+                    .await?;
+            }
+            plan.resolved_grants
+        } else {
+            ResolvedToolGrants::default()
+        };
+
+        self.build_selected(build_config, &resolved_tool_grants)
+            .await
+    }
+
+    async fn build_with_resolved_tool_grants(
+        &self,
+        build_config: &BuildConfig,
+        component_names: Vec<ComponentName>,
+        default_component_select_mode: &ApplicationComponentSelectMode,
+        resolved_tool_grants: &ResolvedToolGrants,
+    ) -> anyhow::Result<()> {
+        self.must_select_components(component_names, default_component_select_mode)
+            .await?;
+        self.build_selected(build_config, resolved_tool_grants)
+            .await
+    }
+
+    async fn build_selected(
+        &self,
+        build_config: &BuildConfig,
+        resolved_tool_grants: &ResolvedToolGrants,
+    ) -> anyhow::Result<()> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -2400,7 +2888,7 @@ impl AppCommandHandler {
             self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
         }
 
-        app_ctx.build(build_config).await
+        app_ctx.build(build_config, resolved_tool_grants).await
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
@@ -2788,7 +3276,7 @@ fn collect_declared_agent_secret_types(
 ) -> anyhow::Result<BTreeMap<String, SchemaType>> {
     let mut declared_secret_types = BTreeMap::<Vec<String>, (SchemaType, String)>::new();
 
-    for component in deploy_diff.deployable_components.values() {
+    for component in deploy_diff.deployable_manifest.components.values() {
         for agent_type in &component.agent_types {
             for config in &agent_type.config {
                 if config.source != AgentConfigSource::Secret {
@@ -2902,8 +3390,24 @@ fn duplicate_component_matches(found: &[Match]) -> Vec<(String, Vec<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::duplicate_component_matches;
+    use super::{build_tool_grant_reconciliation_plan, duplicate_component_matches};
     use crate::fuzzy::Match;
+    use crate::model::deploy::EnvironmentToolGrantPlanAction;
+    use chrono::Utc;
+    use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
+    use golem_common::model::diff::Hash;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::environment_tool_grant::{
+        EnvironmentToolGrant, EnvironmentToolGrantId, EnvironmentToolGrantLifecycle,
+        EnvironmentToolGrantWithDetails,
+    };
+    use golem_common::model::tool::ToolName;
+    use golem_common::model::tool_release::{
+        ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseId, ToolReleaseMetadata,
+        ToolReleaseReference,
+    };
+    use golem_common::schema::SchemaGraph;
+    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use test_r::test;
 
     fn matched(option: &str, pattern: &str) -> Match {
@@ -2933,5 +3437,176 @@ mod tests {
     fn no_collision_for_distinct_components() {
         let found = vec![matched("a", "a"), matched("b", "b")];
         assert!(duplicate_component_matches(&found).is_empty());
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_is_idempotent_for_an_existing_exact_grant() {
+        let current = grant("search", "1.2.0", "publisher@example.com", true, false);
+        let desired = vec![ToolReleaseReference::ById(ToolReleaseById {
+            release_id: current.release.id,
+        })];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, &[current]);
+
+        assert!(plan.creations.is_empty());
+        assert!(plan.deletions.is_empty());
+        assert!(plan.view.entries.is_empty());
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_is_idempotent_for_existing_coordinates() {
+        let current = grant("search", "1.2.0", "publisher@example.com", true, true);
+        let desired = vec![ToolReleaseReference::ByCoordinates(
+            ToolReleaseByCoordinates {
+                account: AccountEmail::new("publisher@example.com"),
+                name: ToolName::try_from("search").unwrap(),
+                version: "1.2.0".to_string(),
+            },
+        )];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, &[current]);
+
+        assert!(plan.creations.is_empty());
+        assert!(plan.deletions.is_empty());
+        assert!(plan.view.entries.is_empty());
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_updates_id_reference_to_coordinates() {
+        let current = grant("search", "1.2.0", "publisher@example.com", true, false);
+        let desired = vec![ToolReleaseReference::ByCoordinates(
+            ToolReleaseByCoordinates {
+                account: AccountEmail::new("publisher@example.com"),
+                name: ToolName::try_from("search").unwrap(),
+                version: "1.2.0".to_string(),
+            },
+        )];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, std::slice::from_ref(&current));
+
+        assert!(plan.creations.is_empty());
+        assert_eq!(plan.reference_updates, desired);
+        assert_eq!(plan.deletions, vec![current.grant.id]);
+        assert_eq!(plan.view.entries.len(), 1);
+        assert_eq!(
+            plan.view.entries[0].action,
+            EnvironmentToolGrantPlanAction::UpdateReference
+        );
+        assert_eq!(plan.view.entries[0].grant_id, Some(current.grant.id));
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_updates_coordinate_reference_to_id() {
+        let current = grant("search", "1.2.0", "publisher@example.com", true, true);
+        let desired = vec![ToolReleaseReference::ById(ToolReleaseById {
+            release_id: current.release.id,
+        })];
+
+        let plan = build_tool_grant_reconciliation_plan(&desired, std::slice::from_ref(&current));
+
+        assert!(plan.creations.is_empty());
+        assert_eq!(plan.reference_updates, desired);
+        assert_eq!(plan.deletions, vec![current.grant.id]);
+        assert_eq!(plan.view.entries.len(), 1);
+        assert_eq!(
+            plan.view.entries[0].action,
+            EnvironmentToolGrantPlanAction::UpdateReference
+        );
+        assert_eq!(plan.view.entries[0].grant_id, Some(current.grant.id));
+    }
+
+    #[test]
+    fn tool_grant_reconciliation_deletes_automatic_and_retains_protected_and_administrator_managed()
+    {
+        let automatic = grant("old-search", "1.0.0", "old@example.com", true, false);
+        let mut protected = grant("host-clock", "1.0.0", "system@example.com", true, false);
+        protected.grant.protected = true;
+        let administrator_managed =
+            grant("admin-tool", "1.0.0", "publisher@example.com", false, false);
+        let desired = vec![ToolReleaseReference::ByCoordinates(
+            ToolReleaseByCoordinates {
+                account: AccountEmail::new("publisher@example.com"),
+                name: ToolName::try_from("search").unwrap(),
+                version: "1.2.0".to_string(),
+            },
+        )];
+
+        let plan = build_tool_grant_reconciliation_plan(
+            &desired,
+            &[
+                automatic.clone(),
+                protected.clone(),
+                administrator_managed.clone(),
+            ],
+        );
+
+        assert_eq!(plan.creations, desired);
+        assert_eq!(plan.deletions, vec![automatic.grant.id]);
+        assert_eq!(plan.view.entries.len(), 4);
+        assert!(plan.view.entries.iter().any(|entry| {
+            entry.action == EnvironmentToolGrantPlanAction::RetainProtected
+                && entry.grant_id == Some(protected.grant.id)
+        }));
+        assert!(plan.view.entries.iter().any(|entry| {
+            entry.action
+                == crate::model::deploy::EnvironmentToolGrantPlanAction::RetainAdministratorManaged
+                && entry.grant_id == Some(administrator_managed.grant.id)
+        }));
+    }
+
+    fn grant(
+        name: &str,
+        version: &str,
+        owner_email: &str,
+        automatic: bool,
+        follow_coordinates: bool,
+    ) -> EnvironmentToolGrantWithDetails {
+        let release_id = ToolReleaseId::new();
+        let actor = AccountId::new();
+        let now = Utc::now();
+        let name = ToolName::try_from(name).unwrap();
+        let definition = Tool {
+            version: version.to_string(),
+            commands: CommandTree {
+                nodes: vec![CommandNode {
+                    name: name.to_string(),
+                    aliases: Vec::new(),
+                    doc: Doc::default(),
+                    globals: Globals::default(),
+                    subcommands: Vec::new(),
+                    body: None,
+                }],
+            },
+            schema: SchemaGraph::empty(),
+        };
+        EnvironmentToolGrantWithDetails {
+            grant: EnvironmentToolGrant {
+                id: EnvironmentToolGrantId::new(),
+                environment_id: EnvironmentId::new(),
+                tool_release_id: release_id,
+                protected: false,
+                automatic,
+                follow_coordinates,
+                lifecycle: EnvironmentToolGrantLifecycle::Active,
+                created_at: now,
+                created_by: actor,
+                state_changed_at: now,
+                state_changed_by: actor,
+            },
+            release: ToolReleaseMetadata {
+                id: release_id,
+                name,
+                version: version.to_string(),
+                definition,
+                metadata_version: "0.1.0".to_string(),
+                metadata_digest: Hash::empty(),
+                source_digest: Hash::empty(),
+            },
+            release_owner: AccountSummary {
+                id: AccountId::new(),
+                name: "publisher".to_string(),
+                email: AccountEmail::new(owner_email),
+            },
+        }
     }
 }

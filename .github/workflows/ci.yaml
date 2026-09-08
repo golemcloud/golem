@@ -36,6 +36,7 @@ env:
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
+  NPM_CONFIG_AUDIT: 'false'
 
 jobs:
   build-and-store:
@@ -477,8 +478,17 @@ jobs:
       - name: it-cli ${{ matrix.group.shard }}
         env:
           QUIET: true
+          GOLEM_CLI_TEST_SERVER_LOG_DIR: ${{ github.workspace }}/tmp/golem-cli-test-server-logs
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30
+      - name: Upload golem server logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: '${{ matrix.group.name }}-server-logs-attempt${{ github.run_attempt }}'
+          path: tmp/golem-cli-test-server-logs
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
@@ -903,6 +913,7 @@ jobs:
     needs:
       - build-cli-test-bins
       - build-golem-ts
+      - build-golem-scala
       - list-test-component-groups
     strategy:
       fail-fast: false
@@ -927,6 +938,24 @@ jobs:
       - name: Install golem-cli
         run: chmod +x tmp/golem-cli-test-binaries/golem-cli
 
+      - name: Setup MoonBit
+        if: matrix.chunk.needs-moonbit
+        uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update MoonBit workspace dependencies
+        if: matrix.chunk.needs-moonbit
+        run: moon update
+        working-directory: sdks/moonbit
+
+      - name: Install wasm-tools
+        if: matrix.chunk.needs-moonbit
+        run: cargo binstall --force --locked wasm-tools@1.248.0
+
       - name: Restore built TS SDK
         if: matrix.chunk.needs-node
         uses: actions/cache/restore@v5
@@ -948,6 +977,42 @@ jobs:
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
+      - name: Setup WASM build tools for Scala components
+        if: matrix.chunk.needs-scala
+        uses: ./.github/actions/setup-wasm-component-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Setup Java for Scala components
+        if: matrix.chunk.needs-scala
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT for Scala components
+        if: matrix.chunk.needs-scala
+        uses: sbt/setup-sbt@v1
+
+      - name: Cache Scala dependencies
+        if: matrix.chunk.needs-scala
+        uses: coursier/cache-action@v8
+
+      - name: Restore Scala SDK ivy local repo
+        if: matrix.chunk.needs-scala
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.ivy2/local
+          key: scala-sdk-ivy-local-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Update MoonBit fixture dependencies
+        if: matrix.chunk.needs-moonbit
+        working-directory: test-components/tool-streaming-moonbit
+        run: moon update
+
       - name: Install TS SDK dependencies
         if: matrix.chunk.needs-node
         working-directory: sdks/ts
@@ -964,9 +1029,16 @@ jobs:
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
+        env:
+          EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}
         run: |
           mkdir -p tmp/test-components-wasm
-          cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
+          if [[ -n "$EXPECTED_ARTIFACT" ]]; then
+            test -s "test-components/$EXPECTED_ARTIFACT"
+            cp "test-components/$EXPECTED_ARTIFACT" tmp/test-components-wasm/
+          else
+            cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
+          fi
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Built $count WASM files in chunk ${{ matrix.chunk.name }}"
           test "$count" -gt 0

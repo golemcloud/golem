@@ -954,6 +954,11 @@ where
         .into_iter()
         .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
         .collect::<Vec<_>>();
+    if !revoked_card_ids.is_empty() {
+        store.with(|mut access| {
+            get_ctx(access.data_mut()).state.authority_initialized = false;
+        });
+    }
     worker
         .queue_card_revocations_locked(&revoked_card_ids)
         .await;

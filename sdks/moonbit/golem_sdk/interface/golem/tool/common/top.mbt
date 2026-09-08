@@ -217,7 +217,7 @@ pub(all) struct ToolMiddleware {
       name : String; aliases : Array[String]; doc : Doc; scope : ToolMiddlewareScope
 } derive(Debug, Eq)
 ///|
-/// Invocation contract — shared between guest and host
+/// Invocation contract — shared between guest and host.
 pub(all) suberror ToolError {
       InvalidToolName(String)
       InvalidCommandPath(Array[String])
