@@ -1879,8 +1879,8 @@ mod protocol_tests {
 
         assert_eq!(
             error,
-            RpcError::ProtocolError {
-                details: "bad invocation".to_string(),
+            RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput("bad invocation".to_string(),)),
             }
         );
     }
