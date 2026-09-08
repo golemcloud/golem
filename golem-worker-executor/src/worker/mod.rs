@@ -134,7 +134,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ShardEpoch, ShardId, Timestamp,
     TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
@@ -6162,6 +6162,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             + HasConfig
             + HasOplogService
             + HasEnvironmentStateService
+            + HasShardService
             + Sync,
     >(
         this: &T,
@@ -6172,6 +6173,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         parent: Option<AgentId>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
+        // Captured once, here, and cached for the life of the oplog. One live oplog is one
+        // ownership generation: a renewal never moves an epoch, and when one does move this
+        // executor is the side that lost the shard, so re-reading it per write would only let a
+        // losing executor talk itself back into ownership.
+        let shard_epoch = owned_shard_epoch(this, &owned_agent_id.agent_id);
         let component_id = owned_agent_id.component_id();
 
         // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
@@ -6258,6 +6264,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         initial_worker_metadata.clone(),
                         read_only_lock::arc_swap::ReadOnlyView::new(current_status.clone()),
                         read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
+                        shard_epoch,
                     )
                     .await;
 
@@ -6418,6 +6425,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             initial_worker_metadata.clone(),
                             read_only_lock::arc_swap::ReadOnlyView::new(initial_status.clone()),
                             read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
+                            shard_epoch,
                         )
                         .await
                 } else {
@@ -6429,6 +6437,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             initial_worker_metadata.clone(),
                             read_only_lock::arc_swap::ReadOnlyView::new(initial_status.clone()),
                             read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
+                            shard_epoch,
                         )
                         .await
                 };
@@ -6806,6 +6815,17 @@ struct PendingWorkerInterrupt {
     kind: InterruptKind,
     reacquire_permits: bool,
     unload_request: UnloadRequest,
+}
+
+/// The shard epoch this executor currently holds for the agent's shard, if it holds one.
+///
+/// `None` only when there is no assignment at all yet (before registration), or when the agent's
+/// shard is not in it - in which case admission has already refused the work, and an oplog opened
+/// without an epoch simply asserts nothing.
+fn owned_shard_epoch<T: HasShardService>(this: &T, agent_id: &AgentId) -> Option<ShardEpoch> {
+    let assignment = this.shard_service().try_get_current_assignment()?;
+    let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
+    assignment.epoch_of(&shard_id)
 }
 
 /// Why this executor is giving an agent up: it no longer owns the agent's shard.

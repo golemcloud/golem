@@ -623,6 +623,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                         timestamp: Timestamp::now_utc(),
                     },
                 ))),
+                // Unfenced: the target's shard may belong to another executor, and
+                // this is a one-shot copy, not a live oplog. Its owner writes the metadata
+                // row on its first open.
+                None,
             )
             .await;
 

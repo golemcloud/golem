@@ -28,6 +28,7 @@ use crate::services::oplog::{
     ReservedRawStartBuilder, downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -386,6 +387,7 @@ struct CreateOplogConstructor {
     initial_worker_metadata: AgentMetadata,
     last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl CreateOplogConstructor {
@@ -401,6 +403,7 @@ impl CreateOplogConstructor {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Self {
         Self {
             owned_agent_id,
@@ -413,6 +416,7 @@ impl CreateOplogConstructor {
             initial_worker_metadata,
             last_known_status,
             execution_status,
+            shard_epoch,
         }
     }
 }
@@ -444,6 +448,7 @@ impl OplogConstructor for CreateOplogConstructor {
                                 self.initial_worker_metadata,
                                 self.last_known_status,
                                 self.execution_status,
+                                self.shard_epoch,
                             )
                             .await
                     } else {
@@ -455,6 +460,7 @@ impl OplogConstructor for CreateOplogConstructor {
                                 self.initial_worker_metadata,
                                 self.last_known_status,
                                 self.execution_status,
+                                self.shard_epoch,
                             )
                             .await
                     }
@@ -467,6 +473,7 @@ impl OplogConstructor for CreateOplogConstructor {
                             self.initial_worker_metadata,
                             self.last_known_status,
                             self.execution_status,
+                            self.shard_epoch,
                         )
                         .await
                 };
@@ -551,6 +558,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -566,6 +574,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -579,6 +588,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -594,6 +604,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -607,6 +618,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -622,6 +634,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await

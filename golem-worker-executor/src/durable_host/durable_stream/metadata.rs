@@ -1429,6 +1429,7 @@ mod tests {
                             timestamp: Timestamp::now_utc(),
                         },
                     ))),
+                    None,
                 )
                 .await;
             let service = Arc::new(DefaultWorkerService::new(
