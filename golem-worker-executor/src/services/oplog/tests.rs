@@ -28,6 +28,7 @@ use bytes::Bytes;
 use futures::FutureExt;
 use futures::stream::BoxStream;
 use golem_common::config::RedisConfig;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
@@ -609,6 +610,35 @@ impl ReadCountingIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for ReadCountingIndexedStorage {
+    async fn upsert_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        shard_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .upsert_oplog_metadata(svc_name, api_name, namespace, key, shard_epoch)
+            .await
+    }
+
+    async fn delete_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .delete_oplog_metadata(svc_name, api_name, namespace, key)
+            .await
+    }
+
+    fn supports_epoch_fencing(&self) -> bool {
+        self.inner.supports_epoch_fencing()
+    }
+
     async fn number_of_replicas(
         &self,
         svc_name: &'static str,
@@ -664,6 +694,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
         id: u64,
         mut value: Vec<u8>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.append_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -687,7 +718,16 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             value.push(0);
         }
         self.inner
-            .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                id,
+                value,
+                shard_epoch,
+            )
             .await?;
         failure.after_write_result()
     }
@@ -700,6 +740,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.append_many_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -745,7 +786,15 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             pairs
         };
         self.inner
-            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .append_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                pairs,
+                shard_epoch,
+            )
             .await?;
         failure.after_write_result()
     }

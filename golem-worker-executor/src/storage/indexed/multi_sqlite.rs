@@ -22,6 +22,7 @@ use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -157,6 +158,40 @@ impl Debug for MultiSqliteIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for MultiSqliteIndexedStorage {
+    async fn upsert_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        shard_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .upsert_oplog_metadata(svc_name, api_name, namespace, key, shard_epoch)
+            .await
+    }
+
+    async fn delete_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .delete_oplog_metadata(svc_name, api_name, namespace, key)
+            .await
+    }
+
+    /// Answers for the per-namespace databases this fans out to, which are all
+    /// [`SqliteIndexedStorage`]. Taking the trait default here would silently report "no fence"
+    /// for a backend that has one.
+    fn supports_epoch_fencing(&self) -> bool {
+        SqliteIndexedStorage::SUPPORTS_EPOCH_FENCING
+    }
+
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -276,10 +311,20 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                id,
+                value,
+                shard_epoch,
+            )
             .await
     }
 
@@ -291,10 +336,19 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(namespace)
             .await?
-            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .append_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                pairs,
+                shard_epoch,
+            )
             .await
     }
 
@@ -438,6 +492,7 @@ mod tests {
                 &first_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"first-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();
@@ -449,6 +504,7 @@ mod tests {
                 &second_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"second-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();
