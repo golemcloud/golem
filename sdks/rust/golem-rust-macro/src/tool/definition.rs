@@ -229,7 +229,7 @@ fn tool_method_param_names(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStrea
         .collect()
 }
 
-fn canonical_param_name(
+pub(crate) fn canonical_param_name(
     ir: &ToolDefinitionIr,
     cmd: &CommandIr,
     param: &ParamIr,
@@ -825,6 +825,7 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     matches!(
         segments.as_slice(),
         ["golem_rust", "agentic" | "tool", "Principal"]
+            | ["golem_native_tool" | "crate", "Principal"]
             | [
                 "golem_rust",
                 "golem_agentic",
@@ -836,7 +837,7 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     )
 }
 
-fn split_result(output: &ReturnType) -> (Option<&Type>, Option<&Type>) {
+pub(crate) fn split_result(output: &ReturnType) -> (Option<&Type>, Option<&Type>) {
     let ty = match output {
         ReturnType::Default => return (None, None),
         ReturnType::Type(_, t) => t.as_ref(),
@@ -1055,7 +1056,7 @@ fn reject_misplaced_method_helper_attrs(item_trait: &ItemTrait) -> Result<(), Er
     Ok(())
 }
 
-fn strip_helper_attrs(item_trait: &mut ItemTrait) {
+pub(crate) fn strip_helper_attrs(item_trait: &mut ItemTrait) {
     item_trait
         .attrs
         .retain(|attr| !attr.path().is_ident("example"));
@@ -1070,7 +1071,7 @@ fn strip_helper_attrs(item_trait: &mut ItemTrait) {
 }
 
 /// Parses the optional `#[tool_definition(version = "...")]` attribute argument.
-fn parse_version(attrs: proc_macro2::TokenStream) -> Result<Option<String>, Error> {
+pub(crate) fn parse_version(attrs: proc_macro2::TokenStream) -> Result<Option<String>, Error> {
     if attrs.is_empty() {
         return Ok(None);
     }

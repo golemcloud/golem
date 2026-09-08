@@ -377,6 +377,10 @@ pub struct ToolBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_keys_readable_merge_mode: Option<SecretKeyMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_keys_readable: Option<ManifestSecretKeyScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_keys_readable_merge_mode: Option<SecretKeyMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_keys_readable: Option<ManifestSecretKeyScope>,
@@ -1740,6 +1744,8 @@ mod test {
             arb_opt(arb_secret_key_scope_model()),
             arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
             arb_opt(arb_secret_key_scope_model()),
+            arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
+            arb_opt(arb_secret_key_scope_model()),
         )
             .prop_map(
                 |(
@@ -1747,6 +1753,8 @@ mod test {
                     parameters_merge_mode,
                     parameters,
                     account,
+                    config_keys_readable_merge_mode,
+                    config_keys_readable,
                     secret_keys_readable_merge_mode,
                     secret_keys_readable,
                     secret_keys_revealable_merge_mode,
@@ -1756,6 +1764,8 @@ mod test {
                     parameters_merge_mode,
                     parameters,
                     account,
+                    config_keys_readable_merge_mode,
+                    config_keys_readable,
                     secret_keys_readable_merge_mode,
                     secret_keys_readable,
                     secret_keys_revealable_merge_mode,
@@ -2910,6 +2920,8 @@ mod test {
                     version: "1.0.0"
                     parametersMergeMode: replace
                     parameters: { root: /workspace/src }
+                    configKeysReadableMergeMode: intersect
+                    configKeysReadable: [runtime.logLevel]
                     secretKeysReadableMergeMode: intersect
                     secretKeysReadable: [credentials.github]
                     secretKeysRevealable: []
@@ -2940,6 +2952,20 @@ mod test {
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
         assert!(!app.tools.is_empty());
         assert_eq!(app.tool_releases.len(), 1);
+    }
+
+    #[test]
+    fn tool_binding_rejects_unknown_config_scope_field() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+            agents:
+              CoderAgent:
+                tools:
+                  grep:
+                    configKeysReadble: "*"
+        "# };
+
+        assert!(Application::from_yaml_str(source).is_err());
     }
 
     #[test]

@@ -910,6 +910,12 @@
         "account": {
           "type": "string"
         },
+        "configKeysReadableMergeMode": {
+          "$ref": "#/definitions/secretKeyMergeMode"
+        },
+        "configKeysReadable": {
+          "$ref": "#/definitions/secretKeyScope"
+        },
         "secretKeysReadableMergeMode": {
           "$ref": "#/definitions/secretKeyMergeMode"
         },

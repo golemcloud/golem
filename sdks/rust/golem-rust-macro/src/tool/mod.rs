@@ -17,6 +17,7 @@
 
 pub use definition::tool_definition_impl;
 pub use implementation::tool_implementation_impl;
+pub(crate) mod native;
 pub use middleware_authoring::{tool_middleware_impl, universal_tool_middleware_impl};
 pub use tool_error::derive_tool_error_impl;
 

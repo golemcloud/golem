@@ -1,0 +1,9 @@
+[package]
+name = "renamed-native-tool-fixture"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+native_sdk = { package = "golem-native-tool", path = "../../.." }

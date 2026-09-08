@@ -72,6 +72,7 @@ message CompiledToolBinding {
   optional golem.common.UUID tool_release_id = 13;
   golem.common.Hash metadata_digest = 14;
   ToolSource tagged_source = 15;
+  golem.component.ConfigKeyScope config_keys_readable = 16;
 }
 
 enum ToolFilesystemAccess {

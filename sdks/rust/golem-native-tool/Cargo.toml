@@ -1,0 +1,23 @@
+[package]
+name = "golem-native-tool"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+harness = false
+
+[[test]]
+name = "native_tool"
+harness = false
+
+[dependencies]
+anyhow = "1"
+blake3 = "1"
+desert_rust = "0.1.10"
+golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0" }
+golem-schema = { path = "../../../golem-schema", version = "0.0.0", features = ["derive", "full"] }
+golem-tool-metadata = { path = "../golem-tool-metadata", version = "0.0.0" }
+
+[dev-dependencies]
+test-r = "3.0.9"

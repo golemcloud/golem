@@ -46,10 +46,10 @@ pub fn doc_tokens(doc: &DocIr) -> TokenStream {
 pub fn error_kind_tokens(kind: ErrorKindIr) -> TokenStream {
     match kind {
         ErrorKindIr::UsageError => quote! {
-            golem_rust::schema::tool::wit::wire::ErrorKind::UsageError
+            golem_rust::agentic::ErrorKind::UsageError
         },
         ErrorKindIr::RuntimeError => quote! {
-            golem_rust::schema::tool::wit::wire::ErrorKind::RuntimeError
+            golem_rust::agentic::ErrorKind::RuntimeError
         },
     }
 }

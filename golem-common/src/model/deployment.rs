@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::AgentTypeName;
 use crate::model::diff;
+use crate::model::tool::ToolBindingInput;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use crate::base_model::deploy_validation_warning::*;
 pub use crate::base_model::deployment::*;
@@ -30,6 +33,11 @@ impl From<CurrentDeployment> for Deployment {
 
 impl DeploymentPlan {
     pub fn to_diffable(&self) -> diff::Deployment {
+        let remote_tools: std::collections::BTreeMap<_, _> = self
+            .remote_tools
+            .iter()
+            .map(|tool| (tool.name.to_string(), tool.hash.into()))
+            .collect();
         diff::Deployment {
             components: self
                 .components
@@ -46,16 +54,41 @@ impl DeploymentPlan {
                 .iter()
                 .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
                 .collect(),
-            remote_tools: self
-                .remote_tools
-                .iter()
-                .map(|tool| (tool.name.to_string(), tool.hash.into()))
-                .collect(),
+            remote_tools,
             published_tools: self
                 .published_tools
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+        }
+    }
+}
+
+impl DeploymentPlanAmbientToolEntry {
+    pub fn to_diffable(
+        &self,
+        agent_types: impl IntoIterator<Item = AgentTypeName>,
+        overrides: &BTreeMap<AgentTypeName, ToolBindingInput>,
+    ) -> diff::RemoteToolDeployment {
+        let bindings = agent_types
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|agent| {
+                diff::effective_tool_binding(Some(&self.environment_binding), overrides.get(&agent))
+                    .map(|(binding, _)| (agent, binding))
+            })
+            .collect();
+        diff::RemoteToolDeployment {
+            release_id: self.release_id,
+            version: self.version.clone(),
+            source_digest: self.source_digest,
+            owner_account_id: self.owner_account_id,
+            owner_account_email: self.owner_account_email.clone(),
+            metadata_version: self.metadata_version.clone(),
+            metadata_digest: self.metadata_digest,
+            provision: self.provision.clone(),
+            bindings,
         }
     }
 }

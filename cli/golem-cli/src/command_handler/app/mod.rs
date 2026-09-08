@@ -1073,8 +1073,19 @@ impl AppCommandHandler {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
 
+        // Ambient tools are registry-owned input. Resolve them before local validation and
+        // hashing; planning remains read-only.
+        let ambient_plan = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .get_environment_deployment_plan(&environment.environment_id.0)
+            .await
+            .map_service_error()?;
+
         let deploy_quick_diff = self
-            .deploy_quick_diff(environment, resolved_tool_grants)
+            .deploy_quick_diff(environment, resolved_tool_grants, &ambient_plan)
             .await?;
 
         debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
@@ -1247,6 +1258,7 @@ impl AppCommandHandler {
         &self,
         environment: ResolvedEnvironmentIdentity,
         resolved_tool_grants: &ResolvedToolGrants,
+        ambient_plan: &golem_common::model::deployment::DeploymentPlan,
     ) -> anyhow::Result<DeployQuickDiff> {
         let ResolvedManifestComponentsAndTools {
             components,
@@ -1255,7 +1267,11 @@ impl AppCommandHandler {
         } = self
             .ctx
             .component_handler()
-            .resolve_manifest_components_and_tools(&environment, resolved_tool_grants)
+            .resolve_manifest_components_and_tools(
+                &environment,
+                resolved_tool_grants,
+                &ambient_plan.ambient_tools,
+            )
             .await?;
 
         let deployable_manifest_http_api_deployments = self

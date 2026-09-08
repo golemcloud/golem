@@ -230,7 +230,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let agent_secrets = self
                 .state
                 .environment_state_service
-                .get_agent_secrets(self.state.component_metadata.environment_id)
+                .get_agent_secrets(self.owner_component_metadata().environment_id)
                 .await?;
 
             let agent_secret = agent_secrets.get(&canonical_path);
@@ -324,7 +324,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .get_all(
                         self.owned_agent_id.environment_id,
                         self.owned_agent_id.agent_id.component_id,
-                        self.state.component_metadata.revision,
+                        self.owner_component_metadata().revision,
                     )
                     .await
                     .map_err(|err| err.to_string());
@@ -370,7 +370,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let component_revision = self.state.component_metadata.revision;
+            let component_revision = self.owner_component_metadata().revision;
             let result = loop {
                 let result = self
                     .agent_types_service()
@@ -517,7 +517,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
-        let component_metadata = &self.component_metadata().metadata;
+        let component_metadata = &self.owner_component_metadata().metadata;
         match ParsedAgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => {
                 let wire_typed = encode_typed(&agent_id.parameters)
@@ -573,7 +573,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
-            if promise_id.agent_id.component_id != self.state.component_metadata.id {
+            if promise_id.agent_id.component_id != self.owner_component_metadata().id {
                 let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
                 break 'result handle
                     .complete(
@@ -601,7 +601,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .agent_webhooks_service
                 .get_agent_webhook_url_for_promise(
-                    self.state.component_metadata.environment_id,
+                    self.owner_component_metadata().environment_id,
                     &agent_type,
                     &promise_id,
                 )
@@ -653,7 +653,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 })
         });
         let is_live = self.state.is_live();
-        let denied = if is_live {
+        let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
+            !scope.activation().policy().config_keys_readable().contains(
+                &CanonicalAgentSecretPath::from_path_in_unknown_casing(&path),
+            )
+        });
+        let denied = if binding_denied {
+            true
+        } else if is_live {
             let targets = config_segments_target(agent_owner(self), &path)
                 .map_err(|_| ())
                 .and_then(|target| {

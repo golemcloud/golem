@@ -124,7 +124,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, drain_queued_dropped_call_events,
 };
 pub use durability::*;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
@@ -791,7 +791,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
         >,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         let crate::workerctx::WorkerFilesystemContext {
@@ -819,17 +819,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-        if executable_component.revision != worker_config.component_revision_for_replay {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Executable component revision {} does not match context revision {}",
-                executable_component.revision, worker_config.component_revision_for_replay
-            )));
-        }
-        if runtime == OwnerRuntime::Agent
-            && executable_component.id != owned_agent_id.component_id()
-        {
+        if let crate::workerctx::WorkerCtxExecutable::Component(component) = &executable {
+            if component.revision != worker_config.component_revision_for_replay {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Executable component revision {} does not match context revision {}",
+                    component.revision, worker_config.component_revision_for_replay
+                )));
+            }
+            if runtime == OwnerRuntime::Agent && component.id != owned_agent_id.component_id() {
+                return Err(WorkerExecutorError::runtime(
+                    "Primary Store executable must be the owner component",
+                ));
+            }
+        } else if runtime == OwnerRuntime::Agent {
             return Err(WorkerExecutorError::runtime(
-                "Primary Store executable must be the owner component",
+                "Primary Store requires a component executable",
             ));
         }
         match (&runtime, &entity_activation) {
@@ -852,6 +856,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
+        match (&executable, entity_activation.as_deref()) {
+            (crate::workerctx::WorkerCtxExecutable::Component(component), Some(activation))
+                if activation.executable_opt().is_some_and(|target| {
+                    target.component_id == component.id
+                        && target.component_revision == component.revision
+                }) => {}
+            (
+                crate::workerctx::WorkerCtxExecutable::Native {
+                    host_tool_id,
+                    implementation_version,
+                },
+                Some(activation),
+            ) if matches!(
+                activation.source(),
+                golem_common::model::entity::EntityActivationSource::Host {
+                    host_tool_id: expected_id,
+                    implementation_version: expected_version,
+                } if expected_id == host_tool_id && expected_version == implementation_version
+            ) => {}
+            (crate::workerctx::WorkerCtxExecutable::Component(_), None)
+                if runtime == OwnerRuntime::Agent => {}
+            _ => {
+                return Err(WorkerExecutorError::runtime(
+                    "Context executable does not match its validated activation source",
+                ));
+            }
+        }
         match (&runtime, &worker_config.owner_component_metadata) {
             (OwnerRuntime::Agent, None) | (OwnerRuntime::Entity(_), Some(_)) => {}
             (OwnerRuntime::Agent, Some(_)) => {
@@ -865,16 +896,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
-        let component_metadata = executable_component;
+        let component_metadata = match executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        };
 
-        if component_metadata.metadata.has_shared_linear_memory() {
+        if component_metadata
+            .as_ref()
+            .is_some_and(|component| component.metadata.has_shared_linear_memory())
+        {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
                 SHARED_LINEAR_MEMORY_ERROR,
             ));
         }
 
-        let initial_linear_memory = component_metadata.metadata.initial_linear_memory_bytes();
+        let initial_linear_memory = component_metadata
+            .as_ref()
+            .map(|component| component.metadata.initial_linear_memory_bytes())
+            .unwrap_or(0);
         if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
@@ -888,6 +928,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let agent_type_provision_configs = match &runtime {
             OwnerRuntime::Agent => agent_id.as_ref().and_then(|agent_id| {
                 component_metadata
+                    .as_ref()
+                    .expect("primary Store has component metadata")
                     .metadata
                     .agent_type_provision_configs()
                     .get(&agent_id.agent_type)
@@ -1342,7 +1384,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub fn agent_auth_ctx(&self) -> AuthCtx {
         let delegation_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
             let context = agent_monomorphization_context(
-                &self.state.component_metadata,
+                self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
             );
@@ -2184,12 +2226,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn component_metadata(&self) -> &Component {
-        &self.state.component_metadata
+        self.executable_component_metadata()
+            .expect("native entity contexts have no executable component metadata")
+    }
+
+    pub fn executable_component_metadata(&self) -> Option<&Component> {
+        self.state.component_metadata.as_ref()
     }
 
     pub fn owner_component_metadata(&self) -> &Component {
         match &self.runtime {
-            OwnerRuntime::Agent => &self.state.component_metadata,
+            OwnerRuntime::Agent => self
+                .state
+                .component_metadata
+                .as_ref()
+                .expect("primary Store has component metadata"),
             OwnerRuntime::Entity(_) => self
                 .state
                 .owner_component_metadata
@@ -2711,7 +2762,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
         logging::policy::emit_log_event_with_state::<Ctx>(
             event,
-            self.state.component_metadata.metadata.has_oplog_processor(),
+            self.owner_component_metadata()
+                .metadata
+                .has_oplog_processor(),
             &self.owned_agent_id,
             &self.public_state,
             &self.state.replay_state,
@@ -3964,7 +4017,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.agent_wallet_cards = match self.state.agent_id.as_ref() {
             Some(agent_id) => {
                 let card = agent_initial_card_from_component_metadata(
-                    &self.state.component_metadata,
+                    self.component_metadata(),
                     agent_id,
                 )?;
                 BTreeMap::from([(card.card_id(), card)])
@@ -4454,7 +4507,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         new_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        let current_metadata = &self.state.component_metadata;
+        let current_metadata = self.component_metadata();
 
         if new_revision <= current_metadata.revision {
             debug!("Update {new_revision} was already applied, skipping");
@@ -4516,7 +4569,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
-        self.state.component_metadata = new_metadata;
+        self.state.component_metadata = Some(new_metadata);
 
         if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
             self.state.agent_config = updated_agent_config;
@@ -9648,7 +9701,7 @@ struct PrivateDurableWorkerState {
     /// executor-created `ProcessOplogEntries` invocation and reset before invocation teardown.
     operator_authorized_oplog_processor_invocation: Arc<AtomicBool>,
 
-    component_metadata: Component,
+    component_metadata: Option<Component>,
     owner_component_metadata: Option<Arc<Component>>,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
@@ -9884,7 +9937,7 @@ impl PrivateDurableWorkerState {
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         tail_work: tail_work::TailWorkTracker,
-        component_metadata: Component,
+        component_metadata: Option<Component>,
         owner_component_metadata: Option<Arc<Component>>,
         configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -9916,7 +9969,9 @@ impl PrivateDurableWorkerState {
                         match agent_id.as_ref() {
                             Some(agent_id) => {
                                 let card = agent_initial_card_from_component_metadata(
-                                    &component_metadata,
+                                    component_metadata
+                                        .as_ref()
+                                        .expect("primary Store has component metadata"),
                                     agent_id,
                                 )?;
                                 Ok(BTreeMap::from([(card.card_id(), card)]))
@@ -9951,8 +10006,13 @@ impl PrivateDurableWorkerState {
         .wallet_id_hash();
         let agent_effective_surface = match (&runtime, agent_id.as_ref()) {
             (OwnerRuntime::Agent, Some(agent_id)) => {
-                let context =
-                    agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
+                let context = agent_monomorphization_context(
+                    component_metadata
+                        .as_ref()
+                        .expect("primary Store has component metadata"),
+                    &owned_agent_id,
+                    agent_id,
+                );
                 golem_common::model::card::agent_effective_surface_from_wallet(
                     &context,
                     agent_wallet_cards.values(),

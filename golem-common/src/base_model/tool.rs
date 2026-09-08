@@ -97,6 +97,37 @@ pub enum SecretKeyScope {
     Keys(BTreeSet<CanonicalAgentSecretPath>),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "keys", rename_all = "camelCase")]
+pub enum ConfigKeyScope {
+    #[default]
+    All,
+    Keys(BTreeSet<CanonicalAgentSecretPath>),
+}
+
+impl ConfigKeyScope {
+    pub fn contains(&self, key: &CanonicalAgentSecretPath) -> bool {
+        match self {
+            Self::All => true,
+            Self::Keys(keys) => keys.contains(key),
+        }
+    }
+
+    pub fn intersection(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::All, value) | (value, Self::All) => value.clone(),
+            (Self::Keys(left), Self::Keys(right)) => {
+                Self::Keys(left.intersection(right).cloned().collect())
+            }
+        }
+    }
+}
+
 impl SecretKeyScope {
     pub fn contains(&self, key: &CanonicalAgentSecretPath) -> bool {
         match self {
@@ -135,6 +166,7 @@ pub struct ToolBindingInput {
     pub version: Option<String>,
     pub parameters: NormalizedJsonValue,
     pub account: Option<AccountEmail>,
+    pub config_keys_readable: ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
 }
@@ -145,6 +177,7 @@ impl Default for ToolBindingInput {
             version: None,
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
             account: None,
+            config_keys_readable: ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
         }
@@ -336,6 +369,7 @@ pub struct CompiledToolBinding {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
     pub parameters: NormalizedJsonValue,
+    pub config_keys_readable: ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
     #[serde(default)]
@@ -387,7 +421,7 @@ pub struct ToolDeploymentState {
 
 #[cfg(test)]
 mod tests {
-    use super::{SecretKeyScope, ToolName};
+    use super::{ConfigKeyScope, SecretKeyScope, ToolName};
     use crate::model::agent_secret::CanonicalAgentSecretPath;
     use std::collections::BTreeSet;
     use test_r::test;
@@ -421,5 +455,18 @@ mod tests {
         assert!(left.contains(&a));
         assert!(!right.contains(&CanonicalAgentSecretPath(vec!["b".to_string()])));
         assert!(SecretKeyScope::All.contains(&CanonicalAgentSecretPath(vec!["c".to_string()])));
+    }
+
+    #[test]
+    fn config_key_scope_intersection_allows_only_shared_keys() {
+        let a = CanonicalAgentSecretPath(vec!["a".to_string()]);
+        let b = CanonicalAgentSecretPath(vec!["b".to_string()]);
+        let environment = ConfigKeyScope::Keys(BTreeSet::from([a.clone(), b]));
+        let agent = ConfigKeyScope::Keys(BTreeSet::from([a.clone()]));
+
+        let effective = environment.intersection(&agent);
+        assert!(effective.contains(&a));
+        assert!(!effective.contains(&CanonicalAgentSecretPath(vec!["b".to_string()])));
+        assert_eq!(ConfigKeyScope::All.intersection(&agent), agent);
     }
 }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
+use super::component::ComponentService;
 use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
     TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord,
@@ -86,6 +87,7 @@ error_forwarding!(ToolReleaseError, AccountError, ToolReleaseRepoError);
 pub struct ToolReleaseService {
     tool_release_repo: Arc<dyn ToolReleaseRepo>,
     account_service: Arc<AccountService>,
+    component_service: Arc<ComponentService>,
     builtin_tool_owner_account_id: AccountId,
 }
 
@@ -101,11 +103,13 @@ impl ToolReleaseService {
     pub fn new(
         tool_release_repo: Arc<dyn ToolReleaseRepo>,
         account_service: Arc<AccountService>,
+        component_service: Arc<ComponentService>,
         builtin_tool_owner_account_id: AccountId,
     ) -> Self {
         Self {
             tool_release_repo,
             account_service,
+            component_service,
             builtin_tool_owner_account_id,
         }
     }
@@ -469,6 +473,44 @@ impl ToolReleaseService {
         &self,
         provision: SystemToolReleaseProvision,
     ) -> Result<ToolRelease, ToolReleaseError> {
+        if let ToolSource::Component {
+            component_id,
+            component_revision,
+            component_name,
+        } = &provision.source
+        {
+            let component = self
+                .component_service
+                .get_component_revision(
+                    *component_id,
+                    *component_revision,
+                    false,
+                    &AuthCtx::system(),
+                )
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("invalid system tool component source: {error}")
+                })?;
+            let deployed = self
+                .component_service
+                .get_all_deployed_component_versions(*component_id, &AuthCtx::system())
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("invalid system tool component source: {error}")
+                })?;
+            let exported = component.metadata.tools().get(&provision.name);
+            if component.account_id != self.builtin_tool_owner_account_id
+                || component.component_name != *component_name
+                || !deployed
+                    .iter()
+                    .any(|value| value.revision == *component_revision)
+                || exported.map(|value| &value.definition) != Some(&provision.definition)
+            {
+                return Err(ToolReleaseError::InternalError(anyhow::anyhow!(
+                    "system tool component source does not match its owner, deployed revision, name, or exported metadata"
+                )));
+            }
+        }
         let candidate = ToolReleaseRecord::from_system_provision(
             self.builtin_tool_owner_account_id,
             provision,
@@ -493,6 +535,65 @@ impl ToolReleaseService {
             }
             Err(other) => Err(other.into()),
         }
+    }
+
+    pub(crate) async fn preflight_system_component_release(
+        &self,
+        name: &ToolName,
+        version: &str,
+        definition: &Tool,
+        component_name: &golem_common::model::component::ComponentName,
+        wasm_hash: diff::Hash,
+    ) -> Result<(), ToolReleaseError> {
+        let Some(existing) = self
+            .tool_release_repo
+            .get_by_coordinates(self.builtin_tool_owner_account_id.0, name.as_str(), version)
+            .await?
+        else {
+            return Ok(());
+        };
+        let release: ToolRelease = existing.release.try_into()?;
+        let ToolSource::Component {
+            component_id,
+            component_revision,
+            component_name: recorded_name,
+        } = release.source
+        else {
+            return Err(ToolReleaseError::ImmutableReleaseConflict);
+        };
+        let component = self
+            .component_service
+            .get_component_revision(component_id, component_revision, false, &AuthCtx::system())
+            .await
+            .map_err(|_| ToolReleaseError::ImmutableReleaseConflict)?;
+        let deployed = self
+            .component_service
+            .get_all_deployed_component_versions(component_id, &AuthCtx::system())
+            .await
+            .map_err(|_| ToolReleaseError::ImmutableReleaseConflict)?;
+        if release.definition != *definition
+            || release.metadata_version != TOOL_METADATA_WIT_VERSION
+            || !release.immutable
+            || release.lifecycle != ToolReleaseLifecycle::Published
+            || release.origin != ToolReleaseOrigin::ProtectedSystem
+            || release.system_availability != Some(SystemToolAvailability::Grantable)
+            || recorded_name != *component_name
+            || component.component_name != *component_name
+            || component.account_id != self.builtin_tool_owner_account_id
+            || component.wasm_hash != wasm_hash
+            || !deployed
+                .iter()
+                .any(|value| value.revision == component_revision)
+            || component
+                .metadata
+                .tools()
+                .get(name)
+                .map(|tool| &tool.definition)
+                != Some(definition)
+        {
+            return Err(ToolReleaseError::ImmutableReleaseConflict);
+        }
+        Ok(())
     }
 
     async fn authorize_management(

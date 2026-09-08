@@ -41,7 +41,7 @@ struct EntitySlotState {
 
 struct ActiveEntityInvocation {
     activation_fingerprint: EntityActivationFingerprint,
-    executable: ExecutableTarget,
+    executable: Option<ExecutableTarget>,
     mode: InvocationExecutionMode,
     linear_memory: Option<LinearMemoryTracker>,
     abort: Option<AbortHandle>,
@@ -52,7 +52,7 @@ struct ActiveEntityInvocation {
 pub struct ActiveEntityInvocationMetadata {
     pub invocation_id: EntityInvocationId,
     pub activation_fingerprint: EntityActivationFingerprint,
-    pub executable: ExecutableTarget,
+    pub executable: Option<ExecutableTarget>,
     pub mode: InvocationExecutionMode,
     pub store_attached: bool,
     pub linear_memory_bytes: u64,
@@ -187,7 +187,7 @@ impl EntitySlot {
         let invocation_id = scope.invocation_id().clone();
         let invocation = ActiveEntityInvocation {
             activation_fingerprint: scope.activation().fingerprint(),
-            executable: scope.activation().executable().clone(),
+            executable: scope.activation().executable_opt().cloned(),
             mode: scope.mode(),
             linear_memory: None,
             abort: None,

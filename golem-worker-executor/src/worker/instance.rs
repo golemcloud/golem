@@ -526,6 +526,11 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         slot: Arc<EntitySlot>,
         owner_component_metadata: Arc<ComponentMetadata>,
     ) -> Result<Self, WorkerExecutorError> {
+        let executable = activation.executable_opt().ok_or_else(|| {
+            WorkerExecutorError::runtime(
+                "Component instance hosts cannot be constructed for native activations",
+            )
+        })?;
         if slot.entity_id().owner_id() != owner.owned_agent_id() {
             return Err(WorkerExecutorError::runtime(
                 "Entity slot does not belong to the instance owner",
@@ -534,7 +539,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         Ok(Self {
             owner_id: owner.owned_agent_id().clone(),
             runtime: OwnerRuntime::Entity(slot.entity().clone()),
-            executable: activation.executable().clone(),
+            executable: executable.clone(),
             filesystem: activation.filesystem(),
             owner_execution: owner.owner_execution(),
             owner_resources: owner.owner_runtime_resources(),
@@ -754,7 +759,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             };
             if scope.owner_id() != &self.owner_id
                 || scope.invocation_id().entity() != entity
-                || scope.activation().executable() != &self.executable
+                || scope.activation().executable_opt() != Some(&self.executable)
                 || scope.activation().filesystem() != self.filesystem
             {
                 return Err(WorkerExecutorError::runtime(
@@ -779,8 +784,10 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     .map(EntityInvocationScope::mode)
                     .unwrap_or(InvocationExecutionMode::Live),
                 self.filesystem,
-                component_metadata,
-                self.activation.clone(),
+                crate::workerctx::WorkerCtxExecutable::Component(component_metadata),
+                self.activation
+                    .clone()
+                    .expect("Entity instance host must pin its activation"),
                 self.owner_component_metadata
                     .clone()
                     .expect("Entity instance host must pin its owner component metadata"),
@@ -964,7 +971,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         };
         if scope.owner_id() != &self.owner_id
             || scope.invocation_id().entity() != entity
-            || scope.activation().executable() != &self.executable
+            || scope.activation().executable_opt() != Some(&self.executable)
             || scope.activation().filesystem() != self.filesystem
         {
             return Err(WorkerExecutorError::runtime(

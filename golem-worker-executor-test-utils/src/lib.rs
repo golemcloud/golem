@@ -92,6 +92,10 @@ use golem_worker_executor::durable_host::{
 use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
 };
+use golem_worker_executor::native_tool::{
+    NativeToolAdapter, NativeToolCatalog, NativeToolHandler, NativeToolInvocation,
+    NativeToolRegistration,
+};
 use golem_worker_executor::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, FutureInvokeResult,
     HostFutureInvokeResult, HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata,
@@ -163,8 +167,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
@@ -1655,6 +1659,126 @@ pub struct TestWorkerCtx {
     agent_id: AgentId,
 }
 
+static NATIVE_TEST_EFFECTS: AtomicUsize = AtomicUsize::new(0);
+static NATIVE_TEST_HELPER_EFFECTS: AtomicUsize = AtomicUsize::new(0);
+static NATIVE_TEST_TOOL_METADATA: OnceLock<golem_common::schema::tool::Tool> = OnceLock::new();
+
+#[golem_native_tool::tool_definition(version = "1.0.0")]
+trait NativeDurableHelper {
+    async fn touch(&self, context: &mut TestWorkerCtx) -> golem_native_tool::HostResult<()>;
+}
+
+struct NativeDurableHelperImpl;
+
+#[golem_native_tool::tool_implementation]
+impl NativeDurableHelper for NativeDurableHelperImpl {
+    async fn touch(&self, ctx: &mut TestWorkerCtx) -> golem_native_tool::HostResult<()> {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(ctx).await?;
+        if ctx.is_live() {
+            NATIVE_TEST_HELPER_EFFECTS.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+}
+
+struct NativeTestTool;
+
+#[async_trait]
+impl NativeToolHandler<TestWorkerCtx> for NativeTestTool {
+    async fn invoke(
+        &self,
+        ctx: &mut TestWorkerCtx,
+        invocation: NativeToolInvocation,
+    ) -> Result<golem_worker_executor::native_tool::NativeToolResult, WorkerExecutorError> {
+        let mode = match invocation.input.value() {
+            golem_common::schema::SchemaValue::Record { fields } => match fields.first() {
+                Some(golem_common::schema::SchemaValue::String(value)) => value.as_str(),
+                _ => "",
+            },
+            _ => "",
+        };
+        if mode != "read-counter" && ctx.is_live() {
+            NATIVE_TEST_EFFECTS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        if mode == "wait-cancel" {
+            if let Some(stdout) = &invocation.stdout {
+                stdout
+                    .write(b"native:started".to_vec())
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            }
+            if let Some(cancellation) = invocation.cancellation {
+                cancellation.cancelled().await;
+                return Ok(Err(
+                    golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
+                ));
+            }
+        }
+
+        if let Some(stdout) = invocation.stdout {
+            if mode == "read-counter" {
+                stdout
+                    .write(
+                        NATIVE_TEST_EFFECTS
+                            .load(Ordering::SeqCst)
+                            .to_string()
+                            .into_bytes(),
+                    )
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            } else {
+                stdout
+                    .write(b"native:".to_vec())
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+                if let Some(stdin) = invocation.stdin {
+                    while let Some(item) = stdin.read().await {
+                        stdout
+                            .write(item.map_err(WorkerExecutorError::runtime)?)
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                    }
+                }
+            }
+            stdout.finish().map_err(WorkerExecutorError::runtime)?;
+        }
+
+        Ok(Ok(
+            golem_common::model::oplog::payload::types::SerializableToolStructuredResult {
+                result: None,
+            },
+        ))
+    }
+}
+
+pub fn native_test_tool_metadata() -> golem_common::schema::tool::Tool {
+    use golem_native_tool::NativeToolInvoker;
+    __GolemNativeToolInvokerNativeDurableHelperImplNativeDurableHelper::new(NativeDurableHelperImpl)
+        .metadata()
+}
+
+pub fn install_native_test_tool_metadata(metadata: golem_common::schema::tool::Tool) {
+    if let Some(installed) = NATIVE_TEST_TOOL_METADATA.get() {
+        assert_eq!(installed, &metadata);
+    } else {
+        NATIVE_TEST_TOOL_METADATA
+            .set(metadata)
+            .expect("native test metadata was concurrently installed");
+    }
+}
+
+fn native_test_helper_definition() -> golem_native_tool::NativeToolDefinition {
+    use golem_native_tool::NativeToolInvoker;
+    __GolemNativeToolInvokerNativeDurableHelperImplNativeDurableHelper::new(NativeDurableHelperImpl)
+        .definition("executor-native-helper", "1.0.0")
+        .unwrap()
+}
+
+pub fn native_test_helper_effect_count() -> usize {
+    NATIVE_TEST_HELPER_EFFECTS.load(Ordering::SeqCst)
+}
+
 impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     fn durable_ctx(&self) -> &DurableWorkerCtx<TestWorkerCtx> {
         &self.durable_ctx
@@ -1954,6 +2078,29 @@ struct TestServerBootstrap {
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
+    fn native_tool_catalog() -> Arc<NativeToolCatalog<Self>> {
+        let mut registrations = vec![NativeToolRegistration {
+            definition: native_test_helper_definition(),
+            handler: Arc::new(NativeToolAdapter(
+                __GolemNativeToolInvokerNativeDurableHelperImplNativeDurableHelper::new(
+                    NativeDurableHelperImpl,
+                ),
+            )),
+        }];
+        if let Some(metadata) = NATIVE_TEST_TOOL_METADATA.get() {
+            registrations.push(NativeToolRegistration {
+                definition: golem_native_tool::NativeToolDefinition::new(
+                    "executor-native-test",
+                    "1.0.0",
+                    metadata.clone(),
+                )
+                .unwrap(),
+                handler: Arc::new(NativeTestTool),
+            });
+        }
+        Arc::new(NativeToolCatalog::new(registrations).unwrap())
+    }
+
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
@@ -2024,7 +2171,7 @@ impl WorkerCtx for TestWorkerCtx {
         owner_execution: Arc<golem_worker_executor::worker::instance::OwnerExecution>,
         owner_resources: Arc<golem_worker_executor::worker::instance::OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: golem_worker_executor::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         // Capture the executor's ActiveAgents handle the first time we see
@@ -2087,7 +2234,7 @@ impl WorkerCtx for TestWorkerCtx {
             owner_resources,
             entity_reconstruction_claim_hook,
             filesystem_capability,
-            executable_component,
+            executable,
             entity_activation,
         )
         .await?;
@@ -2144,8 +2291,8 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.created_by_email()
     }
 
-    fn component_metadata(&self) -> &Component {
-        self.durable_ctx.component_metadata()
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {

@@ -770,7 +770,7 @@ async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
         ));
     };
     let context = super::agent_monomorphization_context(
-        &ctx.state.component_metadata,
+        ctx.owner_component_metadata(),
         &ctx.owned_agent_id,
         agent_id,
     );
@@ -2536,7 +2536,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                         ));
                     };
                     let context = super::agent_monomorphization_context(
-                        &ctx.state.component_metadata,
+                        ctx.owner_component_metadata(),
                         &ctx.owned_agent_id,
                         agent_id,
                     );

@@ -26,6 +26,7 @@ use crate::services::environment_tool_grant::{
 };
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
+use crate::services::native_tool_catalog::NativeToolCatalog;
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -34,6 +35,7 @@ use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
+use golem_common::model::account::AccountSummary;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
@@ -130,6 +132,7 @@ pub struct DeploymentWriteService {
     retry_policy_service: Arc<RetryPolicyService>,
     environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
     tool_release_service: Arc<ToolReleaseService>,
+    native_tool_catalog: Arc<NativeToolCatalog>,
 }
 
 impl DeploymentWriteService {
@@ -146,6 +149,7 @@ impl DeploymentWriteService {
         retry_policy_service: Arc<RetryPolicyService>,
         environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
         tool_release_service: Arc<ToolReleaseService>,
+        native_tool_catalog: Arc<NativeToolCatalog>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -160,6 +164,7 @@ impl DeploymentWriteService {
             retry_policy_service,
             environment_tool_grant_service,
             tool_release_service,
+            native_tool_catalog,
         }
     }
 
@@ -252,8 +257,19 @@ impl DeploymentWriteService {
         );
 
         let account_id = environment.owner_account_id;
-        let remote_tool_references = data
+        let ambient_catalog = self
+            .native_tool_catalog
+            .active()
+            .into_iter()
+            .map(|tool| (tool.release.name.clone(), tool))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let ordinary_remote_tools = data
             .remote_tools
+            .iter()
+            .filter(|deployment| !ambient_catalog.contains_key(&deployment.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let remote_tool_references = ordinary_remote_tools
             .iter()
             .map(|deployment| deployment.release.clone())
             .collect::<Vec<_>>();
@@ -261,12 +277,43 @@ impl DeploymentWriteService {
             .environment_tool_grant_service
             .resolve_active_references_partial(&environment, &remote_tool_references, auth)
             .await?;
-        let remote_tools = data
-            .remote_tools
-            .iter()
-            .cloned()
+        let mut remote_tools = ordinary_remote_tools
+            .into_iter()
             .zip(resolved_remote_tools)
             .collect::<Vec<_>>();
+        for ambient in ambient_catalog.into_values() {
+            let requested = data
+                .remote_tools
+                .iter()
+                .find(|deployment| deployment.name == ambient.release.name);
+            let release = ambient.release;
+            let canonical = golem_common::model::tool::RemoteToolDeployment {
+                name: release.name.clone(),
+                release: golem_common::model::tool_release::ToolReleaseReference::ById(
+                    golem_common::model::tool_release::ToolReleaseById {
+                        release_id: release.id,
+                    },
+                ),
+                provision: ambient.provision,
+                environment_binding: Some(ambient.environment_binding),
+                agent_bindings: requested
+                    .map(|deployment| deployment.agent_bindings.clone())
+                    .unwrap_or_default(),
+            };
+            remote_tools.push((
+                canonical,
+                Some(
+                    crate::services::environment_tool_grant::ResolvedGrantedToolRelease {
+                        owner: AccountSummary {
+                            id: release.owner_account_id,
+                            name: "Golem system".to_string(),
+                            email: ambient.owner_account_email,
+                        },
+                        release,
+                    },
+                ),
+            ));
+        }
         let deployment_context = DeploymentContext::new(
             environment,
             components,

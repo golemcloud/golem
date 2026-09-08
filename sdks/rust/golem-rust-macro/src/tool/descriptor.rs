@@ -1317,7 +1317,7 @@ fn flag_spec_tokens(name: &str, base_ty: &Type, arg: Option<&ArgIr>) -> Result<T
             Some(expr) => quote! { ::std::option::Option::Some({ let __m: u32 = #expr; __m }) },
             None => quote! { ::std::option::Option::None },
         };
-        quote! { golem_rust::schema::tool::wit::wire::FlagShape::CountFlag(#max) }
+        quote! { golem_rust::agentic::FlagShape::CountFlag(#max) }
     } else {
         let default = match arg.and_then(|a| a.default.as_ref()) {
             Some(expr) => bool_default(expr)?,
@@ -1325,8 +1325,8 @@ fn flag_spec_tokens(name: &str, base_ty: &Type, arg: Option<&ArgIr>) -> Result<T
         };
         let negatable = arg.and_then(|a| a.negatable).unwrap_or(false);
         quote! {
-            golem_rust::schema::tool::wit::wire::FlagShape::BoolFlag(
-                golem_rust::schema::tool::wit::wire::BoolFlagShape {
+            golem_rust::agentic::FlagShape::BoolFlag(
+                golem_rust::agentic::BoolFlagShape {
                     default: #default,
                     negatable: #negatable,
                 }
@@ -1480,7 +1480,7 @@ fn option_spec_tokens(
                     repetition: #rep,
                     map_type: #graph,
                     duplicate_key_policy:
-                        golem_rust::schema::tool::wit::wire::DuplicateKeyPolicy::Reject,
+                        golem_rust::agentic::DuplicateKeyPolicy::Reject,
                 }
             )
         }
@@ -1653,7 +1653,7 @@ fn inherited_tail_option_surrogate_tokens(
             shape: golem_rust::agentic::ExtendedOptionShape::RepeatableList(
                 golem_rust::agentic::ExtendedRepeatableListShape {
                     repetition:
-                        golem_rust::schema::tool::wit::wire::Repetition::Repeated,
+                        golem_rust::agentic::Repetition::Repeated,
                     item_type: #graph,
                 }
             ),
@@ -1680,7 +1680,7 @@ fn repetition_tokens(arg: Option<&ArgIr>) -> Result<TokenStream, Error> {
                     "`delim` requires `repeatable = \"delimited\"` or `repeatable = \"either\"`",
                 ));
             }
-            Ok(quote! { golem_rust::schema::tool::wit::wire::Repetition::Repeated })
+            Ok(quote! { golem_rust::agentic::Repetition::Repeated })
         }
         RepeatableMode::Delimited => {
             let d = delim.ok_or_else(|| {
@@ -1689,7 +1689,7 @@ fn repetition_tokens(arg: Option<&ArgIr>) -> Result<TokenStream, Error> {
                     "repeatable = \"delimited\" requires a `delim = '<char>'`",
                 )
             })?;
-            Ok(quote! { golem_rust::schema::tool::wit::wire::Repetition::Delimited(#d) })
+            Ok(quote! { golem_rust::agentic::Repetition::Delimited(#d) })
         }
         RepeatableMode::Either => {
             let d = delim.ok_or_else(|| {
@@ -1698,7 +1698,7 @@ fn repetition_tokens(arg: Option<&ArgIr>) -> Result<TokenStream, Error> {
                     "repeatable = \"either\" requires a `delim = '<char>'`",
                 )
             })?;
-            Ok(quote! { golem_rust::schema::tool::wit::wire::Repetition::Either(#d) })
+            Ok(quote! { golem_rust::agentic::Repetition::Either(#d) })
         }
     }
 }
@@ -1975,10 +1975,10 @@ fn ref_tokens(r: &RefIr) -> Result<TokenStream, Error> {
 fn quantifier_tokens(q: QuantifierIr) -> TokenStream {
     match q {
         QuantifierIr::All => {
-            quote! { golem_rust::schema::tool::wit::wire::Quantifier::All }
+            quote! { golem_rust::agentic::Quantifier::All }
         }
         QuantifierIr::Any => {
-            quote! { golem_rust::schema::tool::wit::wire::Quantifier::Any }
+            quote! { golem_rust::agentic::Quantifier::Any }
         }
     }
 }
@@ -2356,6 +2356,7 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     matches!(
         segments.as_slice(),
         ["golem_rust", "agentic" | "tool", "Principal"]
+            | ["golem_native_tool" | "crate", "Principal"]
             | [
                 "golem_rust",
                 "golem_agentic",

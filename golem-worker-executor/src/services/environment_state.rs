@@ -728,6 +728,7 @@ mod tests {
             account_id: registered_tool.owner_account_id,
             account_email: registered_tool.owner_account_email.clone(),
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,
@@ -940,7 +941,7 @@ mod tests {
         else {
             panic!("component source must dispatch through component activation")
         };
-        assert_eq!(entity.executable(), &expected_executable);
+        assert_eq!(entity.executable_opt(), Some(&expected_executable));
         assert_eq!(entity.deployment_revision(), registered.deployment_revision);
         assert_eq!(entity.filesystem(), FilesystemCapability::Incapable);
         assert_eq!(

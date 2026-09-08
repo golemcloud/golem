@@ -65,6 +65,8 @@ pub trait ToolStreamingCaller {
     ) -> Vec<StreamEvidence>;
     async fn edge_lifecycles(&self) -> Vec<String>;
     async fn raw_modes_and_handles(&self) -> Vec<String>;
+    async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
+    async fn native_effect_count(&self) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
@@ -752,6 +754,108 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             "invoke".to_string(),
             "async-invoke-and-await".to_string(),
         ]
+    }
+
+    async fn native_modes_stream_cancel_overlap(&self) -> Vec<String> {
+        let rpc = ToolRpc::new("native-streaming");
+        let path = ["run".to_string()];
+
+        let (sync_target, sync_stdout) = tool_host::create_stdout();
+        let sync = rpc.invoke_and_await(
+            path.to_vec(),
+            raw_input("echo"),
+            Some(raw_stdin(vec![b"sync".to_vec()])),
+            Some(sync_target),
+        );
+        let (sync, sync_output) = (sync, read_all(sync_stdout)).join().await;
+        sync.expect("native synchronous invocation");
+        assert_eq!(sync_output, b"native:sync");
+
+        rpc.invoke(&path, raw_input("fire"), Some(closed_raw_stdin()))
+            .expect("native fire-and-forget invocation");
+
+        let (left_target, left_stdout) = tool_host::create_stdout();
+        let (right_target, right_stdout) = tool_host::create_stdout();
+        let left = rpc.async_invoke_and_await(
+            &path,
+            raw_input("echo"),
+            Some(raw_stdin(vec![b"left".to_vec()])),
+            Some(left_target),
+        );
+        let right = rpc.async_invoke_and_await(
+            &path,
+            raw_input("echo"),
+            Some(raw_stdin(vec![b"right".to_vec()])),
+            Some(right_target),
+        );
+        let (left_result, right_result, left_output, right_output) = (
+            raw_result(&left),
+            raw_result(&right),
+            read_all(left_stdout),
+            read_all(right_stdout),
+        )
+            .join()
+            .await;
+        left_result.expect("left overlapping native invocation");
+        right_result.expect("right overlapping native invocation");
+        assert_eq!(left_output, b"native:left");
+        assert_eq!(right_output, b"native:right");
+
+        let (cancel_target, mut cancel_stdout) = tool_host::create_stdout();
+        let cancelled = rpc.async_invoke_and_await(
+            &path,
+            raw_input("wait-cancel"),
+            Some(closed_raw_stdin()),
+            Some(cancel_target),
+        );
+        assert_eq!(raw_chunk(&mut cancel_stdout).await, b"native:started");
+        cancelled.cancel();
+        assert!(raw_result(&cancelled).await.is_err());
+
+        let (counter_target, counter_stdout) = tool_host::create_stdout();
+        rpc.invoke_and_await(
+            path.to_vec(),
+            raw_input("read-counter"),
+            Some(closed_raw_stdin()),
+            Some(counter_target),
+        )
+        .await
+        .expect("read native effect counter");
+        let count = String::from_utf8(read_all(counter_stdout).await).unwrap();
+
+        ToolRpc::new("native-durable-helper")
+            .invoke_and_await(
+                vec!["touch".to_string()],
+                raw_optional_streams_input(),
+                None,
+                None,
+            )
+            .await
+            .expect("macro-generated native helper invocation");
+
+        vec![
+            "sync".to_string(),
+            "fire-and-forget".to_string(),
+            "async".to_string(),
+            "stream".to_string(),
+            "cancel".to_string(),
+            "overlap".to_string(),
+            count,
+        ]
+    }
+
+    async fn native_effect_count(&self) -> String {
+        let rpc = ToolRpc::new("native-streaming");
+        let (target, stdout) = tool_host::create_stdout();
+        rpc.invoke_and_await(
+            vec!["run".to_string()],
+            raw_input("read-counter"),
+            Some(closed_raw_stdin()),
+            Some(target),
+        )
+        .await
+        .expect("read native effect counter");
+        String::from_utf8(read_all(stdout).await).unwrap()
     }
 
     async fn raw_handle_lifecycles(&self) -> Vec<String> {

@@ -1164,8 +1164,7 @@ impl AttachmentConsumer {
         }
     }
 
-    #[cfg(test)]
-    async fn read_next(&self) -> AttachmentRead {
+    pub(crate) async fn read_next(&self) -> AttachmentRead {
         loop {
             let notified = self.attachment.changed.notified();
             tokio::pin!(notified);
@@ -1574,9 +1573,8 @@ pub(crate) struct AttachmentActivity {
     pub(crate) charged_bytes: u64,
 }
 
-#[cfg(test)]
 #[derive(Debug)]
-enum AttachmentRead {
+pub(crate) enum AttachmentRead {
     Item(Result<Vec<u8>, ByteStreamFailure>),
     End,
 }

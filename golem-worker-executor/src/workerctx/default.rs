@@ -975,7 +975,7 @@ impl WorkerCtx for Context {
         owner_execution: Arc<crate::worker::instance::OwnerExecution>,
         owner_resources: Arc<crate::worker::instance::OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
@@ -1028,7 +1028,7 @@ impl WorkerCtx for Context {
             owner_resources,
             None,
             filesystem_capability,
-            executable_component,
+            executable,
             entity_activation,
         )
         .await?;
@@ -1075,8 +1075,8 @@ impl WorkerCtx for Context {
         self.durable_ctx.created_by_email()
     }
 
-    fn component_metadata(&self) -> &Component {
-        self.durable_ctx.component_metadata()
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {

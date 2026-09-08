@@ -60,8 +60,8 @@ fn direct_stream_type(ty: &Type) -> Option<StreamKind> {
         return None;
     };
     match path.path.segments.last()?.ident.to_string().as_str() {
-        "InputStream" => Some(StreamKind::Input),
-        "OutputStream" => Some(StreamKind::Output),
+        "InputStream" | "NativeToolStdin" => Some(StreamKind::Input),
+        "OutputStream" | "NativeToolStdout" => Some(StreamKind::Output),
         _ => None,
     }
 }

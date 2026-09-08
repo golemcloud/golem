@@ -18,7 +18,8 @@ use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
 use crate::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
+    CompiledToolBinding, HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig,
 };
 use crate::schema::TypedSchemaValue;
 use desert_rust::BinaryCodec;
@@ -212,6 +213,19 @@ pub struct ExecutableTarget {
     pub component_revision: ComponentRevision,
 }
 
+/// Exact executable leaf pinned into an accepted entity invocation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EntityActivationSource {
+    Component {
+        executable: ExecutableTarget,
+    },
+    Host {
+        host_tool_id: HostToolId,
+        implementation_version: String,
+    },
+}
+
 impl ExecutableTarget {
     pub fn new(component_id: ComponentId, component_revision: ComponentRevision) -> Self {
         Self {
@@ -271,6 +285,17 @@ impl EntityActivationPolicy {
         }
     }
 
+    pub fn config_keys_readable(&self) -> &crate::model::tool::ConfigKeyScope {
+        match self {
+            Self::Tool { binding, .. } => &binding.config_keys_readable,
+            Self::ToolMiddleware { .. } => {
+                static ALL: crate::model::tool::ConfigKeyScope =
+                    crate::model::tool::ConfigKeyScope::All;
+                &ALL
+            }
+        }
+    }
+
     pub fn secret_keys_revealable(&self) -> &SecretKeyScope {
         match self {
             Self::Tool { binding, .. } => &binding.secret_keys_revealable,
@@ -307,7 +332,7 @@ impl Display for EntityActivationFingerprint {
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 pub struct EntityActivation {
-    executable: ExecutableTarget,
+    source: EntityActivationSource,
     deployment_revision: DeploymentRevision,
     policy: EntityActivationPolicy,
     filesystem: FilesystemCapability,
@@ -317,7 +342,7 @@ pub struct EntityActivation {
 #[derive(BinaryCodec)]
 #[desert(evolution())]
 struct EntityActivationFingerprintInput {
-    executable: ExecutableTarget,
+    source: EntityActivationSource,
     deployment_revision: DeploymentRevision,
     policy: EntityActivationPolicy,
     filesystem: FilesystemCapability,
@@ -330,9 +355,41 @@ impl EntityActivation {
         policy: EntityActivationPolicy,
         filesystem: FilesystemCapability,
     ) -> Result<Self, String> {
-        Self::validate(&executable, deployment_revision, &policy, filesystem)?;
+        Self::new_with_source(
+            EntityActivationSource::Component { executable },
+            deployment_revision,
+            policy,
+            filesystem,
+        )
+    }
+
+    pub fn new_host(
+        host_tool_id: HostToolId,
+        implementation_version: String,
+        deployment_revision: DeploymentRevision,
+        policy: EntityActivationPolicy,
+        filesystem: FilesystemCapability,
+    ) -> Result<Self, String> {
+        Self::new_with_source(
+            EntityActivationSource::Host {
+                host_tool_id,
+                implementation_version,
+            },
+            deployment_revision,
+            policy,
+            filesystem,
+        )
+    }
+
+    fn new_with_source(
+        source: EntityActivationSource,
+        deployment_revision: DeploymentRevision,
+        policy: EntityActivationPolicy,
+        filesystem: FilesystemCapability,
+    ) -> Result<Self, String> {
+        Self::validate(&source, deployment_revision, &policy, filesystem)?;
         let fingerprint_input = EntityActivationFingerprintInput {
-            executable: executable.clone(),
+            source: source.clone(),
             deployment_revision,
             policy: policy.clone(),
             filesystem,
@@ -342,7 +399,7 @@ impl EntityActivation {
         let fingerprint = EntityActivationFingerprint::from_bytes(*blake3::hash(&bytes).as_bytes());
 
         Ok(Self {
-            executable,
+            source,
             deployment_revision,
             policy,
             filesystem,
@@ -351,11 +408,24 @@ impl EntityActivation {
     }
 
     fn validate(
-        executable: &ExecutableTarget,
+        source: &EntityActivationSource,
         deployment_revision: DeploymentRevision,
         policy: &EntityActivationPolicy,
         filesystem: FilesystemCapability,
     ) -> Result<(), String> {
+        if let EntityActivationSource::Host {
+            host_tool_id,
+            implementation_version,
+        } = source
+        {
+            if host_tool_id.as_str().is_empty() {
+                return Err("Entity host source host tool id cannot be empty".to_string());
+            }
+            if implementation_version.trim().is_empty() {
+                return Err("Entity host source implementation version cannot be empty".to_string());
+            }
+        }
+
         match policy {
             EntityActivationPolicy::Tool { provision, binding } => {
                 if binding.deployment_revision != deployment_revision {
@@ -364,12 +434,15 @@ impl EntityActivation {
                             .to_string(),
                     );
                 }
-                match &binding.source {
-                    crate::model::tool::ToolSource::Component {
-                        component_id,
-                        component_revision,
-                        ..
-                    } => {
+                match (&binding.source, source) {
+                    (
+                        crate::model::tool::ToolSource::Component {
+                            component_id,
+                            component_revision,
+                            ..
+                        },
+                        EntityActivationSource::Component { executable },
+                    ) => {
                         if *component_id != executable.component_id
                             || *component_revision != executable.component_revision
                         {
@@ -377,8 +450,28 @@ impl EntityActivation {
                                 .to_string());
                         }
                     }
-                    crate::model::tool::ToolSource::Host { .. } => {
-                        return Err("Host tools do not use component entity activation".to_string());
+                    (
+                        crate::model::tool::ToolSource::Host {
+                            host_tool_id,
+                            implementation_version,
+                        },
+                        EntityActivationSource::Host {
+                            host_tool_id: actual_id,
+                            implementation_version: actual_version,
+                        },
+                    ) => {
+                        if host_tool_id != actual_id || implementation_version != actual_version {
+                            return Err(
+                                "Entity host source does not match the tool binding source"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    _ => {
+                        return Err(
+                            "Entity activation kind does not match the tool binding source"
+                                .to_string(),
+                        );
                     }
                 }
                 if !binding
@@ -403,6 +496,11 @@ impl EntityActivation {
                 filesystem_access,
                 ..
             } => {
+                if matches!(source, EntityActivationSource::Host { .. }) {
+                    return Err(
+                        "Host entity activation is not supported for tool middleware".to_string(),
+                    );
+                }
                 if !secret_keys_revealable.is_subset_of(secret_keys_readable) {
                     return Err(
                         "Entity middleware revealable secrets exceed readable secrets".to_string(),
@@ -446,8 +544,15 @@ impl EntityActivation {
         Ok(())
     }
 
-    pub fn executable(&self) -> &ExecutableTarget {
-        &self.executable
+    pub fn source(&self) -> &EntityActivationSource {
+        &self.source
+    }
+
+    pub fn executable_opt(&self) -> Option<&ExecutableTarget> {
+        match &self.source {
+            EntityActivationSource::Component { executable } => Some(executable),
+            EntityActivationSource::Host { .. } => None,
+        }
     }
 
     pub fn deployment_revision(&self) -> DeploymentRevision {
@@ -474,7 +579,7 @@ impl EntityActivation {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EntityActivationWire {
-    executable: ExecutableTarget,
+    source: EntityActivationSource,
     deployment_revision: DeploymentRevision,
     policy: EntityActivationPolicy,
     filesystem: FilesystemCapability,
@@ -487,8 +592,8 @@ impl<'de> Deserialize<'de> for EntityActivation {
         D: Deserializer<'de>,
     {
         let wire = EntityActivationWire::deserialize(deserializer)?;
-        let activation = Self::new(
-            wire.executable,
+        let activation = Self::new_with_source(
+            wire.source,
             wire.deployment_revision,
             wire.policy,
             wire.filesystem,
@@ -1034,8 +1139,24 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivationFingerprint>
 
 impl From<EntityActivation> for golem_api_grpc::proto::golem::worker::EntityActivation {
     fn from(value: EntityActivation) -> Self {
+        use golem_api_grpc::proto::golem::worker::entity_activation::Source;
+
+        let source = match value.source {
+            EntityActivationSource::Component { executable } => {
+                Source::Component(executable.into())
+            }
+            EntityActivationSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => Source::Host(
+                golem_api_grpc::proto::golem::worker::HostEntityActivationSource {
+                    host_tool_id: host_tool_id.into(),
+                    implementation_version,
+                },
+            ),
+        };
         Self {
-            executable: Some(value.executable.into()),
+            source: Some(source),
             deployment_revision: value.deployment_revision.into(),
             policy: Some(value.policy.into()),
             filesystem: golem_api_grpc::proto::golem::worker::FilesystemCapability::from(
@@ -1056,10 +1177,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivation> for EntityA
             golem_api_grpc::proto::golem::worker::FilesystemCapability::try_from(value.filesystem)
                 .map_err(|_| format!("Invalid EntityActivation.filesystem: {}", value.filesystem))?
                 .try_into()?;
-        let executable = value
-            .executable
-            .ok_or("Missing EntityActivation.executable")?
-            .try_into()?;
+        use golem_api_grpc::proto::golem::worker::entity_activation::Source;
+
+        let source = match value.source.ok_or("Missing EntityActivation.source")? {
+            Source::Component(executable) => EntityActivationSource::Component {
+                executable: executable.try_into()?,
+            },
+            Source::Host(host) => EntityActivationSource::Host {
+                host_tool_id: HostToolId::try_from(host.host_tool_id)?,
+                implementation_version: host.implementation_version,
+            },
+        };
         let deployment_revision = DeploymentRevision::try_from(value.deployment_revision)?;
         let policy = value
             .policy
@@ -1069,7 +1197,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivation> for EntityA
             .fingerprint
             .ok_or("Missing EntityActivation.fingerprint")?
             .try_into()?;
-        let activation = Self::new(executable, deployment_revision, policy, filesystem)?;
+        let activation = Self::new_with_source(source, deployment_revision, policy, filesystem)?;
         if fingerprint != activation.fingerprint {
             return Err("EntityActivation fingerprint does not match its contents".to_string());
         }
@@ -1196,6 +1324,7 @@ mod tests {
             account_id: AccountId::new(),
             account_email: AccountEmail::new("owner@example.com"),
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
@@ -1228,6 +1357,30 @@ mod tests {
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: ToolFilesystemAccess::Unset,
             },
+            FilesystemCapability::Incapable,
+        )
+        .unwrap()
+    }
+
+    fn host_activation() -> EntityActivation {
+        let component_activation = activation();
+        let deployment_revision = component_activation.deployment_revision;
+        let mut policy = component_activation.policy;
+        let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
+        let implementation_version = "1.2.3".to_string();
+        let EntityActivationPolicy::Tool { binding, .. } = &mut policy else {
+            unreachable!()
+        };
+        binding.source = ToolSource::Host {
+            host_tool_id: host_tool_id.clone(),
+            implementation_version: implementation_version.clone(),
+        };
+
+        EntityActivation::new_host(
+            host_tool_id,
+            implementation_version,
+            deployment_revision,
+            policy,
             FilesystemCapability::Incapable,
         )
         .unwrap()
@@ -1522,6 +1675,113 @@ mod tests {
     }
 
     #[test]
+    fn host_activation_roundtrips_through_binary_json_and_protobuf() {
+        let activation = host_activation();
+        assert!(activation.executable_opt().is_none());
+
+        let bytes = desert_rust::serialize_to_byte_vec(&activation).unwrap();
+        assert_eq!(
+            desert_rust::deserialize::<EntityActivation>(&bytes).unwrap(),
+            activation
+        );
+
+        let json = serde_json::to_string(&activation).unwrap();
+        assert_eq!(
+            serde_json::from_str::<EntityActivation>(&json).unwrap(),
+            activation
+        );
+
+        let protobuf: golem_api_grpc::proto::golem::worker::EntityActivation =
+            activation.clone().into();
+        assert!(matches!(
+            protobuf.source,
+            Some(golem_api_grpc::proto::golem::worker::entity_activation::Source::Host(_))
+        ));
+        assert_eq!(EntityActivation::try_from(protobuf).unwrap(), activation);
+    }
+
+    #[test]
+    fn host_activation_rejects_source_policy_identity_mismatches() {
+        let activation = host_activation();
+        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
+            unreachable!()
+        };
+
+        for (host_tool_id, implementation_version) in [
+            (
+                HostToolId::try_from("other-host".to_string()).unwrap(),
+                "1.2.3".to_string(),
+            ),
+            (
+                HostToolId::try_from("native-search".to_string()).unwrap(),
+                "9.9.9".to_string(),
+            ),
+        ] {
+            let result = EntityActivation::new_host(
+                host_tool_id,
+                implementation_version,
+                activation.deployment_revision,
+                EntityActivationPolicy::Tool {
+                    provision: provision.clone(),
+                    binding: binding.clone(),
+                },
+                activation.filesystem,
+            );
+            assert_eq!(
+                result.unwrap_err(),
+                "Entity host source does not match the tool binding source"
+            );
+        }
+    }
+
+    #[test]
+    fn host_activation_rejects_invalid_source_contracts() {
+        let activation = host_activation();
+        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
+            unreachable!()
+        };
+        let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
+
+        assert_eq!(
+            EntityActivation::new_host(
+                host_tool_id.clone(),
+                "  ".to_string(),
+                activation.deployment_revision,
+                EntityActivationPolicy::Tool { provision, binding },
+                activation.filesystem,
+            )
+            .unwrap_err(),
+            "Entity host source implementation version cannot be empty"
+        );
+
+        assert_eq!(
+            EntityActivation::new_host(
+                host_tool_id,
+                "1.2.3".to_string(),
+                DeploymentRevision::try_from(12_u64).unwrap(),
+                middleware_activation().policy,
+                FilesystemCapability::Incapable,
+            )
+            .unwrap_err(),
+            "Host entity activation is not supported for tool middleware"
+        );
+    }
+
+    #[test]
+    fn host_activation_protobuf_rejects_empty_host_tool_id() {
+        let mut protobuf: golem_api_grpc::proto::golem::worker::EntityActivation =
+            host_activation().into();
+        let Some(golem_api_grpc::proto::golem::worker::entity_activation::Source::Host(host)) =
+            protobuf.source.as_mut()
+        else {
+            unreachable!()
+        };
+        host.host_tool_id.clear();
+
+        assert!(EntityActivation::try_from(protobuf).is_err());
+    }
+
+    #[test]
     fn activation_json_rejects_content_that_does_not_match_fingerprint() {
         let mut json = serde_json::to_value(activation()).unwrap();
         json["fingerprint"][0] = serde_json::json!(255);
@@ -1612,7 +1872,10 @@ mod tests {
     fn activation_rejects_executable_that_differs_from_binding_source() {
         let activation = activation();
         let result = EntityActivation::new(
-            ExecutableTarget::new(ComponentId::new(), activation.executable.component_revision),
+            ExecutableTarget::new(
+                ComponentId::new(),
+                activation.executable_opt().unwrap().component_revision,
+            ),
             activation.deployment_revision,
             activation.policy,
             activation.filesystem,

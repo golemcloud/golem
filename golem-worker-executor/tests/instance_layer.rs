@@ -362,6 +362,7 @@ fn activation_with_policy(
         account_id,
         account_email: AccountEmail::new("test@golem"),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        config_keys_readable: Default::default(),
         secret_keys_readable,
         secret_keys_revealable,
         filesystem_access: match filesystem {
@@ -1418,7 +1419,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         slot.entity_id.entity == tool_entity
             && slot.invocations.len() == 1
             && slot.invocations[0].invocation_id.start_index() == nested_start
-            && slot.invocations[0].executable == *tool_activation.executable()
+            && slot.invocations[0].executable == tool_activation.executable_opt().cloned()
     }));
     assert!(
         active_agent

@@ -76,6 +76,18 @@ use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
 
+/// Executable identity used to construct a worker context.
+///
+/// Native contexts deliberately carry no component metadata or Wasm executable.
+#[derive(Clone)]
+pub enum WorkerCtxExecutable {
+    Component(Component),
+    Native {
+        host_tool_id: golem_common::model::tool::HostToolId,
+        implementation_version: String,
+    },
+}
+
 pub struct WorkerFilesystemContext {
     pub(crate) generation_handle: FilesystemGenerationHandle,
     pub(crate) preopen: OpenNode,
@@ -145,6 +157,11 @@ pub trait WorkerCtx:
     + Sized
     + 'static
 {
+    /// Native implementations installed in this executor process.
+    fn native_tool_catalog() -> Arc<crate::native_tool::NativeToolCatalog<Self>> {
+        Arc::new(crate::native_tool::NativeToolCatalog::default())
+    }
+
     /// PublicState is a subset of the worker context that is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
@@ -252,7 +269,7 @@ pub trait WorkerCtx:
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
 
@@ -285,7 +302,16 @@ pub trait WorkerCtx:
     /// Gets the email of the account that created this worker
     fn created_by_email(&self) -> &AccountEmail;
 
-    fn component_metadata(&self) -> &Component;
+    /// Metadata for the executable component. Native entity contexts have none.
+    fn executable_component_metadata(&self) -> Option<&Component>;
+
+    /// Metadata for the executable component.
+    ///
+    /// Panics for native entity contexts, matching component-only host API behavior.
+    fn component_metadata(&self) -> &Component {
+        self.executable_component_metadata()
+            .expect("native entity contexts have no executable component metadata")
+    }
 
     fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig>;
 

@@ -95,6 +95,26 @@ pub fn tool_implementation(attr: TokenStream, item: TokenStream) -> TokenStream 
     tool::tool_implementation_impl(attr, item, &get_golem_rust_crate_ident())
 }
 
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn native_tool_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool::native::native_tool_definition_impl(attr, item, &get_native_tool_crate_ident())
+}
+
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn native_tool_implementation(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool::native::native_tool_implementation_impl(attr, item, &get_native_tool_crate_ident())
+}
+
+fn get_native_tool_crate_ident() -> syn::Ident {
+    match crate_name("golem-native-tool") {
+        Ok(FoundCrate::Itself) => syn::Ident::new("crate", Span::call_site()),
+        Ok(FoundCrate::Name(name)) => syn::Ident::new(&name, Span::call_site()),
+        Err(_) => syn::Ident::new("golem_native_tool", Span::call_site()),
+    }
+}
+
 #[proc_macro_attribute]
 pub fn tool_middleware(attr: TokenStream, item: TokenStream) -> TokenStream {
     tool::tool_middleware_impl(attr, item, &get_golem_rust_crate_ident())
@@ -107,7 +127,19 @@ pub fn universal_tool_middleware(attr: TokenStream, item: TokenStream) -> TokenS
 
 #[proc_macro_derive(ToolError, attributes(tool_error, example))]
 pub fn derive_tool_error(input: TokenStream) -> TokenStream {
-    tool::derive_tool_error_impl(input, &get_golem_rust_crate_ident())
+    tool::derive_tool_error_impl(input, &get_tool_schema_crate_ident())
+}
+
+fn get_tool_schema_crate_ident() -> syn::Ident {
+    if crate_name("golem-rust").is_ok() {
+        get_golem_rust_crate_ident()
+    } else {
+        match crate_name("golem-native-tool") {
+            Ok(FoundCrate::Itself) => syn::Ident::new("crate", Span::call_site()),
+            Ok(FoundCrate::Name(name)) => syn::Ident::new(&name, Span::call_site()),
+            Err(_) => syn::Ident::new("golem_rust", Span::call_site()),
+        }
+    }
 }
 
 #[doc(hidden)]

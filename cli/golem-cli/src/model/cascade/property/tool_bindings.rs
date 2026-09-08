@@ -25,6 +25,7 @@ pub struct ToolBindingState {
     pub version: Option<String>,
     pub parameters: IndexMap<String, serde_json::Value>,
     pub account: Option<String>,
+    pub config_keys_readable: Vec<ManifestSecretKeyScope>,
     pub secret_keys_readable: Vec<ManifestSecretKeyScope>,
     pub secret_keys_revealable: Vec<ManifestSecretKeyScope>,
 }
@@ -53,6 +54,9 @@ impl ToolBindingState {
 
         if let Some(scope) = binding.secret_keys_readable {
             self.secret_keys_readable.push(scope);
+        }
+        if let Some(scope) = binding.config_keys_readable {
+            self.config_keys_readable.push(scope);
         }
         if let Some(scope) = binding.secret_keys_revealable {
             self.secret_keys_revealable.push(scope);

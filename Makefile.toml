@@ -1566,6 +1566,22 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+## BUILT-IN TOOLS
+[tasks.build-builtin-tools]
+dependencies = ["wit"]
+description = "Builds the representative built-in tool fixture (production descriptor inventories are currently empty)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+rust_sdk = canonicalize sdks/rust/golem-rust
+set_env GOLEM_RUST_PATH ${rust_sdk}
+cd test-components/tool-streaming
+exec --fail-on-error ${golem_cli} --preset release build --yes --skip-check
+exec --fail-on-error ${golem_cli} --preset release exec copy
+cd ../..
+'''
+
 ## ** BUILD TEST COMPONENTS **
 
 [tasks.build-test-components]

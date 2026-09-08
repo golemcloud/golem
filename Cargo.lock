@@ -4000,6 +4000,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-native-tool"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "desert_rust",
+ "golem-rust-macro",
+ "golem-schema",
+ "golem-tool-metadata",
+ "test-r",
+]
+
+[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.0"
 dependencies = [
@@ -4035,6 +4048,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-service-base",
  "heck",
  "http 1.5.0",
@@ -4087,6 +4101,18 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "golem-rust-macro"
+version = "0.0.0"
+dependencies = [
+ "heck",
+ "humantime",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4315,6 +4341,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-tool-metadata"
+version = "0.0.0"
+dependencies = [
+ "golem-schema",
+ "test-r",
+]
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
@@ -4351,6 +4385,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
@@ -4436,6 +4471,7 @@ dependencies = [
  "chrono",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",

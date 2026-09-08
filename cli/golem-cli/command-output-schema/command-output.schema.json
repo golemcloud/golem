@@ -4147,6 +4147,7 @@
         "version",
         "parameters",
         "account",
+        "configKeysReadable",
         "secretKeysReadable",
         "secretKeysRevealable"
       ],
@@ -4154,10 +4155,34 @@
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
         "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
         "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" }
       },
       "additionalProperties": false
+    },
+    "ConfigKeyScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "all" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "keys"],
+          "properties": {
+            "kind": { "const": "keys" },
+            "keys": {
+              "type": "array",
+              "items": { "type": "array", "items": { "type": "string" } },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SecretKeyScope": {
       "oneOf": [
@@ -5294,12 +5319,14 @@
       "type": "object",
       "required": [
         "parameters",
+        "configKeysReadable",
         "secretKeysReadable",
         "secretKeysRevealable",
         "filesystemAccess"
       ],
       "properties": {
         "parameters": {},
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
         "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
         "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
         "filesystemAccess": { "type": "string", "enum": ["unset", "allowed", "denied"] }

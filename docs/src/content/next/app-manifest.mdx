@@ -219,7 +219,17 @@ Tool publication changes are planned separately from staged deployment state. Th
 
 Publishing a new version does not move an existing consumer deployment. Selecting it creates a new deployment snapshot and reconciles its grant. Existing deployment snapshots and historical replay continue to use their pinned source. When loose publication replaces an existing coordinate, coordinate-following grants move to the replacement while ID-pinned grants continue to resolve the superseded release.
 
-Runtime discovery and admission use the consumer deployment snapshot and the caller's environment policy. GOL-28 stops at the admitted component dispatch boundary; actual component-sidecar invocation is not implemented by this work. Executor-native Host tool dispatch is owned separately by GOL-24.
+Runtime discovery and admission use the consumer deployment snapshot and the caller's environment policy.
+
+### System-provided tools
+
+Golem can ship two kinds of system-provided tool. A component-implemented built-in tool is a protected, immutable, grantable release. It behaves like any other registry release at consumption time: select its exact published coordinate with `tools.<name>.release`, then add a separate `agents.<agent-type>.tools.<name>` binding to make it available to that agent. Selecting a release does not itself bind the tool to an agent.
+
+A native tool is compiled into the Golem host and provisioned as ambient. Do not declare it in the top-level `tools` map and do not specify a release coordinate. It is available to agents in the environment by default; an agent binding with the native tool's name can narrow its parameters and policies.
+
+Both kinds use the normal effective binding policy. In particular, `configKeysReadable` is narrowing-only: the effective scope is the intersection of the system or environment binding and the agent binding. Calls made by a native implementation through Golem's config host helper are checked against that effective scope; running in the host does not grant unrestricted config access.
+
+Golem currently ships no production built-in or native tool inventory. A deployment can only refer to system-provided tool names advertised by the Golem installation it targets.
 
 ### Bridge generation
 

@@ -295,6 +295,7 @@ impl DeploymentIdentity {
                 .collect::<Result<Vec<_>, _>>()?,
             remote_tools,
             published_tools,
+            ambient_tools: Vec::new(),
         })
     }
 }

@@ -100,7 +100,7 @@ pub(crate) struct EntityInvocationResources {
     lane_wait: Option<OwnerLaneWait>,
 }
 
-trait RetainedEntityStore: Send {
+pub(crate) trait RetainedEntityStore: Send {
     fn prepare_parent_end(
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>>;
@@ -110,9 +110,191 @@ trait RetainedEntityStore: Send {
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>>;
 }
 
+pub(crate) trait EntityInvocationRunner<R>: Send + 'static {
+    fn run<'a>(
+        self,
+        scope: EntityInvocationScope,
+        registration: &'a EntitySlotRegistration,
+        abort: tokio_util::sync::CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = (
+                        Result<R, WorkerExecutorError>,
+                        Option<Box<dyn RetainedEntityStore>>,
+                    ),
+                > + Send
+                + 'a,
+        >,
+    >;
+}
+
+struct ComponentEntityRunner<Ctx: WorkerCtx, F> {
+    host: InstanceHost<Ctx>,
+    body: F,
+}
+
+impl<Ctx, R, F> EntityInvocationRunner<R> for ComponentEntityRunner<Ctx, F>
+where
+    Ctx: WorkerCtx,
+    R: Send + 'static,
+    F: EntityInvocationBody<Ctx, R>,
+{
+    fn run<'a>(
+        self,
+        scope: EntityInvocationScope,
+        registration: &'a EntitySlotRegistration,
+        _abort: tokio_util::sync::CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = (
+                        Result<R, WorkerExecutorError>,
+                        Option<Box<dyn RetainedEntityStore>>,
+                    ),
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let invocation = OwnerInvocationId::Entity(scope.invocation_id().clone());
+            tokio::select! {
+                result = async move {
+                    match self.host.instantiate_entity_scoped(&scope).await {
+                        Ok(hosted_instance) => {
+                            let (result, retained) = hosted_instance
+                                .invoke_scoped_registered_retained(scope, registration, self.body)
+                                .await;
+                            (
+                                result,
+                                Some(Box::new(RetainedHostedInstance {
+                                    hosted: retained,
+                                    invocation,
+                                }) as Box<dyn RetainedEntityStore>),
+                            )
+                        }
+                        Err(error) => (Err(error), None),
+                    }
+                } => result,
+                _ = _abort.cancelled() => (
+                    Err(WorkerExecutorError::runtime("Entity body was cancelled")),
+                    None,
+                ),
+            }
+        })
+    }
+}
+
+struct ClosureEntityRunner<F>(F);
+
+impl<R, F> EntityInvocationRunner<R> for ClosureEntityRunner<F>
+where
+    R: Send + 'static,
+    F: Send + 'static,
+    F: for<'a> FnOnce(
+        EntityInvocationScope,
+        &'a EntitySlotRegistration,
+        tokio_util::sync::CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = (
+                        Result<R, WorkerExecutorError>,
+                        Option<Box<dyn RetainedEntityStore>>,
+                    ),
+                > + Send
+                + 'a,
+        >,
+    >,
+{
+    fn run<'a>(
+        self,
+        scope: EntityInvocationScope,
+        registration: &'a EntitySlotRegistration,
+        abort: tokio_util::sync::CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = (
+                        Result<R, WorkerExecutorError>,
+                        Option<Box<dyn RetainedEntityStore>>,
+                    ),
+                > + Send
+                + 'a,
+        >,
+    > {
+        self.0(scope, registration, abort)
+    }
+}
+
 struct RetainedHostedInstance<Ctx: WorkerCtx> {
     hosted: super::instance::HostedInstance<Ctx>,
     invocation: OwnerInvocationId,
+}
+
+pub(crate) struct RetainedNativeContext<Ctx: WorkerCtx> {
+    context: Ctx,
+    execution: Arc<super::instance::OwnerExecution>,
+    invocation: OwnerInvocationId,
+    parent_end_prepared: bool,
+}
+
+impl<Ctx: WorkerCtx> RetainedNativeContext<Ctx> {
+    pub(crate) fn new(
+        context: Ctx,
+        execution: Arc<super::instance::OwnerExecution>,
+        invocation: OwnerInvocationId,
+    ) -> Self {
+        Self {
+            context,
+            execution,
+            invocation,
+            parent_end_prepared: false,
+        }
+    }
+
+    pub(crate) fn context_mut(&mut self) -> &mut Ctx {
+        &mut self.context
+    }
+
+    async fn prepare_native_parent_end(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.parent_end_prepared {
+            return Ok(());
+        }
+        crate::durable_host::tool::prepare_tool_parent_end_owned(
+            &self.execution,
+            self.invocation.clone(),
+        )
+        .await?;
+
+        // Native handlers use the context's host resource table directly. Destroy every
+        // body-owned resource while the context and its drop-event receiver are still alive, then
+        // record the resulting durable cancellations before removing the entity scope.
+        *self.context.durable_ctx_mut().table() = wasmtime::component::ResourceTable::new();
+        crate::durable_host::drain_queued_dropped_call_events(self.context.durable_ctx_mut())
+            .await
+            .map_err(|error| error.source)?;
+        self.context.set_entity_invocation_scope(None)?;
+        self.parent_end_prepared = true;
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedNativeContext<Ctx> {
+    fn prepare_parent_end(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
+        Box::pin(self.prepare_native_parent_end())
+    }
+
+    fn settle(
+        self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
+        Box::pin(async move {
+            crate::durable_host::tool::settle_tool_children_owned(&self.execution, self.invocation)
+                .await
+        })
+    }
 }
 
 impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedHostedInstance<Ctx> {
@@ -316,16 +498,11 @@ where
             scope.activation().filesystem(),
         )
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-    start_entity_invocation_inner(
+    let run = ComponentEntityRunner {
         host,
-        slot,
-        lane,
-        scope,
-        mode,
-        Some(ticket),
-        ClosureEntityInvocationBody(invoke),
-        finalize,
-    )
+        body: ClosureEntityInvocationBody(invoke),
+    };
+    start_entity_invocation_inner(slot, lane, scope, mode, Some(ticket), run, finalize)
 }
 
 /// Starts a body whose caller already owns the registered and granted lane node. This is used by
@@ -347,34 +524,84 @@ where
     Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
-    start_entity_invocation_inner(host, slot, lane, scope, mode, None, invoke, finalize)
+    let run = ComponentEntityRunner { host, body: invoke };
+    start_entity_invocation_inner(slot, lane, scope, mode, None, run, finalize)
 }
 
-fn start_entity_invocation_inner<Ctx, R, F, Finalize, Finalized>(
-    host: InstanceHost<Ctx>,
+pub(crate) fn start_native_entity_invocation<R, Run, Finalize, Finalized>(
+    slot: Arc<EntitySlot>,
+    lane: OwnerLane,
+    parent: Option<OwnerInvocationId>,
+    scope: EntityInvocationScope,
+    mode: EntityCallMode,
+    run: Run,
+    finalize: Finalize,
+) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+where
+    R: Send + 'static,
+    Run: Send + 'static,
+    Run: for<'a> FnOnce(
+        EntityInvocationScope,
+        &'a EntitySlotRegistration,
+        tokio_util::sync::CancellationToken,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = (
+                        Result<R, WorkerExecutorError>,
+                        Option<Box<dyn RetainedEntityStore>>,
+                    ),
+                > + Send
+                + 'a,
+        >,
+    >,
+    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+{
+    let ticket = parent
+        .map(|parent| {
+            lane.register_entity(
+                parent,
+                scope.invocation_id().clone(),
+                mode,
+                scope.activation().filesystem(),
+            )
+        })
+        .transpose()
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    start_entity_invocation_inner(
+        slot,
+        lane,
+        scope,
+        mode,
+        ticket,
+        ClosureEntityRunner(run),
+        finalize,
+    )
+}
+
+fn start_entity_invocation_inner<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     ticket: Option<OwnerInvocationTicket>,
-    invoke: F,
+    run: Run,
     finalize: Finalize,
 ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
 where
-    Ctx: WorkerCtx,
     R: Send + 'static,
-    F: EntityInvocationBody<Ctx, R>,
+    Run: EntityInvocationRunner<R>,
     Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
     let registration = slot.register(&scope)?;
     let invocation_id = scope.invocation_id().clone();
     let invocation = OwnerInvocationId::Entity(invocation_id.clone());
-    let task_invocation = invocation.clone();
     let lane_await_required = ticket.is_some();
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let entity = scope.invocation_id().entity();
-    let executable = scope.activation().executable();
+    let executable = scope.activation().executable_opt();
     let span = info_span!(
         "entity_invocation",
         owner_environment_id = %scope.owner_id().environment_id,
@@ -382,11 +609,32 @@ where
         entity_kind = entity.kind_label(),
         entity_name = entity.name(),
         invocation_start_index = scope.invocation_id().start_index().as_u64(),
-        executable_component_id = %executable.component_id,
-        executable_component_revision = executable.component_revision.get(),
+        executable_component_id = tracing::field::display(executable.map(|target| target.component_id.to_string()).unwrap_or_else(|| "native".to_string())),
+        executable_component_revision = executable.map(|target| target.component_revision.get()),
         activation_fingerprint = %scope.activation().fingerprint(),
         execution_mode = ?scope.mode(),
     );
+    struct AbortRelay(tokio_util::sync::CancellationToken);
+    impl Drop for AbortRelay {
+        fn drop(&mut self) {
+            self.0.cancel();
+        }
+    }
+    struct AbortRelayTask(tokio::task::JoinHandle<()>);
+    impl Drop for AbortRelayTask {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let abort = tokio_util::sync::CancellationToken::new();
+    let abort_relay = AbortRelayTask(tokio::spawn({
+        let relay = AbortRelay(abort.clone());
+        async move {
+            let _relay = relay;
+            std::future::pending::<()>().await;
+        }
+    }));
+    let body_abort = abort_relay.0.abort_handle();
     let task = tokio::spawn(super::invocation::with_invocation_stack(
         async move {
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
@@ -418,21 +666,12 @@ where
                     },
                     None => None,
                 };
-                match host.instantiate_entity_scoped(&scope).await {
-                    Ok(hosted_instance) => {
-                        let (result, retained) = hosted_instance
-                            .invoke_scoped_registered_retained(scope, &registration, invoke)
-                            .await;
-                        hosted = Some(Box::new(RetainedHostedInstance {
-                            hosted: retained,
-                            invocation: task_invocation.clone(),
-                        }) as Box<dyn RetainedEntityStore>);
-                        result
-                    }
-                    Err(error) => Err(error),
-                }
+                let (result, retained) = run.run(scope, &registration, abort.clone()).await;
+                hosted = retained;
+                result
             };
             let result = finalize(result).await;
+            abort_relay.0.abort();
             metrics.finish(&result);
             debug!(succeeded = result.is_ok(), "Entity invocation finished");
             EntityInvocationCompletion {
@@ -446,13 +685,13 @@ where
         }
         .instrument(span),
     ));
-    let abort = task.abort_handle();
-    if let Err(error) = slot.attach_abort(&invocation_id, abort.clone()) {
-        abort.abort();
+    let task_abort = task.abort_handle();
+    if let Err(error) = slot.attach_abort(&invocation_id, body_abort) {
+        task_abort.abort();
         return Err(error);
     }
     if start_tx.send(()).is_err() {
-        abort.abort();
+        task_abort.abort();
         return Err(WorkerExecutorError::runtime(
             "Entity invocation was fenced before its body started",
         ));

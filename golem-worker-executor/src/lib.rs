@@ -20,6 +20,7 @@ pub mod grpc;
 pub mod identity;
 pub mod metrics;
 pub mod model;
+pub mod native_tool;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;

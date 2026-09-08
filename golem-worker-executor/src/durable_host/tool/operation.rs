@@ -1933,6 +1933,7 @@ mod tests {
                         parameters: golem_common::model::json::NormalizedJsonValue::new(
                             serde_json::json!({}),
                         ),
+                        config_keys_readable: Default::default(),
                         secret_keys_readable: SecretKeyScope::All,
                         secret_keys_revealable: SecretKeyScope::All,
                         filesystem_access: match filesystem {

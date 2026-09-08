@@ -121,6 +121,9 @@ declare_structs! {
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
         pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
         pub published_tools: Vec<ToolName>,
+        /// Registry-owned ambient tool catalog inputs. These are read-only deployment inputs;
+        /// applications neither declare nor receive grants for them.
+        pub ambient_tools: Vec<DeploymentPlanAmbientToolEntry>,
     }
 
     /// Summary of all entities tracked by the deployment
@@ -159,4 +162,19 @@ declare_structs! {
         pub name: ToolName,
         pub hash: Hash,
     }
+
+    pub struct DeploymentPlanAmbientToolEntry {
+        pub release_id: crate::model::tool_release::ToolReleaseId,
+        pub name: ToolName,
+        pub version: String,
+        pub source_digest: Hash,
+        pub owner_account_id: crate::model::account::AccountId,
+        pub owner_account_email: crate::model::account::AccountEmail,
+        pub metadata_version: String,
+        pub metadata_digest: Hash,
+        pub definition: crate::schema::tool::Tool,
+        pub provision: crate::model::tool::ToolProvisionConfig,
+        pub environment_binding: crate::model::tool::ToolBindingInput,
+    }
+
 }

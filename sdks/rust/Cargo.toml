@@ -2,8 +2,10 @@
 resolver = "2"
 
 members = [
+    "golem-native-tool",
     "golem-rust-macro",
     "golem-rust",
+    "golem-tool-metadata",
 ]
 
 [profile.release]
