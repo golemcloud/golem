@@ -5333,7 +5333,25 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        let append_live = if self.is_live() {
+            true
+        } else if self
+            .state
+            .replay_state
+            .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::FinishSpan { .. }))
+            .await?
+            .is_some()
+        {
+            false
+        } else if self.state.replay_state.is_live() {
+            self.switch_to_live().await?;
+            true
+        } else {
+            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
+            false
+        };
+
+        if append_live {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::finish_span(
@@ -5341,8 +5359,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     span_id.clone(),
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
 
         if &self.state.current_span_id == span_id {

@@ -2759,6 +2759,31 @@ impl ReplayState {
         .await
     }
 
+    pub async fn try_get_oplog_entry_owned(
+        &self,
+        condition: impl FnMut(&OplogEntry) -> bool + Send + 'static,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            let mut condition = condition;
+            loop {
+                let progress = state.cursor.progress.notified();
+                tokio::pin!(progress);
+                progress.as_mut().enable();
+                let (entry, blocked_on_completion_delivery) = state
+                    .with_tx(async |tx| {
+                        let entry = tx.try_get_oplog_entry(&mut condition).await?;
+                        Ok((entry, tx.blocked_on_completion_delivery))
+                    })
+                    .await?;
+                if entry.is_some() || !blocked_on_completion_delivery {
+                    return Ok(entry);
+                }
+                progress.await;
+            }
+        })
+        .await
+    }
+
     /// Returns true if the given log entry has unmatched persisted occurrences since the last
     /// non-hint oplog entry.
     pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {

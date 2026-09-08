@@ -440,7 +440,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
     }
 }
 
-async fn publish_incomplete_replay_tail_access<T, D, Ctx>(
+pub(in crate::durable_host) async fn publish_incomplete_replay_tail_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<FinishReplayToLive, WorkerExecutorError>

@@ -1538,44 +1538,56 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut handle;
         let decision;
 
-        if begun.is_live() {
-            decision = begun
-                .agent_auth_ctx()
-                .authorize_permission(&target)
-                .map_err(|error| SerializableRpcError::Denied {
-                    details: error.to_string(),
-                });
-            handle = begun
-                .start_live(
-                    self,
-                    HostRequestGolemRpcActivate {
-                        remote_agent_id: remote_agent_id.agent_id(),
-                        method_name: method_name.to_string(),
-                        decision: decision.clone(),
-                    },
-                )
-                .await?;
+        let begun = if begun.is_live() {
+            BegunCallReplayOutcome::ContinueLive(begun)
         } else {
-            handle = begun.start_replay(self).await?;
-            match handle.replay(self).await? {
-                CallReplayOutcome::Replayed(response) => {
-                    return match response.result {
-                        Ok(target_fingerprint) => {
-                            set_rpc_target_replay_pending(self, rpc_resource, target_fingerprint)?;
-                            Ok(Ok(()))
-                        }
-                        Err(error) => Ok(Err(OutboundRpcDenial {
-                            error: InternalRpcError::from(error).into(),
-                            activation_decision: Some(begin_index),
-                        })),
-                    };
-                }
-                CallReplayOutcome::Incomplete(live) => {
-                    let recorded = self
-                        .load_recorded_rpc_activation_request(live.start_index())
-                        .await?;
-                    decision = recorded.decision;
-                    handle = live;
+            begun.start_replay_or_continue_live(self).await?
+        };
+        match begun {
+            BegunCallReplayOutcome::ContinueLive(begun) => {
+                decision = begun
+                    .agent_auth_ctx()
+                    .authorize_permission(&target)
+                    .map_err(|error| SerializableRpcError::Denied {
+                        details: error.to_string(),
+                    });
+                handle = begun
+                    .start_live(
+                        self,
+                        HostRequestGolemRpcActivate {
+                            remote_agent_id: remote_agent_id.agent_id(),
+                            method_name: method_name.to_string(),
+                            decision: decision.clone(),
+                        },
+                    )
+                    .await?;
+            }
+            BegunCallReplayOutcome::Claimed(replayed) => {
+                handle = replayed;
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => {
+                        return match response.result {
+                            Ok(target_fingerprint) => {
+                                set_rpc_target_replay_pending(
+                                    self,
+                                    rpc_resource,
+                                    target_fingerprint,
+                                )?;
+                                Ok(Ok(()))
+                            }
+                            Err(error) => Ok(Err(OutboundRpcDenial {
+                                error: InternalRpcError::from(error).into(),
+                                activation_decision: Some(begin_index),
+                            })),
+                        };
+                    }
+                    CallReplayOutcome::Incomplete(live) => {
+                        let recorded = self
+                            .load_recorded_rpc_activation_request(live.start_index())
+                            .await?;
+                        decision = recorded.decision;
+                        handle = live;
+                    }
                 }
             }
         }
@@ -2754,12 +2766,28 @@ async fn finish_span_access<T, Ctx: WorkerCtx>(
         )
     });
 
-    if is_live {
+    let append_live = if is_live {
+        true
+    } else if replay_state
+        .try_get_oplog_entry_owned(|entry| matches!(entry, OplogEntry::FinishSpan { .. }))
+        .await?
+        .is_some()
+    {
+        false
+    } else if replay_state.is_live() {
+        super::concurrent::publish_incomplete_replay_tail_access(accessor, accessor.getter())
+            .await?
+            .require_live()?;
+        true
+    } else {
+        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
+        false
+    };
+
+    if append_live {
         worker
             .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
             .await;
-    } else if !is_live {
-        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
     }
 
     accessor.with(|mut access| {
