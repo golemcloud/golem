@@ -38,7 +38,7 @@ use crate::services::{
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
-use crate::worker::{Worker, WorkerUpdateMode};
+use crate::worker::{RelinquishReason, Worker, WorkerUpdateMode};
 use crate::workerctx::WorkerCtx;
 use futures::Stream;
 use futures::StreamExt;
@@ -1028,24 +1028,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return Ok(());
         }
 
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err()
-                && let Some(mut await_interrupted) = worker_details
-                    .set_interrupting(InterruptKind::Restart)
-                    .await
-            {
-                // A closed channel means the interrupt already ran its course,
-                // which is all this waits for.
-                let _ = await_interrupted.recv().await;
-            }
-        }
+        // Given up, not restarted: a restart in place would reopen each agent's oplog with the
+        // epoch this executor no longer holds. They are dropped from here and recovered by the
+        // shards' new owners.
+        let shard_service = self.shard_service();
+        self.active_agents()
+            .relinquish_matching(RelinquishReason::ShardRevoked, |agent_id| {
+                shard_service.check_worker(agent_id).is_err()
+            })
+            .await;
 
         Ok(())
     }
 
     /// Full replace: the request carries this executor's complete shard set
     /// with epochs and the cluster's shard count. Anything absent from the
-    /// set is dropped, and any agent whose shard went away is restarted.
+    /// set is dropped, and any agent whose shard went away is given up.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
@@ -1110,19 +1108,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     where
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
-        // Pure set membership on purpose: a lapsed lease must not restart every
-        // running agent: a lapsed lease refuses new work and leaves running work alone.
-        for (agent_id, worker_details) in this.active_agents().snapshot().await {
-            if this.shard_service().check_worker(&agent_id).is_err()
-                && let Some(mut await_interrupted) = worker_details
-                    .set_interrupting(InterruptKind::Restart)
-                    .await
-            {
-                // A closed channel means the interrupt already ran its course,
-                // which is all this waits for.
-                let _ = await_interrupted.recv().await;
-            }
-        }
+        // Pure set membership on purpose: a lapsed lease must not give up every running agent -
+        // a lapsed lease refuses new work and leaves running work alone.
+        //
+        // Given up rather than restarted: a narrowing delivery means these shards have another
+        // owner now, and a restart in place would reopen their oplogs at the stale epoch.
+        let shard_service = this.shard_service();
+        this.active_agents()
+            .relinquish_matching(RelinquishReason::ShardNotAssigned, |agent_id| {
+                shard_service.check_worker(agent_id).is_err()
+            })
+            .await;
 
         if !this.shard_service().is_ready() {
             tracing::info!(

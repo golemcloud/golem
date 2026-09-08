@@ -2361,6 +2361,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
+            // Intercepted before the arm below, which would flatten it into an
+            // `AgentError::InternalError` and append an `Error` entry to the very oplog that
+            // just refused the write.
+            Err(error @ WorkerExecutorError::OplogFenced { .. }) => {
+                let decision = self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Interrupt(InterruptKind::ShardLost),
+                    )
+                    .await;
+                let _ = self
+                    .parent
+                    .fail_durable_streaming_session(idempotency_key, error.to_string())
+                    .await;
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+            }
             Err(error) => {
                 self.store
                     .data_mut()

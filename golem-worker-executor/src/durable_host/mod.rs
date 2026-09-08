@@ -4772,6 +4772,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
+        // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and
+        // a relinquished agent's oplog belongs to another executor now. Nothing further is
+        // written for it - not the drain, not an `Error` entry, not a status change.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::ShardLost)) {
+            self.public_state
+                .worker()
+                .mark_relinquished(crate::worker::RelinquishReason::Fenced(None));
+            return RetryDecision::None;
+        }
+
         if self.state.is_live()
             && !self.state.snapshotting_mode
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
