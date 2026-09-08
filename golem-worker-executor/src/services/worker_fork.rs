@@ -991,6 +991,7 @@ mod tests {
                 pinned_card_ids: Vec::new(),
                 scope_card_id: None,
             }),
+            shard_epoch: None,
         };
 
         match rewrite_forked_oplog_entry(entry, &source, &target) {

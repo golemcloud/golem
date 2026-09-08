@@ -2806,6 +2806,7 @@ mod test {
                     trace_states: vec![],
                     invocation_context: vec![],
                     wallet_pin: None,
+                    shard_epoch: None,
                 },
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);
