@@ -70,7 +70,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Destination, StreamProducer, StreamResult};
@@ -2951,15 +2951,15 @@ impl DurableSessionStreams {
                                 replayed = outcome.replayed,
                                 "Durable stream output items committed"
                             );
-                            let nested_handles = self
-                                .producer
-                                .nested_handles(handle.stream_id, event.offset)
-                                .await
-                                .map_err(|error| error.to_string())?;
-                            if nested_handles.len() != nested_outputs.len() {
-                                return Err("nested output stream mapping count does not match durable item metadata".to_string());
-                            }
                             if !nested_outputs.is_empty() {
+                                let nested_handles = self
+                                    .producer
+                                    .nested_handles(handle.stream_id, event.offset)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                if nested_handles.len() != nested_outputs.len() {
+                                    return Err("nested output stream mapping count does not match durable item metadata".to_string());
+                                }
                                 let _session_guard = self.session_lock.lock().await;
                                 for (output, nested_handle) in
                                     nested_outputs.into_iter().zip(nested_handles)
@@ -3734,12 +3734,12 @@ impl DurableSessionStreams {
         role: SessionStreamRoleV1,
     ) -> Result<DurableInputEndpoint, String> {
         let (journal, after, _, terminal) = self.consumer_history(handle.stream_id).await?;
-        let reader = if terminal {
+        let mut reader = if terminal {
             None
         } else {
             Some(self.stream_reader(handle.clone(), after, role).await?)
         };
-        record_source_journal_lag(reader.as_ref(), after).await;
+        record_source_journal_lag(reader.as_mut(), after, true).await;
         Ok(DurableInputEndpoint {
             reader,
             journal,
@@ -3770,6 +3770,7 @@ impl DurableSessionStreams {
                 ),
                 source: self.producer.clone(),
                 handle: Box::new(handle),
+                next_journal_lag_sample: Instant::now(),
             }
         } else {
             let mapping = self
@@ -3804,6 +3805,7 @@ impl DurableSessionStreams {
                 after,
                 buffered: VecDeque::new(),
                 terminal: false,
+                next_journal_lag_sample: Instant::now(),
             }))
         };
         Ok(reader)
@@ -4136,11 +4138,22 @@ enum DurableStreamReader {
         reader: Box<DurableCatchUpReader>,
         source: Arc<DurableStreamProducer>,
         handle: Box<DurableStreamHandleV1>,
+        next_journal_lag_sample: Instant,
     },
     Attached(Box<AttachedDurableCatchUpReader>),
 }
 
 impl DurableStreamReader {
+    fn journal_lag_sample_deadline(&mut self) -> &mut Instant {
+        match self {
+            Self::Owned {
+                next_journal_lag_sample,
+                ..
+            } => next_journal_lag_sample,
+            Self::Attached(reader) => &mut reader.next_journal_lag_sample,
+        }
+    }
+
     async fn journal_lag_events(
         &self,
         after: Option<golem_common::model::durable_stream::StreamOffsetV1>,
@@ -4167,20 +4180,29 @@ impl DurableStreamReader {
 }
 
 async fn record_source_journal_lag(
-    reader: Option<&DurableStreamReader>,
+    reader: Option<&mut DurableStreamReader>,
     after: Option<golem_common::model::durable_stream::StreamOffsetV1>,
+    force: bool,
 ) {
     let lag = match reader {
-        Some(reader) => match reader.journal_lag_events(after).await {
-            Ok(lag) => lag,
-            Err(error) => {
-                tracing::debug!(
-                    error = %error,
-                    "Failed to sample durable consumer journal lag"
-                );
+        Some(reader) => {
+            if !force && Instant::now() < *reader.journal_lag_sample_deadline() {
                 return;
             }
-        },
+            let result = reader.journal_lag_events(after).await;
+            // Exact telemetry can require remote metadata IO; bound attempts, including failures.
+            *reader.journal_lag_sample_deadline() = Instant::now() + Duration::from_millis(100);
+            match result {
+                Ok(lag) => lag,
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "Failed to sample durable consumer journal lag"
+                    );
+                    return;
+                }
+            }
+        }
         None => 0,
     };
     crate::metrics::durable_stream::record_journal_lag(lag);
@@ -4194,6 +4216,7 @@ struct AttachedDurableCatchUpReader {
     after: Option<golem_common::model::durable_stream::StreamOffsetV1>,
     buffered: VecDeque<CommittedProducerStreamEventV1>,
     terminal: bool,
+    next_journal_lag_sample: Instant,
 }
 
 impl AttachedDurableCatchUpReader {
@@ -4593,7 +4616,12 @@ impl DurableInputProducer {
                         .back()
                         .map(|event| event.offset)
                         .unwrap_or(event.offset);
-                    record_source_journal_lag(reader.as_ref(), Some(committed_through)).await;
+                    record_source_journal_lag(
+                        reader.as_mut(),
+                        Some(committed_through),
+                        event.is_terminal(),
+                    )
+                    .await;
                     tracing::debug!(
                         stream_id = %stream_id,
                         source_offset = %event.offset,
@@ -5201,6 +5229,70 @@ mod tests {
         commits: Arc<AtomicU64>,
     }
 
+    struct LagRecordingSource {
+        producer: Arc<DurableStreamProducer>,
+        calls: Mutex<Vec<(Option<StreamOffsetV1>, Result<usize, ()>)>>,
+        failures_remaining: AtomicU64,
+    }
+
+    impl LagRecordingSource {
+        fn new(producer: Arc<DurableStreamProducer>, failures: u64) -> Arc<Self> {
+            Arc::new(Self {
+                producer,
+                calls: Mutex::new(Vec::new()),
+                failures_remaining: AtomicU64::new(failures),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AttachedStreamSegmentSource for LagRecordingSource {
+        async fn journal_lag_events(
+            &self,
+            handle: &DurableStreamHandleV1,
+            after: Option<StreamOffsetV1>,
+        ) -> Result<usize, DurableStreamProducerError> {
+            if self
+                .failures_remaining
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                self.calls.lock().await.push((after, Err(())));
+                return Err(DurableStreamProducerError::InvalidHandle);
+            }
+            let lag = self.producer.journal_lag_events(handle, after).await?;
+            self.calls.lock().await.push((after, Ok(lag)));
+            Ok(lag)
+        }
+
+        async fn read_attached_segment(
+            &self,
+            attachment: &StreamAttachmentKeyV1,
+            handle: &DurableStreamHandleV1,
+            now_millis: u64,
+            after: Option<StreamOffsetV1>,
+            through: Option<StreamOffsetV1>,
+        ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
+            self.producer
+                .read_attached_segment(attachment, handle, now_millis, after, through)
+                .await
+        }
+
+        async fn wait_for_attached_segment(
+            &self,
+            attachment: &StreamAttachmentKeyV1,
+            handle: &DurableStreamHandleV1,
+            now_millis: u64,
+            after: Option<StreamOffsetV1>,
+        ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
+            self.producer
+                .wait_for_attached_segment(attachment, handle, now_millis, after)
+                .await
+        }
+    }
+
     struct AttachedProducerRpc {
         producer: Arc<DurableStreamProducer>,
     }
@@ -5638,6 +5730,7 @@ mod tests {
             reader: Box::new(producer.catch_up(handle.clone(), None).await.unwrap()),
             source: producer.clone(),
             handle: Box::new(handle.clone()),
+            next_journal_lag_sample: Instant::now(),
         };
 
         producer
@@ -5738,6 +5831,7 @@ mod tests {
             after: None,
             buffered: VecDeque::new(),
             terminal: false,
+            next_journal_lag_sample: Instant::now(),
         }));
 
         assert_eq!(reader.journal_lag_events(None).await.unwrap(), 3);
@@ -5746,6 +5840,66 @@ mod tests {
             reader.journal_lag_events(Some(first.offset)).await.unwrap(),
             2
         );
+    }
+
+    async fn use_attached_lag_spy(
+        consumer: &mut DurableInputProducer,
+        producer: Arc<DurableStreamProducer>,
+        identity: &TestIdentity,
+        handle: &DurableStreamHandleV1,
+        source: Arc<LagRecordingSource>,
+    ) {
+        let attachment = StreamAttachmentKeyV1 {
+            attachment_id: AttachmentId::primary(
+                identity.environment_id,
+                &identity.agent_id,
+                &identity.invocation.idempotency_key,
+            )
+            .unwrap(),
+            stream_id: handle.stream_id,
+            epoch: 1,
+            session_key: identity.invocation.clone(),
+            producer_environment_id: identity.environment_id,
+            producer: identity.agent_id.clone(),
+            expected_producer_fingerprint: identity.fingerprint,
+            consumer_environment_id: identity.environment_id,
+            consumer: identity.agent_id.clone(),
+            expected_consumer_fingerprint: identity.fingerprint,
+            consumer_invocation: identity.invocation.clone(),
+        };
+        let now_millis = Timestamp::now_utc().to_millis();
+        producer
+            .prepare_attachment(attachment.clone(), now_millis)
+            .await
+            .unwrap();
+        producer
+            .activate_attachment(attachment.clone(), now_millis)
+            .await
+            .unwrap();
+        consumer.reader = Some(DurableStreamReader::Attached(Box::new(
+            AttachedDurableCatchUpReader {
+                source,
+                attachment,
+                handle: handle.clone(),
+                consumer_producer: None,
+                after: None,
+                buffered: VecDeque::new(),
+                terminal: false,
+                next_journal_lag_sample: Instant::now(),
+            },
+        )));
+    }
+
+    async fn receive_for_test(
+        consumer: &mut DurableInputProducer,
+    ) -> (CommittedProducerStreamEventV1, bool, usize) {
+        consumer.begin_receive();
+        let (reader, event, _, journaled, queued) = consumer.pending.take().unwrap().await.unwrap();
+        consumer.reader = reader;
+        let queued_len = queued.len();
+        consumer.journal.extend(queued);
+        consumer.consumer_read_ordinal += 1;
+        (event.unwrap(), journaled, queued_len)
     }
 
     #[test]
@@ -5821,6 +5975,226 @@ mod tests {
         assert!(journaled);
         assert!(event.is_some());
         assert_eq!(commits.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    async fn consumer_journal_lag_sampling_is_deadline_gated_and_failure_is_throttled() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::AgentHostedInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        for value in 0..8 {
+            producer
+                .write_items(
+                    handle.stream_id,
+                    u64::from(value),
+                    StreamItemsPayloadV1::Values(vec![
+                        ProtoSchemaValue::try_from(SchemaValue::U32(value))
+                            .unwrap()
+                            .encode_to_vec(),
+                    ]),
+                )
+                .await
+                .unwrap();
+        }
+        let commits = Arc::new(AtomicU64::new(0));
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation.clone(),
+            [(1, handle.clone(), SessionStreamRoleV1::Input)],
+        )
+        .with_consumer_journal(Arc::new(RecordingConsumerJournal {
+            oplog,
+            commits: commits.clone(),
+        }));
+        let mut consumer = DurableInputProducer::new(
+            streams
+                .endpoint(handle.clone(), 0, SessionStreamRoleV1::Input)
+                .await
+                .unwrap(),
+        );
+        let source = LagRecordingSource::new(producer.clone(), 0);
+        use_attached_lag_spy(&mut consumer, producer, &identity, &handle, source.clone()).await;
+        *consumer
+            .reader
+            .as_mut()
+            .unwrap()
+            .journal_lag_sample_deadline() = Instant::now() + Duration::from_secs(60);
+
+        for expected_commits in 1..=5 {
+            let (_, journaled, _) = receive_for_test(&mut consumer).await;
+            assert!(!journaled);
+            assert_eq!(commits.load(Ordering::Relaxed), expected_commits);
+        }
+        assert!(source.calls.lock().await.is_empty());
+
+        *consumer
+            .reader
+            .as_mut()
+            .unwrap()
+            .journal_lag_sample_deadline() = Instant::now() - Duration::from_millis(1);
+        let (sampled, journaled, _) = receive_for_test(&mut consumer).await;
+        assert!(!journaled);
+        assert_eq!(commits.load(Ordering::Relaxed), 6);
+        assert_eq!(
+            source.calls.lock().await.as_slice(),
+            &[(Some(sampled.offset), Ok(2))]
+        );
+
+        source.failures_remaining.store(1, Ordering::Relaxed);
+        let before_attempt = Instant::now();
+        *consumer
+            .reader
+            .as_mut()
+            .unwrap()
+            .journal_lag_sample_deadline() = Instant::now() - Duration::from_millis(1);
+        let (_, journaled, _) = receive_for_test(&mut consumer).await;
+        assert!(!journaled);
+        assert_eq!(commits.load(Ordering::Relaxed), 7);
+        assert_eq!(source.calls.lock().await.len(), 2);
+        assert!(source.calls.lock().await[1].1.is_err());
+        assert!(
+            before_attempt
+                < *consumer
+                    .reader
+                    .as_mut()
+                    .unwrap()
+                    .journal_lag_sample_deadline()
+        );
+        *consumer
+            .reader
+            .as_mut()
+            .unwrap()
+            .journal_lag_sample_deadline() = Instant::now() + Duration::from_secs(60);
+        let (_, journaled, _) = receive_for_test(&mut consumer).await;
+        assert!(!journaled);
+        assert_eq!(commits.load(Ordering::Relaxed), 8);
+        assert_eq!(source.calls.lock().await.len(), 2);
+    }
+
+    #[test]
+    async fn packed_consumer_samples_after_final_queued_offset_and_terminal_forces_sampling() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::AgentHostedInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let bytes = (0..4096).map(|value| value as u8).collect::<Vec<_>>();
+        producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(bytes.clone()),
+            )
+            .await
+            .unwrap();
+        producer
+            .end(handle.stream_id, bytes.len() as u64, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+
+        let commits = Arc::new(AtomicU64::new(0));
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation.clone(),
+            [(1, handle.clone(), SessionStreamRoleV1::Input)],
+        )
+        .with_consumer_journal(Arc::new(RecordingConsumerJournal {
+            oplog,
+            commits: commits.clone(),
+        }));
+        let mut consumer = DurableInputProducer::new(
+            streams
+                .endpoint(handle.clone(), 0, SessionStreamRoleV1::Input)
+                .await
+                .unwrap(),
+        );
+        let source = LagRecordingSource::new(producer.clone(), 0);
+        use_attached_lag_spy(&mut consumer, producer, &identity, &handle, source.clone()).await;
+        *consumer
+            .reader
+            .as_mut()
+            .unwrap()
+            .journal_lag_sample_deadline() = Instant::now() - Duration::from_millis(1);
+
+        let (first, journaled, queued) = receive_for_test(&mut consumer).await;
+        assert!(!journaled);
+        assert_eq!(queued, bytes.len() - 1);
+        assert_eq!(commits.load(Ordering::Relaxed), 1);
+        {
+            let calls = source.calls.lock().await;
+            assert_eq!(calls.len(), 1);
+            let (sampled_after, lag) = calls[0];
+            assert_eq!(
+                sampled_after,
+                Some(StreamOffsetV1::new(
+                    first.offset.producer_oplog_index(),
+                    bytes.len() as u32 - 1
+                ))
+            );
+            assert_eq!(lag, Ok(1));
+        }
+
+        for _ in 1..bytes.len() {
+            let (_, journaled, _) = receive_for_test(&mut consumer).await;
+            assert!(journaled);
+        }
+        assert_eq!(commits.load(Ordering::Relaxed), 1);
+        assert_eq!(source.calls.lock().await.len(), 1);
+
+        *consumer
+            .reader
+            .as_mut()
+            .unwrap()
+            .journal_lag_sample_deadline() = Instant::now() + Duration::from_secs(60);
+        let (terminal, journaled, _) = receive_for_test(&mut consumer).await;
+        assert!(terminal.is_terminal());
+        assert!(!journaled);
+        assert_eq!(commits.load(Ordering::Relaxed), 2);
+        let calls = source.calls.lock().await;
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1], (Some(terminal.offset), Ok(0)));
     }
 
     #[test]
