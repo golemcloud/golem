@@ -6726,6 +6726,7 @@ pub(crate) enum UnloadReason {
     OutOfMemory,
     Panic,
     Restart,
+    ShardLost,
     Suspend,
 }
 
@@ -6735,6 +6736,7 @@ impl UnloadReason {
             InterruptKind::Restart | InterruptKind::Jump => Self::Restart,
             InterruptKind::Suspend(_) => Self::Suspend,
             InterruptKind::Interrupt(_) => Self::Interrupt,
+            InterruptKind::ShardLost => Self::ShardLost,
         }
     }
 }
@@ -6780,7 +6782,7 @@ impl PendingWorkerInterrupt {
         } else {
             match self.kind {
                 InterruptKind::Restart | InterruptKind::Jump => RetryDecision::Immediate,
-                InterruptKind::Interrupt(_) => RetryDecision::None,
+                InterruptKind::Interrupt(_) | InterruptKind::ShardLost => RetryDecision::None,
                 InterruptKind::Suspend(timestamp) => RetryDecision::TryStop(timestamp),
             }
         }
@@ -8779,6 +8781,16 @@ mod tests {
             decision(InterruptKind::Suspend(suspend_timestamp), false),
             RetryDecision::TryStop(suspend_timestamp)
         );
+        // A lost shard is terminal here: a retry in place would reopen the oplog with the same
+        // stale epoch, and the agent belongs to the shard's new owner now.
+        assert_eq!(
+            decision(InterruptKind::ShardLost, false),
+            RetryDecision::None
+        );
+        assert_eq!(
+            UnloadReason::from_interrupt(InterruptKind::ShardLost),
+            UnloadReason::ShardLost
+        );
 
         // Permit reacquisition overrides the kind-based decision for every kind.
         for kind in [
@@ -8786,6 +8798,7 @@ mod tests {
             InterruptKind::Jump,
             InterruptKind::Interrupt(Timestamp::now_utc()),
             InterruptKind::Suspend(Timestamp::now_utc()),
+            InterruptKind::ShardLost,
         ] {
             assert_eq!(
                 decision(kind, true),
@@ -8810,6 +8823,7 @@ mod tests {
         assert!(!terminal(InterruptKind::Jump));
         assert!(terminal(InterruptKind::Interrupt(Timestamp::now_utc())));
         assert!(terminal(InterruptKind::Suspend(Timestamp::now_utc())));
+        assert!(terminal(InterruptKind::ShardLost));
     }
 
     #[test]
