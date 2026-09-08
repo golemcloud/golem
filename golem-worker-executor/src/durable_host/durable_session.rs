@@ -5042,6 +5042,15 @@ mod tests {
         handle: &DurableStreamHandleV1,
         role: SessionStreamRoleV1,
     ) -> OplogIndex {
+        let stream_mappings = if role == SessionStreamRoleV1::Input {
+            vec![StreamSessionMappingRecordV1 {
+                transport_stream_id: 7,
+                handle: handle.clone(),
+                role,
+            }]
+        } else {
+            Vec::new()
+        };
         producer
             .append_session_record(StreamSessionRecordV1::Prepared(
                 StreamSessionPreparedRecordV1 {
@@ -5058,18 +5067,17 @@ mod tests {
                             target_component_revision: ComponentRevision::INITIAL,
                             method_name: "consume".to_string(),
                             invocation_value: vec![1],
-                            stream_handles: vec![handle.clone()],
+                            stream_handles: stream_mappings
+                                .iter()
+                                .map(|mapping| mapping.handle.clone())
+                                .collect(),
                             execution_config: vec![2],
                             effective_identity: vec![3],
                         },
                         effective_identity: vec![3],
                         live_join_buffer_events: 8,
                     },
-                    stream_mappings: vec![StreamSessionMappingRecordV1 {
-                        transport_stream_id: 7,
-                        handle: handle.clone(),
-                        role,
-                    }],
+                    stream_mappings,
                 },
             ))
             .await
