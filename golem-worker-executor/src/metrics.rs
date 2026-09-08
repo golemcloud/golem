@@ -1136,7 +1136,7 @@ pub mod oplog {
         .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
-            "Number of oplog storage operation retries due to transient errors",
+            "Number of oplog storage operation retries due to transient errors or indeterminate writes",
             &["op"]
         )
         .unwrap();

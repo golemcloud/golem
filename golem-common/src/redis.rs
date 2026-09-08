@@ -501,6 +501,7 @@ impl RedisLabelledApi<'_> {
         cap: C,
         id: I,
         fields: F,
+        options: Option<&Options>,
     ) -> RedisResult<R>
     where
         R: FromValue,
@@ -513,10 +514,12 @@ impl RedisLabelledApi<'_> {
     {
         self.ensure_connected().await?;
         let start = Instant::now();
+        let options = options.cloned().unwrap_or_default();
         self.record(
             start,
             "XADD",
             self.pool
+                .with_options(&options)
                 .xadd(self.prefixed_key(key), nomkstream, cap, id, fields)
                 .await,
         )
@@ -528,6 +531,7 @@ impl RedisLabelledApi<'_> {
         nomkstream: bool,
         cap: C,
         id_field_pairs: Vec<(I, F)>,
+        options: Option<&Options>,
     ) -> RedisResult<()>
     where
         K: AsRef<str>,
@@ -539,7 +543,8 @@ impl RedisLabelledApi<'_> {
         C::Error: Into<RedisError> + Send,
     {
         self.ensure_connected().await?;
-        let pipeline = self.pool.next().pipeline();
+        let options = options.cloned().unwrap_or_default();
+        let pipeline = self.pool.next().pipeline().with_options(&options);
         let count = id_field_pairs.len();
         let key = self.prefixed_key(key);
         for (id, fields) in id_field_pairs {
@@ -957,5 +962,132 @@ impl RedisTransaction {
         K: AsRef<str>,
     {
         self.trx.scard(self.prefixed_key(key)).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use test_r::test;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
+
+    async fn read_resp_command(reader: &mut BufReader<TcpStream>) -> Option<Vec<Vec<u8>>> {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await.ok()? == 0 {
+            return None;
+        }
+        let count = line.strip_prefix('*')?.trim_end().parse::<usize>().ok()?;
+        let mut parts = Vec::with_capacity(count);
+        for _ in 0..count {
+            line.clear();
+            reader.read_line(&mut line).await.ok()?;
+            let len = line.strip_prefix('$')?.trim_end().parse::<usize>().ok()?;
+            let mut part = vec![0; len];
+            reader.read_exact(&mut part).await.ok()?;
+            let mut crlf = [0; 2];
+            reader.read_exact(&mut crlf).await.ok()?;
+            parts.push(part);
+        }
+        Some(parts)
+    }
+
+    async fn serve_connection(stream: TcpStream, xadds: Arc<AtomicUsize>, disconnect_after: usize) {
+        let mut reader = BufReader::new(stream);
+        while let Some(command) = read_resp_command(&mut reader).await {
+            if command
+                .first()
+                .is_some_and(|name| name.eq_ignore_ascii_case(b"XADD"))
+            {
+                let count = xadds.fetch_add(1, Ordering::SeqCst) + 1;
+                if count >= disconnect_after {
+                    return;
+                }
+                reader.get_mut().write_all(b"+1-0\r\n").await.unwrap();
+            } else {
+                reader.get_mut().write_all(b"+OK\r\n").await.unwrap();
+            }
+        }
+    }
+
+    async fn fake_redis(
+        disconnect_after: usize,
+    ) -> (FredRedisPool, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let xadds = Arc::new(AtomicUsize::new(0));
+        let server_xadds = xadds.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let xadds = server_xadds.clone();
+                tokio::spawn(serve_connection(stream, xadds, disconnect_after));
+            }
+        });
+        let config = Config::from_url(&format!("redis://{address}")).unwrap();
+        let policy = ReconnectPolicy::new_constant(20, 10);
+        let pool = FredRedisPool::new(config, None, None, Some(policy), 1).unwrap();
+        (pool, xadds, task)
+    }
+
+    fn no_replay_options() -> Options {
+        Options {
+            max_attempts: Some(1),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    async fn xadd_options_prevent_replay_after_committed_disconnect() {
+        let (pool, xadds, server) = fake_redis(1).await;
+        let redis = RedisPool::new(pool, String::new());
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            redis.with("test", "test").xadd::<String, _, _, _, _>(
+                "stream",
+                false,
+                None,
+                "1",
+                ("key", "value"),
+                Some(&no_replay_options()),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            result.unwrap_err().kind(),
+            fred::error::ErrorKind::IO | fred::error::ErrorKind::Canceled
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(xadds.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[test]
+    async fn xadd_pipeline_options_prevent_replay_after_committed_disconnect() {
+        let (pool, xadds, server) = fake_redis(2).await;
+        let redis = RedisPool::new(pool, String::new());
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            redis.with("test", "test").xadd_pipeline(
+                "stream",
+                false,
+                None,
+                vec![("1", ("key", "one")), ("2", ("key", "two"))],
+                Some(&no_replay_options()),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            result.unwrap_err().kind(),
+            fred::error::ErrorKind::IO | fred::error::ErrorKind::Canceled
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(xadds.load(Ordering::SeqCst), 2);
+        server.abort();
     }
 }
