@@ -1417,9 +1417,10 @@ command = "cargo"
 args = ["watch", "--watch", "cli/golem-cli/src/tui", "--watch", "cli/golem-cli/examples/tui-preview.rs", "--", "cargo", "run", "-p", "golem-cli", "--features", "tui-preview", "--example", "tui-preview", "--", "serve"]
 
 [tasks.tui-preview-terminal]
-description = "Open the deterministic TUI story gallery in the terminal"
+description = "Watch and open the deterministic TUI design lab in the terminal"
+install_crate = "cargo-watch"
 command = "cargo"
-args = ["run", "-p", "golem-cli", "--features", "tui-preview", "--example", "tui-preview", "--", "terminal"]
+args = ["watch", "--watch", "cli/golem-cli/src/tui", "--watch", "cli/golem-cli/examples/tui-preview.rs", "--", "cargo", "run", "-p", "golem-cli", "--features", "tui-preview", "--example", "tui-preview", "--", "terminal"]
 
 [tasks.tui-preview-export]
 description = "Export a standalone real-renderer TUI gallery under target/"

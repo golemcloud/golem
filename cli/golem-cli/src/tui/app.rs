@@ -19,12 +19,12 @@ use crate::command_handler::Handlers;
 use crate::config::Config;
 use crate::context::Context;
 use crate::log::Output;
-use crate::model::app::ApplicationSourceMode;
-use crate::model::app_raw::{BuiltinServer, Server};
-use crate::model::environment::EnvironmentReference;
 use crate::model::agent::{
     AgentListMode, AgentListRequest, AgentMetadataView, AgentsMetadataResponseView,
 };
+use crate::model::app::ApplicationSourceMode;
+use crate::model::app_raw::{BuiltinServer, Server};
+use crate::model::environment::EnvironmentReference;
 use crate::tui::TuiEvent;
 use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextTaskResult};
 use crate::tui::input::encode_key_for_pty;
@@ -36,10 +36,22 @@ use crate::tui::nested_cli::{
 };
 use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
-#[cfg(feature = "tui-preview")]
-use crate::tui::visual::TuiVisualVariant;
 use crate::tui::visual::active_style;
+#[cfg(feature = "tui-preview")]
+use crate::tui::visual::{
+    ChromeTextStyle, FooterLayoutStyle, HeaderMetadataStyle, HeaderSeparatorStyle, PaneEdgeStyle,
+    PaneTitleStyle, TuiVisualVariant,
+};
 use crate::tui::visual::{TuiVisualStyle, with_style};
+#[cfg(feature = "tui-preview")]
+use crate::tui::widgets::{
+    CellPolicy, ColumnChooserState, ContentTableRow, ContextHeader, ContextPair, DecisionTableRow,
+    FieldRow, KeyHint, Notice, NoticeKind, OutputLine, OverlayFrame, PaneEnding, PaneFocus,
+    PaneHeader, PaneLayout, PaneRegion, PaneResizeDividers, PaneRole, PaneScrollbarSlot, PaneSpec,
+    PaneTable, PaneTableColumn, PaneTableState, SearchInput, SectionHeading, SelectableRow,
+    ShortcutRow, StatusKind, StatusMarker, TableDecoration, WorkspaceItem, WorkspaceSelector, fit,
+    key_span, render_scrollbar, shortcut_line,
+};
 use ansi_to_tui::IntoText;
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -3927,6 +3939,56 @@ fn render_styled(frame: &mut Frame<'_>, app: &TuiApp, visual: &TuiVisualStyle) {
     with_style(visual, || render_tree(frame, app));
 }
 
+#[cfg(feature = "tui-preview")]
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DesignLabScene {
+    ShellDefault,
+    ShellScrollable,
+    ContentDensity,
+    ContentLong,
+    ContentScrolling,
+    ContentSplit,
+    SplitFocus,
+    SplitScrollable,
+    ThreePaneScrollable,
+    ShortcutLeader,
+    OverlaySearch,
+    OverlayDecision,
+    OverlayError,
+    OverlayNested,
+    TableDecoration,
+    TableLong,
+    TableDetails,
+    TableColumns,
+}
+
+#[cfg(feature = "tui-preview")]
+impl DesignLabScene {
+    fn parse(name: &str) -> anyhow::Result<Self> {
+        match name {
+            "shell-default" => Ok(Self::ShellDefault),
+            "shell-scrollbar" => Ok(Self::ShellScrollable),
+            "content-density" => Ok(Self::ContentDensity),
+            "content-long" => Ok(Self::ContentLong),
+            "content-scrolling" => Ok(Self::ContentScrolling),
+            "content-split" => Ok(Self::ContentSplit),
+            "split-focus" => Ok(Self::SplitFocus),
+            "split-scrollbars" => Ok(Self::SplitScrollable),
+            "three-pane-scrollbars" => Ok(Self::ThreePaneScrollable),
+            "shortcut-leader" => Ok(Self::ShortcutLeader),
+            "overlay-search" => Ok(Self::OverlaySearch),
+            "overlay-decision" => Ok(Self::OverlayDecision),
+            "overlay-error" => Ok(Self::OverlayError),
+            "overlay-nested" => Ok(Self::OverlayNested),
+            "table-decoration" => Ok(Self::TableDecoration),
+            "table-long" => Ok(Self::TableLong),
+            "table-details" => Ok(Self::TableDetails),
+            "table-columns" => Ok(Self::TableColumns),
+            _ => anyhow::bail!("unknown TUI design-lab scene: {name}"),
+        }
+    }
+}
+
 fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
     let snapshot = layout::compute(LayoutInput {
         area: frame.area(),
@@ -3983,7 +4045,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
 
 #[cfg(feature = "tui-preview")]
 pub(super) fn render_preview_buffer(
-    story: &str,
+    scene: &str,
     variant: TuiVisualVariant,
     width: u16,
     height: u16,
@@ -3991,28 +4053,1855 @@ pub(super) fn render_preview_buffer(
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    let app = preview_story(story)?;
+    let scene = DesignLabScene::parse(scene)?;
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
     let visual = TuiVisualStyle::for_variant(variant);
-    terminal.draw(|frame| render_styled(frame, &app, &visual))?;
+    terminal.draw(|frame| with_style(&visual, || render_design_lab(frame, scene)))?;
     Ok(terminal.backend().buffer().clone())
 }
 
 #[cfg(all(feature = "tui-preview", test))]
 pub(super) fn render_production_preview_buffer(
-    story: &str,
     width: u16,
     height: u16,
+    styled: bool,
 ) -> anyhow::Result<ratatui::buffer::Buffer> {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    let app = preview_story(story)?;
+    let app = preview_production_app();
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
-    terminal.draw(|frame| render(frame, &app))?;
+    terminal.draw(|frame| {
+        if styled {
+            render_styled(frame, &app, &TuiVisualStyle::production());
+        } else {
+            render(frame, &app);
+        }
+    })?;
     Ok(terminal.backend().buffer().clone())
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab(frame: &mut Frame<'_>, scene: DesignLabScene) {
+    if matches!(theme().footer_layout, FooterLayoutStyle::Joined) {
+        render_design_lab_with_unified_footer(frame, scene);
+        render_design_lab_overlay_for_scene(frame, scene);
+        return;
+    }
+
+    let [header, navigation, separator, body, footer] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+
+    render_design_lab_header(frame, header);
+    render_design_lab_navigation(frame, navigation);
+    render_design_lab_separator(frame, separator, scene);
+    render_design_lab_body(frame, body, scene);
+    render_design_lab_footer(frame, footer, scene);
+
+    render_design_lab_overlay_for_scene(frame, scene);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_overlay_for_scene(frame: &mut Frame<'_>, scene: DesignLabScene) {
+    match scene {
+        DesignLabScene::OverlaySearch => render_design_lab_search(frame),
+        DesignLabScene::OverlayDecision => render_design_lab_decision(frame),
+        DesignLabScene::OverlayError => render_design_lab_error(frame),
+        DesignLabScene::OverlayNested => {
+            render_design_lab_decision(frame);
+            render_design_lab_nested_error(frame);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_with_unified_footer(frame: &mut Frame<'_>, scene: DesignLabScene) {
+    let contextual = design_lab_contextual_hints(scene);
+    let contextual_rows = ShortcutRow::pack(&contextual, frame.area().width, 2).len() as u16;
+    let footer_height = 2 + contextual_rows + u16::from(scene == DesignLabScene::ShortcutLeader);
+    let [header, separator, body, footer] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(footer_height),
+        ])
+        .areas(frame.area());
+    render_design_lab_header(frame, header);
+    render_design_lab_separator(frame, separator, scene);
+    render_design_lab_body(frame, body, scene);
+    render_design_lab_unified_footer(frame, footer, scene);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_header(frame: &mut Frame<'_>, area: Rect) {
+    if theme().footer_layout == FooterLayoutStyle::Joined {
+        ContextHeader {
+            pairs: &[
+                ContextPair {
+                    label: "app",
+                    value: "preview-app",
+                },
+                ContextPair {
+                    label: "env",
+                    value: "local",
+                },
+                ContextPair {
+                    label: "server",
+                    value: "local",
+                },
+            ],
+        }
+        .render(frame, area, &theme());
+        return;
+    }
+    let filled = theme().fill_header;
+    let row_style = if filled {
+        header_style()
+    } else if theme().shared_chrome_background {
+        footer_style()
+    } else {
+        tabs_style()
+    };
+    let label_style = if filled {
+        header_segment_label_style(0)
+    } else {
+        Style::default().fg(theme().text_muted)
+    };
+    let value_style = if filled {
+        header_segment_value_style(0)
+    } else {
+        Style::default()
+            .fg(theme().text)
+            .add_modifier(Modifier::BOLD)
+    };
+    let logo_text = match theme().chrome_text {
+        ChromeTextStyle::Filled | ChromeTextStyle::PlainPadded => " GOLEM ",
+    };
+    let logo_style = match theme().chrome_text {
+        ChromeTextStyle::Filled => Style::default()
+            .fg(theme().background)
+            .bg(theme().accent)
+            .add_modifier(Modifier::BOLD),
+        ChromeTextStyle::PlainPadded => Style::default()
+            .fg(theme().accent)
+            .add_modifier(Modifier::BOLD),
+    };
+    let mut spans = vec![
+        Span::styled(
+            format!(
+                "{}{}",
+                if theme().footer_layout == FooterLayoutStyle::Joined {
+                    "┌"
+                } else {
+                    theme().rail_glyph
+                },
+                theme().header_rail_gap
+            ),
+            row_style.fg(theme().border_subtle),
+        ),
+        Span::styled(logo_text, logo_style),
+    ];
+    if theme().footer_layout == FooterLayoutStyle::Joined {
+        spans.push(Span::styled(
+            "·",
+            Style::default().fg(theme().border_subtle),
+        ));
+    }
+    let metadata_separator = match theme().header_separator {
+        HeaderSeparatorStyle::Divider => " │ ",
+        HeaderSeparatorStyle::Dot => " · ",
+    };
+    match theme().header_metadata {
+        HeaderMetadataStyle::Labels => spans.extend([
+            Span::styled(" app: ", label_style),
+            Span::styled("preview-app", value_style),
+            Span::styled("  env: ", label_style),
+            Span::styled("local", value_style),
+            Span::styled("  server: ", label_style),
+            Span::styled("local", value_style),
+        ]),
+        HeaderMetadataStyle::Dividers => {
+            push_design_lab_context_pair(
+                &mut spans,
+                "app",
+                "preview-app",
+                true,
+                label_style,
+                value_style,
+            );
+            spans.push(Span::styled(
+                metadata_separator,
+                Style::default().fg(theme().border_subtle),
+            ));
+            push_design_lab_context_pair(
+                &mut spans,
+                "env",
+                "local",
+                false,
+                label_style,
+                value_style,
+            );
+            spans.push(Span::styled(
+                metadata_separator,
+                Style::default().fg(theme().border_subtle),
+            ));
+            push_design_lab_context_pair(
+                &mut spans,
+                "server",
+                "local",
+                false,
+                label_style,
+                value_style,
+            );
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(row_style), area);
+}
+
+#[cfg(feature = "tui-preview")]
+fn push_design_lab_context_pair(
+    spans: &mut Vec<Span<'static>>,
+    label: &'static str,
+    value: &'static str,
+    first: bool,
+    delimiter_style: Style,
+    value_style: Style,
+) {
+    let label = if first {
+        format!(" {label}")
+    } else {
+        label.to_string()
+    };
+    spans.push(Span::styled(format!("{label} "), delimiter_style));
+    spans.push(Span::styled(value, value_style));
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_navigation(frame: &mut Frame<'_>, area: Rect) {
+    let line = Line::from(vec![
+        Span::styled(
+            format!("{}{}", theme().rail_glyph, theme().header_rail_gap),
+            tabs_rail_style(),
+        ),
+        shortcut_text_span("[1]".to_string()),
+        Span::styled(
+            " Overview",
+            Style::default()
+                .fg(theme().accent_hover)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ),
+        Span::raw("   "),
+        shortcut_text_span("[2]".to_string()),
+        Span::styled(" Workbench", Style::default().fg(theme().text_muted)),
+        Span::raw("   "),
+        shortcut_text_span("[3]".to_string()),
+        Span::styled(" Resources", Style::default().fg(theme().text_muted)),
+        Span::raw("  "),
+        Span::styled("● active", Style::default().fg(theme().success)),
+    ]);
+    frame.render_widget(Paragraph::new(line).style(tabs_style()), area);
+    render_design_lab_rail(frame, area, tabs_rail_style(), false);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_separator(frame: &mut Frame<'_>, area: Rect, scene: DesignLabScene) {
+    if design_lab_joined_titles() {
+        let (specs, weights) = design_lab_top_panes(scene);
+        PaneLayout::horizontal(area, &weights).render_headers(frame, &specs, &theme());
+        return;
+    }
+    let (glyph, style) = match theme().pane_edges {
+        PaneEdgeStyle::Production => (" ", separator_style()),
+        PaneEdgeStyle::Shared => ("─", surface_style().fg(theme().border_subtle)),
+    };
+    frame.render_widget(
+        Paragraph::new(glyph.repeat(area.width as usize)).style(style),
+        area,
+    );
+    render_design_lab_rail(frame, area, style.fg(theme().border_subtle), false);
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_top_panes(scene: DesignLabScene) -> (Vec<PaneSpec<'static>>, Vec<u32>) {
+    match scene {
+        DesignLabScene::SplitFocus | DesignLabScene::SplitScrollable => (
+            vec![
+                PaneSpec {
+                    title: "Focused panel",
+                    focus: PaneFocus::Active,
+                },
+                PaneSpec {
+                    title: "Secondary",
+                    focus: PaneFocus::Idle,
+                },
+            ],
+            vec![60, 40],
+        ),
+        DesignLabScene::ThreePaneScrollable => (
+            vec![
+                PaneSpec {
+                    title: "Left",
+                    focus: PaneFocus::Active,
+                },
+                PaneSpec {
+                    title: "Middle",
+                    focus: PaneFocus::Idle,
+                },
+                PaneSpec {
+                    title: "Right",
+                    focus: PaneFocus::Idle,
+                },
+            ],
+            vec![1, 1, 1],
+        ),
+        DesignLabScene::ContentSplit => (
+            vec![
+                PaneSpec {
+                    title: "Resources",
+                    focus: PaneFocus::Active,
+                },
+                PaneSpec {
+                    title: "Status",
+                    focus: PaneFocus::Idle,
+                },
+            ],
+            vec![60, 40],
+        ),
+        DesignLabScene::ContentDensity
+        | DesignLabScene::ContentLong
+        | DesignLabScene::ContentScrolling
+        | DesignLabScene::TableDecoration
+        | DesignLabScene::TableLong
+        | DesignLabScene::TableColumns => (
+            vec![PaneSpec {
+                title: if matches!(
+                    scene,
+                    DesignLabScene::TableDecoration
+                        | DesignLabScene::TableLong
+                        | DesignLabScene::TableColumns
+                ) {
+                    "Resources"
+                } else {
+                    "Content"
+                },
+                focus: PaneFocus::Active,
+            }],
+            vec![1],
+        ),
+        DesignLabScene::TableDetails => (
+            vec![
+                PaneSpec {
+                    title: "Resources",
+                    focus: PaneFocus::Active,
+                },
+                PaneSpec {
+                    title: "Details",
+                    focus: PaneFocus::Idle,
+                },
+            ],
+            vec![65, 35],
+        ),
+        _ => (
+            vec![PaneSpec {
+                title: "Overview",
+                focus: PaneFocus::Active,
+            }],
+            vec![1],
+        ),
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_joined_titles() -> bool {
+    theme().pane_titles != PaneTitleStyle::Production
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_joined_header(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    connector: Option<&'static str>,
+    title: &str,
+    focused: bool,
+    _hint: &str,
+    right_ending: &'static str,
+) {
+    let ending = match right_ending {
+        "┐" => PaneEnding::Top,
+        "┤" => PaneEnding::Stacked,
+        _ => PaneEnding::Continue,
+    };
+    PaneHeader {
+        title,
+        focus: if focused {
+            PaneFocus::Active
+        } else {
+            PaneFocus::Idle
+        },
+        left_connector: connector,
+        ending,
+    }
+    .render(frame, area, &theme());
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_joined_rule_style(focused: bool) -> Style {
+    let _ = focused;
+    surface_style().fg(theme().border_subtle)
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_surface(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    render_design_lab_rail(frame, area, surface_rail_style(), false);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_rail(frame: &mut Frame<'_>, area: Rect, style: Style, focused: bool) {
+    let glyph = if focused {
+        theme().focus_rail_glyph
+    } else {
+        theme().rail_glyph
+    };
+    for y in area.y..area.y.saturating_add(area.height) {
+        frame.buffer_mut()[(area.x, y)]
+            .set_symbol(glyph)
+            .set_style(style);
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_body(frame: &mut Frame<'_>, area: Rect, scene: DesignLabScene) {
+    match scene {
+        DesignLabScene::ShellDefault
+        | DesignLabScene::ShellScrollable
+        | DesignLabScene::ShortcutLeader
+        | DesignLabScene::OverlaySearch
+        | DesignLabScene::OverlayDecision
+        | DesignLabScene::OverlayError
+        | DesignLabScene::OverlayNested => render_design_lab_shell_content(frame, area),
+        DesignLabScene::ContentDensity => {
+            render_design_lab_single_content(frame, area, false, false)
+        }
+        DesignLabScene::ContentLong => render_design_lab_single_content(frame, area, false, true),
+        DesignLabScene::ContentScrolling => {
+            render_design_lab_surface(frame, area);
+            let layout = PaneLayout::horizontal(area, &[1]);
+            let regions = layout.regions(&[28]);
+            if let Some(region) = regions.first() {
+                render_design_lab_content(frame, region.content_area, true, true);
+                layout.render_body_boundaries(frame, &regions, &theme());
+                if let Some(slot) = region.scrollbar {
+                    render_design_lab_scrollbar(frame, slot, 8, 28, area.height as usize);
+                }
+            }
+        }
+        DesignLabScene::ContentSplit => render_design_lab_content_split(frame, area),
+        DesignLabScene::SplitFocus => render_design_lab_splits(frame, area, false),
+        DesignLabScene::SplitScrollable => render_design_lab_splits(frame, area, true),
+        DesignLabScene::ThreePaneScrollable => render_design_lab_three_scrollbars(frame, area),
+        DesignLabScene::TableDecoration => render_design_lab_table_decoration(frame, area),
+        DesignLabScene::TableLong => render_design_lab_table(frame, area, true),
+        DesignLabScene::TableDetails => render_design_lab_table_details(frame, area),
+        DesignLabScene::TableColumns => {
+            render_design_lab_table(frame, area, false);
+            render_design_lab_column_chooser(frame);
+        }
+    }
+    if scene == DesignLabScene::ShellScrollable {
+        let layout = PaneLayout::horizontal(area, &[1]);
+        let regions = layout.regions(&[36]);
+        if let Some(slot) = regions.first().and_then(|region| region.scrollbar) {
+            render_design_lab_scrollbar(frame, slot, 11, 36, area.height as usize);
+        }
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_single_content(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    scrolling: bool,
+    long_content: bool,
+) {
+    render_design_lab_surface(frame, area);
+    let layout = PaneLayout::horizontal(area, &[1]);
+    let regions = layout.regions(&[0]);
+    if let Some(region) = regions.first() {
+        render_design_lab_content(frame, region.content_area, scrolling, long_content);
+        layout.render_body_boundaries(frame, &regions, &theme());
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_scrollbar(
+    frame: &mut Frame<'_>,
+    slot: PaneScrollbarSlot,
+    position: usize,
+    total: usize,
+    viewport: usize,
+) {
+    let mut state = ScrollbarState::new(total)
+        .position(position)
+        .viewport_content_length(viewport);
+    render_scrollbar(frame, slot, &mut state, &theme());
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_three_scrollbars(frame: &mut Frame<'_>, area: Rect) {
+    render_design_lab_surface(frame, area);
+    let layout = PaneLayout::horizontal(area, &[1, 1, 1]);
+    let regions = layout.regions(&[40, 40, 40]);
+    for region in &regions {
+        if region.content_area.width == 0 || region.content_area.height == 0 {
+            continue;
+        }
+        let label = format!("{:?} pane content reaches its usable edge", region.role);
+        frame.render_widget(
+            Paragraph::new(label).style(surface_style()),
+            region.content_area,
+        );
+    }
+    layout.render_body_boundaries(frame, &regions, &theme());
+    for (region, position) in regions.iter().zip([5, 12, 20]) {
+        if let Some(slot) = region.scrollbar {
+            render_design_lab_scrollbar(frame, slot, position, 40, area.height as usize);
+        }
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+const PANE_TABLE_COLUMNS: &[PaneTableColumn<'static>] = &[
+    PaneTableColumn {
+        id: "name",
+        title: "Name",
+        width: 20,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "state",
+        title: "State",
+        width: 10,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "kind",
+        title: "Kind",
+        width: 14,
+        required: false,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "owner",
+        title: "Owner",
+        width: 18,
+        required: false,
+        default_visible: false,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "description",
+        title: "Description",
+        width: 34,
+        required: false,
+        default_visible: true,
+        policy: CellPolicy::WrapSelected,
+    },
+];
+
+#[cfg(feature = "tui-preview")]
+const PANE_TABLE_ROWS: &[&[&str]] = &[
+    &[
+        "checkout-service",
+        "running",
+        "agent",
+        "payments",
+        "Processes checkout requests and coordinates durable payment workflows across regions.",
+    ],
+    &[
+        "order-history",
+        "idle",
+        "component",
+        "fulfilment",
+        "Stores a durable customer order timeline with delivery and refund events.",
+    ],
+    &[
+        "payment-reconciliation",
+        "failed",
+        "worker",
+        "finance",
+        "Reconciles provider settlements against captured payments and reports mismatches.",
+    ],
+    &[
+        "inventory",
+        "running",
+        "agent",
+        "catalog",
+        "Reserves stock while orders move through confirmation and fulfilment.",
+    ],
+    &[
+        "email-notifications",
+        "idle",
+        "component",
+        "engagement",
+        "Delivers transactional messages for order state changes.",
+    ],
+    &[
+        "fraud-review",
+        "attention",
+        "worker",
+        "risk",
+        "Queues suspicious payments for a manual decision.",
+    ],
+    &[
+        "shipping-quotes",
+        "running",
+        "agent",
+        "fulfilment",
+        "Requests carrier estimates and records the selected service.",
+    ],
+    &[
+        "returns",
+        "idle",
+        "component",
+        "support",
+        "Coordinates return labels, inspection, and refund eligibility.",
+    ],
+];
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_table_decoration(frame: &mut Frame<'_>, area: Rect) {
+    render_design_lab_surface(frame, area);
+    let layout = PaneLayout::horizontal(area, &[1]);
+    let regions = layout.regions(&[0]);
+    let Some(region) = regions.first() else {
+        return;
+    };
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .split(region.content_area);
+    for (section, title, decoration) in [
+        (sections[0], "Minimal", TableDecoration::Minimal),
+        (sections[1], "Cell rules", TableDecoration::Rules),
+        (sections[2], "Odd / even", TableDecoration::Zebra),
+    ] {
+        let [heading, table] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .areas(section);
+        frame.render_widget(
+            Paragraph::new(title).style(
+                surface_style()
+                    .fg(theme().text_muted)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            heading,
+        );
+        let state = PaneTableState::new(PANE_TABLE_COLUMNS, 0);
+        PaneTable {
+            columns: PANE_TABLE_COLUMNS,
+            rows: &PANE_TABLE_ROWS[..PANE_TABLE_ROWS.len().min(3)],
+            state: &state,
+            decoration,
+        }
+        .render(frame, table, &theme());
+    }
+    layout.render_body_boundaries(frame, &regions, &theme());
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_table(frame: &mut Frame<'_>, area: Rect, panned: bool) {
+    render_design_lab_surface(frame, area);
+    let layout = PaneLayout::horizontal(area, &[1]);
+    let mut state = PaneTableState::new(PANE_TABLE_COLUMNS, 0);
+    state.set_column_visible(PANE_TABLE_COLUMNS, "owner", true);
+    if panned {
+        state.horizontal_offset = 18;
+    }
+    let table = PaneTable {
+        columns: PANE_TABLE_COLUMNS,
+        rows: PANE_TABLE_ROWS,
+        state: &state,
+        decoration: TableDecoration::Zebra,
+    };
+    let table_height = table.height();
+    let regions = layout.regions(&[table_height]);
+    let Some(region) = regions.first() else {
+        return;
+    };
+    table.render(frame, region.content_area, &theme());
+    layout.render_body_boundaries(frame, &regions, &theme());
+    if let Some(slot) = region.scrollbar {
+        render_design_lab_scrollbar(frame, slot, 0, table_height, area.height as usize);
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_table_details(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    let layout = PaneLayout::horizontal(area, &[65, 35]);
+    let regions = layout.regions(&[32, 28]);
+    let [table_region, details_region] = regions.as_slice() else {
+        return;
+    };
+    let state = PaneTableState::new(PANE_TABLE_COLUMNS, 1);
+    PaneTable {
+        columns: PANE_TABLE_COLUMNS,
+        rows: PANE_TABLE_ROWS,
+        state: &state,
+        decoration: TableDecoration::Zebra,
+    }
+    .render(frame, table_region.content_area, &theme());
+    frame.render_widget(
+        Paragraph::new(vec![
+            SectionHeading {
+                title: "order-history",
+                detail: Some("selected"),
+            }
+            .line(&theme()),
+            Line::default(),
+            FieldRow {
+                label: "State",
+                value: "idle",
+                label_width: 9,
+            }
+            .line(&theme()),
+            FieldRow {
+                label: "Kind",
+                value: "component",
+                label_width: 9,
+            }
+            .line(&theme()),
+            FieldRow {
+                label: "Owner",
+                value: "fulfilment",
+                label_width: 9,
+            }
+            .line(&theme()),
+            Line::default(),
+            Notice {
+                kind: NoticeKind::Info,
+                message: "Selection remains in the table; Tab focuses details.",
+            }
+            .line(&theme()),
+        ])
+        .style(surface_style())
+        .wrap(Wrap { trim: false }),
+        details_region.content_area,
+    );
+    layout.render_body_boundaries(frame, &regions, &theme());
+    for (region, position, total) in [(table_region, 4, 32), (details_region, 7, 28)] {
+        if let Some(slot) = region.scrollbar {
+            render_design_lab_scrollbar(
+                frame,
+                slot,
+                position,
+                total,
+                region.pane_area.height as usize,
+            );
+        }
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_column_chooser(frame: &mut Frame<'_>) {
+    let table_state = PaneTableState::new(PANE_TABLE_COLUMNS, 0);
+    let mut chooser = ColumnChooserState::new(&table_state);
+    chooser.selected = 2;
+    let mut lines = chooser.lines(PANE_TABLE_COLUMNS, &theme());
+    lines.push(Line::default());
+    lines.push(shortcut_line(
+        &[
+            KeyHint {
+                key: "↑/↓",
+                label: "Navigate",
+            },
+            KeyHint {
+                key: "space",
+                label: "Toggle",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Apply",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Cancel",
+            },
+        ],
+        &theme(),
+        Alignment::Center,
+    ));
+    OverlayFrame {
+        title: Some("Columns"),
+    }
+    .render(
+        frame,
+        centered_rect_fixed(54, 12, frame.area()),
+        lines,
+        &theme(),
+    );
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_content_prefix() -> Span<'static> {
+    let width = if theme().header_rail_gap.is_empty() {
+        1
+    } else {
+        2
+    };
+    Span::styled(" ".repeat(width), surface_style())
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_prefixed_line(text: impl Into<String>) -> Line<'static> {
+    Line::from(vec![design_lab_content_prefix(), Span::raw(text.into())])
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_shell_content(frame: &mut Frame<'_>, area: Rect) {
+    render_design_lab_surface(frame, area);
+    let lines = vec![
+        Line::from(vec![
+            design_lab_content_prefix(),
+            Span::styled(
+                "Shell foundation",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::default(),
+        design_lab_prefixed_line(
+            "Review identity, context, location, state, and persistent actions.",
+        ),
+        design_lab_prefixed_line(
+            "Product workflows and workspace names remain intentionally provisional.",
+        ),
+        design_lab_prefixed_line(
+            "Long content can use every column through the terminal-facing edge: 0123456789 abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        ),
+        Line::default(),
+        Line::from(vec![
+            design_lab_content_prefix(),
+            Span::styled("●", Style::default().fg(theme().success)),
+            Span::raw(" running   "),
+            Span::styled("○", Style::default().fg(theme().text_muted)),
+            Span::raw(" idle   "),
+            Span::styled("×", Style::default().fg(theme().error)),
+            Span::raw(" failed   "),
+            Span::styled("!", Style::default().fg(theme().marker)),
+            Span::raw(" attention"),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines).style(surface_style()), area);
+    render_design_lab_rail(frame, area, surface_rail_style(), false);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_content(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    scrolling: bool,
+    long_content: bool,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let content = area;
+    let available = content.width as usize;
+    let name_width = available.saturating_sub(23).clamp(8, 24);
+    let widths = [name_width, 9, 11];
+    let mut rows = vec![
+        design_lab_content_line(
+            SectionHeading {
+                title: "Resources",
+                detail: Some(if scrolling {
+                    "3 of 28 items"
+                } else {
+                    "3 items"
+                }),
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            ContentTableRow {
+                cells: &["Name", "State", "Kind"],
+                widths: &widths,
+                header: true,
+                selected: false,
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            ContentTableRow {
+                cells: &["checkout", "running", "agent"],
+                widths: &widths,
+                header: false,
+                selected: true,
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            ContentTableRow {
+                cells: &["orders", "idle", "agent"],
+                widths: &widths,
+                header: false,
+                selected: false,
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            ContentTableRow {
+                cells: &["payments", "failed", "component"],
+                widths: &widths,
+                header: false,
+                selected: false,
+            }
+            .line(&theme()),
+        ),
+        Line::default(),
+        design_lab_content_line(
+            FieldRow {
+                label: "Context",
+                value: "preview-app / local",
+                label_width: 10,
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            FieldRow {
+                label: "Revision",
+                value: "18",
+                label_width: 10,
+            }
+            .line(&theme()),
+        ),
+        Line::default(),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Active,
+                message: "Build #18 is producing output.",
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Success,
+                message: "The latest component revision is deployed.",
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Loading,
+                message: "Refreshing resources…",
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Warning,
+                message: "Cached metadata may be stale.",
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Unavailable,
+                message: "Deploy — select a context first",
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Error,
+                message: "Connection refused; existing data remains visible.",
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Empty,
+                message: "No completed jobs in this context.",
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            Notice {
+                kind: NoticeKind::Info,
+                message: "Selection remains usable while metadata refreshes.",
+            }
+            .line(&theme()),
+        ),
+        Line::default(),
+        design_lab_content_line(
+            SectionHeading {
+                title: "Output",
+                detail: Some("build #18"),
+            }
+            .line(&theme()),
+        ),
+        design_lab_content_line(
+            OutputLine {
+                stream: "out",
+                text: "Compiling component checkout",
+            }
+            .line(available, &theme()),
+        ),
+        design_lab_content_line(
+            OutputLine {
+                stream: "err",
+                text: "warning: cached artifact is stale",
+            }
+            .line(available, &theme()),
+        ),
+    ];
+    if long_content {
+        rows.insert(1, design_lab_content_line(FieldRow {
+            label: "Location",
+            value: "projects/acme/environments/development-west/components/checkout-service-with-a-very-long-name",
+            label_width: 10,
+        }.line(&theme())));
+    }
+    frame.render_widget(Paragraph::new(rows).style(surface_style()), content);
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_content_line(line: Line<'static>) -> Line<'static> {
+    line
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_content_split(frame: &mut Frame<'_>, area: Rect) {
+    let layout = PaneLayout::horizontal(area, &[60, 40]);
+    let regions = layout.regions(&[0, 0]);
+    let [primary, secondary] = regions.as_slice() else {
+        return;
+    };
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    render_design_lab_content(frame, primary.content_area, false, false);
+    layout.render_body_boundaries(frame, &regions, &theme());
+    let width = secondary.content_area.width as usize;
+    let mut status = Vec::new();
+    for marker in [
+        StatusMarker {
+            kind: StatusKind::Running,
+            label: "running",
+        },
+        StatusMarker {
+            kind: StatusKind::Idle,
+            label: "idle",
+        },
+        StatusMarker {
+            kind: StatusKind::Failed,
+            label: "failed",
+        },
+        StatusMarker {
+            kind: StatusKind::Attention,
+            label: "attention",
+        },
+    ] {
+        status.extend(marker.spans(&theme()));
+        status.push(Span::raw("  "));
+    }
+    frame.render_widget(
+        Paragraph::new(vec![
+            SectionHeading {
+                title: "Status",
+                detail: None,
+            }
+            .line(&theme()),
+            Line::from(status),
+            Line::default(),
+            Notice {
+                kind: NoticeKind::Unavailable,
+                message: "Details hidden in this narrow pane.",
+            }
+            .line(&theme()),
+            Line::default(),
+            OutputLine {
+                stream: "out",
+                text: "Primary content keeps selection and output visible.",
+            }
+            .line(width, &theme()),
+        ])
+        .style(surface_style())
+        .wrap(Wrap { trim: false }),
+        secondary.content_area,
+    );
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_splits(frame: &mut Frame<'_>, area: Rect, scrolling: bool) {
+    render_design_lab_surface(frame, area);
+    let layout = PaneLayout::horizontal(area, &[60, 40]);
+    let regions = layout.regions(&[if scrolling { 48 } else { 0 }, 0]);
+    let [primary, secondary] = regions.as_slice() else {
+        return;
+    };
+    let [upper, horizontal_handle, lower] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(55),
+            Constraint::Length(1),
+            Constraint::Min(3),
+        ])
+        .areas(secondary.pane_area);
+    let upper = PaneRegion::new(
+        1,
+        PaneRole::Right,
+        upper,
+        if scrolling { 24 } else { 0 },
+        PaneResizeDividers {
+            before: secondary.resize_dividers.before,
+            after: Some(horizontal_handle),
+        },
+    );
+    let lower = PaneRegion::new(
+        2,
+        PaneRole::Right,
+        lower,
+        if scrolling { 32 } else { 0 },
+        PaneResizeDividers {
+            before: Some(horizontal_handle),
+            after: None,
+        },
+    );
+
+    render_design_lab_panel(
+        frame,
+        primary.pane_area,
+        primary.content_area,
+        "Focused panel",
+        true,
+        "tab next",
+        &[
+            "Focus uses shape and contrast, not color alone.",
+            "The body keeps a quiet surface behind dense content.",
+            "Long primary-pane content reaches its edge without reserving a scrollbar column: 0123456789",
+        ],
+        true,
+        scrolling,
+    );
+    layout.render_body_boundaries(frame, &regions, &theme());
+    render_design_lab_panel(
+        frame,
+        upper.pane_area,
+        upper.content_area,
+        "Secondary",
+        false,
+        "",
+        &[
+            "Unfocused panel",
+            "Stable identity",
+            "Secondary content reaches the right edge 0123456789",
+        ],
+        false,
+        scrolling,
+    );
+    if design_lab_joined_titles() {
+        render_design_lab_joined_lower_header(frame, horizontal_handle);
+    } else {
+        render_design_lab_split_handle(frame, horizontal_handle);
+    }
+    render_design_lab_panel(
+        frame,
+        lower.pane_area,
+        lower.content_area,
+        "Activity",
+        false,
+        "",
+        &[
+            "● running   00:12",
+            "Activity content reaches the right edge 0123456789",
+        ],
+        false,
+        scrolling,
+    );
+    if scrolling {
+        for (region, position, total) in [(primary, 14, 48), (&upper, 7, 24), (&lower, 18, 32)] {
+            if let Some(slot) = region.scrollbar {
+                render_design_lab_scrollbar(
+                    frame,
+                    slot,
+                    position,
+                    total,
+                    region.pane_area.height as usize,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content_area: Rect,
+    title: &str,
+    focused: bool,
+    hint: &str,
+    lines: &[&str],
+    outer_boundary: bool,
+    truncate_lines: bool,
+) {
+    let has_rail = design_lab_panel_has_rail(focused, outer_boundary);
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    if has_rail {
+        render_design_lab_rail(frame, area, surface_rail_style(), false);
+    }
+    let body = if design_lab_joined_titles() {
+        content_area
+    } else {
+        let [title_area, body] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .areas(area);
+        render_design_lab_panel_title(frame, title_area, title, focused, hint, has_rail);
+        Rect {
+            x: content_area.x,
+            width: content_area.width,
+            ..body
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(
+            lines
+                .iter()
+                .map(|line| {
+                    let text = if truncate_lines {
+                        fit(line, body.width as usize)
+                    } else {
+                        (*line).to_string()
+                    };
+                    design_lab_panel_line(text, false)
+                })
+                .collect::<Vec<_>>(),
+        )
+        .style(surface_style()),
+        body,
+    );
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_joined_lower_header(frame: &mut Frame<'_>, area: Rect) {
+    if area.x > 0 {
+        frame.buffer_mut()[(area.x - 1, area.y)]
+            .set_symbol("├")
+            .set_style(design_lab_joined_rule_style(false));
+    }
+    render_design_lab_joined_header(frame, area, None, "Activity", false, "", "┤");
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_panel_has_rail(_focused: bool, outer_boundary: bool) -> bool {
+    match theme().pane_edges {
+        PaneEdgeStyle::Shared => outer_boundary,
+        PaneEdgeStyle::Production => true,
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_panel_line(text: impl Into<String>, has_rail: bool) -> Line<'static> {
+    let prefix = if has_rail {
+        design_lab_content_prefix()
+    } else {
+        Span::raw("")
+    };
+    Line::from(vec![prefix, Span::raw(text.into())])
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_split_handle(frame: &mut Frame<'_>, area: Rect) {
+    let glyph = match theme().pane_edges {
+        PaneEdgeStyle::Shared => {
+            if area.width == 1 {
+                "│"
+            } else {
+                "─"
+            }
+        }
+        PaneEdgeStyle::Production => " ",
+    };
+    frame.render_widget(
+        Paragraph::new(if area.width == 1 {
+            glyph.to_string()
+        } else {
+            glyph.repeat(area.width as usize)
+        })
+        .style(surface_style().fg(theme().border_subtle)),
+        area,
+    );
+    if area.width == 1 {
+        for y in area.y..area.y.saturating_add(area.height) {
+            frame.buffer_mut()[(area.x, y)]
+                .set_symbol(glyph)
+                .set_style(surface_style().fg(theme().border_subtle));
+        }
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_panel_title(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    focused: bool,
+    hint: &str,
+    has_rail: bool,
+) {
+    let background = match theme().pane_titles {
+        PaneTitleStyle::Production if focused => command_status_bg_style(),
+        PaneTitleStyle::Production => tabs_style(),
+        PaneTitleStyle::HintNone => surface_style(),
+    };
+    let rail = if focused {
+        command_rail_style()
+    } else {
+        tabs_rail_style()
+    };
+    let mut spans = Vec::new();
+    if has_rail {
+        spans.push(Span::styled(
+            format!(
+                "{}{}",
+                if focused {
+                    theme().focus_rail_glyph
+                } else {
+                    theme().rail_glyph
+                },
+                theme().header_rail_gap
+            ),
+            rail,
+        ));
+    }
+    let marker_style = if focused {
+        Style::default().fg(theme().accent_hover)
+    } else {
+        Style::default().fg(theme().text_muted)
+    };
+    let title_style = if focused {
+        Style::default()
+            .fg(theme().accent_hover)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme().text_muted)
+    };
+    spans.extend([
+        Span::styled(
+            if focused {
+                theme().focus_marker
+            } else {
+                theme().idle_marker
+            },
+            marker_style,
+        ),
+        Span::raw(" "),
+        Span::styled(title.to_string(), title_style),
+    ]);
+    if !hint.is_empty() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            hint.to_string(),
+            Style::default().fg(theme().text_muted),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(background), area);
+    if has_rail {
+        render_design_lab_rail(frame, area, rail, focused);
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_footer(frame: &mut Frame<'_>, area: Rect, scene: DesignLabScene) {
+    let line = if matches!(scene, DesignLabScene::ShortcutLeader) {
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", theme().focus_rail_glyph),
+                command_rail_style(),
+            ),
+            shortcut_span("w"),
+            Span::raw(" workspace  "),
+            shortcut_span("f"),
+            Span::raw(" focus  "),
+            shortcut_span("r"),
+            Span::raw(" run  "),
+            shortcut_span("l"),
+            Span::raw(" layout  "),
+            shortcut_span("e"),
+            Span::raw(" context  "),
+            shortcut_span("?"),
+            Span::raw(" help"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(format!("{} ", theme().rail_glyph), footer_rail_style()),
+            shortcut_span("ctrl+p"),
+            Span::raw(" Commands   "),
+            shortcut_span("ctrl+x"),
+            Span::raw(" More   "),
+            shortcut_span("?"),
+            Span::raw(" Help   "),
+            shortcut_span("q"),
+            Span::raw(" Quit"),
+        ])
+    };
+    let style = if matches!(scene, DesignLabScene::ShortcutLeader) {
+        command_status_bg_style()
+    } else {
+        footer_style()
+    };
+    frame.render_widget(Paragraph::new(line).style(style), area);
+    render_design_lab_rail(
+        frame,
+        area,
+        if matches!(scene, DesignLabScene::ShortcutLeader) {
+            command_rail_style()
+        } else {
+            footer_rail_style()
+        },
+        matches!(scene, DesignLabScene::ShortcutLeader),
+    );
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_unified_footer(frame: &mut Frame<'_>, area: Rect, scene: DesignLabScene) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut rows = (area.y..area.y.saturating_add(area.height))
+        .map(|y| Rect::new(area.x, y, area.width, 1))
+        .collect::<Vec<_>>();
+    let navigation = rows.remove(0);
+    render_design_lab_footer_navigation(frame, navigation, true, scene);
+
+    let leader = if scene == DesignLabScene::ShortcutLeader {
+        rows.pop()
+    } else {
+        None
+    };
+    let global = [
+        KeyHint {
+            key: "ctrl+p",
+            label: "Commands",
+        },
+        KeyHint {
+            key: "?",
+            label: "Help",
+        },
+        KeyHint {
+            key: "q",
+            label: "Quit",
+        },
+    ];
+    if !rows.is_empty() {
+        let row = rows.remove(0);
+        render_design_lab_scoped_footer_row(frame, row, &global, false, "│");
+    }
+    let contextual = design_lab_contextual_hints(scene);
+    let contextual_rows = ShortcutRow::pack(&contextual, area.width, 2);
+    let row_count = contextual_rows.len().min(rows.len());
+    for (index, (row, items)) in rows.into_iter().zip(contextual_rows).enumerate() {
+        let closes = theme().footer_closes && leader.is_none() && index + 1 == row_count;
+        render_design_lab_scoped_footer_row(
+            frame,
+            row,
+            &items,
+            false,
+            if closes { "└" } else { "│" },
+        );
+    }
+    if let Some(row) = leader {
+        render_design_lab_scoped_footer_row(
+            frame,
+            row,
+            &[
+                KeyHint {
+                    key: "w",
+                    label: "Workspace",
+                },
+                KeyHint {
+                    key: "f",
+                    label: "Focus",
+                },
+                KeyHint {
+                    key: "r",
+                    label: "Run",
+                },
+                KeyHint {
+                    key: "l",
+                    label: "Layout",
+                },
+                KeyHint {
+                    key: "e",
+                    label: "Context",
+                },
+                KeyHint {
+                    key: "?",
+                    label: "Help",
+                },
+            ],
+            true,
+            if theme().footer_closes { "└" } else { "│" },
+        );
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_contextual_hints(scene: DesignLabScene) -> Vec<KeyHint<'static>> {
+    if matches!(
+        scene,
+        DesignLabScene::TableDecoration
+            | DesignLabScene::TableLong
+            | DesignLabScene::TableDetails
+            | DesignLabScene::TableColumns
+    ) {
+        return vec![
+            KeyHint {
+                key: "←/→",
+                label: "Pan",
+            },
+            KeyHint {
+                key: "ctrl+x c",
+                label: "Columns",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Details",
+            },
+            KeyHint {
+                key: "tab",
+                label: "Focus",
+            },
+        ];
+    }
+    let mut hints = vec![
+        KeyHint {
+            key: "r",
+            label: "Run",
+        },
+        KeyHint {
+            key: "ctrl+x l",
+            label: "Layout",
+        },
+        KeyHint {
+            key: "ctrl+x e",
+            label: "Context",
+        },
+    ];
+    if matches!(
+        scene,
+        DesignLabScene::SplitFocus | DesignLabScene::SplitScrollable | DesignLabScene::ContentSplit
+    ) {
+        hints.push(KeyHint {
+            key: "tab",
+            label: "Focus",
+        });
+    }
+    hints.extend([
+        KeyHint {
+            key: "enter",
+            label: "Open",
+        },
+        KeyHint {
+            key: "u",
+            label: "Refresh",
+        },
+    ]);
+    hints
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_footer_navigation(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    joined: bool,
+    scene: DesignLabScene,
+) {
+    if joined {
+        let (_, weights) = design_lab_top_panes(scene);
+        let junctions = PaneLayout::horizontal(area, &weights).junctions();
+        WorkspaceSelector {
+            items: &[
+                WorkspaceItem {
+                    key: "1",
+                    label: "Overview",
+                    active: true,
+                },
+                WorkspaceItem {
+                    key: "2",
+                    label: "Workbench",
+                    active: false,
+                },
+                WorkspaceItem {
+                    key: "3",
+                    label: "Resources",
+                    active: false,
+                },
+            ],
+            junctions: &junctions,
+        }
+        .render(frame, area, &theme());
+        return;
+    }
+    let line = if joined {
+        Line::from(vec![
+            Span::styled("├─", design_lab_footer_rule_style()),
+            Span::styled(
+                "[ ",
+                Style::default()
+                    .fg(theme().text_secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            design_lab_footer_shortcut_span("1"),
+            Span::styled(
+                " Overview ]",
+                Style::default()
+                    .fg(theme().text_secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("──", design_lab_footer_rule_style()),
+            Span::styled("( ", Style::default().fg(theme().text_muted)),
+            design_lab_footer_shortcut_span("2"),
+            Span::styled(" Workbench )", Style::default().fg(theme().text_muted)),
+            Span::styled("──", design_lab_footer_rule_style()),
+            Span::styled("( ", Style::default().fg(theme().text_muted)),
+            design_lab_footer_shortcut_span("3"),
+            Span::styled(" Resources )", Style::default().fg(theme().text_muted)),
+            Span::styled(
+                "─".repeat(area.width as usize),
+                design_lab_footer_rule_style(),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(format!("{} ", theme().rail_glyph), footer_rail_style()),
+            design_lab_footer_shortcut_span("1"),
+            Span::styled(
+                " Overview",
+                Style::default()
+                    .fg(theme().text_secondary)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            ),
+            Span::raw("   "),
+            design_lab_footer_shortcut_span("2"),
+            Span::styled(" Workbench", Style::default().fg(theme().text_muted)),
+            Span::raw("   "),
+            design_lab_footer_shortcut_span("3"),
+            Span::styled(" Resources", Style::default().fg(theme().text_muted)),
+        ])
+    };
+    frame.render_widget(Paragraph::new(line).style(footer_style()), area);
+    if joined {
+        frame.buffer_mut()[(area.right().saturating_sub(1), area.y)]
+            .set_symbol("┘")
+            .set_style(design_lab_footer_rule_style());
+    }
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_scoped_footer_row(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    items: &[KeyHint<'_>],
+    active: bool,
+    left_glyph: &'static str,
+) {
+    ShortcutRow {
+        items,
+        active,
+        left_glyph,
+        fallback: KeyHint {
+            key: "ctrl+p",
+            label: "Commands",
+        },
+    }
+    .render(frame, area, &theme());
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_footer_rule_style() -> Style {
+    Style::default()
+        .fg(theme().footer_rule)
+        .bg(theme().footer_background)
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_footer_shortcut_span(key: &'static str) -> Span<'static> {
+    key_span(key, &theme())
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_search(frame: &mut Frame<'_>) {
+    let area = centered_rect_fixed(68, 12, frame.area());
+    let lines = vec![
+        design_lab_search_input("dep", area.width.saturating_sub(4) as usize),
+        palette_line(vec![]),
+        design_lab_search_result("Deploy application", true, false),
+        design_lab_search_result("Open deployment details", false, false),
+        design_lab_search_result(
+            "Delete deployment — unavailable: no remote context",
+            false,
+            true,
+        ),
+        palette_line(vec![]),
+        design_lab_overlay_shortcuts(&[("enter", "Select"), ("up/down", "Move"), ("esc", "Close")]),
+    ];
+    render_design_lab_overlay(frame, area, Some("Commands"), lines);
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_search_input(query: &'static str, width: usize) -> Line<'static> {
+    SearchInput { query }.line(width, &theme())
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_search_result(
+    label: &'static str,
+    selected: bool,
+    unavailable: bool,
+) -> Line<'static> {
+    SelectableRow {
+        label,
+        selected,
+        unavailable,
+    }
+    .line(58, &theme())
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_decision(frame: &mut Frame<'_>) {
+    let area = centered_rect_fixed(68, 11, frame.area());
+    let lines = vec![
+        palette_line(vec![Span::styled(
+            "! Switching context will stop 2 running jobs.",
+            Style::default().fg(theme().marker),
+        )]),
+        palette_line(vec![]),
+        design_lab_decision_table_row("Job", "State", true),
+        design_lab_decision_table_row("build #18", "running", false),
+        design_lab_decision_table_row("agent stream", "connected", false),
+        palette_line(vec![]),
+        design_lab_overlay_shortcuts(&[("enter/y", "Confirm"), ("esc/n", "Cancel")]),
+    ];
+    render_design_lab_overlay(frame, area, Some("Stop running work?"), lines);
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_decision_table_row(
+    job: &'static str,
+    state: &'static str,
+    header: bool,
+) -> Line<'static> {
+    DecisionTableRow {
+        cells: &[job, state],
+        widths: &[24, 14],
+        header,
+        selectable: false,
+        selected: false,
+    }
+    .line(&theme())
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_error(frame: &mut Frame<'_>) {
+    let area = centered_rect_fixed(64, 9, frame.area());
+    let lines = vec![
+        palette_line(vec![Span::styled(
+            "× Could not connect to the selected environment.",
+            Style::default().fg(theme().error),
+        )]),
+        palette_line(vec![Span::raw("Existing deployment state was preserved.")]),
+        palette_line(vec![]),
+        design_lab_overlay_shortcuts(&[("enter", "Details"), ("esc", "Close")]),
+    ];
+    render_design_lab_overlay(frame, area, Some("Deployment failed"), lines);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_nested_error(frame: &mut Frame<'_>) {
+    let area = centered_rect_fixed(52, 7, frame.area());
+    let lines = vec![
+        palette_line(vec![Span::styled(
+            "× The active job changed while confirming.",
+            Style::default().fg(theme().error),
+        )]),
+        palette_line(vec![]),
+        design_lab_overlay_shortcuts(&[("esc", "Return to confirmation")]),
+    ];
+    render_design_lab_overlay(frame, area, Some("Action unavailable"), lines);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_overlay(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: Option<&'static str>,
+    mut lines: Vec<Line<'static>>,
+) {
+    if theme().frame_overlays {
+        OverlayFrame { title }.render(frame, area, lines, &theme());
+        return;
+    }
+    frame.render_widget(Clear, area);
+    if let Some(title) = title {
+        lines.insert(
+            0,
+            palette_line(vec![Span::styled(
+                title,
+                Style::default()
+                    .fg(theme().accent)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(command_status_bg_style())
+            .wrap(Wrap { trim: false }),
+        Rect {
+            x: area.x.saturating_add(2),
+            width: area.width.saturating_sub(2),
+            ..area
+        },
+    );
+    render_design_lab_rail(
+        frame,
+        area,
+        Style::default().fg(theme().border_subtle),
+        true,
+    );
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_overlay_shortcuts(items: &[(&'static str, &'static str)]) -> Line<'static> {
+    let hints = items
+        .iter()
+        .map(|(key, label)| KeyHint { key, label })
+        .collect::<Vec<_>>();
+    shortcut_line(&hints, &theme(), Alignment::Center)
 }
 
 fn render_home_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -4646,11 +6535,15 @@ fn command_rail_style() -> Style {
 }
 
 fn footer_style() -> Style {
-    Style::default().fg(theme().text_muted).bg(theme().panel)
+    Style::default()
+        .fg(theme().text_muted)
+        .bg(theme().footer_background)
 }
 
 fn footer_rail_style() -> Style {
-    Style::default().fg(theme().text_faint).bg(theme().panel)
+    Style::default()
+        .fg(theme().text_faint)
+        .bg(theme().footer_background)
 }
 
 fn prefixed_line(text: impl Into<String>) -> Line<'static> {
@@ -6527,11 +8420,9 @@ fn action_short_label(id: TuiActionId) -> &'static str {
     }
 }
 
-#[cfg(feature = "tui-preview")]
-fn preview_story(name: &str) -> anyhow::Result<TuiApp> {
-    use crate::tui::layout::DevLayoutPreset;
-
-    let mut app = TuiApp {
+#[cfg(all(feature = "tui-preview", test))]
+fn preview_production_app() -> TuiApp {
+    TuiApp {
         should_quit: false,
         active_workspace: TuiWorkspace::Home,
         dev_focus: DevPanel::Repl,
@@ -6569,114 +8460,7 @@ fn preview_story(name: &str) -> anyhow::Result<TuiApp> {
         auth_prompt: None,
         layout: TuiLayoutState::default(),
         layout_snapshot: RefCell::new(None),
-    };
-
-    let add_agents = |app: &mut TuiApp| {
-        app.agents.agents = vec![
-            AgentListItem {
-                name: "cart-1".into(),
-                component: Some("cart".into()),
-                agent_type: Some("CartAgent".into()),
-                status: Some("Running".into()),
-                raw: serde_json::json!({"region":"eu-central","revision":7}),
-            },
-            AgentListItem {
-                name: "orders-42".into(),
-                component: Some("orders".into()),
-                agent_type: Some("OrderAgent".into()),
-                status: Some("Idle".into()),
-                raw: serde_json::json!({"region":"us-east","revision":3}),
-            },
-        ];
-    };
-    let add_command = |app: &mut TuiApp, status| {
-        let mut run = CommandRun::new(
-            1,
-            CommandKind::Build,
-            vec!["build".into(), "-P".into(), "release".into()],
-            CommandOptions::default(),
-            "preview-app:local".into(),
-        );
-        run.status = status;
-        run.output.append_local_line("Building component checkout");
-        run.output.append_local_line("Compiled component in 2.4s");
-        if status == CommandStatus::Failed {
-            run.output
-                .append_local_line("error: component validation failed");
-        }
-        app.command_run = Some(run);
-    };
-
-    match name {
-        "home-idle" => {}
-        "home-active" => add_command(&mut app, CommandStatus::Running),
-        "dev-running" => {
-            app.active_workspace = TuiWorkspace::Dev;
-            add_command(&mut app, CommandStatus::Running);
-        }
-        "dev-completed" => {
-            app.active_workspace = TuiWorkspace::Dev;
-            add_command(&mut app, CommandStatus::Succeeded);
-        }
-        "dev-failed" => {
-            app.active_workspace = TuiWorkspace::Dev;
-            add_command(&mut app, CommandStatus::Failed);
-        }
-        "dev-server-drawer" => {
-            app.active_workspace = TuiWorkspace::Dev;
-            app.layout.server_drawer_open = true;
-            app.server.run.status = ServerStatus::Running;
-            app.server
-                .run
-                .output
-                .append_local_line("Listening on 127.0.0.1:9881");
-        }
-        "dev-layout-left" => {
-            app.active_workspace = TuiWorkspace::Dev;
-            app.layout.dev_preset = DevLayoutPreset::Left;
-        }
-        "dev-layout-top" => {
-            app.active_workspace = TuiWorkspace::Dev;
-            app.layout.dev_preset = DevLayoutPreset::Top;
-        }
-        "dev-layout-bottom" => {
-            app.active_workspace = TuiWorkspace::Dev;
-            app.layout.dev_preset = DevLayoutPreset::Bottom;
-        }
-        "ops-list" => {
-            app.active_workspace = TuiWorkspace::Ops;
-            app.agents.detail_visible = false;
-            add_agents(&mut app);
-        }
-        "ops-details" => {
-            app.active_workspace = TuiWorkspace::Ops;
-            add_agents(&mut app);
-        }
-        "ops-loading" => {
-            app.active_workspace = TuiWorkspace::Ops;
-            app.agents.refresh_running = true;
-        }
-        "ops-error" => {
-            app.active_workspace = TuiWorkspace::Ops;
-            app.agents.last_error = Some("preview connection refused".into());
-        }
-        "agent-inspect" => {
-            app.active_workspace = TuiWorkspace::Ops;
-            add_agents(&mut app);
-            app.agents.view_mode = AgentsViewMode::Inspect;
-            app.agents.inspect.agent_name = Some("cart-1".into());
-        }
-        "palette" => app.open_palette(),
-        "help" => app.mode = TuiMode::Help,
-        "context-picker" => app.mode = TuiMode::ContextPicker,
-        "confirmation" => app.mode = TuiMode::ContextSwitchConfirm,
-        "loading" => {
-            app.mode = TuiMode::ContextPicker;
-            app.context_switcher.environment_list_running = true;
-        }
-        _ => anyhow::bail!("unknown TUI preview story: {name}"),
     }
-    Ok(app)
 }
 
 fn palette_actions() -> Vec<TuiAction> {
@@ -7788,7 +9572,7 @@ mod tests {
         assert_eq!(items[0].component.as_deref(), Some("cart"));
         assert_eq!(items[0].agent_type.as_deref(), Some("CartAgent"));
         assert_eq!(items[0].status.as_deref(), Some("Running"));
-        assert_eq!(items[0].raw["agentName"], "CartAgent(\"cart-1\")");
+        assert_eq!(items[0].raw["agentId"], "CartAgent(\"cart-1\")");
     }
 
     #[test]

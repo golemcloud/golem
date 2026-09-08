@@ -132,9 +132,26 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 ## Deferred Goal: DX/UX Hardening
 
 - [x] Add a Production-first, linkable real-renderer review surface and a
-  long-lived story review ledger under `.tui-plan`.
-- [ ] Review deterministic stories one at a time and record decision-ready
+  long-lived preview-case review ledger under `.tui-plan`.
+- [x] Replace the workflow-first preview catalog with six focused generic cases
+  for shell, content density, splits/focus, leader shortcuts, search, and
+  confirmation.
+- [x] Narrow visual comparison to the Production baseline and one actively
+  iterated Frame Base direction.
+- [ ] Review deterministic cases one at a time and record decision-ready
   feedback in `dx-ux-review.md`.
+- [ ] Review and promote foundation batches in order: tokens, shell geometry,
+  content density, panels/splits, shortcuts, and overlays.
+- [x] Accept shared content primitives across single-pane, split-pane,
+  scrolling, and long-content stories, retaining compact tables for popups and
+  simple summaries.
+- [~] Review pane data tables across decoration, long/panned content, selected
+  details, and column-chooser stories; implementation is awaiting visual
+  selection among minimal, cell-rule, and odd/even treatments.
+- [ ] Add the compact shell case after the normal-sized foundation is coherent
+  and use it as the responsive acceptance gate.
+- [ ] Inventory user goals after the foundation is accepted and redefine
+  navigation, workspace grouping, and workflows before adding flow stories.
 - [ ] Implement explicitly approved feedback as small themed batches and keep
   the design system, tasks, progress, and tests synchronized.
 - [x] Remove the Braille Golem logo from the Home background so previews and

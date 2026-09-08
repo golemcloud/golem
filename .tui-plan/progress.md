@@ -1,5 +1,156 @@
 # Progress
 
+## 2026-09-02
+
+- Added semantic content primitives for section headings, aligned fields,
+  non-color status markers, loading/error/unavailable/empty/info notices,
+  selectable fixed-column tables, and bounded output rows.
+- Rebuilt the content design-lab focus from those components and added
+  single-pane, split-pane, scrolling, and long/narrow stories. Production
+  rendering remains unchanged.
+- Added focused component invariants and all-story wide, short, narrow, and
+  extreme non-zero render coverage.
+- Removed the legacy `> Content hierarchy  tab focus` row from content stories.
+  Content panes now use only the locked joined boundary title; side panes do not
+  add local focus rails, headers, or shortcut hints.
+- Consolidated one-or-more-pane horizontal geometry in `PaneLayout`, making
+  headers, body dividers, and footer junctions share the same weighted columns.
+  Removed the duplicate secondary content rail and added right-edge, shared
+  divider, and three-pane structural invariants.
+- Moved the outer left body spine into `PaneLayout` and render it after content,
+  preventing row backgrounds and padding from punching gaps through the line.
+- Completed the shared notice vocabulary with active, success, and warning
+  states, retaining `!` as the non-color warning identity alongside explicit
+  labels for every state.
+- Assigned active notices to the positive green semantic token alongside
+  running and success, rather than the orange focus/accent token.
+- Right-aligned contextual quick-hint groups while keeping their left structural
+  spine fixed; modal shortcuts remain centered and workspace navigation is
+  unchanged.
+- Replaced the three statically reserved shortcut rows with one global row and
+  width-aware packing of merged workspace/pane hints into one or, only when
+  necessary, two contextual rows. Footer height now follows the packed result.
+- Removed stale right padding from split-pane output width, so overflowing
+  output places its ellipsis in the terminal-facing final cell.
+
+- Extracted named preview components for the locked visual foundation: context
+  headers, pane boundaries, workspace selectors, shortcut rows, neutral
+  scrollbars, popup frames, search inputs, selectable rows, and decision-table
+  rows. Frame Base stories use these representations while Production remains
+  unchanged.
+- Made programmatic representation and focused verification part of accepting
+  every future design decision, while allowing the same representation to be
+  revised when a decision is reopened.
+
+## 2026-09-01
+
+- Selected Hint None: pane headers now reserve their joined labels for identity,
+  while shortcut guidance belongs in footer or modal control surfaces.
+- Recorded the durable active-square/idle-round title grammar and the rule that
+  every workspace is a one-or-more-pane layout.
+- Added Flat, Joined, and Nav Last unified-footer preview candidates with
+  persistent global/workspace/pane rows, transient leader coverage, and no
+  generic `More` entry.
+- Added compact priority fallback and single-pane coverage without changing the
+  Production renderer or keymap.
+- Selected Unified Joined as the bottom control-zone structure and promoted it
+  into Frame Base.
+- Added Soft, Deep, and Closed Spine mutations that share a darker background
+  with the context header and tone down the joined footer boundary.
+- Selected Closed Spine while retaining the original footer background and
+  sharing it with the context header.
+- Made all structural decorators neutral and muted footer navigation and key
+  labels, leaving the active pane title as the only orange focus signal.
+- Advanced the focused comparison to Labels, Dividers, Path, and Chips for
+  context-header metadata.
+- Selected Dividers for context metadata and promoted it into Frame Base.
+- Shifted footer key labels from gray to subdued amber, still darker than the
+  active-pane selection accent.
+- Added Padded, Compact, and Regular plain-chrome candidates that remove special
+  header/footer backgrounds and render GOLEM as orange text.
+- Completed the shell's joined left spine with `┌` on the identity row as the
+  counterpart to the selected footer `└`.
+- Applied the subdued shortcut amber to the `1`, `2`, and `3` workspace keys in
+  the joined footer navigation row.
+- Selected Plain Padded, removed special header/footer backgrounds from Frame
+  Base, and retained GOLEM as padded bold orange text.
+- Added Dot, Slash, and Space candidates to replace unconnected vertical
+  context dividers.
+- Selected Dot for context metadata and added the same neutral separator between
+  GOLEM and the first application pair.
+- Added an Angle Values mutation with gray `<` and `>` delimiters around bright
+  app, environment, and server values while retaining the dot rhythm.
+- Expanded value framing into four focused spacing candidates: tight, outer,
+  inner, and full; Frame Base remains the accepted plain-value reference.
+
+## 2026-08-31
+
+- Promoted Joined Bracket into Frame Base after pane-header review.
+- Narrowed the active focus to three prefix-free treatments: active title,
+  connected rule, and filled bracket label.
+- Promoted Active Title into Frame Base and narrowed the next comparison to
+  round idle, plain idle, and double active delimiter shapes.
+- Promoted Round Idle into Frame Base and narrowed the next comparison to hints
+  inside the title, outside it, on the rule, or omitted in favor of the footer.
+- Queued matching shell header and footer chrome after the pane focus decision.
+
+## 2026-08-27
+
+Browser preview typography:
+
+- Split HTML buffer export into aligned background and foreground layers so
+  later row backgrounds cannot cover glyph descenders while terminal rails keep
+  a one-em, gapless row pitch.
+- Replaced platform and generated-CSS font choices with version-pinned Fira Code
+  and commit-pinned Iosevka Term WOFF2 files.
+- Added browser-side font loading, monospace/glyph-width checks, vertical rail
+  edge checks, and blocking failure behavior instead of silent fallback.
+- Added a calibration sample using descenders and the TUI's actual decorator
+  glyphs, while keeping font and size selections linkable.
+- Confirmed through the forwarded macOS browser that Fira Code and Iosevka Term
+  both pass qualification and preserve readable text with joined decorations.
+
+TUI generic design lab:
+
+- Replaced the workflow-first preview catalog with six focused real-renderer
+  cases covering shell chrome, content density and states, mixed splits and
+  focus, leader shortcuts, search, and confirmation.
+- Narrowed the color-oriented experiments and temporary Frame branches to one
+  actively iterated Frame Base beside Production.
+- Removed workflow fixture construction from the preview path while retaining
+  the existing production semantic tests and explicit production-wrapper render
+  equivalence.
+- Added semantic design-lab checks for progressive shortcut disclosure,
+  non-color focus markers, modal-local controls, status vocabulary, route and
+  revision responses, and separation between Production and Frame Base.
+- Reopened product workspace and flow decisions for a goal-led review after the
+  generic foundation is accepted; production behavior remains unchanged.
+- Retired the temporary Header, Popup, and Quiet branches after they clarified
+  the individual choices; subsequent changes land directly on Frame Base.
+- Made the interactive terminal design lab watched as well. It catches watcher
+  termination, leaves blocking input within 100 ms, and restores raw mode,
+  cursor, and alternate-screen state before cargo-watch rebuilds and restarts it.
+- Replaced Frame Base's `├` focus rail with `│` in panel headers and
+  unframed overlays; focus remains visible through the adjacent marker and style.
+- Removed the remaining left gutter from Frame Base panel titles and view
+  content, matching the compact rail spacing already used by its main headers.
+- Added isolated Header and Panes experiment families: three uniform metadata
+  treatments and three single-owner boundary strategies, with browser filtering
+  and terminal cycling across the preview-only candidates.
+- Replaced parallel experiment families with one four-card current focus. Pane
+  boundaries are active, header metadata is queued, inactive header variants
+  are removed, and Production/coverage controls are collapsed as secondary tools.
+- Selected Shared boundary ownership and folded it into Frame Base, then narrowed
+  the active mutations to band, chip, and underline pane-header treatments.
+- Increased Band and Chip contrast through a dedicated pane-header surface
+  without changing overlays, the bare/underline options, or Production.
+- Retired the still-subtle background treatments in favor of joined, joined
+  accent, and joined bracket headers that occupy the actual split boundary rows;
+  also gave Frame previews a more visible dedicated footer surface.
+- Validation: normal and feature-gated `golem-cli` checks and all 14 focused
+  preview tests pass. Manual direction comparison remains the next acceptance
+  step.
+
 ## 2026-08-06
 
 TUI DX/UX review workflow:
@@ -54,6 +205,99 @@ Validation:
 - `cargo fmt --package golem-cli`
 - `cargo check -p golem-cli`
 - `cargo test -p golem-cli --lib -- tui:: --report-time`
+
+Context value separator focus narrowed.
+
+Current status:
+
+- Retired the four angle-bracket spacing mutations.
+- Kept the selected dot separators between GOLEM and context groups.
+- Reduced the active comparison to space (`app value`), colon (`app:value`),
+  and equals (`app=value`), with punctuation using the muted label color.
+- Switched the focused case to `split-focus` so the selected space form can be
+  reviewed against joined multi-pane geometry before promotion.
+- Recorded a later interaction requirement: contextual shortcut hints will be
+  toggleable, but the primary `1` / `2` / `3` workspace selector stays visible.
+- Locked the whitespace context grammar (`app value`) and retired the colon and
+  equals mutations.
+- Started a four-card split-pane focus comparing open, capped, square-turn, and
+  round-turn terminal-facing pane-title endings.
+- Selected the square turn, continued the terminal-facing rail to a `┘` footer
+  connection, and conditionally joined unobstructed split rails with `┴`.
+- Revised the right edge to a title-only `┐` cap with no vertical rail or footer
+  corner, reclaiming that column while retaining the conditional middle `┴`.
+- Added isolated `┤` endings for stacked pane titles and `┘` for the last footer
+  row, and made the focused browser view show single- and multi-panel cases
+  together.
+- Moved the right-side `┘` from the final shortcut row to the persistent
+  `[1, 2, 3]` workspace-selector row.
+- Added single- and multi-panel scrollbar cases using Ratatui's scrollbar widget,
+  plus edge-reaching content in the non-scrollbar cases for direct comparison.
+- Muted scrollbar arrows and thumbs to gray and made the track a fainter gray so
+  scrolling chrome does not compete with pane focus.
+- Locked all vertical scrollbars to the trailing-right pane cell. Each visible
+  scrollbar now reserves exactly one content column, and split and stacked
+  stories use the same pane region for content, boundaries, scrollbar slots,
+  resize-divider metadata, and hit geometry.
+- Added testable terminal resize-event handling that propagates the new Ratatui
+  viewport dimensions and requests a redraw.
+- Accepted the general Content Primitives batch and split richer main-pane data
+  tables from the compact popup and summary row grammar.
+- Added preview-only pane-table columns and state with required/optional
+  visibility, explicit widths, per-column ellipsis or selected-only wrapping,
+  a frozen marker, restrained multi-line selection, and horizontal panning.
+- Added deterministic table-decoration, long/panned, selected-details, and
+  column-chooser stories. The chooser applies visibility changes
+  transactionally; table and details panes retain independent geometry and
+  scrollbars.
+- Replaced the main-pane table's diamond selection marker with a solid `▌` rail
+  repeated across the selected record's full wrapped height. Popup and search
+  selection markers remain unchanged.
+- Removed space padding around table cell rules, moved the Columns chooser to
+  the compact popup-table selection grammar with an `↑/↓ Navigate` hint, and
+  restricted multi-line rows to odd/even tables with four explicit row
+  surfaces for odd/even × selected/unselected.
+- Accepted the pane-boundary and scrollbar treatment, then moved the active
+  review to search, confirmation, error, and nested-modal baseline cases.
+- Replaced the overlay side-rail treatment with complete outer borders, inset
+  content, and a more distinct shared background for border and interior cells.
+- Rejected half-cell block borders as too heavy. Restored narrow box-drawing
+  borders while keeping their cell backgrounds on the underlying surface, so
+  the distinct popup background begins inward and does not halo outside the box.
+- Chose the narrow connected panel-style border compromise: border cells use the
+  popup background, accepting its outer half-cell halo to avoid a double or
+  uneven inner boundary.
+- Added optional `─[ Title ]` overlay titles with neutral brackets and contextual
+  title colors, plus a darker search-input row with a muted `>` prompt.
+- Replaced bracketed overlay titles with border-background labels using exactly
+  one cell of left and right padding.
+- Lightened warning and error title-label colors independently from body status
+  colors, improving their separation from the gray border background.
+- Shifted the error title token from pale pink to a clearer warm red while
+  retaining sufficient contrast on the gray title background.
+- Added a dark overlay-title comparison using dark gray, amber, and red text
+  beside the existing light title set, without changing popup geometry.
+- Rejected the dark title set, restored the accepted white and pale amber, and
+  narrowed review to warm, signal, and vermilion error-title reds.
+- Rejected per-status title colors and standardized all overlay titles on the
+  GOLEM yellow accent with neutral `[ Title ]` brackets.
+- Made the search field lighter than its popup and centered it with one cell of
+  popup-surface margin on every side.
+- Replaced search `>` markers with a muted `›` prompt and `◆` selection marker,
+  added darker green query text, centered popup content, and aligned popup
+  shortcut styling with the main footer.
+- Centralized one-cell popup content padding on every side and used blank rows,
+  rather than input-specific margins, between search, results, and shortcuts.
+- Standardized search entries as equal-width rows with aligned labels and a
+  consistent near-white selection background spanning the full row.
+- Darkened the selected-row background and inserted a blank row after the main
+  `!` / `×` message in confirmation and nested-modal content.
+- Converted confirmation job lists into a centered, fixed-width `Job` / `State`
+  table with left-aligned columns.
+- Darkened the fixed-width search selection background one additional step while
+  preserving its dark text and geometry.
+- Restored the selected `[ Overview ]` pane header beneath GOLEM on every overlay
+  case, replacing the disconnected generic separator with the joined `├` row.
 
 Selected Context UX foundation:
 

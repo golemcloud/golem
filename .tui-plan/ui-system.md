@@ -1,7 +1,8 @@
 # TUI Design System
 
-This is the authoritative design-system document for the Golem TUI. It defines
-the target interaction model before more feature work continues.
+This is the authoritative design-system document for the Golem TUI. It records
+accepted foundation rules and the current interaction model while the broader
+product flows are reviewed.
 
 The document is intentionally strict. Future TUI changes must either follow
 these rules or update this document first.
@@ -10,34 +11,63 @@ these rules or update this document first.
 
 TUI design work uses deterministic stories rendered by the actual Ratatui
 widget tree. Run `cargo make tui-preview` for the watched browser gallery,
-`cargo make tui-preview-terminal` for the interactive terminal gallery, or
+`cargo make tui-preview-terminal` for the watched interactive terminal gallery, or
 `cargo make tui-preview-export` for a standalone artifact under `target/`.
 
-The browser opens in a Production-first review view. Its URL identifies the
-selected preview case, view mode, font, and font size, so feedback and follow-up
-changes should reuse copied gallery links. Fira Code is the local default and
-browser ligatures are disabled to better match terminal cell rendering. The
-browser loads Fira Code and JetBrains Mono from the Google Fonts CSS API so the
-preview remains consistent when the server and browser run on different
-machines. Because those primary fonts do not contain Braille glyphs, Noto Sans
-Symbols 2 provides a web-loaded symbol fallback; system monospace remains the
-offline fallback. Use the comparison view for one story across all visual
-candidates and the coverage view for all stories under one candidate. Track
-normalized feedback and review status in `dx-ux-review.md`; durable rules
-accepted through that review still belong in this document.
+The browser opens on one explicit current focus with Frame Base and no more than
+three mutations. Its URL identifies the focus, view mode, font, and font size,
+so feedback and follow-up changes should reuse copied gallery links. Production,
+case browsing, and coverage live under collapsed secondary tools. Browser ligatures are disabled to
+better match terminal cell rendering. Version-pinned Fira Code and
+commit-pinned Iosevka Term files load directly from jsDelivr so a browser on a
+different machine sees the same fonts. The gallery verifies regular and bold
+cell widths plus joined vertical decorators before showing a frame; it blocks
+review instead of silently falling back to a platform font. Coverage mode
+renders every case under one selected variant. Track normalized
+feedback and review status in `dx-ux-review.md`; durable rules accepted through
+that review still belong in this document.
 
-The `Production` visual style is the only runtime style. `Quiet`, `Dense`, and
-`Ops Contrast` are preview-only candidates; accepting a candidate means
-deliberately changing `Production`, not exposing a persisted theme setting.
-Layout presets remain application state and are independent from these visual
-comparisons.
+The `Production` visual style is the only runtime style. `Frame Base` is the
+preview-only baseline for temporary current-focus mutations. They are
+comparison material, not themes. Accepted rules are deliberately folded back
+into Frame Base and all mutations are deleted before the next focus begins.
+Explicit promotion into `Production` happens later.
 
-Stories are synthetic, deterministic, offline render fixtures. They are useful
+### Programmatic design sources
+
+A locked visual decision must have one executable representation in addition
+to its written rule. Use a named widget, semantic token, typed rendering model,
+or tested layout invariant according to the kind of decision. Preview stories
+provide content and application state, but must not recreate accepted glyphs,
+spacing, alignment, colors, selection treatment, or boundary behavior locally.
+
+The preview component system owns context headers, pane boundaries, workspace
+selectors, shortcut rows, scrollbars, popup frames and titles, search inputs,
+selectable rows, decision-table rows, section headings, label/value fields,
+status markers, notices, content tables, and output rows. `TuiVisualStyle` owns
+their semantic colors. Explicit pane and footer geometry owns junction
+placement. These components remain preview-only until Frame Base is deliberately
+promoted into Production.
+
+`PaneLayout` is the executable source for one-or-more-pane horizontal geometry.
+The same pane weights determine header widths, body divider columns, and footer
+junctions. It alone renders shared vertical dividers and top junctions; pane
+content must not add a rail beside an internal divider. The terminal-facing
+right edge remains title-only `┐` plus the workspace-row `┘`, with no body rail.
+Body boundaries render after pane content so content cannot punch blank cells
+through the outer left spine or shared dividers.
+
+When a decision is revisited, change its existing representation and focused
+tests. Temporary alternatives may exist only for the active comparison and are
+removed when the new choice is locked.
+
+Design-lab cases are synthetic, deterministic, offline render fixtures. They are useful
 for visual comparison and render regression tests, but they do not exercise
 providers or process lifecycles. Use `cargo make tui-preview-live -- <global
 flags>` to launch the checkout-built production `golem <global flags> tui`
-runtime. The watched server and terminal gallery must not be used to supervise
-the live runtime, since forced restarts could interrupt raw-mode cleanup.
+runtime. The terminal preview catches watcher termination and returns through
+its raw-mode and alternate-screen cleanup guard before it is rebuilt. Neither
+preview watcher supervises the live runtime.
 
 ## Core Model
 
@@ -47,11 +77,51 @@ and REPL-driven testing; production work may also use REPL-like inspection and
 interactive operations. The shell must therefore avoid a hard split where Dev is
 only local and Ops is only production.
 
-The top-level workspaces are:
+The current runtime top-level workspaces are:
 
 - Home;
 - Dev;
 - Ops.
+
+These workspaces remain the production implementation baseline while the
+generic visual and interaction foundation is designed. They are not a
+constraint on the later goal-led flow review: workspace grouping, navigation,
+and workflows may be retained, renamed, regrouped, or replaced after the
+foundation is accepted. Foundation work must not change runtime behavior merely
+to anticipate that later review.
+
+## Generic Foundation Review
+
+The preview starts with focused, workflow-neutral cases for shell chrome,
+content density and states, splits and focus, leader shortcuts, search overlays,
+and decision overlays. Workflow-specific cases are added only when their flow
+is actively being reviewed and retained afterward when they provide regression
+value.
+
+Shortcut visibility uses progressive disclosure:
+
+- the bottom control zone starts with workspace navigation;
+- one persistent row shows global actions;
+- workspace and focused-pane actions merge into one contextual row when they
+  fit, and use a second contextual row only when required by available width;
+- `ctrl+x` appends a transient row of structured leader choices;
+- inputs and modals show their local navigation and accept/cancel controls;
+- help is the complete reference.
+
+Contextual quick-hint rows keep their structural spine at the left edge and
+align the visible shortcut group to the right edge. Modal-local shortcut rows
+remain centered, and workspace navigation retains its joined left-to-right
+layout.
+
+Pane titles contain identity only, never shortcut hints. Active pane titles use
+square delimiters and inactive pane titles use round delimiters so focus remains
+visible without color. Titles join directly to their owning boundary without
+gaps, adjacent rails, or stacked horizontal rules.
+
+Foundation decisions are reviewed in dependency order: visual tokens, shell
+geometry, content density, panels and splits, shortcut grammar, overlays, then
+compact behavior. The compact case is added after the normal-sized foundation
+is coherent rather than maintained as a separate visual language.
 
 The TUI must not add top-level workspaces for Jobs, Observe, Context, Settings,
 Server, Output, or REPL. Those are global surfaces, panels, sub-pages, or jobs
@@ -63,6 +133,10 @@ Terms:
 - Sub-page or tab: a stable page inside a workspace.
 - Panel: a named layout region inside a preset layout.
 - Focus: the active panel or control that receives keyboard input.
+
+Every workspace body uses the pane model. A layout with one pane is not a
+separate single-view mode; it is a one-pane layout with one focused pane. Focus
+switch actions appear only when another pane is reachable.
 - Job: a running or completed command, server process, REPL, stream, or
   inspection with output history and launch context.
 - Context: the global selected target used by future actions. A context is not
@@ -263,6 +337,149 @@ cover:
 
 Leader hints should show immediate available keys. Scoped help should provide
 the full reference for the current workspace, sub-page, panel, and focus.
+
+The persistent footer names concrete scoped actions rather than a generic
+`ctrl+x More` entry. At narrow widths it keeps whole actions in priority order
+and exposes `ctrl+p Commands` when lower-priority actions do not fit.
+
+Workspace navigation is the first row of the bottom control zone and joins its
+top boundary using the same connected geometry as pane titles. Global,
+workspace, and focused-pane rows continue beneath it on one left spine, which
+opens with `┌` on the identity row and closes with `└` on the final row.
+
+The workspace selector containing `1`, `2`, and `3` is always visible. The
+remaining global, workspace, and focused-pane shortcut-hint rows will be
+toggleable as a group, without hiding or moving that primary selector.
+
+Structural decorators never change color to communicate focus or mode. Rails,
+junctions, rules, and popup borders use one neutral decorator color; semantic
+status glyphs and active pane titles may still use semantic or accent colors.
+The top terminal-facing pane-title rule ends with `┐`, additional stacked title
+rules end with `┤`, and the `[1, 2, 3]` workspace-selector row ends with `┘`.
+These are isolated terminators: no right rail is drawn between them, so panes
+retain the terminal-edge content column. Internal split rails join the
+workspace-selector boundary with `┴` only when the junction cell contains no
+selector content; labels and shortcuts take priority over a decorative
+connection.
+
+Scrollbars use neutral gray chrome: muted gray for the thumb and end markers,
+and the fainter structural gray for the track. They never use the active orange
+accent, which remains reserved for focus and semantic emphasis.
+
+Every vertical scrollbar occupies the trailing-right cell of its pane. A
+visible scrollbar structurally reserves exactly one column from that pane's
+content rectangle; it never overlays text, the outer-left spine, or a resize
+divider. The pane region that owns the content rectangle also owns its
+scrollbar slot, boundary rectangles, role, and hit metadata, including for
+stacked panes.
+
+Popups and modals use a complete four-sided border with the same narrow
+box-drawing weight as pane decorators. Border cells and the inset interior share
+the distinct popup surface. Because terminal box glyphs are centered within
+cells, a half-cell of popup color remains visible outside the perceived stroke;
+this is an accepted terminal-grid compromise in exchange for narrow, connected,
+even borders. Border foreground remains the neutral structural color regardless
+of popup status.
+
+Overlays may place identity in the top border using `─[ Title ]──`. Brackets are
+neutral gray and every title uses the same yellow accent as GOLEM, independent
+of status. Warning and error meaning stays in popup content rather than changing
+structural title styling. Search uses a dedicated full-width input row with a
+lighter input surface and a muted gray `›` prompt. The field is centered within
+the popup by the shared content padding and spans the full padded content width.
+
+Search inputs use a muted `›` prompt and a darker green query color derived from
+the active/success family. Search results use equal-width centered rows with a
+two-cell marker slot, keeping every label on the same left edge. Selection uses
+`◆` without shifting the label and fills the entire fixed row with a slightly
+darkened light-gray background and dark text. Popup content is centered except
+for text typed inside the full-width input field. Popup shortcut rows reuse the
+main footer grammar:
+lowercase key notation in subdued amber, capitalized muted labels, and centered
+row alignment.
+
+Every popup has one cell of content padding inside all four border edges.
+Components do not add their own outer margin within that area. Distinct content
+groups use one blank row between them; search separates its input, result list,
+and shortcut row this way. Confirmation and nested modals also place one blank
+row immediately after their leading `!` or `×` message.
+
+Lists of affected jobs in confirmation modals use an equal-width, fixed-column
+table with muted `Job` and `State` headers. Fields are left-aligned to stable
+column starts while the table as a whole remains centered in the popup.
+
+An overlay never replaces the underlying pane identity. Single-pane overlay
+screens retain the selected pane-title row directly beneath the GOLEM context
+row, including the connected `┌` to `├` left spine and square active title.
+
+Content hierarchy is semantic and shared across panes. Section headings use a
+bold primary title and optional muted detail. Label/value fields align labels to
+a caller-declared shared width and keep values primary. Status always combines a
+stable glyph and text label so color is supplementary: `●` running, `○` idle,
+`×` failed, and `!` attention.
+
+Informational, active, success, loading, warning, error, unavailable, and empty
+states use the shared notice representation with a stable glyph, kind label,
+and message. The glyph vocabulary is `i` notice, `●` active, `✓` success, `…`
+loading, `!` warning, `×` error, `—` unavailable, and `○` empty. Content tables own
+their marker slot, fixed column starts, character-safe ellipsis, and full-row
+selection surface. Log and output rows reserve a muted stream prefix and
+truncate safely to the available row width. These rules are identical in
+single-pane, split-pane, scrolling, and long-content layouts; stories may vary
+data and geometry but may not recreate the styling locally.
+
+`OutputLine` receives the actual usable row width, including its stream prefix.
+When truncation is necessary, the ellipsis occupies the final usable cell; a
+caller must not invent trailing padding by subtracting from that width.
+
+Compact fixed-column rows remain suitable for popups and small summaries. Main
+pane datasets use the separate pane-table model: columns have stable IDs,
+explicit widths, required or optional visibility, and an `ellipsis` or
+`wrap-selected` content policy. Unselected records stay one line. Multi-line
+selected records are available only with odd/even row surfaces, because the
+row background is what keeps a wrapped record visually coherent; its selected
+surface covers every line.
+The frozen two-cell marker does not pan with the virtual data columns. Selected
+records use a solid `▌` rail in the first marker cell, repeated on every visual
+line so wrapped records retain one continuous full-height selection edge.
+
+When enabled columns exceed the pane width, plain left and right arrows pan the
+table's data viewport while it owns focus. Required columns cannot be disabled.
+Optional columns are changed transactionally in a scoped Columns overlay and
+remain session-local. Enter opens an optional 60/40 right details pane without
+moving focus from the table; selection changes update details, Tab may focus
+them, and Escape closes them or returns table focus. Table and details panes
+own independent scrollbars and preserve the shared pane boundary rules.
+
+The pane-table decoration is under active review. The candidates are minimal
+rows, faint one-cell `│` rules directly between cells without space padding,
+and odd/even background rows. Odd/even tables own four surfaces: odd and even,
+each in selected and unselected forms. Pane-table selection uses a restrained
+fill plus full-height `▌` rail; the brighter selection surface remains reserved
+for search overlays.
+
+The Columns overlay uses the compact popup-table grammar with `Column` and
+`Visibility` columns, one selected row, required/shown/hidden states, and an
+explicit `↑/↓ Navigate` hint alongside toggle, apply, and cancel actions.
+
+Active and success use the positive green semantic family. Orange remains the
+focus/accent family and is not used to color active operational state.
+
+The main context header and footer use the normal shell surface rather than a
+special filled background. GOLEM is padded bold orange text without a filled
+block.
+
+Footer workspace selection relies on square-active/round-idle shape and neutral
+text hierarchy rather than the orange accent. Shortcut keys use subdued amber,
+darker than the active-pane accent, so they remain recognizable as keys without
+competing with pane focus. This includes the `1`, `2`, and `3` workspace keys
+inside the footer navigation labels.
+
+Application, environment, and server metadata use uniform `label value` pairs
+with a single space between the muted label and bright value, and neutral middle
+dots between pairs. A matching dot separates the padded GOLEM
+identity from the first application pair. The identity row does not use chips,
+path notation, or unconnected vertical dividers for these fields.
 
 Text input owns printable keys. When a filter, search box, command input, or
 other text field is focused, printable keys must type into that field. Only
@@ -490,8 +707,9 @@ debt and should move to direct streaming providers.
 
 ## Review Status
 
-This document is accepted as the planning baseline for the Home, Dev, and Ops
-workspace shell remap.
+The earlier Home, Dev, and Ops shell remap remains implemented history. Its
+workspace and flow choices are reopened for the goal-led review that follows the
+generic foundation.
 
 Accepted sections:
 
@@ -515,7 +733,8 @@ the decision directly. They must not block the first workspace-shell remap.
 ## Roadmap
 
 Milestone 0: review and accept this design-system document. This is complete.
-Major workspace or navigation reshaping may now be planned from this baseline.
+Major workspace or navigation reshaping must wait for the generic foundation
+and the subsequent goal inventory.
 
 Milestone 1: align interaction metadata with the design-system vocabulary. Fix
 shortcut notation, action metadata drift, execution kind drift, availability
@@ -545,6 +764,14 @@ view state.
 Milestone 6: plan local observability integration. Local/server metrics should
 fit into Dev panels and Ops Monitor dashboard surfaces, not a new top-level
 workspace.
+
+Milestone 7: establish the generic design lab and compact minimal foundation.
+Compare Production with Frame Base through focused cases, promote accepted
+themed batches, then add compact validation.
+
+Milestone 8: inventory user goals and redefine product flows. Derive navigation,
+workspace grouping, and scenario stories from that inventory instead of treating
+the current Home, Dev, and Ops model as fixed.
 
 ## Open Questions
 

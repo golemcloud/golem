@@ -22,10 +22,12 @@ mod preview;
 mod terminal;
 pub(crate) mod terminal_screen;
 mod visual;
+#[cfg(feature = "tui-preview")]
+mod widgets;
 
 use crate::context::Context;
-use crate::model::environment::EnvironmentReference;
 use crate::model::agent::AgentsMetadataResponseView;
+use crate::model::environment::EnvironmentReference;
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;
