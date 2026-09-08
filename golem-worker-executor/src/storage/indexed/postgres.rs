@@ -22,6 +22,7 @@ use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_common::model::ShardEpoch;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -282,6 +283,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
@@ -311,6 +313,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
@@ -325,6 +328,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     key,
                     *id,
                     value.to_vec(),
+                    _shard_epoch,
                 )
                 .await;
         }

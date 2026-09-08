@@ -326,7 +326,15 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
     let value = Bytes::from_static(&[0, 255, 17, 3]);
     for ns in [primary, compressed] {
         storage
-            .append_many("svc", "api", "entity", &ns.ns, "singleton", Arc::from([]))
+            .append_many(
+                "svc",
+                "api",
+                "entity",
+                &ns.ns,
+                "singleton",
+                Arc::from([]),
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -343,6 +351,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                 &ns.ns,
                 "singleton",
                 Arc::from([(17, value.clone())]),
+                None,
             )
             .await
             .unwrap();
@@ -387,7 +396,8 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                     "entity",
                     &ns.ns,
                     "singleton",
-                    Arc::from([(u64::MAX, value.clone())])
+                    Arc::from([(u64::MAX, value.clone())]),
+                    None,
                 )
                 .await,
             Err(IndexedStorageError::Other(_))
@@ -408,7 +418,8 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                 "entity",
                 &primary.ns,
                 "singleton",
-                Arc::from([(17, Bytes::from_static(b"replacement"))])
+                Arc::from([(17, Bytes::from_static(b"replacement"))]),
+                None,
             )
             .await,
         Err(IndexedStorageError::Conflict(_))
@@ -445,6 +456,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
             "atomic",
             1025,
             b"original".to_vec(),
+            None,
         )
         .await
         .unwrap();
@@ -454,7 +466,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
         .into();
     assert!(matches!(
         storage
-            .append_many("svc", "api", "entity", &ns.ns, "atomic", pairs)
+            .append_many("svc", "api", "entity", &ns.ns, "atomic", pairs, None)
             .await,
         Err(IndexedStorageError::Conflict(_))
     ));
@@ -481,7 +493,7 @@ async fn exists_append(
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
     let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -503,9 +515,18 @@ async fn namespaces_are_separate(
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns1.ns.clone(), key1, 1, value1)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns1.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+    )
+    .await
+    .unwrap();
     let result = is.exists("svc", "api", ns2.ns.clone(), key1).await.unwrap();
 
     assert_eq!(result, false);
@@ -534,6 +555,7 @@ async fn can_append_and_get(
         key1,
         1,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -545,6 +567,7 @@ async fn can_append_and_get(
         key1,
         2,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -556,6 +579,7 @@ async fn can_append_and_get(
         key1,
         3,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -582,11 +606,11 @@ async fn append_cannot_overwrite(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
     let result1 = is
-        .append("svc", "api", "entity", ns.ns.clone(), key1, 1, value2)
+        .append("svc", "api", "entity", ns.ns.clone(), key1, 1, value2, None)
         .await;
 
     assert!(result1.is_err());
@@ -614,6 +638,7 @@ async fn append_can_skip(
         key1,
         4,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -625,6 +650,7 @@ async fn append_can_skip(
         key1,
         8,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -652,11 +678,11 @@ async fn length(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 4, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 4, value1, None)
         .await
         .unwrap();
     let result2 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 8, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 8, value2, None)
         .await
         .unwrap();
     let result3 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -708,10 +734,10 @@ async fn scan_with_no_pattern_single_paged(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
         .await
         .unwrap();
 
@@ -759,6 +785,7 @@ async fn scan_with_no_pattern_paginated(
         key1,
         1,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -770,6 +797,7 @@ async fn scan_with_no_pattern_paginated(
         key1,
         2,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -781,6 +809,7 @@ async fn scan_with_no_pattern_paginated(
         key2,
         1,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -792,6 +821,7 @@ async fn scan_with_no_pattern_paginated(
         key3,
         3,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -870,13 +900,13 @@ async fn scan_with_prefix_pattern_single_paged(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3)
+    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3, None)
         .await
         .unwrap();
 
@@ -916,13 +946,13 @@ async fn scan_with_prefix_pattern_paginated(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3)
+    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3, None)
         .await
         .unwrap();
 
@@ -981,7 +1011,7 @@ async fn exists_append_delete(
     let value1 = "value1".as_bytes().to_vec();
 
     let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1, None)
         .await
         .unwrap();
     is.delete("svc", "api", ns.ns.clone(), key1).await.unwrap();
@@ -1004,9 +1034,18 @@ async fn delete_is_per_namespace(
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns1.ns.clone(), key1, 1, value1)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns1.ns.clone(),
+        key1,
+        1,
+        value1,
+        None,
+    )
+    .await
+    .unwrap();
     is.delete("svc", "api", ns2.ns.clone(), key1).await.unwrap();
     let result = is.exists("svc", "api", ns1.ns.clone(), key1).await.unwrap();
 
@@ -1056,6 +1095,7 @@ async fn first(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1067,6 +1107,7 @@ async fn first(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1105,6 +1146,7 @@ async fn last(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1116,6 +1158,7 @@ async fn last(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1154,6 +1197,7 @@ async fn closest_low(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1165,6 +1209,7 @@ async fn closest_low(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1203,6 +1248,7 @@ async fn closest_match(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1214,6 +1260,7 @@ async fn closest_match(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1252,6 +1299,7 @@ async fn closest_mid(
         key1,
         5,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1263,6 +1311,7 @@ async fn closest_mid(
         key1,
         7,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1293,10 +1342,10 @@ async fn closest_high(
         .closest("svc", "api", "entity", ns.ns.clone(), key1, 10)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 5, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 5, value1, None)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 7, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 7, value2, None)
         .await
         .unwrap();
     let result2 = is
@@ -1331,6 +1380,7 @@ async fn drop_prefix_no_match(
         key1,
         10,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1342,6 +1392,7 @@ async fn drop_prefix_no_match(
         key1,
         11,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1353,6 +1404,7 @@ async fn drop_prefix_no_match(
         key1,
         12,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1391,6 +1443,7 @@ async fn drop_prefix_partial(
         key1,
         10,
         value1.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1402,6 +1455,7 @@ async fn drop_prefix_partial(
         key1,
         11,
         value2.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1413,6 +1467,7 @@ async fn drop_prefix_partial(
         key1,
         12,
         value3.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -1443,15 +1498,42 @@ async fn drop_prefix_full(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 10, value1)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 11, value2)
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.ns.clone(), key1, 12, value3)
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        10,
+        value1,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        11,
+        value2,
+        None,
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        12,
+        value3,
+        None,
+    )
+    .await
+    .unwrap();
 
     is.drop_prefix("svc", "api", ns.ns.clone(), key1, 20)
         .await

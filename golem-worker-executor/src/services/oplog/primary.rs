@@ -156,12 +156,12 @@ impl SerializedOplogAppend {
         match self {
             Self::Entry((id, value)) => {
                 storage
-                    .append_raw(namespace.clone(), key, *id, value.to_vec())
+                    .append_raw(namespace.clone(), key, *id, value.to_vec(), None)
                     .await
             }
             Self::Batch(entries) => {
                 storage
-                    .append_many_raw(namespace, key, entries.clone())
+                    .append_many_raw(namespace, key, entries.clone(), None)
                     .await
             }
         }
@@ -208,6 +208,11 @@ async fn retry_oplog_append(
                     panic!("Indexed storage operation '{op_name}' failed for key '{key}': {error}");
                 }
                 false
+            }
+            // No backend asserts an epoch yet, so nothing can produce this. Treated as permanent
+            // until the fence is armed, which is when it becomes a value the caller acts on.
+            IndexedStorageError::Fenced { .. } => {
+                panic!("Indexed storage operation '{op_name}' was fenced for key '{key}': {error}")
             }
         };
 

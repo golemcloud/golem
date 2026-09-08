@@ -22,6 +22,7 @@ use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_common::model::ShardEpoch;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -40,6 +41,14 @@ pub struct SqliteIndexedStorage {
 }
 
 impl SqliteIndexedStorage {
+    /// Whether this backend enforces the shard-epoch fence on writes.
+    ///
+    /// A constant rather than a literal in the trait impl because
+    /// [`super::multi_sqlite::MultiSqliteIndexedStorage`] is a fan-out of these and must always
+    /// answer the same way: it has no namespace to delegate the question through, so this is what
+    /// keeps the two from drifting apart.
+    pub(crate) const SUPPORTS_EPOCH_FENCING: bool = false;
+
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
         Self::migrate(config).await?;
 
@@ -137,6 +146,10 @@ impl SqliteIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for SqliteIndexedStorage {
+    fn supports_epoch_fencing(&self) -> bool {
+        Self::SUPPORTS_EPOCH_FENCING
+    }
+
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -230,6 +243,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
@@ -265,6 +279,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
@@ -529,6 +544,7 @@ mod tests {
                     (2, Bytes::from_static(b"second")),
                 ]
                 .into(),
+                None,
             )
             .await
             .unwrap();
@@ -566,6 +582,7 @@ mod tests {
                 "oplog",
                 2,
                 b"existing".to_vec(),
+                None,
             )
             .await
             .unwrap();
@@ -582,6 +599,7 @@ mod tests {
                     (2, Bytes::from_static(b"conflict")),
                 ]
                 .into(),
+                None,
             )
             .await;
 
