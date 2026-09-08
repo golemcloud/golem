@@ -362,7 +362,8 @@ async fn live_delivery_token(
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
         })
-        .await;
+        .await
+        .unwrap();
     seed_oplog
         .add(OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -370,7 +371,8 @@ async fn live_delivery_token(
             response: None,
             forced_commit: false,
         })
-        .await;
+        .await
+        .unwrap();
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
@@ -466,7 +468,8 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         .add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
         })
-        .await;
+        .await
+        .unwrap();
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
@@ -679,7 +682,8 @@ async fn tail_gated_token_over_crash_tail(
         .add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
         })
-        .await;
+        .await
+        .unwrap();
     oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -692,7 +696,8 @@ async fn tail_gated_token_over_crash_tail(
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
         })
-        .await;
+        .await
+        .unwrap();
     oplog
         .add(OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -704,9 +709,10 @@ async fn tail_gated_token_over_crash_tail(
             ))),
             forced_commit: false,
         })
-        .await;
+        .await
+        .unwrap();
     for entry in extra_tail {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
     let replay_state = ReplayState::new_for_owner(
@@ -918,7 +924,10 @@ impl InMemoryOplog {
 
 #[async_trait]
 impl Oplog for InMemoryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         self.enqueue_add(entry).await
     }
 
@@ -963,9 +972,11 @@ impl Oplog for InMemoryOplog {
             }
         });
         Box::pin(async move {
-            receipt
-                .await
-                .expect("the in-memory oplog append task must reply")
+            Ok({
+                receipt
+                    .await
+                    .expect("the in-memory oplog append task must reply")
+            })
         })
     }
 
@@ -973,7 +984,7 @@ impl Oplog for InMemoryOplog {
         &self,
         _start: OplogEntry,
         _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
         // The concurrent (p3) durability path under test never writes sequential-adapter pairs,
         // and a routed-through-`add` implementation could not honor the atomic pair contract.
         unreachable!("add_pair is not used by the concurrent durability tests")
@@ -986,11 +997,11 @@ impl Oplog for InMemoryOplog {
             dyn FnOnce(golem_common::model::oplog::RawOplogPayload) -> Result<OplogEntry, String>
                 + Send,
         >,
-    ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
         let entry = build_start(
             golem_common::model::oplog::RawOplogPayload::SerializedInline(serialized_request),
         )?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(crate::services::oplog::OrderedOplogStart {
             index,
             entry,
@@ -1001,7 +1012,7 @@ impl Oplog for InMemoryOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().await;
         let index = OplogIndex::from_u64(entries.len() as u64 + 1);
         let (serialized_request, build_start) = build_request(index)?;
@@ -1023,8 +1034,11 @@ impl Oplog for InMemoryOplog {
     async fn commit(
         &self,
         _level: CommitLevel,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
-        std::collections::BTreeMap::new()
+    ) -> Result<
+        std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        crate::services::oplog::OplogError,
+    > {
+        Ok(std::collections::BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -1100,7 +1114,8 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
         })
-        .await;
+        .await
+        .unwrap();
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
@@ -1162,7 +1177,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             )))),
             durable_function_type: DurableFunctionType::ReadRemote,
         })
-        .await;
+        .await
+        .unwrap();
 
     let permit_counter = Arc::new(AtomicUsize::new(0));
     let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel();

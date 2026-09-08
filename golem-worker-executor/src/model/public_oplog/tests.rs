@@ -165,10 +165,10 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
         .await;
     let timestamp = Timestamp::now_utc();
     assert_eq!(
-        oplog.add(OplogEntry::NoOp { timestamp }).await,
+        oplog.add(OplogEntry::NoOp { timestamp }).await.unwrap(),
         OplogIndex::INITIAL
     );
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let chunk = get_public_oplog_chunk(
         Arc::new(PanicComponentService),
@@ -447,7 +447,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             request: Some(cancelled_request_payload),
             durable_function_type: DurableFunctionType::WriteRemote,
         })
-        .await;
+        .await
+        .unwrap();
     expected_starts.insert(
         cancelled_start_index,
         (
@@ -470,8 +471,9 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             cancelled_start_index,
             Some(partial_payload),
         ))
-        .await;
-    oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let last_index = oplog_service
         .get_last_index(&owned_agent_id, AgentMode::Durable)

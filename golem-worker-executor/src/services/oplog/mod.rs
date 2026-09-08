@@ -534,7 +534,7 @@ impl Display for OplogError {
 
 impl std::error::Error for OplogError {}
 
-pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
+pub type OplogAddReceipt = BoxFuture<'static, Result<OplogIndex, OplogError>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawDurableStreamSessionStatus {
@@ -546,7 +546,7 @@ pub struct RawDurableStreamSessionStatus {
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
         self.enqueue_add(entry).await
     }
 
@@ -566,7 +566,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         let first_index = self.current_oplog_index().await.next();
         let records = make_batch(first_index);
         let mut result = Vec::with_capacity(records.len());
@@ -577,7 +577,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
                     index.next()
                 });
             let entry = record.into_inline_entry();
-            let index = self.add(entry.clone()).await;
+            let index = self.add(entry.clone()).await?;
             assert_eq!(
                 index, expected_index,
                 "oplog add_durable_stream_batch default observed a concurrent writer"
@@ -585,12 +585,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
             result.push((index, entry));
         }
         Ok(result)
-    }
-
-    /// A variant of add that can inject failures in tests. TO BE REMOVED
-    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
-        self.add(entry).await;
-        Ok(())
     }
 
     /// Drop a chunk of entries from the beginning of the oplog
@@ -601,7 +595,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
 
     /// Commits the buffered entries to the oplog
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry>;
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>;
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
@@ -663,10 +660,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn length(&self) -> u64;
 
     /// Adds an entry to the oplog and immediately commits it
-    async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let index = self.add(entry).await;
-        self.commit(CommitLevel::Always).await;
-        index
+    async fn add_and_commit(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
+        let index = self.add(entry).await?;
+        self.commit(CommitLevel::Always).await?;
+        Ok(index)
     }
 
     /// Uploads a big oplog payload and returns a reference to it
@@ -717,7 +714,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String>;
+    ) -> Result<OrderedOplogStart, OplogError>;
 
     /// Like [`Self::add_start_with_reserved_raw_payload`], but builds the request after the leaf
     /// oplog has assigned the exact `Start` index. The leaf must invoke `build_request` and append
@@ -726,7 +723,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String>;
+    ) -> Result<OrderedOplogStart, OplogError>;
 
     /// Atomically appends a `Start` entry and a second entry (its `End` or
     /// `Cancelled`) that references the `Start`'s `OplogIndex`.
@@ -747,20 +744,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex);
-
-    /// Like [`add_pair`](Self::add_pair) but for two already-built entries, returning a
-    /// `Result` so test wrappers can inject a write failure on either entry. The default
-    /// delegates to `add_pair`, inheriting its atomic buffering, so the two entries are
-    /// never split by a commit-threshold check or a crash boundary.
-    async fn fallible_add_pair(
-        &self,
-        first: OplogEntry,
-        second: OplogEntry,
-    ) -> Result<(OplogIndex, OplogIndex), String> {
-        let (first_idx, second_idx) = self.add_pair(first, Box::new(move |_| second)).await;
-        Ok((first_idx, second_idx))
-    }
+    ) -> Result<(OplogIndex, OplogIndex), OplogError>;
 
     /// Returns the inner oplog wrapped by this implementation, if any.
     /// Wrapper oplogs should override this to enable generic traversal of the
@@ -864,7 +848,7 @@ pub trait OplogOps: Oplog {
         &self,
         request: T,
         build_start: impl FnOnce(OplogPayload<T>) -> OplogEntry + Send + 'static,
-    ) -> Result<(OplogIndex, PendingUpload), String>
+    ) -> Result<(OplogIndex, PendingUpload), OplogError>
     where
         T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
     {
@@ -889,7 +873,7 @@ pub trait OplogOps: Oplog {
         &self,
         build_request: impl FnOnce(OplogIndex) -> Result<T, String> + Send + 'static,
         build_start: impl FnOnce(OplogPayload<T>) -> OplogEntry + Send + 'static,
-    ) -> Result<(OplogIndex, PendingUpload), String>
+    ) -> Result<(OplogIndex, PendingUpload), OplogError>
     where
         T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
     {
@@ -936,7 +920,7 @@ pub trait OplogOps: Oplog {
         response: &HostResponse,
         function_type: DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
-    ) -> Result<(OplogIndex, OplogIndex), String> {
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
         let now = Timestamp::now_utc();
@@ -959,7 +943,7 @@ pub trait OplogOps: Oplog {
                     forced_commit: false,
                 }),
             )
-            .await;
+            .await?;
         Ok((start_idx, end_idx))
     }
 
@@ -967,11 +951,11 @@ pub trait OplogOps: Oplog {
         &self,
         invocation: AgentInvocation,
         wallet_pin: InvocationWalletPin,
-    ) -> Result<OplogEntry, String> {
+    ) -> Result<OplogEntry, OplogError> {
         let entry = self
             .agent_invocation_started_entry(invocation, wallet_pin)
             .await?;
-        self.add(entry.clone()).await;
+        self.add(entry.clone()).await?;
         Ok(entry)
     }
 
@@ -979,11 +963,11 @@ pub trait OplogOps: Oplog {
         &self,
         invocation: AgentInvocation,
         wallet_pin: InvocationWalletPin,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, OplogError> {
         let entry = self
             .agent_invocation_started_entry(invocation, wallet_pin)
             .await?;
-        Ok(self.add(entry).await)
+        self.add(entry).await
     }
 
     async fn agent_invocation_started_entry(
@@ -1012,7 +996,7 @@ pub trait OplogOps: Oplog {
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
-    ) -> Result<OplogEntry, String> {
+    ) -> Result<OplogEntry, OplogError> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
         } else {
@@ -1027,7 +1011,7 @@ pub trait OplogOps: Oplog {
             consumed_fuel,
             component_revision,
         };
-        self.add(entry.clone()).await;
+        self.add(entry.clone()).await?;
         Ok(entry)
     }
 

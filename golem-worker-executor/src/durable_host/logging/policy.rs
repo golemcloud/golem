@@ -129,7 +129,7 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                     public_state.event_service().emit_event(event.clone(), true);
 
                     if is_live && !replay_state.seen_log(*level, context, message).await {
-                        oplog.add(entry).await;
+                        oplog.add(entry).await.expect("oplog write");
                     }
                 }
             }

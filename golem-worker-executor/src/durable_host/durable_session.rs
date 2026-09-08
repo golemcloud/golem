@@ -5056,7 +5056,7 @@ mod tests {
     #[async_trait::async_trait]
     impl DurableStreamConsumerJournal for TestConsumerJournal {
         async fn commit(&self) -> Result<(), String> {
-            self.0.commit(CommitLevel::Always).await;
+            self.0.commit(CommitLevel::Always).await.unwrap();
             Ok(())
         }
     }
@@ -5119,6 +5119,7 @@ mod tests {
                 Vec::new(),
             ))
             .await
+            .expect("oplog write")
     }
 
     #[test]
@@ -5693,7 +5694,7 @@ mod tests {
     #[async_trait::async_trait]
     impl DurableStreamConsumerJournal for RecordingConsumerJournal {
         async fn commit(&self) -> Result<(), String> {
-            self.oplog.commit(CommitLevel::Always).await;
+            self.oplog.commit(CommitLevel::Always).await.unwrap();
             self.commits.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
@@ -7124,7 +7125,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
@@ -7631,7 +7633,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         streams
             .append_record(StreamSessionRecordV1::Attached(
                 golem_common::base_model::durable_stream::StreamSessionAttachedRecordV1 {
@@ -8110,7 +8113,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
@@ -8452,7 +8456,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         let streams = DurableSessionStreams::new(
             producer.clone(),
             oplog.clone(),
@@ -8836,7 +8841,8 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ))
-            .await;
+            .await
+            .unwrap();
         streams
             .append_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
@@ -8999,7 +9005,8 @@ mod tests {
                     },
                 ))),
             })
-            .await;
+            .await
+            .expect("oplog write");
         // No commit: another local append must already be visible.
         assert_eq!(streams.caller_attempt_id().await.unwrap(), attempt_id);
         assert_eq!(oplog.take_read_ranges(), vec![(index, 1)]);
@@ -9035,7 +9042,10 @@ mod tests {
         );
         streams.clone().recover_session_mappings().await.unwrap();
         assert!(oplog.take_read_ranges().is_empty());
-        let next = oplog.add(OplogEntry::interrupted()).await;
+        let next = oplog
+            .add(OplogEntry::interrupted())
+            .await
+            .expect("oplog write");
         streams.recover_session_mappings().await.unwrap();
         assert_eq!(oplog.take_read_ranges(), vec![(next, 1)]);
     }
@@ -9141,7 +9151,8 @@ mod tests {
                     },
                 ))),
             })
-            .await;
+            .await
+            .expect("oplog write");
 
         assert_eq!(
             streams.persisted_finished().await.unwrap(),

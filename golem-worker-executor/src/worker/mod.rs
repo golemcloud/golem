@@ -3898,7 +3898,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )))
                     }),
                 )
-                .await;
+                .await?;
             streams
                 .commit_consumer_journal()
                 .await
@@ -5052,7 +5052,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Appends an oplog entry without forcing a durable commit. Callers that
     /// require ordering must await the append before exposing subsequent work.
     pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
-        self.oplog.add(entry).await
+        self.oplog.add(entry).await.expect("oplog write")
     }
 
     pub async fn commit_oplog_and_update_state(&self, commit_level: CommitLevel) -> OplogIndex {
@@ -5749,7 +5749,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 };
 
                 // Make sure the oplog is committed
-                self.oplog.commit(CommitLevel::Always).await;
+                self.oplog
+                    .commit(CommitLevel::Always)
+                    .await
+                    .expect("oplog write");
 
                 // Persist any pending cached-status changes synchronously before the worker leaves
                 // memory, so a subsequent cold load does not have to re-fold oplog entries that were

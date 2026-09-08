@@ -2935,7 +2935,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     response: None,
                     forced_commit: true,
                 };
-                self.state.oplog.add(entry).await;
+                self.state.oplog.add(entry).await?;
                 // The durable scope opened in `begin_function` is now closed.
                 self.state.remove_durable_scope(begin_index)?;
             } else {
@@ -3013,7 +3013,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 response: None,
                                 forced_commit: true,
                             })
-                            .await;
+                            .await?;
                     }
                 }
             }
@@ -3075,7 +3075,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     scope_start,
                     Box::new(move |_start_index| OplogEntry::begin_remote_transaction(tx_id, None)),
                 )
-                .await;
+                .await
+                .map_err(WorkerExecutorError::from)?;
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
@@ -3294,9 +3295,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_commit_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
@@ -3323,9 +3323,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_rollback_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
@@ -3446,17 +3445,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // successful append can never leave one without the other.
         self.state
             .oplog
-            .fallible_add_pair(
+            .add_pair(
                 marker,
-                OplogEntry::End {
+                Box::new(move |_| OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
-                },
+                }),
             )
-            .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .await?;
         self.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::Always)
@@ -4844,7 +4842,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         }
                     }),
                 )
-                .await;
+                .await
+                .expect("oplog write");
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
@@ -5858,7 +5857,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .get_public_state()
                     .oplog()
                     .add(OplogEntry::restart())
-                    .await;
+                    .await?;
 
                 Ok(None)
             } else {

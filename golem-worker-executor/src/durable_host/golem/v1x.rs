@@ -619,7 +619,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
             // discard writes and return `NONE` from `add`; fall back to the session's replay
             // target there so the guest never observes an invalid index.
-            let marker = match self.state.oplog.add(OplogEntry::no_op()).await {
+            let marker = match self
+                .state
+                .oplog
+                .add(OplogEntry::no_op())
+                .await
+                .expect("oplog write")
+            {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
             };
@@ -757,6 +763,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .oplog
                 .add(OplogEntry::begin_atomic_region())
                 .await
+                .expect("oplog write")
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -874,7 +881,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self.state
                 .oplog
                 .add(OplogEntry::end_atomic_region(begin_index))
-                .await;
+                .await?;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
         }

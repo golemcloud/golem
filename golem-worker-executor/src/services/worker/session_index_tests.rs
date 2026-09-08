@@ -235,6 +235,7 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecordV1) -> Opl
     oplog
         .add(DurableStreamOplogRecord::Session(Box::new(record)).into_inline_entry())
         .await
+        .expect("oplog write")
 }
 
 async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
@@ -243,6 +244,7 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
             timestamp: Timestamp::now_utc(),
         })
         .await
+        .expect("oplog write")
 }
 
 async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {
@@ -255,6 +257,7 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> O
             Vec::new(),
         ))
         .await
+        .expect("oplog write")
 }
 
 fn attached_record(
