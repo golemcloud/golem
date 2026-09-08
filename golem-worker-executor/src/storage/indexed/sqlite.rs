@@ -13,12 +13,11 @@
 // limitations under the License.
 
 use super::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ScanCursor,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
@@ -47,7 +46,7 @@ impl SqliteIndexedStorage {
     /// [`super::multi_sqlite::MultiSqliteIndexedStorage`] is a fan-out of these and must always
     /// answer the same way: it has no namespace to delegate the question through, so this is what
     /// keeps the two from drifting apart.
-    pub(crate) const SUPPORTS_EPOCH_FENCING: bool = false;
+    pub(crate) const SUPPORTS_EPOCH_FENCING: bool = true;
 
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
         Self::migrate(config).await?;
@@ -234,6 +233,8 @@ impl IndexedStorage for SqliteIndexedStorage {
         Ok((new_cursor, keys))
     }
 
+    /// Delegates to [`Self::append_many`] so there is exactly one fenced write path: the epoch
+    /// check has to happen in the same transaction as the insert.
     async fn append(
         &self,
         svc_name: &'static str,
@@ -243,32 +244,18 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-        _shard_epoch: Option<ShardEpoch>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
-        let query = sqlx::query(
-            r#"
-                    INSERT INTO index_storage (namespace, key, id, value) VALUES (?,?,?,?);
-                    "#,
+        self.append_many(
+            svc_name,
+            api_name,
+            entity_name,
+            &namespace,
+            key,
+            vec![(id, Bytes::from(value))].into(),
+            shard_epoch,
         )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(sqlx::types::Json(id))
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| {
-                if primary_oplog_insert {
-                    Self::classify_repo_error_primary_oplog_insert(err)
-                } else {
-                    Self::classify_repo_error(err)
-                }
-            })
+        .await
     }
 
     async fn append_many(
@@ -279,7 +266,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
-        _shard_epoch: Option<ShardEpoch>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
@@ -293,8 +280,33 @@ impl IndexedStorage for SqliteIndexedStorage {
         }
 
         self.pool
-            .with_tx(svc_name, api_name, |tx| {
-                async move {
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+                Box::pin(async move {
+                    // SQLite has no `SELECT ... FOR UPDATE`, and it does not need one here: the
+                    // write pool is capped at a single connection (golem-service-base
+                    // db/sqlite.rs:46-50), so this transaction holds the only writer and the
+                    // check cannot be interleaved. Raising that cap means switching this to
+                    // `BEGIN IMMEDIATE`.
+                    if let Some(expected) = shard_epoch {
+                        let stored: Option<(i64,)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch FROM oplog_metadata WHERE namespace = ? AND key = ?;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        let actual = stored.map(|(epoch,)| ShardEpoch(epoch as u64));
+                        if actual != Some(expected) {
+                            return Err(FencedTxError::Fenced {
+                                key: key.clone(),
+                                expected,
+                                actual,
+                            });
+                        }
+                    }
+
                     for (id, value) in pairs.iter() {
                         tx.execute(
                             sqlx::query(
@@ -309,17 +321,88 @@ impl IndexedStorage for SqliteIndexedStorage {
                     }
 
                     Ok(())
-                }
-                .boxed()
+                })
             })
             .await
             .map_err(|err| {
-                if primary_oplog_insert {
-                    Self::classify_repo_error_primary_oplog_insert(err)
+                err.into_indexed_storage_error(if primary_oplog_insert {
+                    Self::classify_repo_error_primary_oplog_insert
                 } else {
-                    Self::classify_repo_error(err)
-                }
+                    Self::classify_repo_error
+                })
             })
+    }
+
+    /// Monotonic compare-and-set: the `WHERE` on the conflict path means a lower epoch updates no
+    /// row, so a stale writer cannot walk the record back and un-fence itself. The unqualified
+    /// `epoch` there is the existing row's.
+    async fn upsert_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        shard_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let namespace = Self::namespace(namespace);
+        // `i64`, not `u64`: sqlx has no `Encode<Sqlite>` for `u64`, which is why ids elsewhere in
+        // this file go through `Json`. That encodes as TEXT, and comparison affinity is applied
+        // per operand, so this column stays integer-bound everywhere.
+        let epoch = shard_epoch.0 as i64;
+
+        let mut api = self.pool.with_rw(svc_name, api_name);
+        let result = api
+            .execute(
+                sqlx::query(
+                    r#"INSERT INTO oplog_metadata (namespace, key, epoch) VALUES (?, ?, ?)
+                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch
+                       WHERE epoch <= excluded.epoch;"#,
+                )
+                .bind(namespace.clone())
+                .bind(key)
+                .bind(epoch),
+            )
+            .await
+            .map_err(Self::classify_repo_error)?;
+
+        if result.rows_affected() == 0 {
+            let stored: Option<(i64,)> = api
+                .fetch_optional_as(
+                    sqlx::query_as(
+                        "SELECT epoch FROM oplog_metadata WHERE namespace = ? AND key = ?;",
+                    )
+                    .bind(namespace)
+                    .bind(key),
+                )
+                .await
+                .map_err(Self::classify_repo_error)?;
+            return Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected: shard_epoch,
+                actual: stored.map(|(epoch,)| ShardEpoch(epoch as u64)),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn delete_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        let query = sqlx::query("DELETE FROM oplog_metadata WHERE namespace = ? AND key = ?;")
+            .bind(Self::namespace(namespace))
+            .bind(key);
+
+        self.pool
+            .with_rw(svc_name, api_name)
+            .execute(query)
+            .await
+            .map(|_| ())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn length(

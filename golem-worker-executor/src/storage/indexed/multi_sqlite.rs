@@ -328,6 +328,10 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await
     }
 
+    /// Overridden rather than inherited. The trait default loops [`Self::append`], which would
+    /// resolve the per-agent database and re-check the fence once per entry, in a separate
+    /// transaction each time - so a batch could land half-written, and the contract that the
+    /// fence is checked once per call would not hold.
     async fn append_many(
         &self,
         svc_name: &'static str,

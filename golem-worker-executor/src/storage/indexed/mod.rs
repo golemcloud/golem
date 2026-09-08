@@ -22,6 +22,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::{AgentId, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::repo::RepoError;
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -97,6 +98,52 @@ impl std::error::Error for IndexedStorageError {}
 impl From<String> for IndexedStorageError {
     fn from(s: String) -> Self {
         IndexedStorageError::Other(s)
+    }
+}
+
+/// Carries a fence rejection out of a transaction closure.
+///
+/// [`Pool::with_tx_err`] requires its error type to be `From<RepoError>`, and
+/// [`IndexedStorageError`] deliberately is not: each backend converts a `RepoError` through its
+/// own classifier, which decides whether the failure is retriable and annotates a unique
+/// violation as a possible ownership mismatch. A blanket `From` would flatten all of that into
+/// `Other`. So the closure fails with this instead, and the backend maps it back at the boundary
+/// with the classifier it would have used anyway - which keeps `with_tx_err`'s labelled rollback
+/// and its metrics rather than hand-rolling `begin`/`rollback` at every early return.
+#[derive(Debug)]
+pub(crate) enum FencedTxError {
+    Repo(RepoError),
+    Fenced {
+        key: String,
+        expected: ShardEpoch,
+        actual: Option<ShardEpoch>,
+    },
+}
+
+impl From<RepoError> for FencedTxError {
+    fn from(err: RepoError) -> Self {
+        FencedTxError::Repo(err)
+    }
+}
+
+impl FencedTxError {
+    /// `classify` is the backend's own `RepoError` classifier.
+    pub(crate) fn into_indexed_storage_error(
+        self,
+        classify: fn(RepoError) -> IndexedStorageError,
+    ) -> IndexedStorageError {
+        match self {
+            FencedTxError::Repo(err) => classify(err),
+            FencedTxError::Fenced {
+                key,
+                expected,
+                actual,
+            } => IndexedStorageError::Fenced {
+                key,
+                expected,
+                actual,
+            },
+        }
     }
 }
 
