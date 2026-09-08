@@ -4500,16 +4500,17 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
         ))
     })?;
 
-    // Host responses can carry deeply nested schema graphs. Clone and serialize them on a fresh
+    // Host responses can carry deeply nested schema graphs. Serialize them on a fresh
     // blocking-task stack rather than on a Tokio worker stack that may already be deep inside a
     // Wasmtime guest call. Box both the task input and output: passing the response inline in the
-    // blocking task envelope can overflow the caller's stack before the task starts. Keep the typed
-    // cache so this changes neither the oplog representation nor same-process payload-read behavior.
+    // blocking task envelope can overflow the caller's stack before the task starts. Leave the
+    // payload uncached so returning the owned response does not require a deep copy for the oplog.
     let response = Box::new(response);
     let prepared = tokio::task::spawn_blocking(move || {
-        let host_response: HostResponse = response.as_ref().clone().into();
+        let host_response: HostResponse = (*response).into();
         let bytes = golem_common::serialization::serialize(&host_response)?;
-        Ok::<_, String>(Box::new((response, bytes, Arc::new(host_response))))
+        let response = Box::new(Pair::unwrap_own_response(host_response));
+        Ok::<_, String>(Box::new((response, bytes)))
     })
     .await
     .map_err(|err| {
@@ -4518,11 +4519,11 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
     .map_err(|err| {
         WorkerExecutorError::runtime(format!("failed to serialize durable call response: {err}"))
     })?;
-    let (response, bytes, cached) = *prepared;
+    let (response, bytes) = *prepared;
     let raw_payload = oplog.upload_raw_payload(bytes).await.map_err(|err| {
         WorkerExecutorError::runtime(format!("failed to store durable call response: {err}"))
     })?;
-    let response_payload = raw_payload.into_payload_with_cache(cached).map_err(|err| {
+    let response_payload = raw_payload.into_payload().map_err(|err| {
         WorkerExecutorError::runtime(format!(
             "failed to prepare durable call response payload: {err}"
         ))

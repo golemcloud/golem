@@ -85,6 +85,7 @@ impl DebugConfig {
             active_agents: self.active_agents,
             agent_status_flush: Default::default(),
             agent_status_checkpoint: Default::default(),
+            invocation_results: Default::default(),
             scheduler: self.scheduler,
             public_worker_api: self.public_worker_api,
             memory: self.memory,

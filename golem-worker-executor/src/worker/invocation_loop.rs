@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
-use crate::model::{ReadFileResult, TrapType};
+use crate::model::{LookupResult, ReadFileResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     LimitTransition, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
@@ -1999,10 +1999,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             invocation => {
                 if let Some(idempotency_key) = invocation.idempotency_key() {
-                    let has_result = {
-                        let invocation_results = self.parent.invocation_results.read().await;
-                        invocation_results.contains_key(idempotency_key)
-                    };
+                    let has_result = matches!(
+                        self.parent.lookup_invocation_result(idempotency_key).await,
+                        LookupResult::Complete(_) | LookupResult::Interrupted
+                    );
                     if !has_result {
                         self.invoke_agent(invocation).await
                     } else {
