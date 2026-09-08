@@ -80,13 +80,6 @@ const PACKED_U8_OUTPUT_FLUSH_DELAY: Duration = Duration::from_millis(50);
 #[async_trait::async_trait]
 pub(crate) trait DurableStreamConsumerJournal: Send + Sync {
     async fn commit(&self) -> Result<(), String>;
-
-    async fn source_unavailable(
-        &self,
-        _key: &StreamAttachmentKeyV1,
-    ) -> Result<Option<golem_common::model::durable_stream::StreamOffsetV1>, String> {
-        Ok(None)
-    }
 }
 
 #[derive(Clone)]
@@ -3794,6 +3787,10 @@ impl DurableSessionStreams {
             let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
                 "foreign durable stream consumer authorization is unavailable".to_string()
             })?;
+            let consumer_producer = self
+                .consumer_journal
+                .as_ref()
+                .map(|_| self.producer.clone());
             DurableStreamReader::Attached(Box::new(AttachedDurableCatchUpReader {
                 source: Arc::new(RoutedAttachedStreamSegmentSource::new(
                     rpc,
@@ -3803,7 +3800,7 @@ impl DurableSessionStreams {
                 )),
                 attachment,
                 handle: handle.clone(),
-                consumer_journal: self.consumer_journal.clone(),
+                consumer_producer,
                 after,
                 buffered: VecDeque::new(),
                 terminal: false,
@@ -4193,7 +4190,7 @@ struct AttachedDurableCatchUpReader {
     source: Arc<dyn AttachedStreamSegmentSource>,
     attachment: StreamAttachmentKeyV1,
     handle: DurableStreamHandleV1,
-    consumer_journal: Option<Arc<dyn DurableStreamConsumerJournal>>,
+    consumer_producer: Option<Arc<DurableStreamProducer>>,
     after: Option<golem_common::model::durable_stream::StreamOffsetV1>,
     buffered: VecDeque<CommittedProducerStreamEventV1>,
     terminal: bool,
@@ -4203,13 +4200,12 @@ impl AttachedDurableCatchUpReader {
     async fn source_unavailable_overlay(
         &self,
     ) -> Result<Option<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
-        let Some(journal) = &self.consumer_journal else {
+        let Some(producer) = &self.consumer_producer else {
             return Ok(None);
         };
-        let source_offset = journal
-            .source_unavailable(&self.attachment)
-            .await
-            .map_err(DurableStreamProducerError::Oplog)?;
+        let source_offset = producer
+            .consumer_source_unavailable(&self.attachment)
+            .await?;
         Ok(source_offset.map(|offset| CommittedProducerStreamEventV1 {
             stream_id: self.handle.stream_id,
             producer_sequence: 0,
@@ -5037,6 +5033,58 @@ mod tests {
         }
     }
 
+    async fn append_prepared_pending(
+        producer: &DurableStreamProducer,
+        oplog: &TestOplog,
+        identity: &TestIdentity,
+        attachment_id: AttachmentId,
+        attempt_id: AttemptId,
+        handle: &DurableStreamHandleV1,
+        role: SessionStreamRoleV1,
+    ) -> OplogIndex {
+        producer
+            .append_session_record(StreamSessionRecordV1::Prepared(
+                StreamSessionPreparedRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    attempt: StartAttemptDescriptorV1 {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation.clone(),
+                        attachment_id,
+                        expected_callee_fingerprint: identity.fingerprint,
+                        attempt_id,
+                        invocation: PersistedStreamInvocationDescriptorV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: identity.invocation.clone(),
+                            target_component_revision: ComponentRevision::INITIAL,
+                            method_name: "consume".to_string(),
+                            invocation_value: vec![1],
+                            stream_handles: vec![handle.clone()],
+                            execution_config: vec![2],
+                            effective_identity: vec![3],
+                        },
+                        effective_identity: vec![3],
+                        live_join_buffer_events: 8,
+                    },
+                    stream_mappings: vec![StreamSessionMappingRecordV1 {
+                        transport_stream_id: 7,
+                        handle: handle.clone(),
+                        role,
+                    }],
+                },
+            ))
+            .await
+            .unwrap();
+        oplog
+            .add(OplogEntry::pending_agent_invocation(
+                identity.invocation.idempotency_key.clone(),
+                OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+                TraceId::generate(),
+                Vec::new(),
+                Vec::new(),
+            ))
+            .await
+    }
+
     #[test]
     fn private_cancellation_mapping_preserves_durable_failure_reasons() {
         use golem_api_grpc::proto::golem::worker::StreamCancelReason;
@@ -5336,20 +5384,32 @@ mod tests {
             .await
             .unwrap()
             .value;
+        let attachment_id = AttachmentId::primary(
+            identity.environment_id,
+            &identity.agent_id,
+            &identity.invocation.idempotency_key,
+        )
+        .unwrap();
+        let attempt_id = AttemptId::fresh();
+        let pending_invocation_oplog_index = append_prepared_pending(
+            producer.as_ref(),
+            oplog.as_ref(),
+            &identity,
+            attachment_id,
+            attempt_id,
+            &handle,
+            SessionStreamRoleV1::Input,
+        )
+        .await;
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
-                    attachment_id: AttachmentId::primary(
-                        identity.environment_id,
-                        &identity.agent_id,
-                        &identity.invocation.idempotency_key,
-                    )
-                    .unwrap(),
-                    attempt_id: AttemptId::fresh(),
+                    attachment_id,
+                    attempt_id,
                     epoch: 1,
-                    pending_invocation_oplog_index: OplogIndex::INITIAL,
+                    pending_invocation_oplog_index,
                 },
             ))
             .await
@@ -5666,7 +5726,7 @@ mod tests {
             source: producer,
             attachment,
             handle,
-            consumer_journal: None,
+            consumer_producer: None,
             after: None,
             buffered: VecDeque::new(),
             terminal: false,
@@ -5890,20 +5950,31 @@ mod tests {
             .unwrap()
             .value;
         let attempt_id = AttemptId::fresh();
+        let attachment_id = AttachmentId::primary(
+            identity.environment_id,
+            &identity.agent_id,
+            &identity.invocation.idempotency_key,
+        )
+        .unwrap();
+        let pending_invocation_oplog_index = append_prepared_pending(
+            producer.as_ref(),
+            oplog.as_ref(),
+            &identity,
+            attachment_id,
+            attempt_id,
+            &handle,
+            SessionStreamRoleV1::Output,
+        )
+        .await;
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
-                    attachment_id: AttachmentId::primary(
-                        identity.environment_id,
-                        &identity.agent_id,
-                        &identity.invocation.idempotency_key,
-                    )
-                    .unwrap(),
+                    attachment_id,
                     attempt_id,
                     epoch: 1,
-                    pending_invocation_oplog_index: OplogIndex::INITIAL,
+                    pending_invocation_oplog_index,
                 },
             ))
             .await
@@ -5995,20 +6066,31 @@ mod tests {
             .unwrap()
             .value;
         let attempt_id = AttemptId::fresh();
+        let attachment_id = AttachmentId::primary(
+            identity.environment_id,
+            &identity.agent_id,
+            &identity.invocation.idempotency_key,
+        )
+        .unwrap();
+        let pending_invocation_oplog_index = append_prepared_pending(
+            producer.as_ref(),
+            oplog.as_ref(),
+            &identity,
+            attachment_id,
+            attempt_id,
+            &handle,
+            SessionStreamRoleV1::Output,
+        )
+        .await;
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
-                    attachment_id: AttachmentId::primary(
-                        identity.environment_id,
-                        &identity.agent_id,
-                        &identity.invocation.idempotency_key,
-                    )
-                    .unwrap(),
+                    attachment_id,
                     attempt_id,
                     epoch: 1,
-                    pending_invocation_oplog_index: OplogIndex::INITIAL,
+                    pending_invocation_oplog_index,
                 },
             ))
             .await
@@ -6080,6 +6162,16 @@ mod tests {
             .unwrap()
             .value;
         let start_attempt_id = AttemptId::fresh();
+        let pending_invocation_oplog_index = append_prepared_pending(
+            producer.as_ref(),
+            oplog.as_ref(),
+            &identity,
+            attachment_id,
+            start_attempt_id,
+            &handle,
+            SessionStreamRoleV1::Input,
+        )
+        .await;
         producer
             .append_session_record(StreamSessionRecordV1::Attached(
                 StreamSessionAttachedRecordV1 {
@@ -6088,7 +6180,7 @@ mod tests {
                     attachment_id,
                     attempt_id: start_attempt_id,
                     epoch: 1,
-                    pending_invocation_oplog_index: OplogIndex::INITIAL,
+                    pending_invocation_oplog_index,
                 },
             ))
             .await

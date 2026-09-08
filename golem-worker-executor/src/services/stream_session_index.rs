@@ -76,6 +76,14 @@ pub(super) struct Metadata {
     pub(super) producer_fingerprint: Option<AgentFingerprint>,
 }
 
+/// Producer identity read from the same projection as stream metadata. `covered_through` is at
+/// least the oplog horizon observed by the lookup, so the fingerprint belongs to that identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProducerIdentityLookup {
+    pub covered_through: OplogIndex,
+    pub producer_fingerprint: AgentFingerprint,
+}
+
 #[derive(Clone, Debug)]
 pub struct StreamSessionIndexService {
     kv: Arc<dyn KeyValueStorage + Send + Sync>,
@@ -110,6 +118,31 @@ impl Drop for IndexLock {
 }
 
 impl StreamSessionIndexService {
+    pub async fn lookup_producer_identity(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<ProducerIdentityLookup, String> {
+        let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
+        let horizon = oplog.get_last_index(id, mode).await;
+        self.catch_up(id, mode, horizon).await?;
+        let metadata: Metadata = self
+            .kv
+            .with_entity("stream_session_index", "lookup_identity", "metadata")
+            .get(Self::namespace(id), METADATA_FIELD)
+            .await?
+            .ok_or("producer identity metadata is unavailable")?;
+        if metadata.covered_through < horizon {
+            return Err("producer identity coverage is unavailable".into());
+        }
+        Ok(ProducerIdentityLookup {
+            covered_through: metadata.covered_through,
+            producer_fingerprint: metadata
+                .producer_fingerprint
+                .ok_or("producer identity is missing from covered metadata")?,
+        })
+    }
+
     #[tracing::instrument(
         name = "stream_session_index.lookup_producer",
         level = "debug",
@@ -662,6 +695,28 @@ impl StreamSessionIndexService {
                 let mut resume_offsets = HashMap::<String, OplogIndex>::new();
                 let mut consumer_deleting = None;
                 for (idx, entry) in &entries {
+                    if let OplogEntry::PendingAgentInvocation {
+                        idempotency_key, ..
+                    } = entry
+                    {
+                        if !updates.contains_key(idempotency_key) {
+                            let old: Option<Result<DurableStreamSessionStatus, String>> = self
+                                .kv
+                                .with_entity("stream_session_index", "read", "session")
+                                .get_attempt_deserialize(
+                                    namespace.clone(),
+                                    &Self::field(idempotency_key),
+                                )
+                                .await?;
+                            if let Some(old) = old.transpose()? {
+                                updates.insert(idempotency_key.clone(), old);
+                            }
+                        }
+                        if let Some(status) = updates.get_mut(idempotency_key) {
+                            status.apply_pending_invocation(*idx, idempotency_key);
+                        }
+                        continue;
+                    }
                     let OplogEntry::StreamSession { record, .. } = entry else {
                         continue;
                     };
@@ -775,6 +830,44 @@ impl StreamSessionIndexService {
                         updates.insert(key.clone(), old.transpose()?.unwrap_or_default());
                     }
                     let status = updates.get_mut(&key).unwrap();
+                    if let StreamSessionRecordV1::Attached(attached) = record
+                        && status.lifecycle_error.is_none()
+                        && status.validated_initial_pending_invocation.is_none()
+                    {
+                        if !status.validate_initial_attachment_reference(*idx, attached) {
+                            continue;
+                        }
+                        let persisted_referent;
+                        let referent = if let Some(entry) =
+                            entries.get(&attached.pending_invocation_oplog_index)
+                        {
+                            Some(entry)
+                        } else {
+                            persisted_referent = oplog
+                                .read_exact(
+                                    id,
+                                    mode,
+                                    attached.pending_invocation_oplog_index,
+                                    1,
+                                )
+                                .await;
+                            persisted_referent.get(&attached.pending_invocation_oplog_index)
+                        };
+                        match referent {
+                            Some(OplogEntry::PendingAgentInvocation {
+                                idempotency_key, ..
+                            }) => status.apply_pending_invocation(
+                                attached.pending_invocation_oplog_index,
+                                idempotency_key,
+                            ),
+                            _ => {
+                                status.lifecycle_error = Some(
+                                    "durable Attached record references a missing or invalid pending invocation"
+                                        .into(),
+                                )
+                            }
+                        }
+                    }
                     if status.first_prepared.is_some()
                         || matches!(record, StreamSessionRecordV1::Prepared(_))
                     {
@@ -891,6 +984,7 @@ impl StreamSessionIndexService {
                 &mut value.prepared,
                 &mut value.invocation_result,
                 &mut value.finished,
+                &mut value.validated_initial_pending_invocation,
             ] {
                 if field.is_some_and(|idx| idx > horizon) {
                     *field = None;
@@ -902,6 +996,7 @@ impl StreamSessionIndexService {
                 value.initial_attachment_epoch = None;
                 value.initial_attachment_attempt_id = None;
                 value.initial_pending_invocation_oplog_index = None;
+                value.validated_initial_pending_invocation = None;
                 value.attachment_epoch = None;
                 value.attachment_attempt_id = None;
                 value.attachment_attached = None;

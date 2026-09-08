@@ -1549,6 +1549,7 @@ mod tests {
     #[derive(Debug)]
     struct IndexTestOplogService {
         entries: BTreeMap<OplogIndex, OplogEntry>,
+        stream_index: std::sync::OnceLock<Arc<StreamSessionIndexService>>,
         reads: StdMutex<Vec<(OplogIndex, u64)>>,
         pause_next_read: AtomicBool,
         read_started: Notify,
@@ -1559,6 +1560,7 @@ mod tests {
         fn new(entries: BTreeMap<OplogIndex, OplogEntry>) -> Self {
             Self {
                 entries,
+                stream_index: std::sync::OnceLock::new(),
                 reads: StdMutex::new(Vec::new()),
                 pause_next_read: AtomicBool::new(false),
                 read_started: Notify::new(),
@@ -1586,6 +1588,14 @@ mod tests {
 
     #[async_trait]
     impl OplogService for IndexTestOplogService {
+        fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
+            self.stream_index.set(index).unwrap();
+        }
+
+        fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
+            self.stream_index.get().cloned()
+        }
+
         async fn create(
             &self,
             _owned_agent_id: &OwnedAgentId,

@@ -59,14 +59,27 @@ impl RawSessionCache {
             .await?
             .filter(|status| status.session_key.as_ref() == Some(key));
         for (offset, entry) in buffer.iter().enumerate() {
+            let index = OplogIndex::from_u64(committed.as_u64() + offset as u64 + 1);
+            if let OplogEntry::PendingAgentInvocation {
+                idempotency_key, ..
+            } = entry
+            {
+                if status
+                    .as_ref()
+                    .and_then(|status| status.session_key.as_ref())
+                    .is_some_and(|session| &session.idempotency_key == idempotency_key)
+                {
+                    status
+                        .as_mut()
+                        .unwrap()
+                        .apply_pending_invocation(index, idempotency_key);
+                }
+                continue;
+            }
             if let Some(record) = record(entry)?
                 && record_key(&record) == Some(key)
             {
-                apply(
-                    &mut status,
-                    OplogIndex::from_u64(committed.as_u64() + offset as u64 + 1),
-                    &record,
-                );
+                apply(&mut status, index, &record);
             }
         }
         Ok(status)
@@ -88,6 +101,24 @@ impl RawSessionCache {
     }
 
     pub fn apply_entry(&mut self, index: OplogIndex, entry: &OplogEntry) {
+        if let OplogEntry::PendingAgentInvocation {
+            idempotency_key, ..
+        } = entry
+        {
+            for (status, _) in self.entries.values_mut() {
+                if status
+                    .as_ref()
+                    .and_then(|status| status.session_key.as_ref())
+                    .is_some_and(|key| &key.idempotency_key == idempotency_key)
+                {
+                    status
+                        .as_mut()
+                        .unwrap()
+                        .apply_pending_invocation(index, idempotency_key);
+                }
+            }
+            return;
+        }
         let record = match record(entry) {
             Ok(Some(record)) => record,
             Ok(None) => return,

@@ -1,6 +1,7 @@
 use crate::services::oplog::OplogServiceOps;
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::durable_stream::StreamSessionRecordV1;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
@@ -232,6 +233,8 @@ where
             return Ok(None);
         }
         hydrate_stream_session_payloads(this, owned_agent_id, agent_mode, &mut entries).await?;
+        hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
+            .await?;
         let finalize_oplog_processor_checkpoints =
             entries.keys().next_back() == Some(&last_oplog_index);
         baseline = match update_status_with_new_entries_internal(
@@ -325,6 +328,8 @@ where
             return Ok(None);
         }
         hydrate_stream_session_payloads(this, owned_agent_id, agent_mode, &mut entries).await?;
+        hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
+            .await?;
         let finalize_oplog_processor_checkpoints =
             entries.keys().next_back() == Some(&last_oplog_index);
         let deleted_regions = baseline.deleted_regions.clone();
@@ -362,6 +367,86 @@ where
                     format!("failed to load durable stream session payload: {error}")
                 })?;
             *record = OplogPayload::Inline(Box::new(decoded));
+        }
+    }
+    Ok(())
+}
+
+async fn hydrate_initial_pending_evidence<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    baseline: &mut AgentStatusRecord,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> Result<(), String>
+where
+    T: HasOplogService + Sync,
+{
+    for (attached_idx, entry) in entries {
+        let OplogEntry::StreamSession {
+            record: OplogPayload::Inline(record),
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let StreamSessionRecordV1::Attached(attached) = record.as_ref() else {
+            continue;
+        };
+        let Some(status) = baseline
+            .durable_stream_sessions
+            .get(&attached.session_key.idempotency_key)
+            .cloned()
+        else {
+            continue;
+        };
+        if status.lifecycle_error.is_some() || status.validated_initial_pending_invocation.is_some()
+        {
+            continue;
+        }
+        let mut status = status;
+        if !status.validate_initial_attachment_reference(*attached_idx, attached) {
+            baseline
+                .durable_stream_sessions
+                .insert(attached.session_key.idempotency_key.clone(), status);
+            continue;
+        }
+        let persisted_referent;
+        let referent = if let Some(entry) = entries.get(&attached.pending_invocation_oplog_index) {
+            Some(entry)
+        } else {
+            persisted_referent = this
+                .oplog_service()
+                .read_exact(
+                    owned_agent_id,
+                    agent_mode,
+                    attached.pending_invocation_oplog_index,
+                    1,
+                )
+                .await;
+            persisted_referent.get(&attached.pending_invocation_oplog_index)
+        };
+        match referent {
+            Some(OplogEntry::PendingAgentInvocation {
+                idempotency_key, ..
+            }) => {
+                status.apply_pending_invocation(
+                    attached.pending_invocation_oplog_index,
+                    idempotency_key,
+                );
+                baseline
+                    .durable_stream_sessions
+                    .insert(attached.session_key.idempotency_key.clone(), status);
+            }
+            _ => {
+                status.lifecycle_error = Some(
+                    "durable Attached record references a missing or invalid pending invocation"
+                        .into(),
+                );
+                baseline
+                    .durable_stream_sessions
+                    .insert(attached.session_key.idempotency_key.clone(), status);
+            }
         }
     }
     Ok(())
@@ -1625,7 +1710,7 @@ mod test {
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
         calculate_last_known_status_with_checkpoint_reader, calculate_oplog_processor_checkpoints,
-        calculate_total_linear_memory_size, try_fold_status_from,
+        calculate_total_linear_memory_size, hydrate_initial_pending_evidence, try_fold_status_from,
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
@@ -1637,7 +1722,8 @@ mod test {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::durable_stream::{
         AttachmentId, AttemptId, PersistedStreamInvocationDescriptorV1, StartAttemptDescriptorV1,
-        StreamInvocationIdV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
+        StreamInvocationIdV1, StreamSessionAttachedRecordV1, StreamSessionPreparedRecordV1,
+        StreamSessionRecordV1,
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -1658,6 +1744,75 @@ mod test {
     use golem_common::schema::IntoTypedSchemaValue;
     use golem_common::schema::SchemaValue;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    #[test]
+    async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
+        let test_case = TestCase::builder(0).build();
+        let key = IdempotencyKey::fresh();
+        let session_key = StreamInvocationIdV1 {
+            callee_environment_id: test_case.owned_agent_id.environment_id,
+            callee: test_case.owned_agent_id.agent_id().clone(),
+            callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+            idempotency_key: key.clone(),
+        };
+        let attempt = AttemptId::fresh();
+        for pending in [
+            OplogIndex::NONE,
+            OplogIndex::from_u64(10),
+            OplogIndex::from_u64(13),
+        ] {
+            let mut baseline = AgentStatusRecord::default();
+            baseline.durable_stream_sessions.insert(
+                key.clone(),
+                golem_common::model::DurableStreamSessionStatus {
+                    first_prepared: Some(OplogIndex::from_u64(10)),
+                    prepared: Some(OplogIndex::from_u64(10)),
+                    session_key: Some(session_key.clone()),
+                    prepared_attempt_id: Some(attempt),
+                    ..Default::default()
+                },
+            );
+            let attached = StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id: AttachmentId::primary(
+                    session_key.callee_environment_id,
+                    &session_key.callee,
+                    &key,
+                )
+                .unwrap(),
+                attempt_id: attempt,
+                epoch: 1,
+                pending_invocation_oplog_index: pending,
+            });
+            let entries = BTreeMap::from([(
+                OplogIndex::from_u64(13),
+                OplogEntry::StreamSession {
+                    timestamp: Timestamp::now_utc(),
+                    record: OplogPayload::Inline(Box::new(attached)),
+                },
+            )]);
+            test_case.read_starts.lock().unwrap().clear();
+            hydrate_initial_pending_evidence(
+                &test_case,
+                &test_case.owned_agent_id,
+                AgentMode::Durable,
+                &mut baseline,
+                &entries,
+            )
+            .await
+            .unwrap();
+            assert!(test_case.read_starts.lock().unwrap().is_empty());
+            assert!(
+                baseline
+                    .durable_stream_sessions
+                    .get(&key)
+                    .unwrap()
+                    .lifecycle_error
+                    .is_some()
+            );
+        }
+    }
     use golem_service_base::model::component::Component;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
@@ -2533,7 +2688,8 @@ mod test {
             AgentMode::Durable,
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, Some(final_expected));
         assert_eq!(
@@ -3756,7 +3912,8 @@ mod test {
                     DeletedRegions::new(),
                     DeletedRegions::new(),
                     finalize,
-                );
+                )
+                .unwrap();
             }
             status
         }

@@ -1186,6 +1186,8 @@ pub struct DurableStreamSessionStatus {
     pub initial_attachment_epoch: Option<u64>,
     pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub initial_pending_invocation_oplog_index: Option<OplogIndex>,
+    /// The referenced pending invocation after its oplog index and idempotency key were verified.
+    pub validated_initial_pending_invocation: Option<OplogIndex>,
     pub attachment_epoch: Option<u64>,
     pub attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub attachment_attached: Option<bool>,
@@ -1193,6 +1195,57 @@ pub struct DurableStreamSessionStatus {
 }
 
 impl DurableStreamSessionStatus {
+    fn invalidate_initial_attachment(&mut self) {
+        self.lifecycle_error = Some(
+            "durable Attached record does not identify an ordered Prepared and pending invocation"
+                .into(),
+        );
+    }
+
+    pub fn validate_initial_attachment_reference(
+        &mut self,
+        attached_idx: OplogIndex,
+        attached: &crate::model::durable_stream::StreamSessionAttachedRecordV1,
+    ) -> bool {
+        if self.lifecycle_error.is_some() {
+            return false;
+        }
+        let valid = attached.format_version == 1
+            && self.session_key.as_ref() == Some(&attached.session_key)
+            && self.prepared_attempt_id == Some(attached.attempt_id)
+            && self.prepared.is_some_and(|prepared_idx| {
+                prepared_idx < attached.pending_invocation_oplog_index
+                    && attached.pending_invocation_oplog_index < attached_idx
+            });
+        if !valid {
+            self.invalidate_initial_attachment();
+        }
+        valid
+    }
+
+    pub fn apply_pending_invocation(
+        &mut self,
+        oplog_idx: OplogIndex,
+        idempotency_key: &IdempotencyKey,
+    ) {
+        if self.lifecycle_error.is_some()
+            || self
+                .session_key
+                .as_ref()
+                .is_none_or(|key| &key.idempotency_key != idempotency_key)
+            || self
+                .prepared
+                .is_none_or(|prepared_idx| oplog_idx <= prepared_idx)
+            || self.initial_attachment_epoch.is_some()
+        {
+            return;
+        }
+        if self.validated_initial_pending_invocation.is_some() {
+            return;
+        }
+        self.validated_initial_pending_invocation = Some(oplog_idx);
+    }
+
     pub fn apply_record(
         &mut self,
         oplog_idx: OplogIndex,
@@ -1241,14 +1294,20 @@ impl DurableStreamSessionStatus {
                 if self.initial_attachment_epoch.is_some() {
                     self.lifecycle_error =
                         Some("durable session contains a repeated initial attachment".into());
-                } else {
+                } else if self.validate_initial_attachment_reference(oplog_idx, v) {
                     self.initial_attachment_epoch = Some(v.epoch);
                     self.initial_attachment_attempt_id = Some(v.attempt_id);
                     self.initial_pending_invocation_oplog_index =
                         Some(v.pending_invocation_oplog_index);
-                    self.attachment_epoch = Some(v.epoch);
-                    self.attachment_attempt_id = Some(v.attempt_id);
-                    self.attachment_attached = Some(true);
+                    if self.validated_initial_pending_invocation
+                        == Some(v.pending_invocation_oplog_index)
+                    {
+                        self.attachment_epoch = Some(v.epoch);
+                        self.attachment_attempt_id = Some(v.attempt_id);
+                        self.attachment_attached = Some(true);
+                    } else {
+                        self.invalidate_initial_attachment();
+                    }
                 }
             }
             StreamSessionRecordV1::ResumeAttempt(v) => {
@@ -1318,6 +1377,17 @@ impl DurableStreamSessionIndex {
     ) -> Result<(), String> {
         use crate::model::oplog::OplogPayload;
 
+        if let OplogEntry::PendingAgentInvocation {
+            idempotency_key, ..
+        } = entry
+        {
+            if let Some(status) = self.get(idempotency_key).cloned() {
+                let mut status = status;
+                status.apply_pending_invocation(index, idempotency_key);
+                self.insert(idempotency_key.clone(), status);
+            }
+            return Ok(());
+        }
         let OplogEntry::StreamSession { record, .. } = entry else {
             return Ok(());
         };

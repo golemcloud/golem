@@ -647,8 +647,6 @@ impl Drop for DurableStreamAttachmentReconciler {
 
 struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
     state_actor: Arc<state_actor::WorkerStateActor<Ctx>>,
-    worker_service: Arc<dyn crate::services::worker::WorkerService>,
-    oplog_service: Arc<dyn crate::services::oplog::OplogService>,
 }
 
 #[async_trait::async_trait]
@@ -663,20 +661,6 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
             self.state_actor.notify_status_changed();
         }
         Ok(())
-    }
-
-    async fn source_unavailable(
-        &self,
-        key: &golem_common::model::durable_stream::StreamAttachmentKeyV1,
-    ) -> Result<Option<golem_common::model::durable_stream::StreamOffsetV1>, String> {
-        DbDirectStreamAttachmentConsumerProbe::new(
-            self.worker_service.clone(),
-            self.oplog_service.clone(),
-        )
-        .journal_inspection(key)
-        .await
-        .map(|inspection| inspection.and_then(|inspection| inspection.source_unavailable))
-        .map_err(|error| error.to_string())
     }
 }
 
@@ -716,8 +700,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
         Arc::new(WorkerDurableStreamConsumerJournal {
             state_actor: self.state_actor.clone(),
-            worker_service: self.worker_service(),
-            oplog_service: self.oplog_service(),
         })
     }
 
@@ -4553,29 +4535,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if session.prepared.is_none() || session.finished.is_some() {
                 continue;
             }
-            let mut invocation_result = {
-                self.invocation_results
-                    .read()
-                    .await
-                    .get(&idempotency_key)
-                    .cloned()
-            };
-            let Some(invocation_result) = invocation_result.as_mut() else {
-                continue;
-            };
-            invocation_result
-                .cache(
-                    &self.owned_agent_id,
-                    self.agent_mode(),
-                    self.initial_worker_metadata.fingerprint,
-                    self,
-                )
-                .await;
-            match lookup_result_from_cached_result(
-                &status,
-                &idempotency_key,
-                invocation_result.clone(),
-            ) {
+            match self.lookup_invocation_result(&idempotency_key).await {
                 LookupResult::Complete(Ok(_)) => {
                     self.complete_durable_streaming_session(&idempotency_key)
                         .await?;
@@ -5028,7 +4988,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await
         };
-        events.map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+        let events = events.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        if request.wait_for_events
+            && probe
+                .status_exact(key, Some(&request.mapping))
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                != ConsumerAttachmentStatus::Active
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "consumer durable topology no longer authorizes this stream read",
+            ));
+        }
+        Ok(events)
     }
 
     pub(crate) fn start_durable_stream_attachment_reconciler(this: &Arc<Self>) {

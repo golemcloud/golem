@@ -38,7 +38,11 @@ use golem_common::model::durable_stream::{
     StreamSessionResumeAttemptRecordV1,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentFingerprint, AgentMetadata, DurableStreamSessionIndex};
+use golem_common::model::invocation_context::TraceId;
+use golem_common::model::oplog::OplogPayload;
+use golem_common::model::{
+    AgentFingerprint, AgentInvocationPayload, AgentMetadata, DurableStreamSessionIndex,
+};
 use golem_common::read_only_lock;
 use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -241,11 +245,24 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
         .await
 }
 
+async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {
+    oplog
+        .add(OplogEntry::pending_agent_invocation(
+            key.clone(),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        ))
+        .await
+}
+
 fn attached_record(
     session_key: StreamInvocationIdV1,
     attachment_id: AttachmentId,
     attempt_id: AttemptId,
     epoch: u64,
+    pending_invocation_oplog_index: OplogIndex,
 ) -> StreamSessionRecordV1 {
     StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
         format_version: 1,
@@ -253,7 +270,7 @@ fn attached_record(
         attachment_id,
         attempt_id,
         epoch,
-        pending_invocation_oplog_index: OplogIndex::INITIAL,
+        pending_invocation_oplog_index,
     })
 }
 
@@ -1298,6 +1315,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let attachment_id = prepared_record.attempt.attachment_id;
     let session = prepared_record.attempt.session_key.clone();
     append_session(oplog.as_ref(), prepared).await;
+    let pending_invocation_oplog_index = append_pending_invocation(oplog.as_ref(), &key).await;
     let attached = append_session(
         oplog.as_ref(),
         StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
@@ -1306,7 +1324,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
             attachment_id,
             attempt_id: first_attempt,
             epoch: 1,
-            pending_invocation_oplog_index: OplogIndex::INITIAL,
+            pending_invocation_oplog_index,
         }),
     )
     .await;
@@ -1399,9 +1417,16 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
     let attachment_id = value.attempt.attachment_id;
     let first_attempt = value.attempt.attempt_id;
     append_session(oplog.as_ref(), prepared).await;
+    let pending = append_pending_invocation(oplog.as_ref(), &key).await;
     append_session(
         oplog.as_ref(),
-        attached_record(session_key.clone(), attachment_id, first_attempt, 1),
+        attached_record(
+            session_key.clone(),
+            attachment_id,
+            first_attempt,
+            1,
+            pending,
+        ),
     )
     .await;
     oplog.commit(CommitLevel::Always).await;
@@ -1464,9 +1489,16 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
     let attachment_id = value.attempt.attachment_id;
     let first_attempt = value.attempt.attempt_id;
     append_session(first.as_ref(), prepared).await;
+    let pending = append_pending_invocation(first.as_ref(), &key).await;
     append_session(
         first.as_ref(),
-        attached_record(session_key.clone(), attachment_id, first_attempt, 1),
+        attached_record(
+            session_key.clone(),
+            attachment_id,
+            first_attempt,
+            1,
+            pending,
+        ),
     )
     .await;
     first.commit(CommitLevel::Always).await;
@@ -1538,9 +1570,10 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
     let attachment_id = value.attempt.attachment_id;
     let attempt_id = value.attempt.attempt_id;
     append_session(oplog.as_ref(), prepared).await;
+    let pending = append_pending_invocation(oplog.as_ref(), &old_key).await;
     append_session(
         oplog.as_ref(),
-        attached_record(session_key.clone(), attachment_id, attempt_id, 1),
+        attached_record(session_key.clone(), attachment_id, attempt_id, 1, pending),
     )
     .await;
     append_session(
@@ -1615,7 +1648,13 @@ async fn persisted_exact_horizon_rejects_newer_index_and_offsets_hide_newer_atta
     let prepared_idx = append_session(oplog.as_ref(), prepared).await;
     let attached_idx = append_session(
         oplog.as_ref(),
-        attached_record(session_key, attachment_id, attempt_id, 1),
+        attached_record(
+            session_key,
+            attachment_id,
+            attempt_id,
+            1,
+            OplogIndex::INITIAL,
+        ),
     )
     .await;
     oplog.commit(CommitLevel::Always).await;
@@ -1797,9 +1836,10 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     let attachment = value.attempt.attachment_id;
     let attempt = value.attempt.attempt_id;
     append_session(oplog.as_ref(), prepared).await;
+    let pending = append_pending_invocation(oplog.as_ref(), &key).await;
     append_session(
         oplog.as_ref(),
-        attached_record(session.clone(), attachment, attempt, 1),
+        attached_record(session.clone(), attachment, attempt, 1, pending),
     )
     .await;
     for _ in 0..2048 {

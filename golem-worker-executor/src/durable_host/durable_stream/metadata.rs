@@ -1513,8 +1513,9 @@ mod tests {
             .await
             .unwrap()
             .value;
+        let mut offsets = Vec::new();
         for sequence in 0..140 {
-            producer
+            let outcome = producer
                 .write_items(
                     handle.stream_id,
                     sequence,
@@ -1522,6 +1523,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            offsets.push(outcome.value[0]);
         }
         for _ in 0..2100 {
             fixture.oplog.add(OplogEntry::interrupted()).await;
@@ -1556,11 +1558,14 @@ mod tests {
             metadata_reads,
             "warm metadata performs no storage IO"
         );
-        let first = cold.read_segment(&handle, None, None).await.unwrap();
-        assert_eq!(first.len(), 1, "catch-up returns only one requested batch");
+        let first = cold
+            .read_segment(&handle, None, Some(offsets[0]))
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 1, "catch-up stops at the requested horizon");
         assert_eq!(fixture.blobs.reads(), 1);
         let second = cold
-            .read_segment(&handle, Some(first[0].offset), None)
+            .read_segment(&handle, Some(first[0].offset), Some(offsets[1]))
             .await
             .unwrap();
         assert_eq!(second[0].producer_sequence, 1);
@@ -1569,11 +1574,14 @@ mod tests {
             cold.index.lock().await.streams[&handle.stream_id]
                 .batches
                 .len()
-                <= 2
+                <= 128
         );
         let mut after = Some(second[0].offset);
         for sequence in 2..140 {
-            let page = cold.read_segment(&handle, after, None).await.unwrap();
+            let page = cold
+                .read_segment(&handle, after, Some(offsets[sequence as usize]))
+                .await
+                .unwrap();
             assert_eq!(page[0].producer_sequence, sequence);
             after = Some(page[0].offset);
             assert!(cold.index.lock().await.batch_positions.len() <= 129);
@@ -1592,6 +1600,241 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(replay.value, vec![first[0].offset]);
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn cold_packed_cursor_reads_the_enclosing_batch_and_traverses_pages() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let offsets = producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8((0..5000).map(|index| index as u8).collect()),
+            )
+            .await
+            .unwrap()
+            .value;
+        fixture.persist().await;
+        drop(producer);
+        let cold = fixture.producer().await;
+
+        let mut after = Some(offsets[9]);
+        let mut sequences = Vec::new();
+        loop {
+            let page = cold.read_segment(&handle, after, None).await.unwrap();
+            if page.is_empty() {
+                break;
+            }
+            assert!(page.len() <= 256);
+            if sequences.is_empty() {
+                assert_eq!(
+                    page.iter()
+                        .map(|event| event.producer_sequence)
+                        .collect::<Vec<_>>(),
+                    (10..266).collect::<Vec<_>>()
+                );
+            }
+            sequences.extend(page.iter().map(|event| event.producer_sequence));
+            after = page.last().map(|event| event.offset);
+        }
+        assert_eq!(sequences, (10..5000).collect::<Vec<_>>());
+        assert_eq!(
+            fixture.blobs.reads(),
+            20,
+            "one packed payload read per page"
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn cold_packed_batches_remain_contiguous_and_respect_exact_through() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let first = producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![1; 64]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let second = producer
+            .write_items(
+                handle.stream_id,
+                64,
+                StreamItemsPayloadV1::PackedU8(vec![2; 64]),
+            )
+            .await
+            .unwrap()
+            .value;
+        fixture.persist().await;
+        drop(producer);
+        let cold = fixture.producer().await;
+
+        let page = cold
+            .read_segment(&handle, Some(first[9]), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.iter()
+                .map(|event| event.producer_sequence)
+                .collect::<Vec<_>>(),
+            (10..128).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            page[54].offset, second[0],
+            "the next batch starts at sequence 64"
+        );
+
+        fixture.blobs.reset();
+        let exact = cold
+            .read_segment(&handle, Some(first[9]), Some(first[63]))
+            .await
+            .unwrap();
+        assert_eq!(exact.len(), 54);
+        assert_eq!(exact.last().unwrap().offset, first[63]);
+        assert_eq!(
+            fixture.blobs.reads(),
+            1,
+            "through does not read the next payload"
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn cold_ordinary_segment_loads_batch_locators_in_linear_windows() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        for sequence in 0..256 {
+            producer
+                .write_items(
+                    handle.stream_id,
+                    sequence,
+                    StreamItemsPayloadV1::Values(vec![vec![sequence as u8; 64]]),
+                )
+                .await
+                .unwrap();
+        }
+        fixture.persist().await;
+        drop(producer);
+        let cold = fixture.producer().await;
+        let indexed_reads = fixture.indexed.reads();
+        let page = cold.read_segment(&handle, None, None).await.unwrap();
+        assert_eq!(page.len(), 256);
+        assert_eq!(
+            page.iter()
+                .map(|event| event.producer_sequence)
+                .collect::<Vec<_>>(),
+            (0..256).collect::<Vec<_>>()
+        );
+        assert_eq!(fixture.blobs.reads(), 256);
+        // Each external payload requires one indexed oplog entry read, in addition
+        // to the metadata reads that resolve the three locator windows.
+        let locator_reads = fixture.indexed.reads() - indexed_reads - 256;
+        assert!(
+            locator_reads <= 6,
+            "batch locator fields are loaded in fixed windows, got {locator_reads} reads"
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn deletion_complete_cold_fallback_preserves_full_locator_prefix() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let mut offsets = Vec::new();
+        for sequence in 0..140 {
+            offsets.push(
+                producer
+                    .write_items(
+                        handle.stream_id,
+                        sequence,
+                        StreamItemsPayloadV1::Values(vec![vec![sequence as u8]]),
+                    )
+                    .await
+                    .unwrap()
+                    .value[0],
+            );
+        }
+        let terminal_offset = producer
+            .end(handle.stream_id, 140, StreamEndResultV1::Ok)
+            .await
+            .unwrap()
+            .value;
+        fixture.persist().await;
+        drop(producer);
+
+        let cold = fixture.producer().await;
+        cold.commit_deletion_barrier(1_000, true).await.unwrap();
+        assert!(cold.index.lock().await.complete_for_deletion);
+
+        let page = cold.read_segment(&handle, None, None).await.unwrap();
+        assert_eq!(page.len(), 141);
+        assert_eq!(
+            page.iter().map(|event| event.offset).collect::<Vec<_>>(),
+            offsets
+                .iter()
+                .copied()
+                .chain(std::iter::once(terminal_offset))
+                .collect::<Vec<_>>()
+        );
+        assert!(page[..140].iter().enumerate().all(|(sequence, event)| {
+            event.producer_sequence == sequence as u64
+                && event.payload
+                    == CommittedProducerStreamEventPayloadV1::Value(vec![sequence as u8])
+        }));
+        assert!(matches!(
+            &page.last().unwrap().payload,
+            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+        ));
+
+        let index = cold.index.lock().await;
+        assert!(index.complete_for_deletion);
+        let stream = &index.streams[&handle.stream_id];
+        assert_eq!(
+            stream.batches,
+            offsets
+                .iter()
+                .enumerate()
+                .map(|(sequence, offset)| { (sequence as u64, offset.producer_oplog_index()) })
+                .collect()
+        );
+        assert_eq!(
+            stream.offsets(),
+            offsets
+                .iter()
+                .copied()
+                .chain(std::iter::once(terminal_offset))
+                .collect::<Vec<_>>(),
+            "deletion cascade must retain the exact producer offset prefix"
+        );
+        drop(index);
+        cold.validate_cursor(handle.stream_id, Some(offsets[139]))
+            .await
+            .unwrap();
     }
 
     #[test]
