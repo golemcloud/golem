@@ -2422,9 +2422,8 @@ impl DurableStreamProducer {
         session_key: &StreamSessionKeyV1,
     ) -> Result<(), DurableStreamProducerError> {
         if self
-            .index
-            .lock()
-            .await
+            .index_for([ProducerMetadataKey::Session(session_key.clone())])
+            .await?
             .finished_sessions
             .contains(session_key)
         {

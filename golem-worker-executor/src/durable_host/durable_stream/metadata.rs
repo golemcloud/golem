@@ -1505,6 +1505,60 @@ mod tests {
 
     #[test]
     #[timeout("60s")]
+    async fn persisted_finished_session_rejects_new_events_after_cold_load_and_eviction() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let session = fixture.identity.invocation.clone();
+        producer
+            .ensure_session_accepts_new_events(&session)
+            .await
+            .unwrap();
+        producer
+            .finish_session(session.clone(), Ok(()), StreamCancelReasonV1::Protocol)
+            .await
+            .unwrap();
+        fixture.persist().await;
+        drop(producer);
+
+        let cold = fixture.producer().await;
+        assert!(cold.index.lock().await.finished_sessions.is_empty());
+        let tip = fixture.oplog.current_oplog_index().await;
+        assert_eq!(
+            cold.ensure_session_accepts_new_events(&session).await,
+            Err(DurableStreamProducerError::SessionFinished(session.clone()))
+        );
+        let reads = fixture.indexed.reads();
+        for _ in 0..3 {
+            assert_eq!(
+                cold.ensure_session_accepts_new_events(&session).await,
+                Err(DurableStreamProducerError::SessionFinished(session.clone()))
+            );
+        }
+        assert_eq!(fixture.indexed.reads(), reads, "warm checks perform no IO");
+
+        for ordinal in 0..130 {
+            let mut other = session.clone();
+            other.idempotency_key =
+                golem_common::model::IdempotencyKey::new(format!("open-session-{ordinal}"));
+            cold.ensure_session_accepts_new_events(&other)
+                .await
+                .unwrap();
+        }
+        assert!(!cold.index.lock().await.finished_sessions.contains(&session));
+        assert_eq!(
+            cold.ensure_session_accepts_new_events(&session).await,
+            Err(DurableStreamProducerError::SessionFinished(session))
+        );
+        assert_eq!(fixture.oplog.current_oplog_index().await, tip);
+        assert_eq!(
+            fixture.blobs.reads(),
+            0,
+            "checks do not load payload history"
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
     async fn persisted_producer_cold_load_pages_only_requested_payloads() {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
