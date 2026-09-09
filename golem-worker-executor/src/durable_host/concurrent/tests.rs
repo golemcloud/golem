@@ -1148,7 +1148,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     // permit must stay held and no cleanup event may become visible; both are released only
     // after the append completes (production releases them via `disarm()` after
     // `end_durable_function_access`, strictly downstream of `wait_terminal()`).
-    use golem_common::model::oplog::HostResponseMonotonicClockTimestamp;
+    use golem_common::model::oplog::HostResponseP3HttpClientConsumeBodyChunk;
+    use golem_common::model::oplog::payload::types::SerializableP3HttpBodyChunk;
 
     let (reached_tx, mut reached_rx) = mpsc::unbounded_channel();
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
@@ -1157,7 +1158,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
-            function_name: HostFunctionName::MonotonicClockNow,
+            function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
@@ -1206,11 +1207,24 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     .expect("failed to build replay state");
     let completion_marker_recorder =
         CompletionMarkerRecorder::new(persist_oplog.clone(), persist_replay_state);
+    let bytes = vec![42u8; 4096];
+    let original_ptr = bytes.as_ptr() as usize;
     let persist = tokio::spawn(async move {
-        let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
-        let result = DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::
-                persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, response, None)
-            .await;
+        let response = HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: SerializableP3HttpBodyChunk::Data(bytes),
+        };
+        let result = DurableCallSession::<
+            host_functions::P3HttpClientConsumeBodyChunk,
+            NotCancellable,
+        >::persist_access_terminal(
+            persist_oplog,
+            completion_marker_recorder,
+            &mut guard,
+            start_idx,
+            response,
+            None,
+        )
+        .await;
         (result, guard)
     });
 
@@ -1238,17 +1252,37 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
 
     gate.add_permits(1);
     let (result, mut guard) = persist.await.expect("persist task must not panic");
-    result.expect("persisting the terminal must succeed");
+    let response = result.expect("persisting the terminal must succeed");
+    let SerializableP3HttpBodyChunk::Data(bytes) = &response.chunk else {
+        panic!("expected the original data chunk");
+    };
+    assert_eq!(bytes.as_ptr() as usize, original_ptr);
 
     // The terminal is durably appended when the persistence stage returns...
-    {
+    let payload = {
         let entries = oplog.entries.lock().await;
         assert_eq!(entries.len(), 2, "expected [Start, End]");
         match &entries[1] {
-            OplogEntry::End { start_index, .. } => assert_eq!(*start_index, start_idx),
+            OplogEntry::End {
+                start_index,
+                response: Some(payload),
+                ..
+            } => {
+                assert_eq!(*start_index, start_idx);
+                assert!(matches!(
+                    payload,
+                    OplogPayload::SerializedInline { cached: None, .. }
+                ));
+                payload.clone()
+            }
             other => panic!("expected End, got {other:?}"),
         }
-    }
+    };
+    let decoded = oplog
+        .download_payload(payload)
+        .await
+        .expect("uncached response must decode");
+    assert_eq!(decoded, response.into());
     // ...while the guard still owns the permit and nothing has been queued: release happens
     // only at the production `disarm()`, strictly after the terminal.
     assert_eq!(

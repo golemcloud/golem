@@ -210,6 +210,15 @@ impl Oplog for RateLimitedOplog {
         self.inner.current_oplog_index().await
     }
 
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> super::RawDurableStreamSessionStatus {
+        self.inner
+            .raw_durable_stream_session_status(session_key)
+            .await
+    }
+
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
         self.inner.last_added_non_hint_entry().await
     }
@@ -352,6 +361,14 @@ impl std::fmt::Debug for RateLimitedOplogService {
 
 #[async_trait]
 impl OplogService for RateLimitedOplogService {
+    fn set_stream_session_index(&self, index: Arc<super::StreamSessionIndexService>) {
+        self.inner.set_stream_session_index(index);
+    }
+
+    fn stream_session_index(&self) -> Option<Arc<super::StreamSessionIndexService>> {
+        self.inner.stream_session_index()
+    }
+
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,

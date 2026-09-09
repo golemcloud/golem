@@ -154,7 +154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         info!("Marking worker for deletion");
         worker.start_deleting_internal().await?;
 
-        worker.worker_service().remove(owned_agent_id).await;
+        worker.worker_service().remove(owned_agent_id).await?;
         worker.remove_from_active_agents().await;
 
         // Keep the worker alive until durable metadata and cache cleanup has completed.

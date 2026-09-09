@@ -15,7 +15,7 @@
 use crate::durable_host::durability::{
     ClassifiedHostError, DurableCallTrapContextMarker, SemanticTrapRetryOverrideMarker,
 };
-use crate::durable_host::schema_value_stream::{StoreValueResolver, contains_stream};
+use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
@@ -27,14 +27,14 @@ use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
 #[cfg(test)]
 use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
-use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema, contains_stream_in_graph};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::value::validate_value;
@@ -47,13 +47,17 @@ use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
 
+pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 /// Polls an invocation task outside Wasmtime's fiber and accessor TLS scopes, with enough native
-/// stack for the nested host futures. Each poll returns before the temporary stack is released.
+/// stack for the nested host futures. Production runtime threads already have sufficient stack;
+/// smaller embedding runtimes grow a temporary stack that is released after each poll.
 pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> F::Output {
-    const STACK_SIZE: usize = 16 * 1024 * 1024;
     let mut future = Box::pin(future);
     std::future::poll_fn(|cx| {
-        stacker::maybe_grow(STACK_SIZE, STACK_SIZE, || future.as_mut().poll(cx))
+        stacker::maybe_grow(INVOCATION_STACK_SIZE, INVOCATION_STACK_SIZE, || {
+            future.as_mut().poll(cx)
+        })
     })
     .await
 }
@@ -789,11 +793,12 @@ pub struct ExpectedInvokeOutput {
     /// The method's declared output type; the canonical empty tuple for
     /// `unit` outputs (see [`decode_invoke_output`]).
     root: SchemaType,
+    uses_streams: bool,
 }
 
 impl ExpectedInvokeOutput {
     fn uses_streams(&self) -> bool {
-        contains_stream_in_graph(&self.graph, &self.root)
+        self.uses_streams
     }
 }
 
@@ -1276,10 +1281,17 @@ pub fn lower_invocation(
                 })?;
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
-            validate_method_invocation(agent_type, method, &input, &method_name)?;
+            let stream_metadata = validate_method_invocation(
+                component_metadata,
+                agent_type,
+                method,
+                &input,
+                &method_name,
+            )?;
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
+                uses_streams: stream_metadata.output,
                 root: match method.output_schema.schema() {
                     Some(ty) => ty.clone(),
                     None => SchemaType::tuple(Vec::new()),
@@ -1371,23 +1383,45 @@ pub fn validate_agent_method_invocation(
             ))
         })?;
 
-    validate_method_invocation(agent_type, method, input, method_name)
+    validate_method_invocation(component_metadata, agent_type, method, input, method_name)
+        .map(AgentMethodStreamMetadata::uses_streams)
 }
 
-pub fn method_uses_streams(
-    agent_type: &AgentTypeSchema,
-    method: &AgentMethodSchema,
-    input: &SchemaValue,
+/// Classifies session work using the executing component's input and output schemas, including
+/// input-only streams and optional streams that are absent from this invocation's values.
+pub(crate) fn invocation_uses_streams(
+    invocation: &AgentInvocation,
+    component_metadata: &ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
 ) -> bool {
-    contains_stream(input) || method.uses_streams(&agent_type.schema)
+    let AgentInvocation::AgentMethod { method_name, .. } = invocation else {
+        return false;
+    };
+    let method = resolve_agent_type(component_metadata, agent_id)
+        .ok()
+        .and_then(|agent_type| {
+            agent_type
+                .methods
+                .iter()
+                .find(|method| method.name == *method_name)
+                .map(|method| (agent_type, method))
+        });
+    // Missing metadata is not proof of a scalar invocation; preserve session failure handling
+    // while the normal lowering path reports the schema error.
+    method.is_none_or(|(agent_type, method)| {
+        component_metadata
+            .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+            .is_none_or(|metadata| metadata.uses_streams())
+    })
 }
 
-pub fn validate_method_invocation(
+fn validate_method_invocation(
+    component_metadata: &ComponentMetadata,
     agent_type: &AgentTypeSchema,
     method: &AgentMethodSchema,
     input: &SchemaValue,
     method_name: &str,
-) -> Result<bool, WorkerExecutorError> {
+) -> Result<AgentMethodStreamMetadata, WorkerExecutorError> {
     method
         .validate_input(&agent_type.schema, input)
         .map_err(|error| {
@@ -1395,7 +1429,13 @@ pub fn validate_method_invocation(
                 "Method '{method_name}': invalid input parameter value: {error}"
             ))
         })?;
-    Ok(method_uses_streams(agent_type, method, input))
+    component_metadata
+        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Streaming classification for method '{method_name}' is missing from component metadata"
+            ))
+        })
 }
 
 /// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
@@ -1444,6 +1484,32 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    fn invocation_poll_reuses_production_thread_stack() {
+        let runtime = crate::bootstrap::create_runtime().unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let mut polls = 0;
+                with_invocation_stack(std::future::poll_fn(|cx| {
+                    // A temporary stack would have less than INVOCATION_STACK_SIZE remaining.
+                    // Check every poll, including after suspension and possible task migration.
+                    assert!(stacker::remaining_stack().unwrap() >= INVOCATION_STACK_SIZE);
+                    polls += 1;
+                    if polls < 100 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(())
+                    }
+                }))
+                .await;
+                assert_eq!(polls, 100);
+            })
+            .await
+            .unwrap();
+        });
+    }
 
     #[test]
     fn invocation_poll_stack_is_reestablished_after_suspension() {
@@ -1693,6 +1759,115 @@ mod tests {
     }
 
     #[test]
+    fn method_stream_classification_survives_metadata_roundtrips_and_copies() {
+        let streaming = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                "input",
+                SchemaType::option(SchemaType::stream(Some(SchemaType::u32()))),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let streaming = streaming
+            .with_provision_configs(BTreeMap::new())
+            .with_tools(BTreeMap::new());
+        let bytes = golem_common::serialization::serialize(&streaming).unwrap();
+        let stored: ComponentMetadata = golem_common::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(stored, streaming);
+        let json = serde_json::to_value(&stored).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ComponentMetadata>(json.clone()).unwrap(),
+            stored
+        );
+        let mut missing = json;
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("agentMethodStreams");
+        assert!(serde_json::from_value::<ComponentMetadata>(missing).is_err());
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            stored.try_into().unwrap();
+        let decoded = ComponentMetadata::try_from(proto).unwrap();
+        assert_eq!(decoded, streaming);
+        assert_eq!(
+            decoded
+                .agent_method_stream_metadata(&AgentTypeName(AGENT_TYPE.to_string()), METHOD_NAME)
+                .unwrap(),
+            golem_common::model::component_metadata::AgentMethodStreamMetadata {
+                input: true,
+                output: false,
+            }
+        );
+    }
+
+    #[test]
+    fn invocation_session_classification_covers_scalar_and_absent_streams() {
+        let optional_stream = SchemaType::option(SchemaType::stream(Some(SchemaType::u32())));
+        for (input_schema, output_schema, fields, expected, output_streams) in [
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Unit,
+                Vec::new(),
+                false,
+                false,
+            ),
+            (
+                InputSchema::Parameters(vec![NamedField::user_supplied(
+                    "input",
+                    optional_stream.clone(),
+                )]),
+                OutputSchema::Unit,
+                vec![SchemaValue::Option { inner: None }],
+                true,
+                false,
+            ),
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Single(Box::new(optional_stream)),
+                Vec::new(),
+                true,
+                true,
+            ),
+        ] {
+            let metadata = metadata_with_method(AgentMethodSchema {
+                name: METHOD_NAME.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema,
+                output_schema,
+                http_endpoint: Vec::new(),
+                read_only: None,
+            });
+            let invocation = method_invocation(SchemaValue::Record { fields });
+            assert_eq!(
+                invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
+                expected
+            );
+            let lowered = lower_invocation(invocation, &metadata, Some(&agent_id())).unwrap();
+            let LoweredCall::Invoke {
+                expected_output, ..
+            } = lowered.call
+            else {
+                panic!("expected a lowered method invocation");
+            };
+            assert_eq!(expected_output.uses_streams(), output_streams);
+        }
+        let mut unknown = method_invocation(SchemaValue::Record { fields: Vec::new() });
+        if let AgentInvocation::AgentMethod { method_name, .. } = &mut unknown {
+            *method_name = "missing".to_string();
+        }
+        assert!(invocation_uses_streams(
+            &unknown,
+            &metadata(),
+            Some(&agent_id())
+        ));
+    }
+
+    #[test]
     fn materializing_boundary_rejects_a_real_stream_handle() {
         let stream = golem_common::schema::stream::SchemaValueStream::from_host_endpoint(());
         let output = SchemaValue::Record {
@@ -1715,6 +1890,7 @@ mod tests {
         ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::tuple(Vec::new()),
+            uses_streams: false,
         }
     }
 
@@ -1746,6 +1922,7 @@ mod tests {
         let expected = ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::u32(),
+            uses_streams: false,
         };
         validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
             .expect("matching value must pass output validation");
@@ -1756,6 +1933,7 @@ mod tests {
         let expected = ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::u32(),
+            uses_streams: false,
         };
         let Err(err) = validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true))
         else {
@@ -1784,6 +1962,7 @@ mod tests {
                 root: SchemaType::record(Vec::new()),
             },
             root: SchemaType::ref_to(TypeId::new("Answer")),
+            uses_streams: false,
         };
         validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
             .expect("ref output must resolve through the agent graph");

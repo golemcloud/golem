@@ -1,5 +1,7 @@
+use crate::services::oplog::OplogServiceOps;
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::durable_stream::StreamSessionRecordV1;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
@@ -9,10 +11,11 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
+    AgentResourceDescription, AgentStatus, AgentStatusRecord, DurableStreamSessionIndex,
+    FailedUpdateRecord, IdempotencyKey, InvocationResultMembership, OplogProcessorCheckpointState,
+    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
+    SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -23,13 +26,13 @@ pub async fn calculate_last_known_status_for_existing_worker<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> AgentStatusRecord
+) -> Result<AgentStatusRecord, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
     calculate_last_known_status(this, owned_agent_id, agent_mode, last_known)
-        .await
-        .expect("Failed to calculate oplog index for existing worker")
+        .await?
+        .ok_or_else(|| "failed to calculate status for existing worker".into())
 }
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker
@@ -46,7 +49,7 @@ pub async fn calculate_last_known_status<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -74,7 +77,7 @@ pub async fn calculate_last_known_status_with_checkpoint<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + HasWorkerService + Sync,
 {
@@ -115,7 +118,7 @@ pub async fn calculate_last_known_status_with_checkpoint_reader<T, Fut>(
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
     read_checkpoint: impl FnOnce() -> Fut,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
@@ -123,20 +126,20 @@ where
     // 1. Try folding forward from the live cached status.
     if let Some(last_known) = last_known
         && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await
+            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await?
     {
         crate::metrics::workers::record_agent_status_recompute("cache");
-        return Some(status);
+        return Ok(Some(status));
     }
 
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
     //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
         && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await
+            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await?
     {
         crate::metrics::workers::record_agent_status_recompute("checkpoint");
-        return Some(status);
+        return Ok(Some(status));
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
@@ -146,11 +149,11 @@ where
         agent_mode,
         AgentStatusRecord::default(),
     )
-    .await;
+    .await?;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
-    status
+    Ok(status)
 }
 
 /// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
@@ -169,11 +172,16 @@ pub async fn try_fold_status_from<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    baseline: AgentStatusRecord,
-) -> Option<AgentStatusRecord>
+    mut baseline: AgentStatusRecord,
+) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
+    let full_rebuild = baseline.oplog_idx == OplogIndex::NONE;
+    if full_rebuild && baseline.invocation_results.is_empty() {
+        baseline.invocation_results = this.config().invocation_results.membership();
+    }
+
     let last_oplog_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
@@ -182,30 +190,266 @@ where
     if last_oplog_index == OplogIndex::NONE {
         // Worker status can only be recovered if we have at least the Create oplog entry, otherwise
         // we cannot recover information like the component version.
-        return None;
+        return Ok(None);
     }
 
     if last_oplog_index < baseline.oplog_idx {
         // The baseline is ahead of the oplog (e.g. a revert truncated it below a stale checkpoint);
         // we cannot fold forward, so the caller must retry from an earlier baseline.
-        return None;
+        return Ok(None);
     }
 
     if baseline.oplog_idx == last_oplog_index {
-        return Some(baseline);
+        return Ok(Some(baseline));
     }
 
-    let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
-        .oplog_service()
-        .read_exact(
+    let chunk_size = this
+        .config()
+        .invocation_results
+        .physical_index_catch_up_chunk_size
+        .max(1);
+
+    if full_rebuild {
+        return fold_status_with_precomputed_regions(
+            this,
             owned_agent_id,
             agent_mode,
-            baseline.oplog_idx.next(),
-            last_oplog_index.as_u64() - baseline.oplog_idx.as_u64(),
+            baseline,
+            last_oplog_index,
+            chunk_size,
         )
         .await;
+    }
 
-    update_status_with_new_entries(agent_mode, baseline, new_entries, &this.config().retry)
+    let original_baseline = baseline.clone();
+    let mut first = baseline.oplog_idx.next();
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let mut entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        hydrate_stream_session_payloads(this, owned_agent_id, agent_mode, &mut entries).await?;
+        hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
+            .await?;
+        let finalize_oplog_processor_checkpoints =
+            entries.keys().next_back() == Some(&last_oplog_index);
+        baseline = match update_status_with_new_entries_internal(
+            agent_mode,
+            baseline,
+            entries,
+            &this.config().retry,
+            true,
+            finalize_oplog_processor_checkpoints,
+        )? {
+            Some(status) => status,
+            None => {
+                return fold_status_with_precomputed_regions(
+                    this,
+                    owned_agent_id,
+                    agent_mode,
+                    original_baseline,
+                    last_oplog_index,
+                    chunk_size,
+                )
+                .await;
+            }
+        };
+        first = baseline.oplog_idx.next();
+    }
+    Ok(Some(baseline))
+}
+
+async fn fold_status_with_precomputed_regions<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    mut baseline: AgentStatusRecord,
+    last_oplog_index: OplogIndex,
+    chunk_size: u64,
+) -> Result<Option<AgentStatusRecord>, String>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
+    let start = baseline.oplog_idx.next();
+    let mut deleted_regions = baseline.deleted_regions.clone();
+    let mut region_entries = BTreeMap::new();
+    let mut first = start;
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        deleted_regions = calculate_deleted_regions(deleted_regions, &entries);
+        region_entries.extend(entries.iter().filter_map(|(index, entry)| {
+            let relevant = matches!(
+                entry,
+                OplogEntry::Jump { .. }
+                    | OplogEntry::Revert { .. }
+                    | OplogEntry::PendingUpdate {
+                        description: UpdateDescription::SnapshotBased { .. },
+                        ..
+                    }
+                    | OplogEntry::SuccessfulUpdate { .. }
+                    | OplogEntry::FailedUpdate { .. }
+            );
+            relevant.then(|| (*index, entry.clone()))
+        }));
+        first = entries.keys().max().unwrap().next();
+    }
+
+    let skipped_regions = calculate_skipped_regions(
+        baseline.skipped_regions.clone(),
+        &deleted_regions,
+        &region_entries,
+    );
+
+    if baseline_is_invalidated(&baseline, &skipped_regions) {
+        return Ok(None);
+    }
+    baseline.deleted_regions = deleted_regions;
+    baseline.skipped_regions = skipped_regions;
+
+    first = start;
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let mut entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        hydrate_stream_session_payloads(this, owned_agent_id, agent_mode, &mut entries).await?;
+        hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
+            .await?;
+        let finalize_oplog_processor_checkpoints =
+            entries.keys().next_back() == Some(&last_oplog_index);
+        let deleted_regions = baseline.deleted_regions.clone();
+        let skipped_regions = baseline.skipped_regions.clone();
+        baseline = update_status_with_precomputed_regions(
+            agent_mode,
+            baseline,
+            entries,
+            &this.config().retry,
+            deleted_regions,
+            skipped_regions,
+            finalize_oplog_processor_checkpoints,
+        )?;
+        first = baseline.oplog_idx.next();
+    }
+    Ok(Some(baseline))
+}
+
+async fn hydrate_stream_session_payloads<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    entries: &mut BTreeMap<OplogIndex, OplogEntry>,
+) -> Result<(), String>
+where
+    T: HasOplogService + Sync,
+{
+    for entry in entries.values_mut() {
+        if let OplogEntry::StreamSession { record, .. } = entry {
+            let decoded = this
+                .oplog_service()
+                .download_payload(owned_agent_id, agent_mode, record.clone())
+                .await
+                .map_err(|error| {
+                    format!("failed to load durable stream session payload: {error}")
+                })?;
+            *record = OplogPayload::Inline(Box::new(decoded));
+        }
+    }
+    Ok(())
+}
+
+async fn hydrate_initial_pending_evidence<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    baseline: &mut AgentStatusRecord,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> Result<(), String>
+where
+    T: HasOplogService + Sync,
+{
+    for (attached_idx, entry) in entries {
+        let OplogEntry::StreamSession {
+            record: OplogPayload::Inline(record),
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let StreamSessionRecordV1::Attached(attached) = record.as_ref() else {
+            continue;
+        };
+        let Some(status) = baseline
+            .durable_stream_sessions
+            .get(&attached.session_key.idempotency_key)
+            .cloned()
+        else {
+            continue;
+        };
+        if status.lifecycle_error.is_some() || status.validated_initial_pending_invocation.is_some()
+        {
+            continue;
+        }
+        let mut status = status;
+        if !status.validate_initial_attachment_reference(*attached_idx, attached) {
+            baseline
+                .durable_stream_sessions
+                .insert(attached.session_key.idempotency_key.clone(), status);
+            continue;
+        }
+        let persisted_referent;
+        let referent = if let Some(entry) = entries.get(&attached.pending_invocation_oplog_index) {
+            Some(entry)
+        } else {
+            persisted_referent = this
+                .oplog_service()
+                .read_exact(
+                    owned_agent_id,
+                    agent_mode,
+                    attached.pending_invocation_oplog_index,
+                    1,
+                )
+                .await;
+            persisted_referent.get(&attached.pending_invocation_oplog_index)
+        };
+        match referent {
+            Some(OplogEntry::PendingAgentInvocation {
+                idempotency_key, ..
+            }) => {
+                status.apply_pending_invocation(
+                    attached.pending_invocation_oplog_index,
+                    idempotency_key,
+                );
+                baseline
+                    .durable_stream_sessions
+                    .insert(attached.session_key.idempotency_key.clone(), status);
+            }
+            _ => {
+                status.lifecycle_error = Some(
+                    "durable Attached record references a missing or invalid pending invocation"
+                        .into(),
+                );
+                baseline
+                    .durable_stream_sessions
+                    .insert(attached.session_key.idempotency_key.clone(), status);
+            }
+        }
+    }
+    Ok(())
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
@@ -215,7 +459,25 @@ pub fn update_status_with_new_entries(
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
     default_retry_policy: &RetryConfig,
-) -> Option<AgentStatusRecord> {
+) -> Result<Option<AgentStatusRecord>, String> {
+    update_status_with_new_entries_internal(
+        agent_mode,
+        last_known,
+        new_entries,
+        default_retry_policy,
+        true,
+        true,
+    )
+}
+
+fn update_status_with_new_entries_internal(
+    agent_mode: AgentMode,
+    last_known: AgentStatusRecord,
+    new_entries: BTreeMap<OplogIndex, OplogEntry>,
+    default_retry_policy: &RetryConfig,
+    validate_baseline: bool,
+    finalize_oplog_processor_checkpoints: bool,
+) -> Result<Option<AgentStatusRecord>, String> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
 
@@ -230,33 +492,52 @@ pub fn update_status_with_new_entries(
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if skipped_regions.is_in_deleted_region(last_known.oplog_idx) {
-        let last_known_skipped_regions_without_overrides =
-            if last_known.skipped_regions.is_overridden() {
-                let mut cloned = last_known.skipped_regions.clone();
-                cloned.merge_override();
-                cloned
-            } else {
-                last_known.skipped_regions.clone()
-            };
-
-        let new_skipped_regions_without_overrides = if skipped_regions.is_overridden() {
-            let mut cloned = skipped_regions.clone();
-            cloned.merge_override();
-            cloned
-        } else {
-            skipped_regions.clone()
-        };
-
-        let effective_skipped_regions_changed =
-            new_skipped_regions_without_overrides != last_known_skipped_regions_without_overrides;
-        // We might have already calculated the status with these skipped regions as an override during a snapshot update.
-        // No need to recompute in this case, we are already up to date.
-        if effective_skipped_regions_changed {
-            return None;
-        }
+    if validate_baseline && baseline_is_invalidated(&last_known, &skipped_regions) {
+        return Ok(None);
     }
 
+    Ok(Some(update_status_with_precomputed_regions(
+        agent_mode,
+        last_known,
+        new_entries,
+        default_retry_policy,
+        deleted_regions,
+        skipped_regions,
+        finalize_oplog_processor_checkpoints,
+    )?))
+}
+
+fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &DeletedRegions) -> bool {
+    if !skipped_regions.is_in_deleted_region(baseline.oplog_idx) {
+        return false;
+    }
+
+    let baseline_without_overrides = if baseline.skipped_regions.is_overridden() {
+        let mut cloned = baseline.skipped_regions.clone();
+        cloned.merge_override();
+        cloned
+    } else {
+        baseline.skipped_regions.clone()
+    };
+    let new_without_overrides = if skipped_regions.is_overridden() {
+        let mut cloned = skipped_regions.clone();
+        cloned.merge_override();
+        cloned
+    } else {
+        skipped_regions.clone()
+    };
+    new_without_overrides != baseline_without_overrides
+}
+
+fn update_status_with_precomputed_regions(
+    agent_mode: AgentMode,
+    last_known: AgentStatusRecord,
+    new_entries: BTreeMap<OplogIndex, OplogEntry>,
+    default_retry_policy: &RetryConfig,
+    deleted_regions: DeletedRegions,
+    skipped_regions: DeletedRegions,
+    finalize_oplog_processor_checkpoints: bool,
+) -> Result<AgentStatusRecord, String> {
     let active_plugins = last_known.active_plugins.clone();
 
     let (status, current_retry_state, overridden_retry_config) = calculate_latest_worker_status(
@@ -275,6 +556,19 @@ pub fn update_status_with_new_entries(
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
+    let durable_stream_sessions =
+        calculate_durable_stream_sessions(last_known.durable_stream_sessions, &new_entries)?;
+    let has_durable_stream_history = last_known.has_durable_stream_history
+        || new_entries.values().any(|entry| {
+            matches!(
+                entry,
+                OplogEntry::StreamRegistered { .. }
+                    | OplogEntry::StreamItems { .. }
+                    | OplogEntry::StreamEnd { .. }
+                    | OplogEntry::StreamCancel { .. }
+                    | OplogEntry::StreamSession { .. }
+            )
+        });
     let (
         pending_updates,
         failed_updates,
@@ -301,12 +595,14 @@ pub fn update_status_with_new_entries(
         &new_entries,
     );
 
-    let (invocation_results, current_idempotency_key) = calculate_invocation_results(
-        last_known.invocation_results,
-        last_known.current_idempotency_key,
-        &deleted_regions,
-        &new_entries,
-    );
+    let (invocation_results, current_idempotency_key, cancelled_idempotency_key) =
+        calculate_invocation_results(
+            last_known.invocation_results,
+            last_known.current_idempotency_key,
+            last_known.cancelled_idempotency_key,
+            &deleted_regions,
+            &new_entries,
+        );
 
     let total_linear_memory_size = calculate_total_linear_memory_size(
         last_known.total_linear_memory_size,
@@ -326,9 +622,10 @@ pub fn update_status_with_new_entries(
         &active_plugins,
         &deleted_regions,
         &new_entries,
+        finalize_oplog_processor_checkpoints,
     );
 
-    let result = AgentStatusRecord {
+    Ok(AgentStatusRecord {
         oplog_idx: new_entries
             .keys()
             .max()
@@ -344,7 +641,10 @@ pub fn update_status_with_new_entries(
         successful_updates,
         invocation_results,
         received_card_transfers,
+        durable_stream_sessions,
+        has_durable_stream_history,
         current_idempotency_key,
+        cancelled_idempotency_key,
         component_revision,
         component_size,
         owned_resources,
@@ -360,9 +660,7 @@ pub fn update_status_with_new_entries(
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
         agent_mode,
-    };
-
-    Some(result)
+    })
 }
 
 fn calculate_latest_worker_status(
@@ -927,6 +1225,19 @@ fn calculate_received_card_transfers(
     transfers
 }
 
+// Session lifecycle follows raw durable stream history, including entries inside guest jumps.
+// Unlike invocation results, external stream effects cannot be undone by a logical oplog deletion;
+// worker revert rejects any worker with durable stream history.
+fn calculate_durable_stream_sessions(
+    mut sessions: DurableStreamSessionIndex,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> Result<DurableStreamSessionIndex, String> {
+    for (oplog_idx, entry) in entries {
+        sessions.apply_oplog_entry(*oplog_idx, entry)?;
+    }
+    Ok(sessions)
+}
+
 #[allow(clippy::type_complexity)]
 fn calculate_update_fields(
     initial_pending_updates: VecDeque<PendingUpdateRef>,
@@ -1060,19 +1371,55 @@ fn calculate_update_fields(
 }
 
 fn calculate_invocation_results(
-    invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    invocation_results: InvocationResultMembership,
     current_idempotency_key: Option<IdempotencyKey>,
+    cancelled_idempotency_key: Option<IdempotencyKey>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
+) -> (
+    InvocationResultMembership,
+    Option<IdempotencyKey>,
+    Option<IdempotencyKey>,
+) {
     let mut invocation_results = invocation_results;
+    let revert_count = entries
+        .values()
+        .filter(|entry| matches!(entry, OplogEntry::Revert { .. }))
+        .count() as u64;
+    invocation_results.set_revert_generation(
+        invocation_results
+            .revert_generation()
+            .wrapping_add(revert_count),
+    );
     let mut current_idempotency_key = current_idempotency_key;
-    let mut cancelled_idempotency_key = None;
+    let mut cancelled_idempotency_key = cancelled_idempotency_key;
 
+    fold_invocation_result_entries(
+        &mut current_idempotency_key,
+        &mut cancelled_idempotency_key,
+        deleted_regions,
+        entries,
+        |key, index| invocation_results.insert(key.clone(), index),
+    );
+
+    (
+        invocation_results,
+        current_idempotency_key,
+        cancelled_idempotency_key,
+    )
+}
+
+pub(crate) fn fold_invocation_result_entries(
+    current_idempotency_key: &mut Option<IdempotencyKey>,
+    cancelled_idempotency_key: &mut Option<IdempotencyKey>,
+    deleted_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    mut observe_result: impl FnMut(&IdempotencyKey, OplogIndex),
+) {
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
-            cancelled_idempotency_key = None;
+            *cancelled_idempotency_key = None;
             continue;
         }
 
@@ -1080,50 +1427,48 @@ fn calculate_invocation_results(
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
             } => {
-                cancelled_idempotency_key = None;
-                current_idempotency_key = Some(idempotency_key.clone());
+                *cancelled_idempotency_key = None;
+                *current_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::AgentInvocationFinished { .. } => {
-                cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                *cancelled_idempotency_key = None;
+                if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
-                current_idempotency_key = None;
+                *current_idempotency_key = None;
             }
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
-                cancelled_idempotency_key = Some(idempotency_key.clone());
+                *cancelled_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::Error {
                 error: AgentError::PermissionDenied(_),
                 ..
             } => {
                 if let Some(idempotency_key) = cancelled_idempotency_key.take() {
-                    invocation_results.insert(idempotency_key, *oplog_idx);
-                } else if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                    observe_result(&idempotency_key, *oplog_idx);
+                } else if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
             }
             OplogEntry::Error { .. } => {
-                cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                *cancelled_idempotency_key = None;
+                if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
             }
             OplogEntry::Exited { .. } => {
-                cancelled_idempotency_key = None;
-                if let Some(idempotency_key) = &current_idempotency_key {
-                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                *cancelled_idempotency_key = None;
+                if let Some(idempotency_key) = &*current_idempotency_key {
+                    observe_result(idempotency_key, *oplog_idx);
                 }
             }
             _ => {
-                cancelled_idempotency_key = None;
+                *cancelled_idempotency_key = None;
             }
         }
     }
-
-    (invocation_results, current_idempotency_key)
 }
 
 fn calculate_total_linear_memory_size(
@@ -1243,6 +1588,7 @@ fn calculate_oplog_processor_checkpoints(
     active_plugins: &HashSet<EnvironmentPluginGrantId>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
+    finalize: bool,
 ) -> HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState> {
     for (idx, entry) in entries {
         if deleted_regions.is_in_deleted_region(*idx) {
@@ -1314,9 +1660,11 @@ fn calculate_oplog_processor_checkpoints(
         }
     }
 
-    result.retain(|grant_id, state| {
-        active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
-    });
+    if finalize {
+        result.retain(|grant_id, state| {
+            active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
+        });
+    }
 
     result
 }
@@ -1368,7 +1716,7 @@ mod test {
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
         calculate_last_known_status_with_checkpoint_reader, calculate_oplog_processor_checkpoints,
-        calculate_total_linear_memory_size, try_fold_status_from,
+        calculate_total_linear_memory_size, hydrate_initial_pending_evidence, try_fold_status_from,
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
@@ -1378,6 +1726,11 @@ mod test {
     use golem_common::model::agent::{AgentMode, Principal};
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::durable_stream::{
+        AttachmentId, AttemptId, PersistedStreamInvocationDescriptorV1, StartAttemptDescriptorV1,
+        StreamInvocationIdV1, StreamSessionAttachedRecordV1, StreamSessionPreparedRecordV1,
+        StreamSessionRecordV1,
+    };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -1397,12 +1750,97 @@ mod test {
     use golem_common::schema::IntoTypedSchemaValue;
     use golem_common::schema::SchemaValue;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    #[test]
+    async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
+        let test_case = TestCase::builder(0).build();
+        let key = IdempotencyKey::fresh();
+        let session_key = StreamInvocationIdV1 {
+            callee_environment_id: test_case.owned_agent_id.environment_id,
+            callee: test_case.owned_agent_id.agent_id().clone(),
+            callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+            idempotency_key: key.clone(),
+        };
+        let attempt = AttemptId::fresh();
+        for pending in [
+            OplogIndex::NONE,
+            OplogIndex::from_u64(10),
+            OplogIndex::from_u64(13),
+        ] {
+            let mut baseline = AgentStatusRecord::default();
+            baseline.durable_stream_sessions.insert(
+                key.clone(),
+                golem_common::model::DurableStreamSessionStatus {
+                    first_prepared: Some(OplogIndex::from_u64(10)),
+                    prepared: Some(OplogIndex::from_u64(10)),
+                    session_key: Some(session_key.clone()),
+                    prepared_attempt_id: Some(attempt),
+                    ..Default::default()
+                },
+            );
+            let attached = StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id: AttachmentId::primary(
+                    session_key.callee_environment_id,
+                    &session_key.callee,
+                    &key,
+                )
+                .unwrap(),
+                attempt_id: attempt,
+                epoch: 1,
+                pending_invocation_oplog_index: pending,
+            });
+            let entries = BTreeMap::from([(
+                OplogIndex::from_u64(13),
+                OplogEntry::StreamSession {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                    record: OplogPayload::Inline(Box::new(attached)),
+                },
+            )]);
+            test_case.read_starts.lock().unwrap().clear();
+            hydrate_initial_pending_evidence(
+                &test_case,
+                &test_case.owned_agent_id,
+                AgentMode::Durable,
+                &mut baseline,
+                &entries,
+            )
+            .await
+            .unwrap();
+            assert!(test_case.read_starts.lock().unwrap().is_empty());
+            assert!(
+                baseline
+                    .durable_stream_sessions
+                    .get(&key)
+                    .unwrap()
+                    .lifecycle_error
+                    .is_some()
+            );
+        }
+    }
     use golem_service_base::model::component::Component;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
     use uuid::Uuid;
+
+    fn update_status_with_new_entries(
+        agent_mode: AgentMode,
+        last_known: AgentStatusRecord,
+        new_entries: BTreeMap<OplogIndex, OplogEntry>,
+        default_retry_policy: &RetryConfig,
+    ) -> Option<AgentStatusRecord> {
+        super::update_status_with_new_entries(
+            agent_mode,
+            last_known,
+            new_entries,
+            default_retry_policy,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn successful_update_resets_total_linear_memory_size() {
@@ -2018,6 +2456,7 @@ mod test {
             None,
         )
         .await
+        .unwrap()
         .unwrap();
         let from_before_atomic_pair = calculate_last_known_status_for_existing_worker(
             &test_case,
@@ -2025,7 +2464,8 @@ mod test {
             AgentMode::Durable,
             Some(pending_baseline),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(from_start, expected);
         assert_eq!(from_before_atomic_pair, expected);
@@ -2135,11 +2575,13 @@ mod test {
             owned_agent_id: owned_agent_id.clone(),
             entries: vec![],
             read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         let result =
             calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
-                .await;
+                .await
+                .unwrap();
         assert2::assert!(let None = result);
     }
 
@@ -2191,7 +2633,8 @@ mod test {
             AgentMode::Durable,
             stale_live.clone(),
         )
-        .await;
+        .await
+        .unwrap();
         assert2::assert!(let None = direct);
 
         test_case.read_starts.lock().unwrap().clear();
@@ -2203,7 +2646,8 @@ mod test {
             Some(stale_live),
             || async { Some(checkpoint) },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(repaired, Some(final_expected));
 
@@ -2231,7 +2675,8 @@ mod test {
             Some(stale_live),
             || async { None },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, Some(final_expected));
 
@@ -2239,6 +2684,26 @@ mod test {
         assert!(
             read_starts.contains(&1),
             "expected a full recompute from idx 1, got {read_starts:?}"
+        );
+    }
+
+    #[test]
+    async fn full_recompute_reads_each_oplog_chunk_twice() {
+        let (test_case, _checkpoint, _stale_live, final_expected) = jump_repair_fixture();
+
+        let result = calculate_last_known_status(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, Some(final_expected));
+        assert_eq!(
+            *test_case.read_starts.lock().unwrap(),
+            vec![1, 3, 5, 7, 1, 3, 5, 7]
         );
     }
 
@@ -2259,7 +2724,8 @@ mod test {
             Some(stale_live),
             || async { Some(unusable_checkpoint) },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, Some(final_expected));
 
@@ -2483,6 +2949,10 @@ mod test {
                 .expected_status
                 .clone();
             self.add(OplogEntry::revert(region.clone()), move |mut status| {
+                let revert_generation = status
+                    .invocation_results
+                    .revert_generation()
+                    .wrapping_add(1);
                 status.active_plugins = old_status.active_plugins;
 
                 status.skipped_regions = old_status.skipped_regions;
@@ -2498,6 +2968,9 @@ mod test {
                 status.successful_updates = old_status.successful_updates;
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
+                status
+                    .invocation_results
+                    .set_revert_generation(revert_generation);
                 status.component_revision_for_replay = old_status.component_revision_for_replay;
                 status.last_manual_update_snapshot_index =
                     old_status.last_manual_update_snapshot_index;
@@ -2545,6 +3018,7 @@ mod test {
                 status
                     .pending_invocations
                     .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
+                status.cancelled_idempotency_key = Some(idempotency_key);
                 status
             })
         }
@@ -2559,6 +3033,7 @@ mod test {
                     None,
                 ),
                 move |mut status| {
+                    status.cancelled_idempotency_key = None;
                     status
                         .invocation_results
                         .insert(idempotency_key, status.oplog_idx);
@@ -2692,6 +3167,7 @@ mod test {
                     .map(|entry| entry.rounded())
                     .collect(),
                 read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
+                raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -2711,6 +3187,8 @@ mod test {
         }
     }
 
+    type RawPayloads = Vec<(PayloadId, Vec<u8>)>;
+
     #[derive(Debug, Clone)]
     struct TestCase {
         owned_agent_id: OwnedAgentId,
@@ -2718,6 +3196,7 @@ mod test {
         /// Records the `start_idx` of every exact read so tests can assert which baseline
         /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
         read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
+        raw_payloads: Arc<std::sync::Mutex<RawPayloads>>,
     }
 
     impl TestCase {
@@ -2747,6 +3226,19 @@ mod test {
 
     #[async_trait]
     impl OplogService for TestCase {
+        fn set_stream_session_index(
+            &self,
+            _: Arc<crate::services::stream_session_index::StreamSessionIndexService>,
+        ) {
+            unreachable!("status-fold fixture does not open raw oplogs")
+        }
+
+        fn stream_session_index(
+            &self,
+        ) -> Option<Arc<crate::services::stream_session_index::StreamSessionIndexService>> {
+            None
+        }
+
         async fn create(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -2854,19 +3346,27 @@ mod test {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-            _payload_id: PayloadId,
+            payload_id: PayloadId,
             _md5_hash: Vec<u8>,
         ) -> Result<Vec<u8>, String> {
-            unreachable!()
+            self.raw_payloads
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(stored_id, _)| *stored_id == payload_id)
+                .map(|(_, bytes)| bytes.clone())
+                .ok_or_else(|| format!("missing raw payload {payload_id}"))
         }
     }
 
     impl HasConfig for TestCase {
         fn config(&self) -> Arc<GolemConfig> {
-            Arc::new(GolemConfig {
+            let mut config = GolemConfig {
                 retry: RetryConfig::default(),
                 ..Default::default()
-            })
+            };
+            config.invocation_results.physical_index_catch_up_chunk_size = 2;
+            Arc::new(config)
         }
     }
 
@@ -2929,13 +3429,92 @@ mod test {
                 AgentMode::Durable,
                 last_known_status,
             )
-            .await;
+            .await
+            .unwrap();
 
             assert_eq!(
                 final_status, final_expected_status,
                 "Calculating the last known status from oplog index {idx}"
             )
         }
+    }
+
+    #[test]
+    async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
+        let mut test_case = TestCase::builder(1).build();
+        let session_key = StreamInvocationIdV1 {
+            callee_environment_id: test_case.owned_agent_id.environment_id,
+            callee: test_case.owned_agent_id.agent_id.clone(),
+            callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
+            idempotency_key: IdempotencyKey::fresh(),
+        };
+        let attachment_id = AttachmentId::primary(
+            session_key.callee_environment_id,
+            &session_key.callee,
+            &session_key.idempotency_key,
+        )
+        .unwrap();
+        let record = StreamSessionRecordV1::Prepared(StreamSessionPreparedRecordV1 {
+            format_version: 1,
+            attempt: StartAttemptDescriptorV1 {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: session_key.callee_fingerprint,
+                attempt_id: AttemptId::fresh(),
+                invocation: PersistedStreamInvocationDescriptorV1 {
+                    format_version: 1,
+                    session_key: session_key.clone(),
+                    target_component_revision: ComponentRevision::INITIAL,
+                    method_name: "large-cold-status".to_string(),
+                    invocation_value: vec![7; 70 * 1024],
+                    stream_handles: Vec::new(),
+                    execution_config: Vec::new(),
+                    effective_identity: Vec::new(),
+                },
+                effective_identity: Vec::new(),
+                live_join_buffer_events: 1,
+            },
+            stream_mappings: Vec::new(),
+        });
+        let bytes = golem_common::serialization::serialize(&record).unwrap();
+        assert!(bytes.len() > 64 * 1024);
+        let payload_id = PayloadId::new();
+        test_case
+            .raw_payloads
+            .lock()
+            .unwrap()
+            .push((payload_id.clone(), bytes));
+        test_case.entries.push(TestEntry {
+            oplog_entry: OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::External {
+                    payload_id,
+                    md5_hash: vec![0; 16],
+                    cached: None,
+                },
+            },
+            expected_status: AgentStatusRecord::default(),
+        });
+
+        let status = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            status
+                .durable_stream_sessions
+                .get(&session_key.idempotency_key)
+                .unwrap()
+                .prepared,
+            Some(OplogIndex::from_u64(test_case.entries.len() as u64))
+        );
     }
 
     // --------------------------------------------------------------------------
@@ -2982,6 +3561,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert_eq!(result.len(), 1);
@@ -3036,6 +3616,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert_eq!(result.len(), 2);
@@ -3076,6 +3657,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         let state = result.get(&grant_id).unwrap();
@@ -3113,6 +3695,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert!(
@@ -3148,6 +3731,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert!(
@@ -3213,6 +3797,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert!(
@@ -3249,6 +3834,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         assert_eq!(result.len(), 1);
@@ -3301,6 +3887,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         let state = result.get(&grant_id).unwrap();
@@ -3311,6 +3898,102 @@ mod test {
         );
         assert_eq!(state.confirmed_up_to, OplogIndex::from_u64(3));
         assert_eq!(state.sending_up_to, OplogIndex::from_u64(8));
+    }
+
+    #[test]
+    fn oplog_processor_checkpoint_fold_is_chunk_composable() {
+        fn fold(
+            entries: &BTreeMap<OplogIndex, OplogEntry>,
+            chunk_size: usize,
+        ) -> AgentStatusRecord {
+            let mut status = AgentStatusRecord::default();
+            let last_index = *entries.keys().next_back().unwrap();
+            let all_entries: Vec<_> = entries.iter().collect();
+            for chunk in all_entries.chunks(chunk_size) {
+                let chunk: BTreeMap<_, _> = chunk
+                    .iter()
+                    .map(|(index, entry)| (**index, (**entry).clone()))
+                    .collect();
+                let finalize = chunk.keys().next_back() == Some(&last_index);
+                status = super::update_status_with_precomputed_regions(
+                    AgentMode::Durable,
+                    status,
+                    chunk,
+                    &RetryConfig::default(),
+                    DeletedRegions::new(),
+                    DeletedRegions::new(),
+                    finalize,
+                )
+                .unwrap();
+            }
+            status
+        }
+
+        let grant_id = EnvironmentPluginGrantId::new();
+        let target = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "checkpoint-target".to_string(),
+        };
+        let test_case = TestCase::builder(0).build();
+        let mut create = test_case.entries[0].oplog_entry.clone();
+        let OplogEntry::Create {
+            initial_active_plugins,
+            ..
+        } = &mut create
+        else {
+            unreachable!()
+        };
+        initial_active_plugins.insert(grant_id);
+
+        let entries = BTreeMap::from([
+            (OplogIndex::INITIAL, create),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                    target_agent_id: target.clone(),
+                    confirmed_up_to: OplogIndex::INITIAL,
+                    sending_up_to: OplogIndex::from_u64(4),
+                    last_batch_start: OplogIndex::INITIAL,
+                },
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::DeactivatePlugin {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                },
+            ),
+            (
+                OplogIndex::from_u64(4),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                    target_agent_id: target.clone(),
+                    confirmed_up_to: OplogIndex::from_u64(4),
+                    sending_up_to: OplogIndex::from_u64(4),
+                    last_batch_start: OplogIndex::INITIAL,
+                },
+            ),
+            (
+                OplogIndex::from_u64(5),
+                OplogEntry::ActivatePlugin {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                },
+            ),
+        ]);
+
+        let unchunked = fold(&entries, entries.len());
+        assert_eq!(fold(&entries, 1), unchunked);
+        assert_eq!(fold(&entries, 2), unchunked);
+        let checkpoint = unchunked
+            .oplog_processor_checkpoints
+            .get(&grant_id)
+            .unwrap();
+        assert_eq!(checkpoint.target_agent_id, Some(target));
+        assert_eq!(checkpoint.confirmed_up_to, OplogIndex::from_u64(4));
     }
 
     #[test]
@@ -3348,6 +4031,7 @@ mod test {
             &active_plugins,
             &deleted_regions,
             &entries,
+            true,
         );
 
         let state = result.get(&grant_id).unwrap();
@@ -3374,7 +4058,7 @@ mod test {
             },
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3408,7 +4092,7 @@ mod test {
             OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3441,7 +4125,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3468,7 +4152,7 @@ mod test {
             },
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3493,7 +4177,7 @@ mod test {
                 local_wallet_generation: Some(1),
             },
         )]);
-        let status_after_revoke = super::update_status_with_new_entries(
+        let status_after_revoke = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             revoked,
@@ -3506,7 +4190,7 @@ mod test {
             OplogIndex::from_u64(2),
             OplogEntry::card_installed(None, None, test_card(card_id).into(), Some(2)),
         )]);
-        let status_after_install = super::update_status_with_new_entries(
+        let status_after_install = update_status_with_new_entries(
             AgentMode::Durable,
             status_after_revoke,
             installed,
@@ -3550,7 +4234,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3590,7 +4274,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3650,7 +4334,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3711,7 +4395,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3760,7 +4444,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3785,7 +4469,7 @@ mod test {
             ),
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3826,7 +4510,7 @@ mod test {
             card: Some(stored_card.clone()),
         });
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             BTreeMap::from([(
@@ -3844,7 +4528,7 @@ mod test {
             }) if card == &stored_card
         ));
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             status,
             BTreeMap::from([(
@@ -3869,7 +4553,7 @@ mod test {
             }) if *recorded_source_card_id == source_card_id && card == &stored_card
         ));
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             status,
             BTreeMap::from([(
@@ -3940,7 +4624,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -3995,7 +4679,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4041,7 +4725,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4087,7 +4771,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4142,7 +4826,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4195,7 +4879,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4256,7 +4940,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4317,7 +5001,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4346,7 +5030,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4374,7 +5058,7 @@ mod test {
             ),
         )]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4408,7 +5092,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4439,7 +5123,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4467,7 +5151,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4500,7 +5184,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
@@ -4534,7 +5218,7 @@ mod test {
             ),
         ]);
 
-        let status = super::update_status_with_new_entries(
+        let status = update_status_with_new_entries(
             AgentMode::Durable,
             AgentStatusRecord::default(),
             entries,
