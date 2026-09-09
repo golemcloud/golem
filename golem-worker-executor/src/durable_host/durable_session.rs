@@ -5229,9 +5229,11 @@ mod tests {
         commits: Arc<AtomicU64>,
     }
 
+    type LagSample = (Option<StreamOffsetV1>, Result<usize, ()>);
+
     struct LagRecordingSource {
         producer: Arc<DurableStreamProducer>,
-        calls: Mutex<Vec<(Option<StreamOffsetV1>, Result<usize, ()>)>>,
+        calls: Mutex<Vec<LagSample>>,
         failures_remaining: AtomicU64,
     }
 
