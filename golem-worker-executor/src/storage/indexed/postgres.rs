@@ -315,6 +315,19 @@ impl IndexedStorage for PostgresIndexedStorage {
         if pairs.is_empty() {
             return Ok(());
         }
+        if let [(id, value)] = pairs.as_ref() {
+            return self
+                .append(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    (*namespace).clone(),
+                    key,
+                    *id,
+                    value.to_vec(),
+                )
+                .await;
+        }
 
         let _permit = self.acquire_permit().await;
         let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
