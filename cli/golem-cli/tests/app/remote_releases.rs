@@ -713,6 +713,55 @@ environments:
     assert_eq!(compiled[0].release_id, Some(release.id));
     assert_eq!(compiled[0].metadata_digest, release.metadata_digest);
 
+    let current_plan = consumer
+        .client
+        .get_environment_deployment_plan(&consumer_environment.id.0)
+        .await?;
+    let summary = consumer
+        .client
+        .get_deployment_summary(
+            &consumer_environment.id.0,
+            pinned.deployment_revision.into(),
+        )
+        .await?;
+    assert_eq!(current_plan.current_revision, Some(pinned.revision));
+    assert_eq!(summary.deployment_revision, pinned.deployment_revision);
+    assert_eq!(current_plan.deployment_hash, summary.deployment_hash);
+    assert_eq!(current_plan.components, summary.components);
+    assert_eq!(
+        current_plan.http_api_deployments,
+        summary.http_api_deployments
+    );
+    assert_eq!(current_plan.mcp_deployments, summary.mcp_deployments);
+    assert_eq!(current_plan.remote_tools, summary.remote_tools);
+    assert_eq!(current_plan.published_tools, summary.published_tools);
+    assert_eq!(
+        current_plan.remote_tool_middlewares,
+        summary.remote_tool_middlewares
+    );
+    assert_eq!(
+        current_plan.published_tool_middlewares,
+        summary.published_tool_middlewares
+    );
+    assert_eq!(
+        current_plan.universal_tool_middlewares,
+        summary.universal_tool_middlewares
+    );
+    assert_eq!(
+        current_plan.tool_compatibility_mode,
+        summary.tool_compatibility_mode
+    );
+    assert_eq!(
+        current_plan.environment_tool_middleware_bindings,
+        summary.environment_tool_middleware_bindings
+    );
+    assert_eq!(
+        current_plan.agent_tool_middleware_bindings,
+        summary.agent_tool_middleware_bindings
+    );
+    assert!(current_plan.agent_tool_middleware_bindings.is_empty());
+    assert!(summary.agent_tool_middleware_bindings.is_empty());
+
     let no_op = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(no_op.success_or_dump());
     let after_no_op = consumer

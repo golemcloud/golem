@@ -10,6 +10,12 @@ pub(all) enum ToolInvokeError[E] {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct RawCustomToolError {
+  name : String
+  payload : @model.TypedSchemaValue
+} derive(Eq, Debug)
+
+///|
 pub fn[E, M] ToolInvokeError::map_tool(
   self : ToolInvokeError[E],
   transform : (E) -> M,
@@ -97,9 +103,9 @@ pub async fn UnderlyingTool::invoke(
   command_path : Array[String],
   input : @model.TypedSchemaValue,
   stdin : MiddlewareStdin?,
-) -> Result[OwnedInvocationResult, ToolInvokeError[@model.TypedSchemaValue]] {
-  self.invoke_with(command_path, input, stdin, fn(_name, value) {
-    Some(Ok(value))
+) -> Result[OwnedInvocationResult, ToolInvokeError[RawCustomToolError]] {
+  self.invoke_with(command_path, input, stdin, fn(name, payload) {
+    Some(Ok({ name, payload, }))
   })
 }
 
@@ -205,7 +211,7 @@ fn[E] decode_tool_error_with_ownership(
 
 ///|
 pub fn encode_tool_error(
-  error : ToolInvokeError[@model.TypedSchemaValue],
+  error : ToolInvokeError[RawCustomToolError],
 ) -> @toolCommon.ToolError {
   match error {
     InvalidToolName(name) => @toolCommon.ToolError::InvalidToolName(name)
@@ -214,16 +220,16 @@ pub fn encode_tool_error(
     ConstraintViolation(message) =>
       @toolCommon.ToolError::ConstraintViolation(message)
     InvalidResult(message) => @toolCommon.ToolError::InvalidResult(message)
-    Tool(value) => {
-      let encoded = @model.typed_schema_value_to_wit(value) catch {
-        error => {
-          @model.drop_owned_capabilities(value.value)
+    Tool(error) => {
+      let encoded = @model.typed_schema_value_to_wit(error.payload) catch {
+        encode_error => {
+          @model.drop_owned_capabilities(error.payload.value)
           return @toolCommon.ToolError::InvalidResult(
-            "failed to encode tool error: \{Repr(error)}",
+            "failed to encode tool error: \{Repr(encode_error)}",
           )
         }
       }
-      @toolCommon.ToolError::CustomError({ name: "custom", payload: encoded, })
+      @toolCommon.ToolError::CustomError({ name: error.name, payload: encoded, })
     }
     UnknownToolError(error) => @toolCommon.ToolError::CustomError(error)
   }

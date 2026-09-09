@@ -123,7 +123,7 @@ test "monomorphic emitter generates namespaced descriptors wrappers dispatch and
     ),
   )
   assert_true(generated.contains("presented: __golem_middleware_tool_def_Echo"))
-  assert_true(generated.contains("expected: __golem_middleware_tool_def_Echo"))
+  assert_true(generated.contains("expected: Some(__golem_middleware_tool_def_Echo"))
 }
 
 ///|

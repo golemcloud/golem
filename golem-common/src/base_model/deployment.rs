@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent::AgentTypeName;
 use super::agent_secret::AgentSecretPath;
 use super::component::{ComponentId, ComponentName, ComponentRevision};
 use super::deploy_validation_warning::DeployValidationWarning;
@@ -21,7 +22,7 @@ use super::environment::EnvironmentId;
 use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use super::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
 use super::quota::ResourceDefinitionCreation;
-use super::tool::{RemoteToolDeployment, ToolName};
+use super::tool::{RemoteToolDeployment, ToolBindingInput, ToolName};
 use super::tool_middleware::{
     RemoteToolMiddlewareDeployment, ToolMiddlewareInstallation, ToolMiddlewareName,
 };
@@ -137,8 +138,12 @@ declare_structs! {
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
         pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
         pub published_tools: Vec<ToolName>,
-        pub remote_tool_middlewares: Vec<ToolMiddlewareName>,
+        pub remote_tool_middlewares: Vec<DeploymentPlanRemoteToolMiddlewareEntry>,
         pub published_tool_middlewares: Vec<ToolMiddlewareName>,
+        pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+        pub tool_compatibility_mode: ToolCompatibilityMode,
+        pub environment_tool_middleware_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+        pub agent_tool_middleware_bindings: std::collections::BTreeMap<AgentTypeName, std::collections::BTreeMap<ToolName, ToolBindingInput>>,
     }
 
     /// Summary of all entities tracked by the deployment
@@ -150,8 +155,12 @@ declare_structs! {
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
         pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
         pub published_tools: Vec<ToolName>,
-        pub remote_tool_middlewares: Vec<ToolMiddlewareName>,
+        pub remote_tool_middlewares: Vec<DeploymentPlanRemoteToolMiddlewareEntry>,
         pub published_tool_middlewares: Vec<ToolMiddlewareName>,
+        pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+        pub tool_compatibility_mode: ToolCompatibilityMode,
+        pub environment_tool_middleware_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+        pub agent_tool_middleware_bindings: std::collections::BTreeMap<AgentTypeName, std::collections::BTreeMap<ToolName, ToolBindingInput>>,
     }
 
     pub struct DeploymentPlanComponentEntry {
@@ -177,6 +186,10 @@ declare_structs! {
 
     pub struct DeploymentPlanRemoteToolEntry {
         pub name: ToolName,
+        pub hash: Hash,
+    }
+    pub struct DeploymentPlanRemoteToolMiddlewareEntry {
+        pub name: ToolMiddlewareName,
         pub hash: Hash,
     }
 }

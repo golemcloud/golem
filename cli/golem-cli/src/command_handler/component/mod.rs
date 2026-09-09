@@ -2496,7 +2496,7 @@ fn resolve_tool_binding_input(
                 None
             }
         },
-        middleware_merge_mode: state.middleware_merge_mode,
+        middleware_merge_mode: agent_name.and(state.middleware_merge_mode),
     })
 }
 
@@ -2931,7 +2931,7 @@ mod tool_binding_tests {
             secret_keys_revealable: revealable,
             filesystem_access: Default::default(),
             middleware: None,
-            middleware_merge_mode: Default::default(),
+            middleware_merge_mode: None,
         }
     }
 
@@ -3026,7 +3026,7 @@ mod tool_binding_tests {
     }
 
     #[test]
-    fn binding_materialization_preserves_middleware_chain_and_merge_mode() {
+    fn agent_binding_materialization_preserves_middleware_chain_and_merge_mode() {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             version: "1.0.0".to_string(),
@@ -3038,9 +3038,47 @@ mod tool_binding_tests {
             middleware: Some(vec![ToolMiddlewareInstallation::Shortcut(
                 "audit@2.0.0".to_string(),
             )]),
-            middleware_merge_mode: ToolMiddlewareMergeMode::Replace,
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
             ..Default::default()
         };
+        let mut issues = Vec::new();
+
+        let binding = resolve_tool_binding_input(
+            &mut issues,
+            &tool_name,
+            &definition,
+            &AccountEmail::new("owner@example.com"),
+            &state,
+            "environments.tools",
+            Some(&AgentTypeName("Agent".to_string())),
+            Some(Path::new("agents.yaml")),
+        )
+        .unwrap();
+
+        assert!(issues.is_empty());
+        assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Allowed);
+        assert_eq!(
+            binding.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+        let middleware = binding.middleware.unwrap();
+        assert_eq!(middleware.len(), 1);
+        assert_eq!(middleware[0].name.as_str(), "audit");
+        assert_eq!(middleware[0].version.as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn environment_parameters_only_binding_has_no_middleware_merge_mode() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let definition = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        };
+        let mut state = ToolBindingState::default();
+        state
+            .parameters
+            .insert("limit".to_string(), serde_json::json!(5));
         let mut issues = Vec::new();
 
         let binding = resolve_tool_binding_input(
@@ -3056,14 +3094,46 @@ mod tool_binding_tests {
         .unwrap();
 
         assert!(issues.is_empty());
-        assert_eq!(binding.filesystem_access, ToolFilesystemAccess::Allowed);
+        assert_eq!(binding.parameters.0, serde_json::json!({ "limit": 5 }));
+        assert_eq!(binding.middleware, None);
+        assert_eq!(binding.middleware_merge_mode, None);
+    }
+
+    #[test]
+    fn agent_binding_distinguishes_omitted_and_explicit_merge_mode() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let definition = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        };
+        let owner = AccountEmail::new("owner@example.com");
+        let agent_name = AgentTypeName("Agent".to_string());
+        let materialize = |state: &ToolBindingState| {
+            resolve_tool_binding_input(
+                &mut Vec::new(),
+                &tool_name,
+                &definition,
+                &owner,
+                state,
+                "agents.tools",
+                Some(&agent_name),
+                Some(Path::new("agents.yaml")),
+            )
+            .unwrap()
+        };
+
         assert_eq!(
-            binding.middleware_merge_mode,
-            ToolMiddlewareMergeMode::Replace
+            materialize(&ToolBindingState::default()).middleware_merge_mode,
+            None
         );
-        let middleware = binding.middleware.unwrap();
-        assert_eq!(middleware.len(), 1);
-        assert_eq!(middleware[0].name.as_str(), "audit");
-        assert_eq!(middleware[0].version.as_deref(), Some("2.0.0"));
+        assert_eq!(
+            materialize(&ToolBindingState {
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+                ..Default::default()
+            })
+            .middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Append)
+        );
     }
 }

@@ -34,6 +34,7 @@ pub mod permission_share;
 pub mod plan;
 pub mod plugin;
 pub mod registry_change;
+pub(crate) mod release_grant_lifecycle;
 pub mod report;
 pub mod resource_definition;
 pub mod retry_policy;

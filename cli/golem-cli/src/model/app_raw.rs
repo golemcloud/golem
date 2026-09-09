@@ -173,7 +173,29 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
     where
         D: serde::Deserializer<'de>,
     {
-        IndexMap::<String, serde_json::Value>::deserialize(deserializer).map(Self)
+        let declarations = IndexMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        if let Some(serde_json::Value::Object(value)) = declarations.get("middleware")
+            && [
+                "component",
+                "release",
+                "templates",
+                "config",
+                "envMergeMode",
+                "env",
+                "pluginsMergeMode",
+                "plugins",
+                "filesMergeMode",
+                "files",
+                "presets",
+            ]
+            .iter()
+            .any(|field| value.contains_key(*field))
+        {
+            return Err(serde::de::Error::custom(
+                "tool name `middleware` is reserved for tool middleware declarations",
+            ));
+        }
+        Ok(Self(declarations))
     }
 }
 
@@ -1100,13 +1122,42 @@ pub struct Environment {
     pub tools: Option<EnvironmentTools>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentTools {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub middleware: Vec<ToolMiddlewareInstallation>,
     #[serde(flatten)]
     pub bindings: IndexMap<String, ToolBinding>,
+}
+
+impl<'de> Deserialize<'de> for EnvironmentTools {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = IndexMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        let mut middleware = Vec::new();
+        let mut bindings = IndexMap::new();
+        for (name, value) in value {
+            if name == "middleware" {
+                middleware = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            } else {
+                let binding: ToolBinding =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                if binding.middleware_merge_mode.is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "middlewareMergeMode is only valid on agent tool bindings, not environment tool binding `{name}`"
+                    )));
+                }
+                bindings.insert(name, binding);
+            }
+        }
+        Ok(Self {
+            middleware,
+            bindings,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3189,6 +3240,9 @@ mod test {
                     - name: audit
                       version: 1.0.0
                       filesystemAccess: denied
+            agents:
+              SearchAgent:
+                tools:
                   search:
                     middleware: []
                     middlewareMergeMode: replace
@@ -3206,7 +3260,14 @@ mod test {
                 .filesystem_access,
             ToolFilesystemAccess::Denied
         );
-        assert_eq!(tools.bindings["search"].middleware, Some(vec![]));
+        assert_eq!(
+            app.agents[&AgentTypeName("SearchAgent".to_string())]
+                .tools
+                .as_ref()
+                .unwrap()["search"]
+                .middleware,
+            Some(vec![])
+        );
         assert_eq!(
             app.tool_middleware_releases
                 .get(&EnvironmentName("local".to_string()))
@@ -3222,6 +3283,63 @@ mod test {
                 .compatibility_mode(),
             golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal
         );
+    }
+
+    #[test]
+    fn compatibility_mode_schema_accepts_every_rust_value() {
+        use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+
+        for mode in [
+            ToolCompatibilityMode::StrictEquality,
+            ToolCompatibilityMode::StructuralSubtype,
+            ToolCompatibilityMode::Nominal,
+        ] {
+            let mode = serde_json::to_value(mode).unwrap();
+            let manifest = serde_json::json!({
+                "environments": {
+                    "local": { "deployment": { "compatibilityMode": mode } }
+                }
+            });
+            assert!(
+                JSON_SCHEMA_VALIDATOR.is_valid(&manifest),
+                "schema rejected Rust compatibility mode {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_middleware_tool_name_has_clear_error() {
+        let error = Application::from_yaml_str(indoc::indoc! { r#"
+            tools:
+              middleware:
+                component: app:tool
+        "# })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("tool name `middleware` is reserved")
+        );
+    }
+
+    #[test]
+    fn environment_middleware_merge_mode_is_rejected_even_when_prepend() {
+        let source = indoc::indoc! { r#"
+            environments:
+              local:
+                tools:
+                  search:
+                    middlewareMergeMode: prepend
+        "# };
+        let error = Application::from_yaml_str(source).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("only valid on agent tool bindings")
+        );
+
+        let json = serde_yaml::from_str::<serde_json::Value>(source).unwrap();
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
     }
 
     #[test]

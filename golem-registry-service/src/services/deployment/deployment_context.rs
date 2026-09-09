@@ -131,7 +131,7 @@ impl DeploymentContext {
                     .is_ok();
                 if !valid {
                     errors.push(DeployValidationError::ToolMiddleware {
-                        middleware_name: name.clone(),
+                        middleware_name: Some(name.clone()),
                         agent_type_name: None,
                         tool_name: None,
                         message:
@@ -161,7 +161,7 @@ impl DeploymentContext {
                 };
                 if registrations.insert(name.clone(), registration).is_some() {
                     errors.push(DeployValidationError::ToolMiddleware {
-                        middleware_name: name.clone(),
+                        middleware_name: Some(name.clone()),
                         agent_type_name: None,
                         tool_name: None,
                         message: "multiple local or remote implementations".to_string(),
@@ -172,7 +172,7 @@ impl DeploymentContext {
         for (deployment, resolved) in remote {
             let Some(resolved) = resolved else {
                 errors.push(DeployValidationError::ToolMiddleware {
-                    middleware_name: deployment.name.clone(),
+                    middleware_name: Some(deployment.name.clone()),
                     agent_type_name: None,
                     tool_name: None,
                     message: "remote release is unavailable in this environment".to_string(),
@@ -187,7 +187,7 @@ impl DeploymentContext {
                     .is_ok_and(|digest| digest == release.metadata_digest);
             if !valid {
                 errors.push(DeployValidationError::ToolMiddleware {
-                    middleware_name: deployment.name.clone(),
+                    middleware_name: Some(deployment.name.clone()),
                     agent_type_name: None,
                     tool_name: None,
                     message: "remote release identity, version, or digest is invalid".to_string(),
@@ -219,7 +219,7 @@ impl DeploymentContext {
                 .is_some()
             {
                 errors.push(DeployValidationError::ToolMiddleware {
-                    middleware_name: deployment.name.clone(),
+                    middleware_name: Some(deployment.name.clone()),
                     agent_type_name: None,
                     tool_name: None,
                     message: "multiple local or remote implementations".to_string(),
@@ -1171,6 +1171,14 @@ fn validate_tool_binding<'a>(
     errors: &mut Vec<DeployValidationError>,
 ) -> Option<&'a ToolBindingInput> {
     let mut valid = true;
+    if agent_type.is_none() && binding.middleware_merge_mode.is_some() {
+        valid = false;
+        errors.push(
+            DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode {
+                tool_name: tool_name.clone(),
+            },
+        );
+    }
     if let Some(version) = &binding.version
         && version != tool_version
     {

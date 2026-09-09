@@ -376,12 +376,12 @@ mod tests {
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented,
                         expected: None,
                     },
-                ),
+                )),
             },
             invoker,
         );
@@ -400,12 +400,12 @@ mod tests {
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: tool("registry-missing-expected"),
                         expected: None,
                     },
-                ),
+                )),
             },
             invoker,
         );
@@ -423,12 +423,12 @@ mod tests {
                     description: String::new(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: tool("registry-shared-name"),
                         expected: Some(tool("registry-shared-name")),
                     },
-                ),
+                )),
             },
             invoker,
         );
@@ -460,12 +460,12 @@ mod tests {
                     description: "Boundary description".to_string(),
                     examples: vec![],
                 },
-                scope: ToolMiddlewareScope::Monomorphic(
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(
                     super::super::MonomorphicToolMiddlewareScope {
                         presented: presented.clone(),
                         expected: Some(expected.clone()),
                     },
-                ),
+                )),
             },
             invoker,
         );

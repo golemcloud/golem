@@ -764,7 +764,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
       },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_Messages().to_tool(),
-        expected: __golem_middleware_tool_def_Messages().to_tool(),
+        expected: Some(__golem_middleware_tool_def_Messages().to_tool()),
       }),
     },
     __golem_monomorphic_tool_middleware_invoke_MessagePolicy,
@@ -781,7 +781,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
       },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_PublicFiles().to_tool(),
-        expected: __golem_middleware_tool_def_Storage().to_tool(),
+        expected: Some(__golem_middleware_tool_def_Storage().to_tool()),
       }),
     },
     __golem_monomorphic_tool_middleware_invoke_FileAdapter,

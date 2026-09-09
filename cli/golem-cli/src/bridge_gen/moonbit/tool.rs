@@ -546,9 +546,7 @@ supported_targets = "+wasm"
                     writer.dedent();
                     writer.line("}");
                 }
-                writer.line(format!(
-                    "Some(Err(\"remote tool error payload is malformed for case `\" + name + \"`\"))"
-                ));
+                writer.line("Some(Err(\"remote tool error payload is malformed for case `\" + name + \"`\"))");
                 writer.dedent();
                 writer.line("}");
             }

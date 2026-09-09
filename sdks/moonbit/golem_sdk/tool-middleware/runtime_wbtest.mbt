@@ -265,6 +265,36 @@ test "successful custom error decode remains owned until invocation teardown" {
 }
 
 ///|
+test "underlying invocation preserves the custom error name" {
+  run_component_async(async fn() {
+    let underlying = new_underlying_tool(
+      (_, _, _) => {
+        Err(
+          @toolCommon.ToolError::CustomError({
+            name: "named-error",
+            payload: @toolCore.encode_typed_input(
+              @schema.try_into_typed_schema_value("details"),
+            ).unwrap(),
+          }),
+        )
+      },
+      no_raw_drop,
+    )
+    let result = underlying.invoke(
+      [],
+      @schema.try_into_typed_schema_value(()),
+      None,
+    )
+    guard result is Err(Tool(error)) else {
+      fail("backend custom error was not preserved")
+    }
+    assert_eq(error.name, "named-error")
+    @model.drop_owned_capabilities(error.payload.value)
+    underlying.revoke()
+  })
+}
+
+///|
 test "failed custom error encoding drops untransferred capabilities" {
   reset_resource_drop_counts()
   let unit = @schema.try_into_typed_schema_value(())
@@ -279,7 +309,9 @@ test "failed custom error encoding drops untransferred capabilities" {
       @model.SchemaValue::S8(128),
     ]),
   }
-  let encoded = encode_tool_error(Tool(malformed))
+  let encoded = encode_tool_error(
+    Tool({ name: "malformed", payload: malformed, }),
+  )
   assert_true(encoded is @toolCommon.ToolError::InvalidResult(_))
   assert_resource_drop_counts(0, 0, 1)
 }

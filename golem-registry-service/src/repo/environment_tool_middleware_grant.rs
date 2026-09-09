@@ -19,6 +19,8 @@ use crate::repo::model::environment_tool_middleware_grant::{
 use crate::repo::model::tool_middleware_release::{
     TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
 };
+use crate::repo::release_grant_lifecycle::{self as lifecycle, GrantKind};
+use crate::repo::tool_middleware_release::ToolMiddlewareReleaseKind;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -579,12 +581,11 @@ const GRANT_DETAILS_SELECT: &str = r#"
         etg.state_changed_at AS grant_state_changed_at,
         etg.state_changed_by AS grant_state_changed_by,
         etg.deleted_at AS grant_deleted_at, etg.deleted_by AS grant_deleted_by,
-        tr.tool_middleware_release_id, tr.owner_account_id, tr.tool_middleware_name, tr.tool_version,
-        tr.source_kind, tr.tool_definition, tr.metadata_version, tr.metadata_digest,
-        tr.immutable, tr.lifecycle, tr.origin, tr.system_availability,
+        tr.tool_middleware_release_id, tr.owner_account_id, tr.tool_middleware_name, tr.middleware_version,
+        tr.tool_definition, tr.metadata_version, tr.metadata_digest,
+        tr.immutable, tr.lifecycle, tr.origin,
         tr.created_at, tr.created_by, tr.state_changed_at, tr.state_changed_by,
         tr.component_id, tr.component_revision, tr.component_name,
-        tr.host_tool_id, tr.implementation_version,
         ar.name AS owner_account_name, a.email AS owner_account_email
     FROM environment_tool_middleware_grants etg
     JOIN tool_middleware_releases tr ON tr.tool_middleware_release_id = etg.tool_middleware_release_id
@@ -592,6 +593,10 @@ const GRANT_DETAILS_SELECT: &str = r#"
     JOIN account_revisions ar
         ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
 "#;
+
+impl GrantKind for ToolMiddlewareReleaseKind {
+    const GRANT_ID: &'static str = "environment_tool_middleware_grant_id";
+}
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
@@ -701,7 +706,7 @@ impl EnvironmentToolMiddlewareGrantRepo for DbEnvironmentToolMiddlewareGrantRepo
         EnvironmentToolMiddlewareGrantRepoError,
     > {
         let query = format!(
-            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.deleted_at IS NULL AND tr.lifecycle IN ({TOOL_RELEASE_LIFECYCLE_PUBLISHED}, {TOOL_RELEASE_LIFECYCLE_SUPERSEDED}) ORDER BY tr.tool_middleware_name, tr.tool_version"
+            "{GRANT_DETAILS_SELECT} WHERE etg.environment_id = $1 AND etg.deleted_at IS NULL AND tr.lifecycle IN ({TOOL_RELEASE_LIFECYCLE_PUBLISHED}, {TOOL_RELEASE_LIFECYCLE_SUPERSEDED}) ORDER BY tr.tool_middleware_name, tr.middleware_version"
         );
         Ok(self
             .with_ro("list_by_environment")
@@ -745,20 +750,11 @@ impl EnvironmentToolMiddlewareGrantRepo for DbEnvironmentToolMiddlewareGrantRepo
         let result = self
             .with_rw("delete")
             .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    UPDATE environment_tool_middleware_grants
-                    SET state_changed_at = $2, state_changed_by = $3,
-                        deleted_at = $2, deleted_by = $3
-                    WHERE environment_tool_middleware_grant_id = $1
-                        AND deleted_at IS NULL
-                        AND NOT protected
-                        AND (NOT $4 OR automatic)
-                    RETURNING environment_tool_middleware_grant_id
-                "#})
-                .bind(grant_id)
-                .bind(SqlDateTime::now())
-                .bind(actor)
-                .bind(automatic_only),
+                sqlx::query(&lifecycle::delete_grant::<ToolMiddlewareReleaseKind>())
+                    .bind(grant_id)
+                    .bind(SqlDateTime::now())
+                    .bind(actor)
+                    .bind(automatic_only),
             )
             .await?;
         Ok(result.is_some())
@@ -795,17 +791,7 @@ impl EnvironmentToolMiddlewareGrantRepo for DbEnvironmentToolMiddlewareGrantRepo
                     }
                     let updated = tx
                         .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE environment_tool_middleware_grants
-                                SET automatic = $4, follow_coordinates = $5,
-                                    state_changed_at = $6, state_changed_by = $7
-                                WHERE environment_tool_middleware_grant_id = $1
-                                    AND environment_id = $2
-                                    AND tool_middleware_release_id = $3
-                                    AND deleted_at IS NULL
-                                    AND NOT protected
-                                    AND (NOT $4 OR automatic)
-                            "#})
+                            sqlx::query(&lifecycle::set_grant_management::<ToolMiddlewareReleaseKind>())
                             .bind(grant_id)
                             .bind(environment_id)
                             .bind(release_id)
@@ -876,18 +862,7 @@ impl EnvironmentToolMiddlewareGrantRepo for DbEnvironmentToolMiddlewareGrantRepo
                     }
                     let updated = tx
                         .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE environment_tool_middleware_grants
-                                SET state_changed_at = $4, state_changed_by = $5,
-                                    automatic = $6,
-                                    follow_coordinates = COALESCE($7, follow_coordinates),
-                                    deleted_at = NULL, deleted_by = NULL
-                                WHERE environment_tool_middleware_grant_id = $1
-                                    AND environment_id = $2
-                                    AND tool_middleware_release_id = $3
-                                    AND deleted_at IS NOT NULL
-                                    AND NOT protected
-                            "#})
+                            sqlx::query(&lifecycle::restore_grant::<ToolMiddlewareReleaseKind>(false))
                             .bind(grant_id)
                             .bind(environment_id)
                             .bind(release_id)
@@ -940,21 +915,12 @@ impl EnvironmentToolMiddlewareGrantRepo for DbEnvironmentToolMiddlewareGrantRepo
         let updated = self
             .with_rw("restore_protected")
             .execute(
-                sqlx::query(indoc! { r#"
-                    UPDATE environment_tool_middleware_grants
-                    SET state_changed_at = $4, state_changed_by = $5,
-                        deleted_at = NULL, deleted_by = NULL
-                    WHERE environment_tool_middleware_grant_id = $1
-                        AND environment_id = $2
-                        AND tool_middleware_release_id = $3
-                        AND deleted_at IS NOT NULL
-                        AND protected
-                "#})
-                .bind(grant_id)
-                .bind(environment_id)
-                .bind(release_id)
-                .bind(now)
-                .bind(actor),
+                sqlx::query(&lifecycle::restore_grant::<ToolMiddlewareReleaseKind>(true))
+                    .bind(grant_id)
+                    .bind(environment_id)
+                    .bind(release_id)
+                    .bind(now)
+                    .bind(actor),
             )
             .await?;
         if updated.rows_affected() != 1 {

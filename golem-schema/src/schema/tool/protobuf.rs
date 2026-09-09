@@ -86,7 +86,7 @@ impl From<ToolMiddlewareScope> for proto::ToolMiddlewareScope {
     fn from(value: ToolMiddlewareScope) -> Self {
         use proto::tool_middleware_scope::Value;
         let value = match value {
-            ToolMiddlewareScope::Monomorphic(scope) => Value::Monomorphic(scope.into()),
+            ToolMiddlewareScope::Monomorphic(scope) => Value::Monomorphic((*scope).into()),
             ToolMiddlewareScope::Universal => Value::Universal(Empty {}),
         };
         Self { value: Some(value) }
@@ -99,7 +99,7 @@ impl TryFrom<proto::ToolMiddlewareScope> for ToolMiddlewareScope {
     fn try_from(value: proto::ToolMiddlewareScope) -> Result<Self, Self::Error> {
         use proto::tool_middleware_scope::Value;
         match required(value.value, "ToolMiddlewareScope.value")? {
-            Value::Monomorphic(scope) => Ok(Self::Monomorphic(scope.try_into()?)),
+            Value::Monomorphic(scope) => Ok(Self::Monomorphic(Box::new(scope.try_into()?))),
             Value::Universal(_) => Ok(Self::Universal),
         }
     }

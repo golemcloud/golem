@@ -32,7 +32,7 @@ pub struct ToolBindingState {
     pub filesystem_access: ToolFilesystemAccess,
     /// `None` means no layer authored this field; `Some([])` is an explicit empty chain.
     pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
-    pub middleware_merge_mode: ToolMiddlewareMergeMode,
+    pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
 }
 
 impl ToolBindingState {
@@ -67,10 +67,11 @@ impl ToolBindingState {
             self.filesystem_access = filesystem_access;
         }
 
-        let mode = binding.middleware_merge_mode.unwrap_or_default();
-        self.middleware_merge_mode = mode;
+        if binding.middleware_merge_mode.is_some() {
+            self.middleware_merge_mode = binding.middleware_merge_mode;
+        }
         if let Some(middleware) = binding.middleware {
-            match mode {
+            match binding.middleware_merge_mode.unwrap_or_default() {
                 ToolMiddlewareMergeMode::Prepend => {
                     let mut merged = middleware;
                     merged.extend(self.middleware.take().unwrap_or_default());
@@ -416,6 +417,7 @@ mod tests {
                     .collect::<Vec<_>>(),
                 expected
             );
+            assert_eq!(state.middleware_merge_mode, Some(mode));
         }
 
         let mut state = super::ToolBindingState::default();
@@ -429,10 +431,15 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(state.middleware, Some(vec![]));
+        assert_eq!(
+            state.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
 
         let mut omitted = super::ToolBindingState::default();
         omitted.apply(ToolBinding::default());
         assert_eq!(omitted.middleware, None);
+        assert_eq!(omitted.middleware_merge_mode, None);
     }
 
     #[test]

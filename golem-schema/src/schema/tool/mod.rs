@@ -163,7 +163,7 @@ pub struct ToolMiddleware {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum ToolMiddlewareScope {
-    Monomorphic(MonomorphicToolMiddlewareScope),
+    Monomorphic(Box<MonomorphicToolMiddlewareScope>),
     Universal,
 }
 

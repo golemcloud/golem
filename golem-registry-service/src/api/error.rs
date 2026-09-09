@@ -259,7 +259,8 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::ToolBindingAccountMismatch { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_ACCOUNT_MISMATCH
         }
-        DeployValidationError::ToolBindingParametersMustBeObject { .. } => {
+        DeployValidationError::ToolBindingParametersMustBeObject { .. }
+        | DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode { .. } => {
             api::error_code::deployment_validation::TOOL_BINDING_PARAMETERS_MUST_BE_OBJECT
         }
         DeployValidationError::ToolMiddleware { .. } => {
@@ -997,10 +998,15 @@ impl From<ToolMiddlewareReleaseError> for ApiError {
     fn from(value: ToolMiddlewareReleaseError) -> Self {
         let error = value.to_safe_string();
         match value {
-            ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(_)
-            | ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound
-            | ToolMiddlewareReleaseError::ParentAccountNotFound(_) => {
-                Self::not_found(api::error_code::TOOL_RELEASE_NOT_FOUND, error)
+            ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(_) => {
+                Self::not_found(api::error_code::TOOL_MIDDLEWARE_RELEASE_NOT_FOUND, error)
+            }
+            ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound => Self::not_found(
+                api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+                error,
+            ),
+            ToolMiddlewareReleaseError::ParentAccountNotFound(_) => {
+                Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
             ToolMiddlewareReleaseError::Unauthorized(inner) => inner.into(),
             ToolMiddlewareReleaseError::InternalError(_) => Self::InternalError(Json(ErrorBody {
@@ -1011,7 +1017,14 @@ impl From<ToolMiddlewareReleaseError> for ApiError {
             ToolMiddlewareReleaseError::ProtectedToolMiddlewareRelease => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
-            _ => Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error),
+            ToolMiddlewareReleaseError::ImmutableReleaseConflict => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+                error,
+            ),
+            _ => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+                error,
+            ),
         }
     }
 }
@@ -1020,10 +1033,20 @@ impl From<EnvironmentToolMiddlewareGrantError> for ApiError {
     fn from(value: EnvironmentToolMiddlewareGrantError) -> Self {
         let error = value.to_safe_string();
         match value {
-            EnvironmentToolMiddlewareGrantError::ParentEnvironmentNotFound(_)
-            | EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(_)
-            | EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound => {
-                Self::not_found(api::error_code::ENVIRONMENT_TOOL_GRANT_NOT_FOUND, error)
+            EnvironmentToolMiddlewareGrantError::ParentEnvironmentNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
+            }
+            EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(_) => {
+                Self::not_found(
+                    api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_NOT_FOUND,
+                    error,
+                )
+            }
+            EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound => {
+                Self::not_found(
+                    api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+                    error,
+                )
             }
             EnvironmentToolMiddlewareGrantError::Unauthorized(inner) => inner.into(),
             EnvironmentToolMiddlewareGrantError::InternalError(_) => {
@@ -1033,10 +1056,18 @@ impl From<EnvironmentToolMiddlewareGrantError> for ApiError {
                     cause: Some(value.into_anyhow()),
                 }))
             }
-            EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(_) => {
-                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
-            }
-            _ => Self::conflict(api::error_code::ENVIRONMENT_TOOL_GRANT_CONFLICT, error),
+            EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(_) => Self::forbidden(
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_PROTECTED,
+                error,
+            ),
+            EnvironmentToolMiddlewareGrantError::GrantAlreadyExists => Self::conflict(
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_ALREADY_EXISTS,
+                error,
+            ),
+            _ => Self::conflict(
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_CONFLICT,
+                error,
+            ),
         }
     }
 }
@@ -1099,6 +1130,14 @@ impl From<DeploymentWriteError> for ApiError {
             DeploymentWriteError::ToolReleaseDePublishedConflict => {
                 Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
             }
+            DeploymentWriteError::ToolMiddlewareReleaseImmutableConflict => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+                error,
+            ),
+            DeploymentWriteError::ToolMiddlewareReleaseDePublishedConflict => Self::conflict(
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+                error,
+            ),
 
             DeploymentWriteError::Unauthorized(inner) => inner.into(),
             DeploymentWriteError::InternalError(_) => Self::InternalError(Json(ErrorBody {
@@ -1554,7 +1593,9 @@ mod tests {
         match api_error {
             ApiError::BadRequest(body) => ("bad_request", body.0.code),
             ApiError::NotFound(body) => ("not_found", body.0.code),
-            other => panic!("Expected bad request or not found, got: {other:?}"),
+            ApiError::Conflict(body) => ("conflict", body.0.code),
+            ApiError::Forbidden(body) => ("forbidden", body.0.code),
+            other => panic!("Expected client error, got: {other:?}"),
         }
     }
 
@@ -1622,6 +1663,88 @@ mod tests {
     }
 
     #[test]
+    fn tool_middleware_release_errors_use_specific_codes() {
+        use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId;
+
+        let cases = [
+            (
+                ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(
+                    ToolMiddlewareReleaseId::new(),
+                ),
+                "not_found",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound,
+                "not_found",
+                api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND,
+            ),
+            (
+                ToolMiddlewareReleaseError::ImmutableReleaseConflict,
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+            ),
+            (
+                ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotPublished,
+                "conflict",
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, expected_status);
+            assert_eq!(code, expected_code);
+        }
+    }
+
+    #[test]
+    fn environment_tool_middleware_grant_errors_use_specific_codes() {
+        use golem_common::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantId;
+
+        let grant_id = EnvironmentToolMiddlewareGrantId::new();
+        let cases = [
+            (
+                EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(
+                    grant_id,
+                ),
+                "not_found",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_NOT_FOUND,
+            ),
+            (
+                EnvironmentToolMiddlewareGrantError::GrantAlreadyExists,
+                "conflict",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_ALREADY_EXISTS,
+            ),
+            (
+                EnvironmentToolMiddlewareGrantError::GrantNotDeleted(grant_id),
+                "conflict",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_CONFLICT,
+            ),
+            (
+                EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(grant_id),
+                "forbidden",
+                api::error_code::ENVIRONMENT_TOOL_MIDDLEWARE_GRANT_PROTECTED,
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, expected_status);
+            assert_eq!(code, expected_code);
+        }
+
+        let (status, code) = status_and_code(
+            EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound.into(),
+        );
+        assert_eq!(status, "not_found");
+        assert_eq!(
+            code,
+            api::error_code::REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND
+        );
+    }
+
+    #[test]
     fn deployment_tool_not_found_keeps_tool_not_found_code() {
         use golem_common::model::tool::ToolName;
 
@@ -1660,6 +1783,26 @@ mod tests {
                 assert!(body.0.error.contains("de-published"));
             }
             other => panic!("Expected Conflict, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deployment_tool_middleware_release_conflicts_use_specific_codes() {
+        let cases = [
+            (
+                DeploymentWriteError::ToolMiddlewareReleaseImmutableConflict,
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_IMMUTABLE_CONFLICT,
+            ),
+            (
+                DeploymentWriteError::ToolMiddlewareReleaseDePublishedConflict,
+                api::error_code::TOOL_MIDDLEWARE_RELEASE_LIFECYCLE_CONFLICT,
+            ),
+        ];
+
+        for (error, expected_code) in cases {
+            let (status, code) = status_and_code(error.into());
+            assert_eq!(status, "conflict");
+            assert_eq!(code, expected_code);
         }
     }
 }

@@ -1252,7 +1252,7 @@ impl EchoMiddleware for Policy {
         else {
             panic!("expected custom tool error, got {err:?}");
         };
-        assert_eq!(value.name, "declared");
+        assert_eq!(value.name, "failed");
         let value =
             golem_rust::decode_typed_schema_value(&value.payload).expect("custom error decodes");
         let payload = String::from_value(value.value())

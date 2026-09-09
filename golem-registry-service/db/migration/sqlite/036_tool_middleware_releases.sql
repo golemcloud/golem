@@ -3,20 +3,16 @@ CREATE TABLE tool_middleware_releases
     tool_middleware_release_id UUID NOT NULL,
     owner_account_id UUID NOT NULL,
     tool_middleware_name TEXT NOT NULL,
-    tool_version TEXT NOT NULL,
-    source_kind SMALLINT NOT NULL,
+    middleware_version TEXT NOT NULL,
     component_id UUID NOT NULL,
     component_revision BIGINT NOT NULL,
     component_name TEXT NOT NULL,
-    host_tool_id TEXT,
-    implementation_version TEXT,
     tool_definition BYTEA NOT NULL,
     metadata_version TEXT NOT NULL,
     metadata_digest BYTEA NOT NULL,
     immutable BOOLEAN NOT NULL,
     lifecycle SMALLINT NOT NULL,
     origin SMALLINT NOT NULL,
-    system_availability SMALLINT,
     created_at TIMESTAMP NOT NULL,
     created_by UUID NOT NULL,
     state_changed_at TIMESTAMP NOT NULL,
@@ -24,15 +20,12 @@ CREATE TABLE tool_middleware_releases
     CONSTRAINT tool_middleware_releases_pk PRIMARY KEY (tool_middleware_release_id),
     CONSTRAINT tool_middleware_releases_owner_account_fk FOREIGN KEY (owner_account_id) REFERENCES accounts,
     CONSTRAINT tool_middleware_releases_component_revision_fk FOREIGN KEY (component_id, component_revision) REFERENCES component_revisions,
-    CONSTRAINT tool_middleware_releases_source_kind_check CHECK (source_kind = 0),
     CONSTRAINT tool_middleware_releases_lifecycle_check CHECK (lifecycle IN (0, 1, 2)),
-    CONSTRAINT tool_middleware_releases_origin_check CHECK (origin IN (0, 1)),
-    CONSTRAINT tool_middleware_releases_no_system_availability_check CHECK (system_availability IS NULL),
-    CONSTRAINT tool_middleware_releases_no_host_source_check CHECK (host_tool_id IS NULL AND implementation_version IS NULL)
+    CONSTRAINT tool_middleware_releases_origin_check CHECK (origin IN (0, 1))
 );
 
 CREATE UNIQUE INDEX tool_middleware_releases_owner_name_version_uk
-    ON tool_middleware_releases (owner_account_id, tool_middleware_name, tool_version)
+    ON tool_middleware_releases (owner_account_id, tool_middleware_name, middleware_version)
     WHERE lifecycle != 2;
 CREATE INDEX tool_middleware_releases_component_revision_idx
     ON tool_middleware_releases (component_id, component_revision);

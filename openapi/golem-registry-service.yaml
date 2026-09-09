@@ -12621,12 +12621,14 @@ components:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+      - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
       discriminator:
         propertyName: type
         mapping:
           HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
           HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+          ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
       - type: object
@@ -12651,6 +12653,18 @@ components:
             - HttpApiReadOnlyTtlBelowOneSecond
             example: HttpApiReadOnlyTtlBelowOneSecond
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_ToolMiddlewareWarning:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ToolMiddleware
+            example: ToolMiddleware
+      - $ref: '#/components/schemas/ToolMiddlewareWarning'
     DeployValidationWarning_ToolRevealableSecretKeysDropped:
       allOf:
       - type: object
@@ -12823,6 +12837,10 @@ components:
       - publishedTools
       - remoteToolMiddlewares
       - publishedToolMiddlewares
+      - universalToolMiddlewares
+      - toolCompatibilityMode
+      - environmentToolMiddlewareBindings
+      - agentToolMiddlewareBindings
       properties:
         currentRevision:
           type: integer
@@ -12853,11 +12871,27 @@ components:
         remoteToolMiddlewares:
           type: array
           items:
-            type: string
+            $ref: '#/components/schemas/DeploymentPlanRemoteToolMiddlewareEntry'
         publishedToolMiddlewares:
           type: array
           items:
             type: string
+        universalToolMiddlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
+        environmentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+        agentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/ToolBindingInput'
     DeploymentPlanComponentEntry:
       type: object
       title: DeploymentPlanComponentEntry
@@ -12930,6 +12964,18 @@ components:
         hash:
           type: string
           format: hash
+    DeploymentPlanRemoteToolMiddlewareEntry:
+      type: object
+      title: DeploymentPlanRemoteToolMiddlewareEntry
+      required:
+      - name
+      - hash
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+          format: hash
     DeploymentRetryPolicyDefault:
       type: object
       title: DeploymentRetryPolicyDefault
@@ -12976,6 +13022,10 @@ components:
       - publishedTools
       - remoteToolMiddlewares
       - publishedToolMiddlewares
+      - universalToolMiddlewares
+      - toolCompatibilityMode
+      - environmentToolMiddlewareBindings
+      - agentToolMiddlewareBindings
       properties:
         deploymentRevision:
           type: integer
@@ -13006,11 +13056,27 @@ components:
         remoteToolMiddlewares:
           type: array
           items:
-            type: string
+            $ref: '#/components/schemas/DeploymentPlanRemoteToolMiddlewareEntry'
         publishedToolMiddlewares:
           type: array
           items:
             type: string
+        universalToolMiddlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
+        environmentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+        agentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/ToolBindingInput'
     DiscriminatorRule:
       type: object
       oneOf:
@@ -17885,10 +17951,10 @@ components:
           items:
             $ref: '#/components/schemas/ToolMiddlewareInstallation'
         middlewareMergeMode:
-          default: Prepend
+          default: null
           allOf:
           - $ref: '#/components/schemas/ToolMiddlewareMergeMode'
-          - default: Prepend
+          - default: null
     ToolCompatibilityMode:
       type: string
       enum:
@@ -18238,6 +18304,20 @@ components:
             format: uint64
           componentName:
             type: string
+    ToolMiddlewareWarning:
+      type: object
+      title: ToolMiddlewareWarning
+      required:
+      - message
+      properties:
+        middlewareName:
+          type: string
+        agentType:
+          type: string
+        toolName:
+          type: string
+        message:
+          type: string
     ToolProvisionConfig:
       type: object
       title: ToolProvisionConfig

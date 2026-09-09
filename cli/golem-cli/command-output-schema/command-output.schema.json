@@ -4157,14 +4157,47 @@
         "parameters",
         "account",
         "secretKeysReadable",
-        "secretKeysRevealable"
+        "secretKeysRevealable",
+        "filesystemAccess",
+        "middleware"
       ],
       "properties": {
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
         "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
-        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" }
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
+        "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" },
+        "middleware": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/ToolMiddlewareInstallation" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": { "$ref": "#/definitions/ToolMiddlewareMergeMode" }
+      },
+      "additionalProperties": false
+    },
+    "ToolFilesystemAccess": {
+      "type": "string",
+      "enum": ["unset", "allowed", "denied"]
+    },
+    "ToolMiddlewareMergeMode": {
+      "type": "string",
+      "enum": ["prepend", "append", "replace"]
+    },
+    "ToolMiddlewareInstallation": {
+      "type": "object",
+      "required": ["name", "version", "parameters", "account", "filesystemAccess"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": ["string", "null"] },
+        "parameters": {},
+        "account": { "type": ["string", "null"] },
+        "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
       },
       "additionalProperties": false
     },

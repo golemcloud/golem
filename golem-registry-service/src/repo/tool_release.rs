@@ -17,6 +17,7 @@ use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord,
     ToolReleaseWithOwnerRecord,
 };
+use crate::repo::release_grant_lifecycle::{self as lifecycle, ReleaseKind};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -234,20 +235,16 @@ const RELEASE_SELECT: &str = r#"
         ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
 "#;
 
-const STRICT_FOLLOWING_GRANT_EXISTS: &str = r#"
-    SELECT 1
-    FROM environment_tool_grants etg
-    JOIN environments e ON e.environment_id = etg.environment_id
-    JOIN environment_revisions er
-        ON er.environment_id = e.environment_id
-        AND er.revision_id = e.current_revision_id
-    WHERE etg.tool_release_id = $1
-        AND etg.follow_coordinates
-        AND etg.deleted_at IS NULL
-        AND e.deleted_at IS NULL
-        AND er.version_check
-    LIMIT 1
-"#;
+pub(crate) struct ToolReleaseKind;
+
+impl ReleaseKind for ToolReleaseKind {
+    const RELEASE_TABLE: &'static str = "tool_releases";
+    const RELEASE_ID: &'static str = "tool_release_id";
+    const NAME: &'static str = "tool_name";
+    const VERSION: &'static str = "tool_version";
+    const GRANT_TABLE: &'static str = "environment_tool_grants";
+    const SELECT: &'static str = RELEASE_SELECT;
+}
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbToolReleaseRepo<PostgresPool> {
@@ -298,9 +295,8 @@ impl DbToolReleaseRepo<PostgresPool> {
             .await?;
         let _ = inserted;
 
-        let query = format!(
-            "{RELEASE_SELECT} WHERE tr.owner_account_id = $1 AND tr.tool_name = $2 AND tr.tool_version = $3 ORDER BY tr.lifecycle = {TOOL_RELEASE_LIFECYCLE_SUPERSEDED}, tr.created_at DESC LIMIT 1"
-        );
+        let query =
+            lifecycle::release_by_coordinates::<ToolReleaseKind>(TOOL_RELEASE_LIFECYCLE_SUPERSEDED);
         let existing: ToolReleaseWithOwnerRecord = tx
             .fetch_one_as(
                 sqlx::query_as(&query)
@@ -311,22 +307,16 @@ impl DbToolReleaseRepo<PostgresPool> {
             .await?;
         let locked = tx
             .execute(
-                sqlx::query(indoc! { r#"
-                    UPDATE tool_releases
-                    SET lifecycle = lifecycle
-                    WHERE tool_release_id = $1 AND lifecycle = $2
-                "#})
-                .bind(existing.release.tool_release_id)
-                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
+                sqlx::query(&lifecycle::lock_published_release::<ToolReleaseKind>())
+                    .bind(existing.release.tool_release_id)
+                    .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED),
             )
             .await?;
         if locked.rows_affected() != 1 {
             let current_lifecycle: Option<(i16,)> = tx
                 .fetch_optional_as(
-                    sqlx::query_as(
-                        "SELECT lifecycle FROM tool_releases WHERE tool_release_id = $1",
-                    )
-                    .bind(existing.release.tool_release_id),
+                    sqlx::query_as(&lifecycle::release_lifecycle::<ToolReleaseKind>())
+                        .bind(existing.release.tool_release_id),
                 )
                 .await?;
             return match current_lifecycle {
@@ -343,7 +333,7 @@ impl DbToolReleaseRepo<PostgresPool> {
 
             let strict_following_grant_exists = tx
                 .fetch_optional(
-                    sqlx::query(STRICT_FOLLOWING_GRANT_EXISTS)
+                    sqlx::query(&lifecycle::strict_following_grant_exists::<ToolReleaseKind>())
                         .bind(existing.release.tool_release_id),
                 )
                 .await?
@@ -354,16 +344,12 @@ impl DbToolReleaseRepo<PostgresPool> {
 
             let superseded = tx
                 .execute(
-                    sqlx::query(indoc! { r#"
-                        UPDATE tool_releases
-                        SET lifecycle = $2, state_changed_at = $3, state_changed_by = $4
-                        WHERE tool_release_id = $1 AND lifecycle != $2 AND origin != $5
-                    "#})
-                    .bind(existing.release.tool_release_id)
-                    .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED)
-                    .bind(&record.state_changed_at)
-                    .bind(record.state_changed_by)
-                    .bind(TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM),
+                    sqlx::query(&lifecycle::supersede_release::<ToolReleaseKind>())
+                        .bind(existing.release.tool_release_id)
+                        .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED)
+                        .bind(&record.state_changed_at)
+                        .bind(record.state_changed_by)
+                        .bind(TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM),
                 )
                 .await?;
             if superseded.rows_affected() != 1 {
@@ -410,21 +396,15 @@ impl DbToolReleaseRepo<PostgresPool> {
             .await?;
 
             tx.execute(
-                sqlx::query(indoc! { r#"
-                    UPDATE environment_tool_grants
-                    SET tool_release_id = $2, state_changed_at = $3, state_changed_by = $4
-                    WHERE tool_release_id = $1
-                        AND follow_coordinates
-                        AND deleted_at IS NULL
-                "#})
-                .bind(existing.release.tool_release_id)
-                .bind(record.tool_release_id)
-                .bind(&record.state_changed_at)
-                .bind(record.state_changed_by),
+                sqlx::query(&lifecycle::move_following_grants::<ToolReleaseKind>())
+                    .bind(existing.release.tool_release_id)
+                    .bind(record.tool_release_id)
+                    .bind(&record.state_changed_at)
+                    .bind(record.state_changed_by),
             )
             .await?;
 
-            let query = format!("{RELEASE_SELECT} WHERE tr.tool_release_id = $1");
+            let query = lifecycle::release_by_id::<ToolReleaseKind>();
             return tx
                 .fetch_one_as(sqlx::query_as(&query).bind(record.tool_release_id))
                 .await
@@ -485,7 +465,7 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
                 .await
                 .to_error_on_unique_violation(ToolReleaseRepoError::CoordinateAlreadyExists)?;
 
-                let query = format!("{RELEASE_SELECT} WHERE tr.tool_release_id = $1");
+                let query = lifecycle::release_by_id::<ToolReleaseKind>();
                 tx.fetch_one_as(sqlx::query_as(&query).bind(release_id))
                     .await
                     .map_err(Into::into)
@@ -499,7 +479,7 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
         &self,
         tool_release_id: Uuid,
     ) -> Result<Option<ToolReleaseWithOwnerRecord>, ToolReleaseRepoError> {
-        let query = format!("{RELEASE_SELECT} WHERE tr.tool_release_id = $1");
+        let query = lifecycle::release_by_id::<ToolReleaseKind>();
         Ok(self
             .with_ro("get_by_id")
             .fetch_optional_as(sqlx::query_as(&query).bind(tool_release_id))
@@ -512,9 +492,8 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
         name: &str,
         version: &str,
     ) -> Result<Option<ToolReleaseWithOwnerRecord>, ToolReleaseRepoError> {
-        let query = format!(
-            "{RELEASE_SELECT} WHERE tr.owner_account_id = $1 AND tr.tool_name = $2 AND tr.tool_version = $3 ORDER BY tr.lifecycle = {TOOL_RELEASE_LIFECYCLE_SUPERSEDED}, tr.created_at DESC LIMIT 1"
-        );
+        let query =
+            lifecycle::release_by_coordinates::<ToolReleaseKind>(TOOL_RELEASE_LIFECYCLE_SUPERSEDED);
         Ok(self
             .with_ro("get_by_coordinates")
             .fetch_optional_as(
@@ -532,7 +511,10 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
     ) -> Result<bool, ToolReleaseRepoError> {
         Ok(self
             .with_ro("strict_following_grant_exists")
-            .fetch_optional(sqlx::query(STRICT_FOLLOWING_GRANT_EXISTS).bind(tool_release_id))
+            .fetch_optional(
+                sqlx::query(&lifecycle::strict_following_grant_exists::<ToolReleaseKind>())
+                    .bind(tool_release_id),
+            )
             .await?
             .is_some())
     }
@@ -541,9 +523,7 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
         &self,
         owner_account_id: Uuid,
     ) -> Result<Vec<ToolReleaseWithOwnerRecord>, ToolReleaseRepoError> {
-        let query = format!(
-            "{RELEASE_SELECT} WHERE tr.owner_account_id = $1 ORDER BY tr.tool_name, tr.tool_version"
-        );
+        let query = lifecycle::releases_by_owner::<ToolReleaseKind>();
         Ok(self
             .with_ro("list_by_owner")
             .fetch_all_as(sqlx::query_as(&query).bind(owner_account_id))
@@ -560,12 +540,9 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
                 let now = SqlDateTime::now();
                 let updated = tx
                     .fetch_optional(
-                        sqlx::query(indoc! { r#"
-                            UPDATE tool_releases
-                            SET lifecycle = $2, state_changed_at = $3, state_changed_by = $4
-                            WHERE tool_release_id = $1 AND lifecycle = $5 AND origin != $6
-                            RETURNING tool_release_id
-                        "#})
+                        sqlx::query(&lifecycle::change_release_lifecycle::<ToolReleaseKind>(
+                            true,
+                        ))
                         .bind(tool_release_id)
                         .bind(TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED)
                         .bind(&now)
@@ -578,7 +555,7 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
                     return Ok(None);
                 }
 
-                let query = format!("{RELEASE_SELECT} WHERE tr.tool_release_id = $1");
+                let query = lifecycle::release_by_id::<ToolReleaseKind>();
                 Ok(tx
                     .fetch_optional_as(sqlx::query_as(&query).bind(tool_release_id))
                     .await?)
@@ -598,11 +575,9 @@ impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
             .db_pool
             .with_rw(METRICS_SVC_NAME, "restore")
             .execute(
-                sqlx::query(indoc! { r#"
-                    UPDATE tool_releases
-                    SET lifecycle = $2, state_changed_at = $3, state_changed_by = $4
-                    WHERE tool_release_id = $1 AND lifecycle = $5 AND origin != $6
-                "#})
+                sqlx::query(&lifecycle::change_release_lifecycle::<ToolReleaseKind>(
+                    false,
+                ))
                 .bind(tool_release_id)
                 .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
                 .bind(now)

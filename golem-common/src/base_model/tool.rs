@@ -145,9 +145,9 @@ pub struct ToolBindingInput {
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default), oai(default))]
     pub middleware: Option<Vec<crate::base_model::tool_middleware::ToolMiddlewareInstallation>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "full", desert(default), oai(default))]
-    pub middleware_merge_mode: crate::base_model::tool_middleware::ToolMiddlewareMergeMode,
+    pub middleware_merge_mode: Option<crate::base_model::tool_middleware::ToolMiddlewareMergeMode>,
 }
 
 impl Default for ToolBindingInput {
@@ -160,7 +160,7 @@ impl Default for ToolBindingInput {
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,
             middleware: None,
-            middleware_merge_mode: Default::default(),
+            middleware_merge_mode: None,
         }
     }
 }

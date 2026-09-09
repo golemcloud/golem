@@ -922,7 +922,7 @@ impl AppCommandHandler {
                 "environment tool middleware grant reconciliation",
             );
             let _indent = self.ctx.log_handler().decorated_indent_primary();
-            log_preformatted(&format!(
+            log_preformatted(format!(
                 "create: {}, update reference: {}, delete automatic: {}, retain administrator-managed: {}, retain protected: {}",
                 tool_middleware_grant_plan.creations.len(),
                 tool_middleware_grant_plan.updates.len(),
@@ -1372,7 +1372,7 @@ impl AppCommandHandler {
                 .publication_plan;
             log_action("Planning", "tool middleware publications");
             for entry in &publication_plan {
-                log_preformatted(&format!(
+                log_preformatted(format!(
                     "{}@{}: {}",
                     entry.name, entry.version, entry.action
                 ));
@@ -1455,13 +1455,18 @@ impl AppCommandHandler {
             .values()
             .flat_map(|component| component.tool_deployment_configs.iter())
         {
-            if let Some(binding) = &config.environment_binding {
+            if let Some(binding) = &config.environment_binding
+                && diff::has_tool_middleware_binding_input(binding)
+            {
                 environment_tool_middleware_bindings.insert(
                     tool_name.to_string(),
                     diff::ToolMiddlewareBindingInput::from(binding),
                 );
             }
             for (agent, binding) in &config.agent_bindings {
+                if !diff::has_tool_middleware_binding_input(binding) {
+                    continue;
+                }
                 agent_tool_middleware_bindings
                     .entry(agent.to_string())
                     .or_insert_with(BTreeMap::new)
@@ -1472,13 +1477,18 @@ impl AppCommandHandler {
             }
         }
         for (tool_name, deployment) in &remote_tools.deployments {
-            if let Some(binding) = &deployment.environment_binding {
+            if let Some(binding) = &deployment.environment_binding
+                && diff::has_tool_middleware_binding_input(binding)
+            {
                 environment_tool_middleware_bindings.insert(
                     tool_name.to_string(),
                     diff::ToolMiddlewareBindingInput::from(binding),
                 );
             }
             for (agent, binding) in &deployment.agent_bindings {
+                if !diff::has_tool_middleware_binding_input(binding) {
+                    continue;
+                }
                 agent_tool_middleware_bindings
                     .entry(agent.to_string())
                     .or_insert_with(BTreeMap::new)

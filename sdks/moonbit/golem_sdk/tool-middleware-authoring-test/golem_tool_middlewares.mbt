@@ -1782,7 +1782,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
       doc: { summary: "", description: "", examples: [], },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_Presented().to_tool(),
-        expected: __golem_middleware_tool_def_Presented().to_tool(),
+        expected: Some(__golem_middleware_tool_def_Presented().to_tool()),
       }),
     },
     __golem_monomorphic_tool_middleware_invoke_Policy,
@@ -1795,7 +1795,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
       doc: { summary: "", description: "", examples: [], },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_Presented().to_tool(),
-        expected: __golem_middleware_tool_def_Storage().to_tool(),
+        expected: Some(__golem_middleware_tool_def_Storage().to_tool()),
       }),
     },
     __golem_monomorphic_tool_middleware_invoke_Adapter,

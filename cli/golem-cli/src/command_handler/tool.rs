@@ -143,8 +143,7 @@ impl ToolCommandHandler {
                 return self
                     .ctx
                     .log_handler()
-                    .log_output(ToolMiddlewareReleaseListView { releases })
-                    .map_err(Into::into);
+                    .log_output(ToolMiddlewareReleaseListView { releases });
             }
             ToolMiddlewareReleaseSubcommand::Get { release_id } => clients
                 .tool_middleware_releases

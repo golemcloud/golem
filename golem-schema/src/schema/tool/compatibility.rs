@@ -58,6 +58,27 @@ pub enum ToolCompatibilityMode {
 pub struct CompiledToolCompatibility {
     pub mode: ToolCompatibilityMode,
     pub commands: Vec<CompiledCommandCompatibility>,
+    pub warnings: Vec<ToolCompatibilityWarning>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct ToolCompatibilityWarning {
+    pub path: String,
+    pub name: String,
 }
 
 #[derive(
@@ -257,18 +278,6 @@ pub fn compile_tool_compatibility(
     inner: &Tool,
     mode: ToolCompatibilityMode,
 ) -> Result<CompiledToolCompatibility, Vec<ToolCompatibilityError>> {
-    // Nominal compatibility is deliberately names-only. Do not validate or
-    // inspect unrelated command and schema details in this mode.
-    if mode == ToolCompatibilityMode::Nominal {
-        if expected.name() != inner.name() {
-            return Err(vec![err("name", "tool names differ")]);
-        }
-        return Ok(CompiledToolCompatibility {
-            mode,
-            commands: Vec::new(),
-        });
-    }
-
     let mut errors = Vec::new();
     if let Err(es) = validate_tool(expected) {
         errors.extend(es.into_iter().map(|e| err("expected", e.to_string())));
@@ -280,6 +289,10 @@ pub fn compile_tool_compatibility(
         return Err(errors);
     }
 
+    if expected.name() != inner.name() {
+        return Err(vec![err("name", "tool names differ")]);
+    }
+
     if mode == ToolCompatibilityMode::StrictEquality && !strictly_equal(expected, inner) {
         return Err(vec![err("tool", "tool descriptors are not strictly equal")]);
     }
@@ -287,6 +300,7 @@ pub fn compile_tool_compatibility(
     let expected_commands = command_paths(expected);
     let inner_commands = command_paths(inner);
     let mut commands = Vec::new();
+    let mut warnings = Vec::new();
     for (path, &ei) in &expected_commands {
         let Some(&ni) = inner_commands.get(path) else {
             errors.push(err(
@@ -330,7 +344,16 @@ pub fn compile_tool_compatibility(
             ));
             continue;
         }
-        let input = compile_inputs(expected, ei, inner, ni, mode, path, &mut errors);
+        let input = compile_inputs(
+            expected,
+            ei,
+            inner,
+            ni,
+            mode,
+            path,
+            &mut errors,
+            &mut warnings,
+        );
         let result = compile_results(expected, eb, inner, nb, mode, path, &mut errors);
         let mapped_errors = compile_errors(expected, eb, inner, nb, mode, path, &mut errors);
         if let Some(input) = input {
@@ -355,7 +378,11 @@ pub fn compile_tool_compatibility(
         }
     }
     if errors.is_empty() {
-        Ok(CompiledToolCompatibility { mode, commands })
+        Ok(CompiledToolCompatibility {
+            mode,
+            commands,
+            warnings,
+        })
     } else {
         Err(errors)
     }
@@ -369,6 +396,7 @@ fn compile_inputs(
     mode: ToolCompatibilityMode,
     path: &[String],
     errors: &mut Vec<ToolCompatibilityError>,
+    warnings: &mut Vec<ToolCompatibilityWarning>,
 ) -> Option<ProjectionPlan> {
     let ef = expected.canonical_input_fields(ei);
     let nf = inner.canonical_input_fields(ni);
@@ -434,7 +462,11 @@ fn compile_inputs(
             return None;
         }
     }
-    let discard = (0..ef.len()).filter(|i| !retained.contains(i)).collect();
+    let discard: Vec<_> = (0..ef.len()).filter(|i| !retained.contains(i)).collect();
+    warnings.extend(discard.iter().map(|&index| ToolCompatibilityWarning {
+        path: format_path(path),
+        name: ef[index].name.clone(),
+    }));
     let root = compiler.push(ProjectionNode::Record { fields, discard });
     Some(compiler.finish(egraph.clone(), ngraph.clone(), root))
 }
@@ -491,7 +523,10 @@ fn compile_errors(
         ));
         return Vec::new();
     }
-    if mode == ToolCompatibilityMode::StructuralSubtype {
+    if matches!(
+        mode,
+        ToolCompatibilityMode::StructuralSubtype | ToolCompatibilityMode::Nominal
+    ) {
         for expected_error in &eb.errors {
             if !nb
                 .errors
@@ -511,10 +546,20 @@ fn compile_errors(
         .map(|(i, n)| {
             let found = eb.errors.iter().enumerate().find(|(_, e)| e.name == n.name);
             let (expected_index, payload) = match found {
-                Some((j, e)) => (
-                    Some(j),
-                    compile_error_payload(inner, n, expected, e, mode, path, errors),
-                ),
+                Some((j, e)) => {
+                    if mode != ToolCompatibilityMode::Nominal
+                        && (n.kind != e.kind || n.exit_code != e.exit_code)
+                    {
+                        errors.push(err(
+                            format!("{}.error.{}", format_path(path), n.name),
+                            "error kind or exit code differs",
+                        ));
+                    }
+                    (
+                        Some(j),
+                        compile_error_payload(inner, n, expected, e, mode, path, errors),
+                    )
+                }
                 None => (None, None),
             };
             ErrorProjection {
@@ -616,6 +661,9 @@ impl<'a> Compiler<'a> {
         path: &str,
         errors: &mut Vec<ToolCompatibilityError>,
     ) -> Option<usize> {
+        if self.mode == ToolCompatibilityMode::Nominal {
+            return Some(self.push(ProjectionNode::DynamicChecked));
+        }
         if self.mode == ToolCompatibilityMode::StrictEquality
             && is_equivalent_cross_graph(self.sg, source, self.tg, target)
         {
@@ -901,10 +949,10 @@ fn strictly_equal(expected: &Tool, inner: &Tool) -> bool {
     canonical_tool(expected) == canonical_tool(inner)
 }
 
-fn canonical_tool(tool: &Tool) -> Option<Tool> {
+fn canonical_tool(tool: &Tool) -> Option<serde_json::Value> {
     fn discover(
         ty: &SchemaType,
-        defs: &HashMap<TypeId, &SchemaTypeDef>,
+        defs: &HashMap<TypeId, SchemaTypeDef>,
         ids: &mut HashMap<TypeId, TypeId>,
         order: &mut Vec<TypeId>,
     ) {
@@ -920,18 +968,20 @@ fn canonical_tool(tool: &Tool) -> Option<Tool> {
         });
     }
 
-    let defs: HashMap<_, _> = tool
+    let mut result = tool.clone();
+    erase_ignored_tool_documentation(&mut result);
+    let defs: HashMap<_, _> = result
         .schema
         .defs
         .iter()
-        .map(|def| (def.id.clone(), def))
+        .map(|def| (def.id.clone(), def.clone()))
         .collect();
     let mut ids = HashMap::new();
     let mut order = Vec::new();
-    for root in tool_schema_roots(tool) {
+    for root in tool_schema_roots(&result) {
         discover(root, &defs, &mut ids, &mut order);
     }
-    discover(&tool.schema.root, &defs, &mut ids, &mut order);
+    discover(&result.schema.root, &defs, &mut ids, &mut order);
 
     // Tool validation permits unused definitions, and strict equality includes
     // them. Pick disconnected graph components by their smallest rooted
@@ -960,7 +1010,6 @@ fn canonical_tool(tool: &Tool) -> Option<Tool> {
         order = next_order;
     }
 
-    let mut result = tool.clone();
     for root in tool_schema_roots_mut(&mut result) {
         rewrite_refs(root, &ids);
     }
@@ -968,13 +1017,111 @@ fn canonical_tool(tool: &Tool) -> Option<Tool> {
     result.schema.defs = order
         .into_iter()
         .map(|original| {
-            let mut def = (*defs.get(&original)?).clone();
+            let mut def = defs.get(&original)?.clone();
             def.id = ids.get(&original)?.clone();
             rewrite_refs(&mut def.body, &ids);
             Some(def)
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(result)
+    serde_json::to_value(result).ok()
+}
+
+fn erase_ignored_tool_documentation(tool: &mut Tool) {
+    tool.version.clear();
+    for node in &mut tool.commands.nodes {
+        node.doc = Default::default();
+        for option in &mut node.globals.options {
+            option.doc = Default::default();
+        }
+        for flag in &mut node.globals.flags {
+            flag.doc = Default::default();
+        }
+        if let Some(body) = &mut node.body {
+            for positional in &mut body.positionals.fixed {
+                positional.doc = Default::default();
+            }
+            if let Some(tail) = &mut body.positionals.tail {
+                tail.doc = Default::default();
+            }
+            for option in &mut body.options {
+                option.doc = Default::default();
+            }
+            for flag in &mut body.flags {
+                flag.doc = Default::default();
+            }
+            if let Some(stdin) = &mut body.stdin {
+                stdin.doc = Default::default();
+            }
+            if let Some(stdout) = &mut body.stdout {
+                stdout.doc = Default::default();
+            }
+            if let Some(result) = &mut body.result {
+                result.doc = Default::default();
+                for formatter in &mut result.formatters {
+                    formatter.doc = Default::default();
+                }
+            }
+            for error in &mut body.errors {
+                error.doc = Default::default();
+            }
+        }
+    }
+    for root in tool_schema_roots_mut(tool) {
+        erase_schema_documentation(root);
+    }
+    erase_schema_documentation(&mut tool.schema.root);
+    for def in &mut tool.schema.defs {
+        erase_schema_documentation(&mut def.body);
+    }
+}
+
+fn erase_schema_documentation(ty: &mut SchemaType) {
+    ty.metadata_mut().doc = None;
+    match ty {
+        SchemaType::Record { fields, .. } => fields.iter_mut().for_each(|field| {
+            field.metadata.doc = None;
+            erase_schema_documentation(&mut field.body);
+        }),
+        SchemaType::Variant { cases, .. } => cases.iter_mut().for_each(|case| {
+            case.metadata.doc = None;
+            if let Some(payload) = &mut case.payload {
+                erase_schema_documentation(payload);
+            }
+        }),
+        SchemaType::Tuple { elements, .. } => {
+            elements.iter_mut().for_each(erase_schema_documentation)
+        }
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            erase_schema_documentation(element)
+        }
+        SchemaType::Map { key, value, .. } => {
+            erase_schema_documentation(key);
+            erase_schema_documentation(value);
+        }
+        SchemaType::Option { inner, .. }
+        | SchemaType::Secret {
+            spec: crate::schema::schema_type::SecretSpec { inner, .. },
+            ..
+        } => erase_schema_documentation(inner),
+        SchemaType::Result { spec, .. } => {
+            if let Some(ok) = &mut spec.ok {
+                erase_schema_documentation(ok);
+            }
+            if let Some(err) = &mut spec.err {
+                erase_schema_documentation(err);
+            }
+        }
+        SchemaType::Union { spec, .. } => spec.branches.iter_mut().for_each(|branch| {
+            branch.metadata.doc = None;
+            erase_schema_documentation(&mut branch.body);
+        }),
+        SchemaType::Future { inner, .. } | SchemaType::Stream { inner, .. } => {
+            if let Some(inner) = inner {
+                erase_schema_documentation(inner);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn walk_refs(ty: &SchemaType, visit: &mut impl FnMut(&TypeId)) {
@@ -1271,279 +1418,4 @@ fn err(path: impl Into<String>, message: impl Into<String>) -> ToolCompatibility
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::schema::metadata::MetadataEnvelope;
-    use crate::schema::schema_type::NamedFieldType;
-    use crate::schema::tool::{
-        CommandAnnotations, CommandNode, CommandTree, ErrorKind, Globals, Positional, Positionals,
-    };
-
-    test_r::enable!();
-    use test_r::test;
-
-    fn tool(result: SchemaType) -> Tool {
-        Tool {
-            version: "1".into(),
-            schema: SchemaGraph::empty(),
-            commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: "demo".into(),
-                    aliases: vec![],
-                    doc: Default::default(),
-                    globals: Globals::default(),
-                    subcommands: vec![],
-                    body: Some(CommandBody {
-                        positionals: Positionals::default(),
-                        options: vec![],
-                        flags: vec![],
-                        constraints: vec![],
-                        stdin: None,
-                        stdout: None,
-                        result: Some(super::super::ResultSpec {
-                            type_: result,
-                            doc: Default::default(),
-                            formatters: vec![super::super::Formatter {
-                                name: "json".into(),
-                                doc: Default::default(),
-                            }],
-                            default_formatter: "json".into(),
-                        }),
-                        errors: vec![],
-                        annotations: None,
-                    }),
-                }],
-            },
-        }
-    }
-
-    fn record(names: &[&str]) -> SchemaType {
-        SchemaType::record(
-            names
-                .iter()
-                .map(|name| NamedFieldType {
-                    name: (*name).into(),
-                    body: SchemaType::string(),
-                    metadata: MetadataEnvelope::default(),
-                })
-                .collect(),
-        )
-    }
-
-    #[test]
-    fn result_record_projection_reorders_positional_values_by_name() {
-        let expected = tool(record(&["first", "second"]));
-        let inner = tool(record(&["second", "first", "discarded"]));
-        let compiled =
-            compile_tool_compatibility(&expected, &inner, ToolCompatibilityMode::StructuralSubtype)
-                .unwrap();
-        let plan = compiled.commands[0].result.as_ref().unwrap();
-        let ProjectionNode::Record { fields, discard } = &plan.nodes[plan.root] else {
-            panic!("record plan expected")
-        };
-        assert_eq!(
-            fields.iter().map(|f| f.source_index).collect::<Vec<_>>(),
-            vec![Some(1), Some(0)]
-        );
-        assert_eq!(discard, &vec![2]);
-    }
-
-    #[test]
-    fn strict_equality_ignores_named_definition_allocation_ids() {
-        let expected = tool(record(&["value"]));
-        let inner = tool(record(&["value"]));
-        assert!(
-            compile_tool_compatibility(&expected, &inner, ToolCompatibilityMode::StrictEquality)
-                .is_ok()
-        );
-    }
-
-    fn recursive_tool(first: &str, second: &str, reverse_defs: bool) -> Tool {
-        let first_def = SchemaTypeDef {
-            id: TypeId::new(first),
-            name: Some("First".into()),
-            body: SchemaType::record(vec![NamedFieldType {
-                name: "next".into(),
-                body: SchemaType::option(SchemaType::ref_to(TypeId::new(second))),
-                metadata: Default::default(),
-            }]),
-        };
-        let second_def = SchemaTypeDef {
-            id: TypeId::new(second),
-            name: Some("Second".into()),
-            body: SchemaType::record(vec![NamedFieldType {
-                name: "next".into(),
-                body: SchemaType::option(SchemaType::ref_to(TypeId::new(first))),
-                metadata: Default::default(),
-            }]),
-        };
-        let mut result = tool(SchemaType::ref_to(TypeId::new(first)));
-        result.schema.defs = if reverse_defs {
-            vec![second_def, first_def]
-        } else {
-            vec![first_def, second_def]
-        };
-        result
-    }
-
-    #[test]
-    fn strict_equality_canonicalizes_reordered_alpha_renamed_recursive_defs() {
-        let expected = recursive_tool("left-a", "left-b", false);
-        let inner = recursive_tool("right-a", "right-b", true);
-        assert!(strictly_equal(&expected, &inner));
-    }
-
-    #[test]
-    fn strict_equality_preserves_docs_and_default_literal_strings_matching_ids() {
-        let mut expected = recursive_tool("literal-id", "other-id", false);
-        expected.commands.nodes[0].doc.summary = "literal-id".into();
-        expected.commands.nodes[0]
-            .body
-            .as_mut()
-            .unwrap()
-            .positionals
-            .fixed
-            .push(Positional {
-                name: "input".into(),
-                doc: Default::default(),
-                value_name: None,
-                type_: SchemaType::string(),
-                default: Some(SchemaValue::String("literal-id".into())),
-                required: false,
-                accepts_stdio: false,
-            });
-
-        let mut inner = recursive_tool("$def0", "$def1", false);
-        inner.commands.nodes[0].doc.summary = "$def0".into();
-        inner.commands.nodes[0].body.as_mut().unwrap().positionals = expected.commands.nodes[0]
-            .body
-            .as_ref()
-            .unwrap()
-            .positionals
-            .clone();
-        inner.commands.nodes[0]
-            .body
-            .as_mut()
-            .unwrap()
-            .positionals
-            .fixed[0]
-            .default = Some(SchemaValue::String("$def0".into()));
-
-        assert!(!strictly_equal(&expected, &inner));
-        inner.commands.nodes[0].doc.summary = expected.commands.nodes[0].doc.summary.clone();
-        assert!(!strictly_equal(&expected, &inner));
-        inner.commands.nodes[0]
-            .body
-            .as_mut()
-            .unwrap()
-            .positionals
-            .fixed[0]
-            .default = expected.commands.nodes[0]
-            .body
-            .as_ref()
-            .unwrap()
-            .positionals
-            .fixed[0]
-            .default
-            .clone();
-        inner.commands.nodes[0].doc.summary = "$def0".into();
-        assert!(!strictly_equal(&expected, &inner));
-    }
-
-    #[test]
-    fn strict_equality_does_not_ignore_other_descriptor_fields() {
-        let expected = tool(SchemaType::string());
-        let mut inner = expected.clone();
-        inner.commands.nodes[0].body.as_mut().unwrap().annotations = Some(CommandAnnotations {
-            read_only: true,
-            destructive: false,
-            idempotent: false,
-            open_world: false,
-        });
-        assert!(!strictly_equal(&expected, &inner));
-    }
-
-    #[test]
-    fn nominal_emits_checked_dynamic_plans() {
-        let expected = tool(record(&["left"]));
-        let inner = tool(record(&["right"]));
-        let compiled =
-            compile_tool_compatibility(&expected, &inner, ToolCompatibilityMode::Nominal).unwrap();
-        assert!(compiled.commands.is_empty());
-    }
-
-    #[test]
-    fn nominal_is_names_only_and_rejects_a_different_name() {
-        let expected = tool(record(&["left"]));
-        let mut unrelated = tool(SchemaType::bool());
-        unrelated.version = "anything".into();
-        unrelated.commands.nodes[0].body = None;
-        assert!(
-            compile_tool_compatibility(&expected, &unrelated, ToolCompatibilityMode::Nominal)
-                .is_ok()
-        );
-
-        unrelated.commands.nodes[0].name = "other".into();
-        assert!(
-            compile_tool_compatibility(&expected, &unrelated, ToolCompatibilityMode::Nominal)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn strict_equality_compares_version_and_documentation() {
-        let expected = tool(SchemaType::string());
-        let mut inner = expected.clone();
-        inner.version = "2".into();
-        assert!(
-            compile_tool_compatibility(&expected, &inner, ToolCompatibilityMode::StrictEquality)
-                .is_err()
-        );
-        inner = expected.clone();
-        inner.commands.nodes[0].doc.summary = "changed".into();
-        assert!(
-            compile_tool_compatibility(&expected, &inner, ToolCompatibilityMode::StrictEquality)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn structural_requires_expected_error_vocabulary_but_allows_additions() {
-        fn error(name: &str) -> ErrorCase {
-            ErrorCase {
-                name: name.into(),
-                doc: Default::default(),
-                kind: ErrorKind::RuntimeError,
-                exit_code: 1,
-                payload: None,
-            }
-        }
-        let mut expected = tool(SchemaType::string());
-        expected.commands.nodes[0].body.as_mut().unwrap().errors = vec![error("expected")];
-        let missing = tool(SchemaType::string());
-        assert!(
-            compile_tool_compatibility(
-                &expected,
-                &missing,
-                ToolCompatibilityMode::StructuralSubtype
-            )
-            .is_err()
-        );
-
-        let mut additional = expected.clone();
-        additional.commands.nodes[0]
-            .body
-            .as_mut()
-            .unwrap()
-            .errors
-            .push(error("additional"));
-        assert!(
-            compile_tool_compatibility(
-                &expected,
-                &additional,
-                ToolCompatibilityMode::StructuralSubtype
-            )
-            .is_ok()
-        );
-    }
-}
+mod tests;

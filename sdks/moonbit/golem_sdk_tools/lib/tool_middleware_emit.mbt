@@ -393,9 +393,9 @@ fn emit_monomorphic_tool_middleware_registration(
     emit_doc(middleware.description, []) +
     ",\n        scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({\n          presented: " +
     descriptor_name(monomorphic.presented, "middleware") +
-    "().to_tool(),\n          expected: " +
+    "().to_tool(),\n          expected: Some(" +
     descriptor_name(monomorphic.expected, "middleware") +
-    "().to_tool(),\n        }),\n      },\n      " +
+    "().to_tool()),\n        }),\n      },\n      " +
     monomorphic_invoker_name(middleware) +
     ",\n    )\n",
   )

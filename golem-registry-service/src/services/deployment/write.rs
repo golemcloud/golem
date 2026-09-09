@@ -84,6 +84,12 @@ pub enum DeploymentWriteError {
     ToolReleaseImmutableConflict,
     #[error("A de-published tool release must be restored explicitly before publication")]
     ToolReleaseDePublishedConflict,
+    #[error("Tool middleware release coordinate exists with different immutable metadata")]
+    ToolMiddlewareReleaseImmutableConflict,
+    #[error(
+        "A de-published tool middleware release must be restored explicitly before publication"
+    )]
+    ToolMiddlewareReleaseDePublishedConflict,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -103,6 +109,8 @@ impl SafeDisplay for DeploymentWriteError {
             Self::NoOpDeployment => self.to_string(),
             Self::ToolReleaseImmutableConflict => self.to_string(),
             Self::ToolReleaseDePublishedConflict => self.to_string(),
+            Self::ToolMiddlewareReleaseImmutableConflict => self.to_string(),
+            Self::ToolMiddlewareReleaseDePublishedConflict => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -374,14 +382,26 @@ impl DeploymentWriteService {
             let middleware_name = diagnostic
                 .middleware_name
                 .as_deref()
-                .and_then(|name| name.try_into().ok())
-                .unwrap_or_else(|| "unknown-middleware".try_into().expect("valid fallback"));
+                .and_then(|name| name.try_into().ok());
             errors.push(DeployValidationError::ToolMiddleware {
                 middleware_name,
-                agent_type_name: Some(diagnostic.agent_type_name),
-                tool_name: Some(diagnostic.tool_name),
+                agent_type_name: diagnostic.agent_type_name,
+                tool_name: diagnostic.tool_name,
                 message: diagnostic.message,
             });
+        }
+        for diagnostic in compiled_middleware.warnings {
+            warnings.push(super::DeployValidationWarning::ToolMiddleware(
+                golem_common::model::deploy_validation_warning::ToolMiddlewareWarning {
+                    middleware_name: diagnostic
+                        .middleware_name
+                        .as_deref()
+                        .and_then(|name| name.try_into().ok()),
+                    agent_type: diagnostic.agent_type_name,
+                    tool_name: diagnostic.tool_name,
+                    message: diagnostic.message,
+                },
+            ));
         }
 
         let registered_tools_by_name = compiled_tools
@@ -557,16 +577,21 @@ impl DeploymentWriteService {
             compiled_tools.registered_tools,
             compiled_tools.agent_tool_bindings,
             tool_releases,
-            registered_tool_middlewares,
-            compiled_middleware.chains,
-            middleware_releases,
-            data.universal_tool_middlewares,
-            data.tool_compatibility_mode,
-            data.publish_tool_middlewares,
-            data.remote_tool_middlewares
-                .into_iter()
-                .map(|middleware| middleware.name)
-                .collect(),
+            crate::repo::model::deployment::DeploymentMiddlewareCreationInput {
+                registered: registered_tool_middlewares,
+                chains: compiled_middleware.chains,
+                releases: middleware_releases,
+                universal: data.universal_tool_middlewares,
+                compatibility_mode: data.tool_compatibility_mode,
+                published: data.publish_tool_middlewares,
+                remote: data
+                    .remote_tool_middlewares
+                    .into_iter()
+                    .map(|middleware| middleware.name)
+                    .collect(),
+                environment_bindings: environment_tool_bindings,
+                agent_bindings: agent_tool_binding_inputs,
+            },
             new_agent_secrets,
             updated_agent_secrets,
             replaced_agent_secrets,
@@ -605,6 +630,12 @@ impl DeploymentWriteService {
                 }
                 DeployRepoError::ToolReleaseDePublishedConflict => {
                     DeploymentWriteError::ToolReleaseDePublishedConflict
+                }
+                DeployRepoError::ToolMiddlewareReleaseImmutableConflict => {
+                    DeploymentWriteError::ToolMiddlewareReleaseImmutableConflict
+                }
+                DeployRepoError::ToolMiddlewareReleaseDePublishedConflict => {
+                    DeploymentWriteError::ToolMiddlewareReleaseDePublishedConflict
                 }
                 other => other.into(),
             })?

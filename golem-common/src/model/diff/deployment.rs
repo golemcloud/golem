@@ -293,7 +293,7 @@ pub fn remote_tool_middleware_deployments(
 #[serde(rename_all = "camelCase")]
 pub struct ToolMiddlewareBindingInput {
     pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
-    pub middleware_merge_mode: ToolMiddlewareMergeMode,
+    pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
 }
 
 impl From<&ToolBindingInput> for ToolMiddlewareBindingInput {
@@ -313,6 +313,10 @@ impl Diffable for ToolMiddlewareBindingInput {
     }
 }
 
+pub fn has_tool_middleware_binding_input(binding: &ToolBindingInput) -> bool {
+    binding.middleware.is_some() || binding.middleware_merge_mode.is_some()
+}
+
 pub fn tool_middleware_binding_inputs(
     environment: &BTreeMap<ToolName, ToolBindingInput>,
     agents: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
@@ -322,7 +326,7 @@ pub fn tool_middleware_binding_inputs(
 ) {
     let environment = environment
         .iter()
-        .filter(|(_, binding)| binding.middleware.is_some())
+        .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
         .map(|(name, binding)| (name.to_string(), binding.into()))
         .collect();
     let agents = agents
@@ -330,7 +334,7 @@ pub fn tool_middleware_binding_inputs(
         .filter_map(|(agent, bindings)| {
             let bindings = bindings
                 .iter()
-                .filter(|(_, binding)| binding.middleware.is_some())
+                .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
                 .map(|(name, binding)| (name.to_string(), binding.into()))
                 .collect::<BTreeMap<_, _>>();
             (!bindings.is_empty()).then(|| (agent.0.clone(), bindings))
@@ -486,10 +490,12 @@ mod tests {
     use crate::model::diff::{Hash, Hashable};
     use crate::model::json::NormalizedJsonValue;
     use crate::model::tool::{
-        HostToolId, RegisteredTool, SecretKeyScope, ToolFilesystemAccess, ToolProvisionConfig,
-        ToolSource,
+        HostToolId, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
+        ToolName, ToolProvisionConfig, ToolSource,
     };
-    use crate::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareSource};
+    use crate::model::tool_middleware::{
+        RegisteredToolMiddleware, ToolMiddlewareMergeMode, ToolMiddlewareSource,
+    };
     use crate::model::tool_middleware_release::ToolMiddlewareReleaseId;
     use crate::model::tool_release::ToolReleaseId;
     use crate::schema::SchemaGraph;
@@ -626,6 +632,46 @@ mod tests {
         .unwrap();
 
         assert_ne!(base, with_middleware);
+    }
+
+    #[test]
+    fn middleware_binding_projection_hash_retains_mode_only_and_ignores_empty_bindings() {
+        let agent = AgentTypeName("Agent".to_string());
+        let tool = ToolName::try_from("grep").unwrap();
+        let empty_tool = ToolName::try_from("empty").unwrap();
+        let environment = BTreeMap::from([(empty_tool.clone(), ToolBindingInput::default())]);
+        let agents = BTreeMap::from([(
+            agent,
+            BTreeMap::from([
+                (
+                    tool,
+                    ToolBindingInput {
+                        middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+                        ..Default::default()
+                    },
+                ),
+                (empty_tool, ToolBindingInput::default()),
+            ]),
+        )]);
+
+        let (environment_bindings, agent_bindings) =
+            super::tool_middleware_binding_inputs(&environment, &agents);
+        assert!(environment_bindings.is_empty());
+        assert_eq!(agent_bindings["Agent"].len(), 1);
+        assert_eq!(
+            agent_bindings["Agent"]["grep"].middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Append)
+        );
+
+        let projected = Deployment {
+            environment_tool_middleware_bindings: environment_bindings,
+            agent_tool_middleware_bindings: agent_bindings,
+            ..Deployment::default()
+        };
+        assert_ne!(
+            projected.hash().unwrap(),
+            Deployment::default().hash().unwrap()
+        );
     }
 
     #[test]

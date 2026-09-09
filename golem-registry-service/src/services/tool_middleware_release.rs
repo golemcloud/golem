@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
+use super::release_grant_lifecycle::{
+    PublicationDecision, ReleaseLifecycle, ReleaseManagementDecision, publication_decision,
+    release_management_decision,
+};
 use crate::repo::model::tool_middleware_release::{
     TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
     TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM,
@@ -100,13 +104,7 @@ pub struct ToolMiddlewareReleaseService {
     account_service: Arc<AccountService>,
 }
 
-pub enum ToolMiddlewarePublicationAssessment {
-    NoChange(ToolMiddlewareReleaseId),
-    Publish,
-    ImmutableConflict,
-    StrictFollowingGrantConflict,
-    DePublishedConflict,
-}
+type ToolMiddlewarePublicationAssessment = PublicationDecision<ToolMiddlewareReleaseId>;
 
 impl ToolMiddlewareReleaseService {
     pub fn new(
@@ -282,7 +280,7 @@ impl ToolMiddlewareReleaseService {
         Ok(())
     }
 
-    pub async fn assess_publication(
+    async fn assess_publication(
         &self,
         owner_account_id: AccountId,
         name: &ToolMiddlewareName,
@@ -296,37 +294,38 @@ impl ToolMiddlewareReleaseService {
             .get_by_coordinates(owner_account_id.0, name.as_str(), &definition.version)
             .await?
         else {
-            return Ok(ToolMiddlewarePublicationAssessment::Publish);
+            return Ok(publication_decision(None, immutable, false));
         };
-        match existing.release.lifecycle {
-            TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED => {
-                Ok(ToolMiddlewarePublicationAssessment::DePublishedConflict)
-            }
-            TOOL_RELEASE_LIFECYCLE_SUPERSEDED => Ok(ToolMiddlewarePublicationAssessment::Publish),
-            TOOL_RELEASE_LIFECYCLE_PUBLISHED => {
-                let content_matches = existing.release.tool_definition.value() == definition
-                    && existing.release.metadata_version == metadata_version
-                    && diff::Hash::from(existing.release.metadata_digest) == metadata_digest;
-                if content_matches {
-                    Ok(ToolMiddlewarePublicationAssessment::NoChange(
-                        ToolMiddlewareReleaseId(existing.release.tool_middleware_release_id),
-                    ))
-                } else if immutable {
-                    Ok(ToolMiddlewarePublicationAssessment::ImmutableConflict)
-                } else if self
-                    .tool_middleware_release_repo
-                    .strict_following_grant_exists(existing.release.tool_middleware_release_id)
-                    .await?
-                {
-                    Ok(ToolMiddlewarePublicationAssessment::StrictFollowingGrantConflict)
-                } else {
-                    Ok(ToolMiddlewarePublicationAssessment::Publish)
-                }
-            }
+        let lifecycle = match existing.release.lifecycle {
+            TOOL_RELEASE_LIFECYCLE_PUBLISHED => ReleaseLifecycle::Published,
+            TOOL_RELEASE_LIFECYCLE_SUPERSEDED => ReleaseLifecycle::Superseded,
+            TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED => ReleaseLifecycle::DePublished,
             lifecycle => {
-                Err(anyhow::anyhow!("unknown tool_middleware release lifecycle {lifecycle}").into())
+                return Err(anyhow::anyhow!(
+                    "unknown tool_middleware release lifecycle {lifecycle}"
+                )
+                .into());
             }
-        }
+        };
+        let content_matches = existing.release.tool_definition.value() == definition
+            && existing.release.metadata_version == metadata_version
+            && diff::Hash::from(existing.release.metadata_digest) == metadata_digest;
+        let strict_following_grant_exists = lifecycle == ReleaseLifecycle::Published
+            && !content_matches
+            && !immutable
+            && self
+                .tool_middleware_release_repo
+                .strict_following_grant_exists(existing.release.tool_middleware_release_id)
+                .await?;
+        Ok(publication_decision(
+            Some((
+                ToolMiddlewareReleaseId(existing.release.tool_middleware_release_id),
+                lifecycle,
+                content_matches,
+            )),
+            immutable,
+            strict_following_grant_exists,
+        ))
     }
 
     pub async fn get(
@@ -396,11 +395,18 @@ impl ToolMiddlewareReleaseService {
                 auth,
             )
             .await?;
-        if record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM {
-            return Err(ToolMiddlewareReleaseError::ProtectedToolMiddlewareRelease);
-        }
-        if record.release.lifecycle != TOOL_RELEASE_LIFECYCLE_PUBLISHED {
-            return Err(ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotPublished);
+        match release_management_decision(
+            record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM,
+            release_lifecycle(record.release.lifecycle)?,
+            ReleaseLifecycle::Published,
+        ) {
+            ReleaseManagementDecision::Protected => {
+                return Err(ToolMiddlewareReleaseError::ProtectedToolMiddlewareRelease);
+            }
+            ReleaseManagementDecision::InvalidLifecycle => {
+                return Err(ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotPublished);
+            }
+            ReleaseManagementDecision::Change => {}
         }
         self.tool_middleware_release_repo
             .de_publish(release_id.0, auth.actor_account_id().0)
@@ -421,11 +427,18 @@ impl ToolMiddlewareReleaseService {
         let record = self
             .authorize_management(release_id, AccountToolMiddlewareReleaseVerb::Restore, auth)
             .await?;
-        if record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM {
-            return Err(ToolMiddlewareReleaseError::ProtectedToolMiddlewareRelease);
-        }
-        if record.release.lifecycle != TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED {
-            return Err(ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotDePublished);
+        match release_management_decision(
+            record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM,
+            release_lifecycle(record.release.lifecycle)?,
+            ReleaseLifecycle::DePublished,
+        ) {
+            ReleaseManagementDecision::Protected => {
+                return Err(ToolMiddlewareReleaseError::ProtectedToolMiddlewareRelease);
+            }
+            ReleaseManagementDecision::InvalidLifecycle => {
+                return Err(ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotDePublished);
+            }
+            ReleaseManagementDecision::Change => {}
         }
         self.tool_middleware_release_repo
             .restore(release_id.0, auth.actor_account_id().0)
@@ -543,6 +556,15 @@ impl ToolMiddlewareReleaseService {
             .ok_or(ToolMiddlewareReleaseError::ToolMiddlewareReleaseNotFound(
                 release_id,
             ))
+    }
+}
+
+fn release_lifecycle(value: i16) -> Result<ReleaseLifecycle, ToolMiddlewareReleaseError> {
+    match value {
+        TOOL_RELEASE_LIFECYCLE_PUBLISHED => Ok(ReleaseLifecycle::Published),
+        TOOL_RELEASE_LIFECYCLE_SUPERSEDED => Ok(ReleaseLifecycle::Superseded),
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED => Ok(ReleaseLifecycle::DePublished),
+        value => Err(anyhow::anyhow!("unknown tool_middleware release lifecycle {value}").into()),
     }
 }
 

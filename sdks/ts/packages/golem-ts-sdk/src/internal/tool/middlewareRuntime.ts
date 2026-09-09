@@ -61,9 +61,7 @@ export class ToolUnderlyingMisuseError extends Error {
 
 export function decodeUnderlyingToolError<Errors>(
   error: unknown,
-  decodeCustomError: (
-    error: Extract<WireToolError, { readonly tag: 'custom-error' }>['val'],
-  ) =>
+  decodeCustomError: (error: Extract<WireToolError, { readonly tag: 'custom-error' }>['val']) =>
     | Errors
     | {
         readonly tag: 'unknown-error';
@@ -681,9 +679,7 @@ function isWireToolError(value: unknown): value is WireToolError {
   }
 }
 
-function isUnknownToolError(
-  value: unknown,
-): value is {
+function isUnknownToolError(value: unknown): value is {
   readonly tag: 'unknown-error';
   readonly name: string;
   readonly payload: WireTypedSchemaValue;

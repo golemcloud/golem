@@ -44,7 +44,7 @@
     },
     "tools": {
       "type": "object",
-      "description": "Canonical tool declarations by logical tool name. A declaration may select a local implementing component or an exact published release; all consumers refer to the logical name.",
+      "description": "Canonical tool declarations by logical tool name. A declaration may select a local implementing component or an exact published release; all consumers refer to the logical name. The name 'middleware' is reserved for tool middleware declarations and cannot be used as a tool name.",
       "properties": {
         "middleware": {
           "type": "object",
@@ -949,6 +949,14 @@
         }
       }
     },
+    "environmentToolBinding": {
+      "allOf": [
+        { "$ref": "#/definitions/toolBinding" },
+        {
+          "not": { "required": ["middlewareMergeMode"] }
+        }
+      ]
+    },
     "toolMiddlewareInstallation": {
       "oneOf": [
         { "type": "string" },
@@ -967,7 +975,7 @@
     "environmentTools": {
       "type": "object",
       "properties": { "middleware": { "type": "array", "items": { "$ref": "#/definitions/toolMiddlewareInstallation" } } },
-      "additionalProperties": { "$ref": "#/definitions/toolBinding" }
+      "additionalProperties": { "$ref": "#/definitions/environmentToolBinding" }
     },
     "secretKeyMergeMode": {
       "type": "string",
@@ -1299,7 +1307,7 @@
           "type": "boolean"
         },
         "compatibilityMode": {
-          "enum": ["nominal", "structural"]
+          "enum": ["strict-equality", "structural-subtype", "nominal"]
         },
         "versionCheck": {
           "type": "boolean"

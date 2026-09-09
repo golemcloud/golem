@@ -271,9 +271,11 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         agent_type: Option<AgentTypeName>,
     },
-    #[error("Tool middleware {middleware_name}{agent_tool} is invalid: {message}", agent_tool = agent_type_name.as_ref().zip(tool_name.as_ref()).map(|(agent, tool)| format!(" for agent {agent} and tool {tool}")).unwrap_or_default())]
+    #[error("middleware merge mode is only valid on agent binding for tool {tool_name}")]
+    ToolBindingEnvironmentMiddlewareMergeMode { tool_name: ToolName },
+    #[error("Tool middleware{middleware}{agent_tool} is invalid: {message}", middleware = middleware_name.as_ref().map(|name| format!(" {name}")).unwrap_or_default(), agent_tool = agent_type_name.as_ref().zip(tool_name.as_ref()).map(|(agent, tool)| format!(" for agent {agent} and tool {tool}")).unwrap_or_default())]
     ToolMiddleware {
-        middleware_name: ToolMiddlewareName,
+        middleware_name: Option<ToolMiddlewareName>,
         agent_type_name: Option<AgentTypeName>,
         tool_name: Option<ToolName>,
         message: String,

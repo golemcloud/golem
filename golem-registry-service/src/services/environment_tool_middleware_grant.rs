@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use super::release_grant_lifecycle::{
+    ExistingGrantDecision, GrantMutationDecision, delete_grant_decision, existing_grant_decision,
+    reconciliation_deletion_decision, release_is_admissible, restore_grant_decision,
+};
 use super::tool_middleware_release::{ToolMiddlewareReleaseError, ToolMiddlewareReleaseService};
 use crate::repo::environment_tool_middleware_grant::{
     EnvironmentToolMiddlewareGrantRepo, EnvironmentToolMiddlewareGrantRepoError,
@@ -165,7 +169,7 @@ impl EnvironmentToolMiddlewareGrantService {
             creation.release,
             ToolMiddlewareReleaseReference::ByCoordinates(_)
         );
-        if !release.release.immutable && environment.version_check {
+        if !release_is_admissible(environment.version_check, release.release.immutable) {
             return Err(
                 EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound,
             );
@@ -189,14 +193,16 @@ impl EnvironmentToolMiddlewareGrantService {
                     .get_by_environment_and_release(environment_id.0, release_id.0, true)
                     .await?
                     .ok_or(EnvironmentToolMiddlewareGrantError::GrantAlreadyExists)?;
-                if existing.grant_deleted_at.is_none() {
-                    if existing.protected
-                        || (automatic && !existing.automatic)
-                        || (existing.automatic == automatic
-                            && existing.follow_coordinates == follow_coordinates)
-                    {
-                        existing.try_into().map_err(Into::into)
-                    } else {
+                match existing_grant_decision(
+                    existing.grant_deleted_at.is_some(),
+                    existing.protected,
+                    existing.automatic,
+                    existing.follow_coordinates,
+                    automatic,
+                    follow_coordinates,
+                ) {
+                    ExistingGrantDecision::ReturnExisting => existing.try_into().map_err(Into::into),
+                    ExistingGrantDecision::SetManagement => {
                         self.environment_tool_middleware_grant_repo
                             .set_management(
                                 existing.environment_tool_middleware_grant_id,
@@ -211,8 +217,7 @@ impl EnvironmentToolMiddlewareGrantService {
                             .try_into()
                             .map_err(Into::into)
                     }
-                } else {
-                    self.environment_tool_middleware_grant_repo
+                    ExistingGrantDecision::Restore => self.environment_tool_middleware_grant_repo
                         .restore(
                             existing.environment_tool_middleware_grant_id,
                             environment_id.0,
@@ -224,7 +229,7 @@ impl EnvironmentToolMiddlewareGrantService {
                         .await?
                         .ok_or(EnvironmentToolMiddlewareGrantError::ReferencedToolMiddlewareReleaseNotFound)?
                         .try_into()
-                        .map_err(Into::into)
+                        .map_err(Into::into),
                 }
             }
             Err(other) => Err(other.into()),
@@ -288,17 +293,27 @@ impl EnvironmentToolMiddlewareGrantService {
                     auth,
                 )
                 .await?;
-            if grant_environment.id != environment.id || !record.automatic {
-                return Err(
-                    EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(
+            match reconciliation_deletion_decision(
+                grant_environment.id == environment.id,
+                record.automatic,
+                record.protected,
+            ) {
+                GrantMutationDecision::NotReconciliable => {
+                    return Err(
+                        EnvironmentToolMiddlewareGrantError::EnvironmentToolMiddlewareGrantNotFound(
+                            grant_id,
+                        ),
+                    );
+                }
+                GrantMutationDecision::Protected => {
+                    return Err(EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(
                         grant_id,
-                    ),
-                );
-            }
-            if record.protected {
-                return Err(EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(
-                    grant_id,
-                ));
+                    ));
+                }
+                GrantMutationDecision::Allow => {}
+                GrantMutationDecision::AdministratorManaged | GrantMutationDecision::NotDeleted => {
+                    unreachable!()
+                }
             }
         }
         Ok(())
@@ -365,15 +380,21 @@ impl EnvironmentToolMiddlewareGrantService {
                 auth,
             )
             .await?;
-        if record.protected {
-            return Err(EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(
-                grant_id,
-            ));
-        }
-        if automatic && !record.automatic {
-            return Err(
-                EnvironmentToolMiddlewareGrantError::AdministratorManagedToolGrant(grant_id),
-            );
+        match delete_grant_decision(record.protected, record.automatic, automatic) {
+            GrantMutationDecision::Protected => {
+                return Err(EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(
+                    grant_id,
+                ));
+            }
+            GrantMutationDecision::AdministratorManaged => {
+                return Err(
+                    EnvironmentToolMiddlewareGrantError::AdministratorManagedToolGrant(grant_id),
+                );
+            }
+            GrantMutationDecision::Allow => {}
+            GrantMutationDecision::NotDeleted | GrantMutationDecision::NotReconciliable => {
+                unreachable!()
+            }
         }
         if !self
             .environment_tool_middleware_grant_repo
@@ -403,15 +424,20 @@ impl EnvironmentToolMiddlewareGrantService {
                 auth,
             )
             .await?;
-        if record.protected {
-            return Err(EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(
-                grant_id,
-            ));
-        }
-        if record.grant_deleted_at.is_none() {
-            return Err(EnvironmentToolMiddlewareGrantError::GrantNotDeleted(
-                grant_id,
-            ));
+        match restore_grant_decision(record.protected, record.grant_deleted_at.is_some()) {
+            GrantMutationDecision::Protected => {
+                return Err(EnvironmentToolMiddlewareGrantError::ProtectedToolGrant(
+                    grant_id,
+                ));
+            }
+            GrantMutationDecision::NotDeleted => {
+                return Err(EnvironmentToolMiddlewareGrantError::GrantNotDeleted(
+                    grant_id,
+                ));
+            }
+            GrantMutationDecision::Allow => {}
+            GrantMutationDecision::AdministratorManaged
+            | GrantMutationDecision::NotReconciliable => unreachable!(),
         }
         self.environment_tool_middleware_grant_repo
             .restore(
@@ -651,76 +677,4 @@ fn environment_owner(environment: &Environment) -> EnvironmentOwnerPattern {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use golem_common::model::account::AccountId;
-    use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::card::{EffectiveSurface, GrantSurface};
-    use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
-    use test_r::test;
-
-    fn test_environment() -> Environment {
-        Environment {
-            id: EnvironmentId::new(),
-            revision: EnvironmentRevision::INITIAL,
-            application_id: ApplicationId::new(),
-            application_name: ApplicationName::try_from("app").unwrap(),
-            name: EnvironmentName::try_from("dev").unwrap(),
-            diff_model_version: 0,
-            compatibility_check: false,
-            version_check: false,
-            security_overrides: false,
-            owner_account_id: AccountId::new(),
-            owner_account_email: golem_common::model::account::AccountEmail::new(
-                "owner@example.com",
-            ),
-            current_deployment: None,
-        }
-    }
-
-    fn view_permission(environment: &Environment, name: ToolMiddlewareName) -> PermissionTarget {
-        PermissionTarget::EnvironmentToolMiddlewareGrant(ClassPermissionTarget {
-            verb: Some(EnvironmentToolMiddlewareGrantVerb::View),
-            owner: environment_owner(environment),
-            resource: EnvironmentToolMiddlewareGrantResourcePattern::Name(name),
-        })
-    }
-
-    #[test]
-    fn name_scoped_view_permission_authorizes_only_that_granted_tool_middleware() {
-        let environment = test_environment();
-        let permitted = ToolMiddlewareName::try_from("search").unwrap();
-        let denied = ToolMiddlewareName::try_from("payments").unwrap();
-        let auth = AuthCtx::agent_with_effective_surface(
-            environment.owner_account_id,
-            environment.owner_account_email.clone(),
-            EffectiveSurface {
-                source_card_ids: Vec::new(),
-                lower: vec![GrantSurface {
-                    positive: vec![view_permission(&environment, permitted.clone())],
-                    negative: Vec::new(),
-                }],
-                upper: Vec::new(),
-            },
-        );
-
-        assert!(
-            authorize_environment_tool_middleware_grant_permission(
-                &auth,
-                &environment,
-                EnvironmentToolMiddlewareGrantVerb::View,
-                permitted,
-            )
-            .is_ok()
-        );
-        assert!(
-            authorize_environment_tool_middleware_grant_permission(
-                &auth,
-                &environment,
-                EnvironmentToolMiddlewareGrantVerb::View,
-                denied,
-            )
-            .is_err()
-        );
-    }
-}
+mod tests;

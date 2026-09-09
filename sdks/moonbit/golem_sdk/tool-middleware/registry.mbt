@@ -1,7 +1,7 @@
 ///|
 pub(all) struct MonomorphicToolMiddlewareScope {
   presented : @toolCommon.Tool
-  expected : @toolCommon.Tool
+  expected : @toolCommon.Tool?
 }
 
 ///|
@@ -51,7 +51,7 @@ fn ToolMiddleware::to_wit(self : ToolMiddleware) -> @toolCommon.ToolMiddleware {
       Monomorphic(scope) =>
         @toolCommon.ToolMiddlewareScope::Monomorphic({
           presented: scope.presented,
-          expected: Some(scope.expected),
+          expected: scope.expected,
         })
       Universal => @toolCommon.ToolMiddlewareScope::Universal
     },

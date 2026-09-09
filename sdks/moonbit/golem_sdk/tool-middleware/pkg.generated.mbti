@@ -20,7 +20,7 @@ pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(OwnedInvocationResul
 
 pub fn[E] decode_tool_error(@golemcloud/golem_sdk/interface/golem/tool/common.ToolError, (String, @schema_model.TypedSchemaValue) -> Result[E, String]?) -> ToolInvokeError[E]
 
-pub fn encode_tool_error(ToolInvokeError[@schema_model.TypedSchemaValue]) -> @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn encode_tool_error(ToolInvokeError[RawCustomToolError]) -> @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
 // Errors
 
@@ -31,7 +31,7 @@ pub struct MiddlewareStdin {
 
 pub(all) struct MonomorphicToolMiddlewareScope {
   presented : @golemcloud/golem_sdk/interface/golem/tool/common.Tool
-  expected : @golemcloud/golem_sdk/interface/golem/tool/common.Tool
+  expected : @golemcloud/golem_sdk/interface/golem/tool/common.Tool?
 }
 
 pub struct OwnedInvocationResult {
@@ -41,6 +41,11 @@ pub struct OwnedInvocationResult {
 pub struct OwnershipContext {
   // private fields
 }
+
+pub(all) struct RawCustomToolError {
+  name : String
+  payload : @schema_model.TypedSchemaValue
+} derive(Eq, @debug.Debug)
 
 pub struct RawInvocationResult {
   // private fields
@@ -110,7 +115,7 @@ pub(all) enum ToolMiddlewareScope {
 pub struct UnderlyingTool {
   // private fields
 }
-pub async fn UnderlyingTool::invoke(Self, Array[String], @schema_model.TypedSchemaValue, MiddlewareStdin?) -> Result[OwnedInvocationResult, ToolInvokeError[@schema_model.TypedSchemaValue]]
+pub async fn UnderlyingTool::invoke(Self, Array[String], @schema_model.TypedSchemaValue, MiddlewareStdin?) -> Result[OwnedInvocationResult, ToolInvokeError[RawCustomToolError]]
 pub async fn UnderlyingTool::invoke_raw(Self, Array[String], RawTypedSchemaValue, MiddlewareStdin?) -> Result[RawInvocationResult, ToolInvokeError[RawTypedSchemaValue]]
 
 // Type aliases

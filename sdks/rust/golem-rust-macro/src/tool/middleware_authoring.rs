@@ -313,12 +313,12 @@ fn expand_tool_middleware(
                     examples: ::std::vec::Vec::new(),
                 },
                 scope: #golem_rust::tool::ToolMiddlewareScope::Monomorphic(
-                    #golem_rust::tool::MonomorphicToolMiddlewareScope {
+                    ::std::boxed::Box::new(#golem_rust::tool::MonomorphicToolMiddlewareScope {
                         presented: <#self_ty as #trait_path>::__golem_presented_tool_descriptor(),
                         expected: ::std::option::Option::Some(
                             <#self_ty as #trait_path>::__golem_expected_tool_descriptor()
                         ),
-                    }
+                    })
                 ),
             }
         }
@@ -813,7 +813,7 @@ mod tests {
                     underlying: golem_rust::tool::UnderlyingTool,
                 ) -> Result<
                     golem_rust::tool::InvocationResult,
-                    golem_rust::tool::ToolInvokeError<golem_rust::TypedSchemaValue>,
+                    golem_rust::tool::ToolInvokeError<golem_rust::tool::RawCustomToolError>,
                 > {
                     underlying.invoke(command_path, input, stdin).await
                 }
@@ -944,7 +944,7 @@ mod tests {
                 stdin: Option<InputStream>,
                 principal: Principal,
                 underlying: UnderlyingTool,
-            ) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+            ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
                 unimplemented!()
             }
         }

@@ -58,7 +58,7 @@ message ToolBindingInput {
   SecretKeyScope secret_keys_readable = 4;
   SecretKeyScope secret_keys_revealable = 5;
   optional ToolMiddlewareInstallations middleware = 6;
-  ToolMiddlewareMergeMode middleware_merge_mode = 7;
+  optional ToolMiddlewareMergeMode middleware_merge_mode = 7;
   ToolFilesystemAccess filesystem_access = 8;
 }
 

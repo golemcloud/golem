@@ -1045,7 +1045,6 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::component::ToolBindingInput,
         ) -> Result<Self, Self::Error> {
-            let middleware_merge_mode = value.middleware_merge_mode();
             let filesystem_access = value.filesystem_access();
             let parameters = serde_json::from_str(&value.parameters_json)
                 .map(NormalizedJsonValue::new)
@@ -1085,11 +1084,18 @@ mod protobuf {
                             .collect::<Result<Vec<_>, String>>()
                     })
                     .transpose()?,
-                middleware_merge_mode: match middleware_merge_mode {
-                    golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Prepend => crate::model::tool_middleware::ToolMiddlewareMergeMode::Prepend,
-                    golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Append => crate::model::tool_middleware::ToolMiddlewareMergeMode::Append,
-                    golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Replace => crate::model::tool_middleware::ToolMiddlewareMergeMode::Replace,
-                },
+                middleware_merge_mode: value
+                    .middleware_merge_mode
+                    .map(|mode| {
+                        golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::try_from(mode)
+                            .map_err(|_| format!("Invalid ToolBindingInput.middleware_merge_mode: {mode}"))
+                            .map(|mode| match mode {
+                                golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Prepend => crate::model::tool_middleware::ToolMiddlewareMergeMode::Prepend,
+                                golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Append => crate::model::tool_middleware::ToolMiddlewareMergeMode::Append,
+                                golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Replace => crate::model::tool_middleware::ToolMiddlewareMergeMode::Replace,
+                            })
+                    })
+                    .transpose()?,
             })
         }
     }
@@ -1115,7 +1121,7 @@ mod protobuf {
                         }).collect(),
                     }
                 }),
-                middleware_merge_mode: match value.middleware_merge_mode {
+                middleware_merge_mode: value.middleware_merge_mode.map(|mode| match mode {
                     crate::model::tool_middleware::ToolMiddlewareMergeMode::Prepend => {
                         golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Prepend
                             as i32
@@ -1128,7 +1134,7 @@ mod protobuf {
                         golem_api_grpc::proto::golem::component::ToolMiddlewareMergeMode::Replace
                             as i32
                     }
-                },
+                }),
                 filesystem_access: golem_api_grpc::proto::golem::component::ToolFilesystemAccess::from(value.filesystem_access) as i32,
             }
         }
@@ -1706,10 +1712,9 @@ mod protobuf {
                         format!("middleware chain references unregistered middleware {name}")
                     })?;
                     if registered != &occurrence.middleware
-                        || occurrence
+                        || !occurrence
                             .secret_keys_revealable
                             .is_subset_of(&occurrence.secret_keys_readable)
-                            == false
                     {
                         return Err(format!(
                             "middleware occurrence {name} does not match its registration or policy"

@@ -61,7 +61,7 @@ test "middleware registry sorts discovery and keeps aliases out of lookup" {
       doc: registry_doc("alpha"),
       scope: Monomorphic({
         presented: registry_tool("presented"),
-        expected: registry_tool("expected"),
+        expected: Some(registry_tool("expected")),
       }),
     },
     empty_registry_invoker,
