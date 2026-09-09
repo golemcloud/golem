@@ -2,8 +2,11 @@ use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
 use golem_cli::{fs, versions};
 use indoc::{formatdoc, indoc};
+use std::process::Stdio;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::Command;
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -69,14 +72,14 @@ async fn moonbit_guest_streams_context() -> TestContext {
             fn produce(&self) -> AgentStream<StreamItem>;
             fn forward(&self, bundle: StreamBundle) -> StreamBundle;
             fn nested(&self, input: AgentStream<AgentStream<StreamItem>>) -> AgentStream<AgentStream<StreamItem>>;
-            fn malformed(&self) -> AgentStream<u32>;
+            async fn malformed(&self) -> AgentStream<u32>;
             async fn drop_after_one(&self, input: AgentStream<u32>) -> u32;
             fn status(&self) -> String;
         }
-        struct StreamProviderImpl;
+        struct StreamProviderImpl { name: String }
         #[agent_implementation]
         impl StreamProvider for StreamProviderImpl {
-            fn new(_name: String) -> Self { Self }
+            fn new(name: String) -> Self { Self { name } }
             async fn consume(&self, mut input: AgentStream<i8>) -> i32 {
                 let mut total = 0;
                 while let Some(value) = input.next().await.expect("read narrow input") { total += i32::from(value); }
@@ -91,11 +94,14 @@ async fn moonbit_guest_streams_context() -> TestContext {
             }
             fn forward(&self, bundle: StreamBundle) -> StreamBundle { bundle }
             fn nested(&self, input: AgentStream<AgentStream<StreamItem>>) -> AgentStream<AgentStream<StreamItem>> { input }
-            fn malformed(&self) -> AgentStream<u32> {
+            async fn malformed(&self) -> AgentStream<u32> {
+                let gate = golem_rust::create_promise();
+                StreamGateClient::get(self.name.clone()).arm(gate.clone()).await;
                 let (mut writer, stream) = golem_rust::schema::wit::new_schema_value_stream();
                 spawn_local(async move {
                     let first = golem_rust::schema::wit::encode_value(&golem_rust::schema::SchemaValue::U32(7)).expect("encode first item");
                     if writer.write_one(first).await.is_some() { return; }
+                    golem_rust::get_promise(&gate).get().await;
                     let _ = writer.write_one(golem_rust::schema::wit::wire::SchemaValueTree {
                         value_nodes: vec![], root: 0,
                     }).await;
@@ -108,6 +114,22 @@ async fn moonbit_guest_streams_context() -> TestContext {
                 first
             }
             fn status(&self) -> String { "ready".into() }
+        }
+
+        #[agent_definition]
+        pub trait StreamGate {
+            fn new(name: String) -> Self;
+            fn arm(&mut self, promise: golem_rust::PromiseId);
+            fn release(&mut self) -> bool;
+        }
+        struct StreamGateImpl { promise: Option<golem_rust::PromiseId> }
+        #[agent_implementation]
+        impl StreamGate for StreamGateImpl {
+            fn new(_name: String) -> Self { Self { promise: None } }
+            fn arm(&mut self, promise: golem_rust::PromiseId) { self.promise = Some(promise); }
+            fn release(&mut self) -> bool {
+                golem_rust::complete_promise(&self.promise.take().expect("armed gate"), &[])
+            }
         }
     "#}).unwrap();
     let manifest = ctx.cwd_path_join("moon.mod.json");
@@ -239,32 +261,68 @@ async fn test_moonbit_generated_guest_streams_e2e() {
 async fn test_moonbit_generated_guest_streams_producer_failure() {
     let ctx = moonbit_guest_streams_context().await;
     let name = Uuid::new_v4();
-    let outputs = tokio::time::timeout(
-        Duration::from_secs(90),
-        ctx.cli_with_input(
-            [
+    let mut child = Command::new(&ctx.golem_cli_path)
+        .arg("--config-dir")
+        .arg(ctx.config_dir.path())
+        .args([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("StreamConsumer(\"{name}\")"),
+            "malformed",
+            "--no-stream",
+        ])
+        .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+        .envs(&ctx.env)
+        .current_dir(&ctx.working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut stderr = child.stderr.take().unwrap();
+    let stderr = tokio::spawn(async move {
+        let mut text = String::new();
+        stderr.read_to_string(&mut text).await.unwrap();
+        text
+    });
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let line = stdout
+                .next_line()
+                .await
+                .unwrap()
+                .expect("must deliver 7 before failure");
+            if line == "7" {
+                break;
+            }
+        }
+        // An accepted relay write is not a CLI delivery acknowledgement.
+        // Release the independent gate only after observing the exact item line.
+        let release = ctx
+            .cli([
                 cmd::AGENT,
                 cmd::INVOKE,
-                &format!("StreamConsumer(\"{name}\")"),
-                "malformed",
-                "--no-stream",
-            ],
-            b"",
-        ),
-    )
+                &format!("StreamGate(\"{name}\")"),
+                "release",
+            ])
+            .await;
+        assert!(release.success_or_dump());
+        assert!(release.stdout_contains("true"));
+        while stdout.next_line().await.unwrap().is_some() {}
+        let status = child.wait().await.unwrap();
+        assert!(
+            status.code().is_some_and(|code| code != 0),
+            "malformed producer became clean EOF: {status}"
+        );
+    })
     .await
     .expect("malformed producer did not terminate the invocation within 90 seconds");
-    assert!(!outputs.success(), "malformed producer became clean EOF");
+    let stderr = stderr.await.unwrap();
     assert!(
-        outputs.stdout_text().lines().any(|line| line == "7"),
-        "must deliver a valid item before the producer failure: {}",
-        outputs.stdout_text()
-    );
-    assert!(
-        outputs.stderr_text().contains("Output stream")
-            || outputs.stderr_text().contains("Invocation Failed"),
-        "expected stream/invocation failure, not an unrelated CLI error: {}",
-        outputs.stderr_text()
+        stderr.contains("Output stream") || stderr.contains("Invocation Failed"),
+        "expected stream/invocation failure, not an unrelated CLI error: {stderr}"
     );
 }
 
