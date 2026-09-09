@@ -1410,16 +1410,12 @@ impl ForwardingOplogState {
     }
 
     fn record_uncached(&mut self, indices: impl IntoIterator<Item = OplogIndex>) {
-        let mut appended = false;
         for idx in indices {
             debug_assert_eq!(idx, self.last_oplog_idx.next());
             self.last_oplog_idx = idx;
-            appended = true;
         }
-        if appended {
-            self.buffer = None;
-            self.buffer_start_idx = self.last_oplog_idx.next();
-        }
+        self.buffer = None;
+        self.buffer_start_idx = self.last_oplog_idx.next();
     }
 
     /// Cursor-driven flush: for each plugin with unsent entries, send a batch.
@@ -3271,6 +3267,28 @@ mod tests {
         assert_eq!(sends[0].entry_count, 3);
         assert_eq!(memory_deltas(&sends[0].entries), vec![1, 2, 3]);
         assert_eq!(inner.read_exact_requests(), vec![(OplogIndex::INITIAL, 3)]);
+    }
+
+    #[test]
+    async fn empty_uncached_batch_releases_cache_without_advancing_index() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, _inner, _recording_plugin, status_writer) =
+            test_forwarding_oplog(HashSet::from([grant_id]), grant_id, usize::MAX).await;
+        oplog.add(grow_memory(1)).await;
+        assert_eq!(oplog.inspect_state().await.buffer_len, Some(1));
+
+        publish_status(&status_writer, HashSet::new(), None);
+        assert!(
+            oplog
+                .add_durable_stream_batch(Box::new(|_| Vec::new()))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let state = oplog.inspect_state().await;
+        assert_eq!(state.last_oplog_idx, OplogIndex::INITIAL);
+        assert_eq!(state.buffer_len, None);
+        assert_eq!(state.buffer_start_idx, state.last_oplog_idx.next());
     }
 
     #[test]
