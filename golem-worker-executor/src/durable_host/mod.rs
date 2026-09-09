@@ -2136,7 +2136,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if commit_immediately {
             self.public_state.worker().add_and_commit_oplog(entry).await;
         } else {
-            self.public_state.worker().add_to_oplog(entry).await;
+            self.public_state.worker().add_to_oplog(entry).await?;
         }
 
         Ok(())
@@ -4833,7 +4833,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             },
         ) = (&current_idempotency_key, trap_type)
         {
-            self.state
+            let denial_persisted = self
+                .state
                 .oplog
                 .add_pair(
                     OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
@@ -4852,8 +4853,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         }
                     }),
                 )
-                .await
-                .expect("oplog write");
+                .await;
+            match denial_persisted {
+                Ok(_) => {}
+                Err(crate::services::oplog::OplogError::Fenced(fence)) => {
+                    // The shard moved while this failure was being recorded. Give the agent up
+                    // exactly as the `ShardLost` arm above does: nothing further may be written
+                    // to an oplog that belongs to another executor now.
+                    self.public_state.worker().mark_relinquished(
+                        crate::worker::RelinquishReason::Fenced(Some(Box::new(fence))),
+                    );
+                    return RetryDecision::None;
+                }
+                Err(error) => panic!("oplog write: {error}"),
+            }
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
@@ -5142,7 +5155,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let resource_id = AgentResourceId(id);
         if self.state.is_live() {
             let entry = OplogEntry::create_resource(resource_id, name.clone());
-            self.public_state.worker().add_to_oplog(entry).await;
+            self.public_state
+                .worker()
+                .add_to_oplog_or_relinquish(entry)
+                .await;
         }
         id
     }
@@ -5153,7 +5169,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
             let id = AgentResourceId(resource_id);
             if self.state.is_live() {
                 let entry = OplogEntry::drop_resource(id, resource_type_id.clone());
-                self.public_state.worker().add_to_oplog(entry).await;
+                self.public_state
+                    .worker()
+                    .add_to_oplog_or_relinquish(entry)
+                    .await;
             }
         }
         result
@@ -5318,7 +5337,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
                     attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
                 })
-                .await;
+                .await?;
         }
 
         Ok(span)
@@ -5355,7 +5374,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     span_id.clone(),
                 ))
-                .await;
+                .await?;
         } else if !self.is_live() {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
@@ -5398,7 +5417,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     key.to_string(),
                     value,
                 ))
-                .await;
+                .await?;
         } else if !self.is_live() {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }

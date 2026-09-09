@@ -3171,7 +3171,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             let delta = growth.delta.swap(0, Ordering::AcqRel);
             if delta > 0 {
-                self.add_to_oplog(OplogEntry::grow_memory(delta)).await;
+                self.add_to_oplog_or_relinquish(OplogEntry::grow_memory(delta))
+                    .await;
             }
 
             let current_growth = self.memory_growth.lock().unwrap();
@@ -5114,8 +5115,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Appends an oplog entry without forcing a durable commit. Callers that
     /// require ordering must await the append before exposing subsequent work.
-    pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
-        self.oplog.add(entry).await.expect("oplog write")
+    pub async fn add_to_oplog(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
+        self.oplog.add(entry).await
+    }
+
+    /// Appends an entry on a path that has no way to report the failure to its caller.
+    ///
+    /// A fenced write means the shard moved while this agent was resident. The agent is marked
+    /// relinquished so the stop that follows drops it from this executor rather than writing to an
+    /// oplog another executor owns now, and `OplogIndex::NONE` is returned for the entry that was
+    /// not written - the same "no index" value a debugging session's discarded write returns.
+    ///
+    /// Marked rather than stopped here on purpose: these callers run under the instance lock and
+    /// inside the wasm store, where `relinquish` would deadlock on the lock it already holds. The
+    /// fence latches on the oplog, so the invocation's next write is refused too and unwinds the
+    /// loop, which is where the stop belongs.
+    ///
+    /// Every other storage failure keeps the fail-stop behaviour it has always had.
+    pub async fn add_to_oplog_or_relinquish(&self, entry: OplogEntry) -> OplogIndex {
+        match self.oplog.add(entry).await {
+            Ok(index) => index,
+            Err(OplogError::Fenced(fence)) => {
+                self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence))));
+                OplogIndex::NONE
+            }
+            Err(error) => panic!("oplog write: {error}"),
+        }
     }
 
     pub async fn commit_oplog_and_update_state(&self, commit_level: CommitLevel) -> OplogIndex {
@@ -5133,7 +5158,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // Should only be called from invocation loop
     pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> OplogIndex {
-        let result = self.add_to_oplog(entry).await;
+        let result = self.add_to_oplog_or_relinquish(entry).await;
         self.commit_oplog_and_update_state(CommitLevel::Always)
             .await;
         result
@@ -5180,9 +5205,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queued_event_indices = Vec::with_capacity(card_ids.len());
         for card_id in card_ids {
             queued_event_indices.push(
-                self.add_to_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
-                    card_id,
-                )))
+                self.add_to_oplog_or_relinquish(OplogEntry::card_event_queued(
+                    QueuedCardEvent::revoke(card_id),
+                ))
                 .await,
             );
         }
@@ -5270,7 +5295,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         entry: OplogEntry,
         wakeup: Option<WorkerCommand>,
     ) -> OplogIndex {
-        let result = self.add_to_oplog(entry).await;
+        let result = self.add_to_oplog_or_relinquish(entry).await;
         // The caller already holds the instance lock (and sends the wakeup itself below), so
         // this must not enqueue a `NotifyStatusChanged` lifecycle job: the commit job is safe to
         // await while holding the instance lock precisely because the status task never takes

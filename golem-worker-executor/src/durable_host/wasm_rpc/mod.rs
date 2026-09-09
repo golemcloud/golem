@@ -2793,7 +2793,7 @@ async fn finish_span_access<T, Ctx: WorkerCtx>(
     if is_live {
         worker
             .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
-            .await;
+            .await?;
     } else if !is_live {
         crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
     }

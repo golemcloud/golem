@@ -87,7 +87,16 @@ impl CompletionMarkerRecorder {
                 let _ = done.send(Err(error));
                 return;
             }
-            let marker_idx = marker_append.await.expect("oplog write");
+            // Reported, not panicked: the process is built with `panic = "abort"`, so panicking
+            // in this task would take the whole executor down over one agent. The awaiter
+            // classifies a fenced marker as `ShardLost` and gives that agent up on its own.
+            let marker_idx = match marker_append.await {
+                Ok(index) => index,
+                Err(error) => {
+                    let _ = done.send(Err(error.into()));
+                    return;
+                }
+            };
             match kind {
                 CompletionMarkerKind::Delivered => {
                     replay_state.record_delivered_completion(start_idx, marker_idx)
