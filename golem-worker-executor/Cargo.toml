@@ -132,6 +132,10 @@ name = "authorization"
 harness = false
 
 [[bench]]
+name = "event_broadcast_allocations"
+harness = false
+
+[[bench]]
 name = "oplog_read"
 harness = false
 
