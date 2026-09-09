@@ -228,9 +228,16 @@ pub struct EtcdConfig {
     pub connect_timeout: Duration,
     #[serde(with = "humantime_serde", default = "default_etcd_request_timeout")]
     pub request_timeout: Duration,
+    /// How long etcd holds this replica's leadership lease without a renewal; renewed at TTL/3.
+    #[serde(with = "humantime_serde", default = "default_leader_lease_ttl")]
+    pub leader_lease_ttl: Duration,
 }
 
 fn default_etcd_connect_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_leader_lease_ttl() -> Duration {
     Duration::from_secs(10)
 }
 
@@ -244,16 +251,25 @@ impl Default for EtcdConfig {
             endpoints: vec!["http://localhost:2379".to_string()],
             connect_timeout: default_etcd_connect_timeout(),
             request_timeout: default_etcd_request_timeout(),
+            leader_lease_ttl: default_leader_lease_ttl(),
         }
     }
 }
 
 impl SafeDisplay for EtcdConfig {
     fn to_safe_string(&self) -> String {
+        let Self {
+            endpoints,
+            connect_timeout,
+            request_timeout,
+            leader_lease_ttl,
+        } = self;
+
         let mut result = String::new();
-        let _ = writeln!(&mut result, "endpoints: {}", self.endpoints.join(", "));
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
-        let _ = writeln!(&mut result, "request timeout: {:?}", self.request_timeout);
+        let _ = writeln!(&mut result, "endpoints: {}", endpoints.join(", "));
+        let _ = writeln!(&mut result, "connect timeout: {connect_timeout:?}");
+        let _ = writeln!(&mut result, "request timeout: {request_timeout:?}");
+        let _ = writeln!(&mut result, "leader lease ttl: {leader_lease_ttl:?}");
         result
     }
 }
