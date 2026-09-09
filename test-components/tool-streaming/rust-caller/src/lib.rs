@@ -1692,7 +1692,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
-            raw_input("historical-reconstruction-gate"),
+            raw_input("historical-reconstruction-exclusive"),
             Some(raw_stdin(vec![
                 b"reconstruction-left".to_vec(),
                 b"reconstruction-right".to_vec(),
@@ -1706,7 +1706,6 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .expect("completed reconstruction result before custom effect");
         };
         let incomplete_custom = async {
-            wait_at_crash_checkpoint("before-reconstruction-custom-effect").await;
             Durability::<(), String>::new(
                 "golem-it",
                 "reconstruction-barrier-custom-effect",
