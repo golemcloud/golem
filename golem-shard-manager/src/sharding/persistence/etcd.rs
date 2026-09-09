@@ -26,9 +26,11 @@ use crate::sharding::shard_management::PERSISTENCE_TIMEOUT;
 use async_trait::async_trait;
 use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp, TxnOpResponse, TxnResponse};
 use golem_common::serialization::serialize;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::info;
+use tonic::Code;
+use tracing::{debug, info};
 
 /// Key holding the serialized [`ShardLeaseState`].
 pub const STATE_KEY: &str = "/golem/shard-manager/state";
@@ -46,6 +48,12 @@ pub struct EtcdRoutingTablePersistence {
     number_of_shards: usize,
     /// Proof that this process won the leadership campaign, added to every write.
     fence: LeaderFence,
+    /// How much history to keep behind the state; see [`RoutingTablePersistence::compact`].
+    /// `0` disables compaction.
+    compaction_retention_revisions: u64,
+    /// The revision this process last compacted to, so a pass that stored nothing new skips the
+    /// round trip.
+    last_compacted_to: AtomicI64,
 }
 
 impl EtcdRoutingTablePersistence {
@@ -58,19 +66,32 @@ impl EtcdRoutingTablePersistence {
         info!(
             endpoints = config.endpoints.join(", "),
             state_key = STATE_KEY,
+            compaction_retention_revisions = config.compaction_retention_revisions,
             "Configured the etcd client for shard lease state persistence"
         );
 
-        Ok(Self::with_client(client, number_of_shards, fence))
+        Ok(Self::with_client(
+            client,
+            number_of_shards,
+            fence,
+            config.compaction_retention_revisions,
+        ))
     }
 
-    /// Builds a persistence over a client `run()` opened before campaigning, so its checks
-    /// against the stored state happen while another replica still holds leadership.
-    pub fn with_client(client: Client, number_of_shards: usize, fence: LeaderFence) -> Self {
+    /// Builds a persistence over `client`, the connection `run()` opened before campaigning and
+    /// already used for the pre-election shard-count read, so one connection serves both.
+    pub fn with_client(
+        client: Client,
+        number_of_shards: usize,
+        fence: LeaderFence,
+        compaction_retention_revisions: u64,
+    ) -> Self {
         Self {
             client,
             number_of_shards,
             fence,
+            compaction_retention_revisions,
+            last_compacted_to: AtomicI64::new(NO_REVISION),
         }
     }
 
@@ -165,6 +186,33 @@ impl RoutingTablePersistence for EtcdRoutingTablePersistence {
             .revision();
 
         check_stored_revision(revision, prev_revision)
+    }
+
+    async fn compact(&self, latest: ExternalRevision) -> Result<(), ShardManagerError> {
+        if self.compaction_retention_revisions == 0 {
+            return Ok(());
+        }
+
+        let target = latest.saturating_sub(self.compaction_retention_revisions as i64);
+        if target <= self.last_compacted_to.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        let mut kv = self.client.kv_client();
+        match kv.compact(target, None).await {
+            Ok(_) => {}
+            // Another replica, or an operator, already compacted past `target`. The history
+            // behind it is gone either way, which is what was asked for.
+            Err(etcd_client::Error::GRpcStatus(status)) if status.code() == Code::OutOfRange => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        self.last_compacted_to.store(target, Ordering::Release);
+        debug!(
+            target,
+            latest, "Compacted etcd history behind the shard lease state"
+        );
+        Ok(())
     }
 }
 

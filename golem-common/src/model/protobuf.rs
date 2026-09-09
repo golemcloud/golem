@@ -20,9 +20,11 @@ use crate::model::{
     AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter, AgentId,
     AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus,
     AgentStatusFilter, FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator,
+    Timestamp,
 };
 use applying::Apply;
+use chrono::{DateTime, TimeDelta, Utc};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
     IpAddress as GrpcIpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable,
@@ -135,6 +137,70 @@ impl From<ShardId> for golem::shardmanager::ShardId {
 impl From<golem::shardmanager::ShardId> for ShardId {
     fn from(proto: golem::shardmanager::ShardId) -> Self {
         Self { value: proto.value }
+    }
+}
+
+pub fn shard_epochs_to_proto(
+    shard_epochs: impl IntoIterator<Item = (ShardId, ShardEpoch)>,
+) -> Vec<golem::shardmanager::ShardEpochEntry> {
+    shard_epochs
+        .into_iter()
+        .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+            shard_id: Some(shard_id.into()),
+            epoch: epoch.0,
+        })
+        .collect()
+}
+
+pub fn shard_epochs_from_proto<C: FromIterator<(ShardId, ShardEpoch)>>(
+    entries: Vec<golem::shardmanager::ShardEpochEntry>,
+) -> Result<C, String> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            Ok((
+                entry
+                    .shard_id
+                    .ok_or("ShardEpochEntry.shard_id missing")?
+                    .into(),
+                ShardEpoch(entry.epoch),
+            ))
+        })
+        .collect()
+}
+
+/// Decodes a lease TTL off the wire into an expiry on the receiver's own clock.
+///
+/// The wire carries how long the lease lasts, not when it ends, so the sender's
+/// clock is never compared against the receiver's: `now` is the receiver's
+/// clock at the moment the message arrived, and the expiry is anchored to it.
+/// Total: an absent, negative, malformed or overflowing TTL is an error, never
+/// a panic.
+pub fn lease_expiry_from_ttl(
+    lease_ttl: Option<prost_types::Duration>,
+    now: DateTime<Utc>,
+    field: &str,
+) -> Result<DateTime<Utc>, String> {
+    let ttl = lease_ttl.ok_or_else(|| format!("{field} is required"))?;
+    if ttl.seconds < 0 {
+        return Err(format!("{field} is negative"));
+    }
+    let nanos =
+        u32::try_from(ttl.nanos).map_err(|_| format!("{field} has out-of-range nanoseconds"))?;
+    let ttl =
+        TimeDelta::new(ttl.seconds, nanos).ok_or_else(|| format!("{field} is out of range"))?;
+    now.checked_add_signed(ttl)
+        .ok_or_else(|| format!("{field} overflows the expiry"))
+}
+
+/// Encodes a lease expiry for the wire as the time left on it, floored at zero:
+/// a lease that has already lapsed goes out as a zero TTL, which the receiver
+/// reads as expired on arrival.
+pub fn lease_ttl_to_proto(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> prost_types::Duration {
+    let remaining = expires_at.signed_duration_since(now).max(TimeDelta::zero());
+    prost_types::Duration {
+        seconds: remaining.num_seconds(),
+        nanos: remaining.subsec_nanos(),
     }
 }
 
@@ -792,4 +858,194 @@ pub fn from_protobuf_resource_description(
         resource_name: description.resource_name,
     };
     Ok((key, value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ShardAssignment, ShardEpoch, ShardId, ShardLeaseRevision};
+    use std::collections::HashMap;
+    use test_r::test;
+
+    test_r::enable!();
+
+    /// The round trip goes through the free conversion functions
+    /// themselves — they are what `AssignShards` and `RenewShardLease` use on
+    /// both sides of the wire. `epoch_of` is how a reader of the pushed set
+    /// gets a shard's ownership generation back out.
+    #[test]
+    fn epochs_survive_a_push_round_trip() {
+        let pushed: HashMap<ShardId, ShardEpoch> = HashMap::from([
+            (ShardId::new(0), ShardEpoch(1)),
+            (ShardId::new(7), ShardEpoch(42)),
+            (ShardId::new(1023), ShardEpoch(0)),
+        ]);
+
+        let on_the_wire = shard_epochs_to_proto(pushed.clone());
+        assert_eq!(on_the_wire.len(), 3);
+
+        let received: HashMap<ShardId, ShardEpoch> =
+            shard_epochs_from_proto(on_the_wire).expect("a well-formed push decodes");
+        assert_eq!(received, pushed);
+
+        let mut assignment = ShardAssignment::default();
+        assignment.set_shards(1024, &received, None, ShardLeaseRevision(1));
+
+        assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
+        assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));
+        assert_eq!(
+            assignment.epoch_of(&ShardId::new(1023)),
+            Some(ShardEpoch(0))
+        );
+        assert_eq!(
+            assignment.epoch_of(&ShardId::new(5)),
+            None,
+            "a shard absent from the push has no epoch here"
+        );
+    }
+
+    #[test]
+    fn an_entry_without_a_shard_id_is_rejected_rather_than_silently_dropped() {
+        let on_the_wire = vec![golem::shardmanager::ShardEpochEntry {
+            shard_id: None,
+            epoch: 3,
+        }];
+
+        let decoded: Result<HashMap<ShardId, ShardEpoch>, String> =
+            shard_epochs_from_proto(on_the_wire);
+
+        assert!(decoded.is_err());
+    }
+
+    fn fixed_now() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_764_000_000, 0).unwrap()
+    }
+
+    /// A lease TTL is required on the wire. `None` is the executor's
+    /// "never expires" sentinel, reachable only from the in-process
+    /// single-shard service; letting an absent proto field decode to it would
+    /// turn the self-fence off silently and permanently.
+    #[test]
+    fn an_absent_lease_ttl_is_rejected_rather_than_read_as_never_expiring() {
+        let decoded = lease_expiry_from_ttl(None, fixed_now(), "AssignShardsRequest.lease_ttl");
+
+        assert_eq!(
+            decoded,
+            Err("AssignShardsRequest.lease_ttl is required".to_string())
+        );
+    }
+
+    /// `Duration.seconds` is an unbounded `i64` on the wire. A value past what
+    /// chrono can hold, or one that overflows the receiver's clock once added,
+    /// has to come back as an error: these crates abort on panic, so an
+    /// inbound RPC could otherwise take the process down. A negative TTL is
+    /// malformed rather than "already expired" - the sender floors at zero.
+    #[test]
+    fn an_out_of_range_or_negative_lease_ttl_is_an_error_and_not_a_panic() {
+        let past_what_chrono_holds = prost_types::Duration {
+            seconds: i64::MAX,
+            nanos: 0,
+        };
+        assert!(
+            lease_expiry_from_ttl(Some(past_what_chrono_holds), fixed_now(), "lease_ttl").is_err()
+        );
+
+        // fits a `TimeDelta`, but `now + ttl` lands past the last representable date
+        let overflows_the_clock = prost_types::Duration {
+            seconds: 9_000_000_000_000,
+            nanos: 0,
+        };
+        assert!(
+            lease_expiry_from_ttl(Some(overflows_the_clock), fixed_now(), "lease_ttl").is_err()
+        );
+
+        let negative = prost_types::Duration {
+            seconds: -1,
+            nanos: 0,
+        };
+        assert_eq!(
+            lease_expiry_from_ttl(Some(negative), fixed_now(), "lease_ttl"),
+            Err("lease_ttl is negative".to_string())
+        );
+    }
+
+    /// `Duration.nanos` is an `i32` on the wire, so it can arrive negative or
+    /// past a second even though no correct producer sends that.
+    #[test]
+    fn a_lease_ttl_with_impossible_nanoseconds_is_rejected() {
+        let negative = prost_types::Duration {
+            seconds: 1,
+            nanos: -1,
+        };
+        assert!(lease_expiry_from_ttl(Some(negative), fixed_now(), "lease_ttl").is_err());
+
+        let overflowing = prost_types::Duration {
+            seconds: 1,
+            nanos: 2_000_000_000,
+        };
+        assert!(lease_expiry_from_ttl(Some(overflowing), fixed_now(), "lease_ttl").is_err());
+    }
+
+    #[test]
+    fn a_lease_expiry_survives_the_round_trip_to_the_wire_and_back() {
+        let now = fixed_now();
+        let granted = now + TimeDelta::new(60, 123_456_789).unwrap();
+
+        let on_the_wire = lease_ttl_to_proto(granted, now);
+        assert_eq!(
+            on_the_wire,
+            prost_types::Duration {
+                seconds: 60,
+                nanos: 123_456_789,
+            }
+        );
+
+        assert_eq!(
+            lease_expiry_from_ttl(Some(on_the_wire), now, "lease_ttl"),
+            Ok(granted)
+        );
+    }
+
+    /// The point of carrying a TTL rather than a timestamp: the expiry is
+    /// anchored to the receiver's clock, so a sender whose clock is ahead or
+    /// behind cannot hand the receiver more, or less, time than the lease has.
+    #[test]
+    fn a_lease_expiry_is_anchored_to_the_receivers_clock_not_the_senders() {
+        let sender_now = fixed_now();
+        // the receiver's clock is thirty seconds behind the sender's
+        let receiver_now = sender_now - TimeDelta::seconds(30);
+        let granted_by_sender = sender_now + TimeDelta::seconds(60);
+
+        let on_the_wire = lease_ttl_to_proto(granted_by_sender, sender_now);
+        let decoded = lease_expiry_from_ttl(Some(on_the_wire), receiver_now, "lease_ttl").unwrap();
+
+        assert_eq!(decoded, receiver_now + TimeDelta::seconds(60));
+        assert_eq!(
+            decoded.signed_duration_since(receiver_now),
+            granted_by_sender.signed_duration_since(sender_now),
+            "the receiver must get exactly the time the sender granted, on its own clock"
+        );
+    }
+
+    /// A lease that had already lapsed when it was encoded goes out as a zero
+    /// TTL rather than a negative one, and decodes as expired on arrival.
+    #[test]
+    fn a_lapsed_lease_is_sent_as_a_zero_ttl_and_arrives_expired() {
+        let now = fixed_now();
+        let lapsed = now - TimeDelta::seconds(5);
+
+        let on_the_wire = lease_ttl_to_proto(lapsed, now);
+        assert_eq!(
+            on_the_wire,
+            prost_types::Duration {
+                seconds: 0,
+                nanos: 0
+            }
+        );
+
+        assert_eq!(
+            lease_expiry_from_ttl(Some(on_the_wire), now, "lease_ttl"),
+            Ok(now)
+        );
+    }
 }

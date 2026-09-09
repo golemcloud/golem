@@ -227,6 +227,7 @@ async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn 
             agent_metadata(id),
             stale_status(),
             suspended_status(),
+            None,
         )
         .await
 }
@@ -235,6 +236,7 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecordV1) -> Opl
     oplog
         .add(DurableStreamOplogRecord::Session(Box::new(record)).into_inline_entry())
         .await
+        .expect("oplog write")
 }
 
 async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
@@ -243,6 +245,7 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
             timestamp: Timestamp::now_utc(),
         })
         .await
+        .expect("oplog write")
 }
 
 async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> OplogIndex {
@@ -255,6 +258,7 @@ async fn append_pending_invocation(oplog: &dyn Oplog, key: &IdempotencyKey) -> O
             Vec::new(),
         ))
         .await
+        .expect("oplog write")
 }
 
 fn attached_record(
@@ -1463,6 +1467,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
             agent_metadata(&id),
             stale_status(),
             suspended_status(),
+            None,
         )
         .await;
     let raw = reopened
@@ -1521,6 +1526,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
             agent_metadata(&id),
             stale_status(),
             suspended_status(),
+            None,
         )
         .await;
     let takeover_attempt = AttemptId::fresh();
@@ -1790,6 +1796,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
             agent_metadata(&id),
             stale_status(),
             suspended_status(),
+            None,
         )
         .await;
     let raw = reopened
@@ -1861,6 +1868,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
             agent_metadata(&id),
             stale_status(),
             suspended_status(),
+            None,
         )
         .await;
     storage.reset();

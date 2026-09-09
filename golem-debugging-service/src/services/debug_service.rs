@@ -213,7 +213,9 @@ impl DebugServiceDefault {
 
         self.all.shard_service().register(
             shard_assignment.number_of_shards,
-            &shard_assignment.shard_ids,
+            &shard_assignment.shard_epochs,
+            shard_assignment.expires_at,
+            shard_assignment.revision,
         );
 
         let worker = Worker::get_or_create_suspended(
@@ -1218,7 +1220,10 @@ mod tests {
 
     #[async_trait]
     impl Oplog for SeqOplog {
-        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+        async fn add(
+            &self,
+            _entry: OplogEntry,
+        ) -> Result<OplogIndex, golem_worker_executor::services::oplog::OplogError> {
             unimplemented!()
         }
 
@@ -1233,7 +1238,8 @@ mod tests {
             &self,
             _start: OplogEntry,
             _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
+        ) -> Result<(OplogIndex, OplogIndex), golem_worker_executor::services::oplog::OplogError>
+        {
             unimplemented!()
         }
 
@@ -1241,14 +1247,20 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+        ) -> Result<
+            golem_worker_executor::services::oplog::OrderedOplogStart,
+            golem_worker_executor::services::oplog::OplogError,
+        > {
             unimplemented!()
         }
 
         async fn add_start_with_indexed_reserved_raw_payload(
             &self,
             _build_request: golem_worker_executor::services::oplog::IndexedReservedStartBuilder,
-        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+        ) -> Result<
+            golem_worker_executor::services::oplog::OrderedOplogStart,
+            golem_worker_executor::services::oplog::OplogError,
+        > {
             unimplemented!()
         }
 
@@ -1256,7 +1268,13 @@ mod tests {
             unimplemented!()
         }
 
-        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        async fn commit(
+            &self,
+            _level: CommitLevel,
+        ) -> Result<
+            BTreeMap<OplogIndex, OplogEntry>,
+            golem_worker_executor::services::oplog::OplogError,
+        > {
             unimplemented!()
         }
 
@@ -1330,7 +1348,10 @@ mod tests {
 
     #[async_trait]
     impl Oplog for TestOplog {
-        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+        async fn add(
+            &self,
+            _entry: OplogEntry,
+        ) -> Result<OplogIndex, golem_worker_executor::services::oplog::OplogError> {
             unimplemented!()
         }
 
@@ -1345,7 +1366,8 @@ mod tests {
             &self,
             _start: OplogEntry,
             _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
+        ) -> Result<(OplogIndex, OplogIndex), golem_worker_executor::services::oplog::OplogError>
+        {
             unimplemented!()
         }
 
@@ -1353,14 +1375,20 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+        ) -> Result<
+            golem_worker_executor::services::oplog::OrderedOplogStart,
+            golem_worker_executor::services::oplog::OplogError,
+        > {
             unimplemented!()
         }
 
         async fn add_start_with_indexed_reserved_raw_payload(
             &self,
             _build_request: golem_worker_executor::services::oplog::IndexedReservedStartBuilder,
-        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+        ) -> Result<
+            golem_worker_executor::services::oplog::OrderedOplogStart,
+            golem_worker_executor::services::oplog::OplogError,
+        > {
             unimplemented!()
         }
 
@@ -1368,7 +1396,13 @@ mod tests {
             unimplemented!()
         }
 
-        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        async fn commit(
+            &self,
+            _level: CommitLevel,
+        ) -> Result<
+            BTreeMap<OplogIndex, OplogEntry>,
+            golem_worker_executor::services::oplog::OplogError,
+        > {
             unimplemented!()
         }
 

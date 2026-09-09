@@ -457,6 +457,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 trace_states,
                 invocation_context,
                 wallet_pin,
+                shard_epoch: _,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)

@@ -92,6 +92,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -407,7 +409,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;

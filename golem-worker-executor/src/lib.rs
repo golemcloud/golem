@@ -108,6 +108,7 @@ use async_trait::async_trait;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
+use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
@@ -193,11 +194,20 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         )?))
     }
 
+    /// Takes the whole [`services::shutdown::Shutdown`] rather than just its
+    /// token: the lease renewal loop has work to finish after the token trips
+    /// (it deregisters), so it spawns through the tracker that `main` waits on.
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        shard_service: Arc<dyn ShardService>,
+        shutdown: services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
-        Arc::new(crate::services::shard_manager::GrpcShardManagerService::new(shard_manager_client))
+        crate::services::shard_manager::GrpcShardManagerService::new(
+            shard_manager_client,
+            shard_service,
+            shutdown,
+        )
     }
 
     fn create_quota_service(
@@ -548,7 +558,7 @@ pub async fn create_worker_executor_impl<
     bootstrap: &BootstrapImpl,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
-    shutdown_token: tokio_util::sync::CancellationToken,
+    shutdown: services::shutdown::Shutdown,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -559,6 +569,7 @@ pub async fn create_worker_executor_impl<
     ),
     anyhow::Error,
 > {
+    let shutdown_token = shutdown.token();
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -857,8 +868,17 @@ pub async fn create_worker_executor_impl<
             ),
         );
 
-    let shard_manager_service =
-        bootstrap.create_shard_manager_service(shard_manager_client.clone());
+    let shard_manager_service = bootstrap.create_shard_manager_service(
+        shard_manager_client.clone(),
+        shard_service.clone(),
+        shutdown.clone(),
+    );
+
+    check_oplog_fencing(
+        shard_manager_service.requires_oplog_fencing(),
+        indexed_storage.as_ref(),
+        &golem_config.indexed_storage,
+    )?;
 
     let quota_service = bootstrap.create_quota_service(
         shard_manager_client,
@@ -1095,7 +1115,7 @@ pub async fn bootstrap_and_run_worker_executor<
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;
@@ -1271,5 +1291,82 @@ async fn build_inner_key_value_storage(
                 ));
             Ok((None, None, key_value_storage))
         }
+    }
+}
+
+/// Refuses a configuration whose oplog writes cannot be fenced on the shard epoch.
+///
+/// Shards move between executors under a real shard manager, so two executors can believe they
+/// own the same agent at once; the storage fence is what stops the one that has lost the shard
+/// from writing. Without it the damage is silent, which is why this is a startup failure rather
+/// than a warning.
+///
+/// Keyed on the services, not on the configuration: it is the `Bootstrap` override in effect -
+/// not a config value - that decides whether shards can move at all, which is why the
+/// single-shard executor and the debugging service are exempt without naming them here.
+fn check_oplog_fencing(
+    requires_oplog_fencing: bool,
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    indexed_storage_config: &IndexedStorageConfig,
+) -> anyhow::Result<()> {
+    if requires_oplog_fencing && !indexed_storage.supports_epoch_fencing() {
+        anyhow::bail!(
+            "The configured indexed storage cannot fence oplog writes on the shard epoch, and \
+             this executor runs with a shard manager that moves shards between executors. \
+             Without the fence, an executor that has lost a shard can keep writing to its \
+             agents' oplogs. Set GOLEM__INDEXED_STORAGE__TYPE to one of Postgres, Sqlite, \
+             KVStoreSqlite, MultiSqlite or KVStoreMultiSqlite. Configured storage: {}",
+            indexed_storage_config.to_safe_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod oplog_fencing_guard_tests {
+    use super::*;
+    use crate::services::golem_config::{
+        IndexedStorageInMemoryConfig, IndexedStorageMultiSqliteConfig,
+    };
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
+    use test_r::test;
+
+    #[test]
+    fn a_non_fencing_backend_under_a_real_shard_manager_is_refused() {
+        let storage = InMemoryIndexedStorage::new();
+        let config = IndexedStorageConfig::InMemory(IndexedStorageInMemoryConfig {});
+
+        let error = check_oplog_fencing(true, &storage, &config)
+            .expect_err("an unfenced backend with a real shard manager must refuse to start");
+        let message = error.to_string();
+        // The message has to name the way out, or the operator is left guessing.
+        assert!(
+            message.contains("GOLEM__INDEXED_STORAGE__TYPE"),
+            "the error must name the setting to change: {message}"
+        );
+    }
+
+    #[test]
+    fn the_same_backend_is_allowed_without_a_real_shard_manager() {
+        let storage = InMemoryIndexedStorage::new();
+        let config = IndexedStorageConfig::InMemory(IndexedStorageInMemoryConfig {});
+
+        // Single-shard mode: nothing can take the shard away, so there is no second writer.
+        check_oplog_fencing(false, &storage, &config).expect("single-shard mode needs no fence");
+    }
+
+    #[test]
+    fn a_fencing_backend_is_allowed_either_way() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
+        let config = IndexedStorageConfig::MultiSqlite(IndexedStorageMultiSqliteConfig {
+            root_dir: dir.path().to_path_buf(),
+            max_connections: 1,
+            foreign_keys: false,
+        });
+
+        check_oplog_fencing(true, &storage, &config).expect("multi-sqlite fences");
+        check_oplog_fencing(false, &storage, &config).expect("multi-sqlite fences");
     }
 }

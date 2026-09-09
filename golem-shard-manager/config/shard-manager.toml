@@ -310,6 +310,7 @@ type = "Disabled"
 # type = "Etcd"
 #
 # [persistence.config]
+# compaction_retention_revisions = 1000
 # connect_timeout = "10s"
 # endpoints = ["http://localhost:2379"]
 # leader_lease_ttl = "10s"

@@ -252,7 +252,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         'outer: loop {
             self.release_terminal_interrupt().await;
-            if let Err(error) = self.parent.shard_service().check_worker(&agent_id) {
+            // ADMISSION: gates the start of a generation, so
+            // fencing refuses new generations and never interrupts a running one.
+            if let Err(error) = self.parent.shard_service().check_admission(&agent_id) {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
                 self.release_concurrent_agent_permit();
@@ -307,6 +309,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             self.parent.complete_startup(
                                 self.start_attempt,
                                 Err(WorkerExecutorError::Interrupted { kind }),
+                            );
+                            self.stop_unloaded(None).await;
+                            break;
+                        }
+                        InterruptKind::ShardLost => {
+                            // Nothing is written: the oplog belongs to the shard's new owner
+                            // now. Whoever was waiting for this start is told to look there.
+                            self.parent.complete_startup(
+                                self.start_attempt,
+                                Err(WorkerExecutorError::ShardingNotReady),
                             );
                             self.stop_unloaded(None).await;
                             break;
@@ -661,6 +673,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 self.parent.add_and_commit_oplog(OplogEntry::interrupted()).await;
                                             }
                                             InterruptKind::Restart | InterruptKind::Jump => {}
+                                            // The oplog is the new owner's to write.
+                                            InterruptKind::ShardLost => {}
                                         }
                                         if matches!(kind, InterruptKind::Interrupt(_))
                                             && let Some(key) = current_idempotency_key
@@ -2344,6 +2358,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .fail_durable_streaming_session(idempotency_key, kind.to_string())
                         .await;
                 }
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+            }
+            // Intercepted before the arm below, which would flatten it into an
+            // `AgentError::InternalError` and append an `Error` entry to the very oplog that
+            // just refused the write.
+            Err(error @ WorkerExecutorError::OplogFenced { .. }) => {
+                let decision = self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Interrupt(InterruptKind::ShardLost),
+                    )
+                    .await;
+                let _ = self
+                    .parent
+                    .fail_durable_streaming_session(idempotency_key, error.to_string())
+                    .await;
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
             Err(error) => {

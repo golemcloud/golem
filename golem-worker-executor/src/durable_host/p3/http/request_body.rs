@@ -464,13 +464,14 @@ pub(super) async fn record_frame_entry(
     let bytes = serialize(&request)?;
     let raw = oplog.upload_raw_payload(bytes).await?;
     let payload = raw.into_payload::<HostRequest>()?;
-    Ok(oplog
+    oplog
         .add(OplogEntry::host_stream_frame(
             parent_start_index,
             HostStreamKind::P3HttpRequestBody,
             payload,
         ))
-        .await)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Loads one recorded data/trailers frame back from its `HostStreamFrame`

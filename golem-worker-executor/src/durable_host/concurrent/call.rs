@@ -3221,7 +3221,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.start_idx
                 )));
             }
-            oplog.add(end).await;
+            oplog.add(end).await?;
             self.execution_scope.release_atomic_lease();
             DurableCallCoordinator::new(ctx)
                 .finish(self.retry.function_type(), self.boundary, false)
@@ -3430,13 +3430,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let end_append = oplog.enqueue_add(end);
         let post_end_append = post_end_entry.map(|entry| oplog.enqueue_add(entry));
         let terminal = tokio::spawn(async move {
-            end_append.await;
+            end_append.await?;
             // A deferred-delivery call's mandatory post-`End` entry (e.g. its durable
             // `FinishSpan`) is appended by the same owned task: it is recorded even when the
             // completing future is torn right after the `End`, so replay can rely on it
             // unconditionally following the `End` (any discard marker chains after this task).
             if let Some(append) = post_end_append {
-                append.await;
+                append.await?;
             }
             Ok(())
         });
@@ -4758,7 +4758,7 @@ where
                     response: None,
                     forced_commit: true,
                 })
-                .await;
+                .await?;
         } else if let Some(handle) = replay_handle {
             match replay_state.await_resolution_outcome(handle).await? {
                 ResolutionOutcome::Resolved(Resolution::Completed { .. }) => {}
@@ -4791,7 +4791,7 @@ where
                             response: None,
                             forced_commit: true,
                         })
-                        .await;
+                        .await?;
                 }
             }
         }
@@ -4907,7 +4907,7 @@ where
     if is_live {
         worker
             .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
-            .await;
+            .await?;
     } else {
         crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
     }

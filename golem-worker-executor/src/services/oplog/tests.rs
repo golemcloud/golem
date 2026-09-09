@@ -28,6 +28,7 @@ use bytes::Bytes;
 use futures::FutureExt;
 use futures::stream::BoxStream;
 use golem_common::config::RedisConfig;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
@@ -609,6 +610,35 @@ impl ReadCountingIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for ReadCountingIndexedStorage {
+    async fn upsert_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        shard_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .upsert_oplog_metadata(svc_name, api_name, namespace, key, shard_epoch)
+            .await
+    }
+
+    async fn delete_oplog_metadata(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .delete_oplog_metadata(svc_name, api_name, namespace, key)
+            .await
+    }
+
+    fn supports_epoch_fencing(&self) -> bool {
+        self.inner.supports_epoch_fencing()
+    }
+
     async fn number_of_replicas(
         &self,
         svc_name: &'static str,
@@ -664,6 +694,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
         id: u64,
         mut value: Vec<u8>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.append_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -687,7 +718,16 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             value.push(0);
         }
         self.inner
-            .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                id,
+                value,
+                shard_epoch,
+            )
             .await?;
         failure.after_write_result()
     }
@@ -700,6 +740,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.append_many_attempts.fetch_add(1, Ordering::Relaxed);
         if self.discard_compressed_appends
@@ -745,7 +786,15 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             pairs
         };
         self.inner
-            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .append_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                pairs,
+                shard_epoch,
+            )
             .await?;
         failure.after_write_result()
     }
@@ -1134,6 +1183,7 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
             metadata,
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -1233,6 +1283,7 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
             metadata,
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -1326,6 +1377,7 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
             metadata,
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -1392,6 +1444,7 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
             metadata,
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -1444,6 +1497,7 @@ async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
                     metadata,
                     default_last_known_status(),
                     default_execution_status(agent_mode),
+                    None,
                 )
                 .await
         }
@@ -1452,8 +1506,8 @@ async fn primary_uses_agent_mode_commit_threshold(_tracing: &Tracing) {
     let durable = open(AgentMode::Durable, "durable-threshold").await;
     let ephemeral = open(AgentMode::Ephemeral, "ephemeral-threshold").await;
     for oplog in [&durable, &ephemeral] {
-        oplog.add(OplogEntry::suspend().rounded()).await;
-        oplog.add(OplogEntry::exited().rounded()).await;
+        oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
+        oplog.add(OplogEntry::exited().rounded()).await.unwrap();
     }
 
     assert_eq!(durable.length().await, 0);
@@ -1519,6 +1573,7 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
             metadata,
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -1587,6 +1642,7 @@ async fn create_append_reconciliation_oplog(
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
 }
@@ -1750,6 +1806,7 @@ async fn direct_identical_append_conflict_from_second_writer_remains_fatal(_trac
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let second_oplog = second_service
@@ -1760,6 +1817,7 @@ async fn direct_identical_append_conflict_from_second_writer_remains_fatal(_trac
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let entry = OplogEntry::suspend();
@@ -1838,6 +1896,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -1850,10 +1909,10 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     let entry3 = OplogEntry::exited().rounded();
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -1909,6 +1968,7 @@ async fn primary_read_range_overflow_panics_without_storage_io(_tracing: &Tracin
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     assert_panics(oplog.read_exact(start, 2)).await;
@@ -1953,6 +2013,7 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     assert_panics(oplog.read_exact(OplogIndex::INITIAL, 1)).await;
@@ -1966,6 +2027,7 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     assert_panics(oplog.read(OplogIndex::INITIAL)).await;
@@ -2047,6 +2109,7 @@ async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracin
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let stream_id = StreamId(Uuid::new_v4());
@@ -2118,7 +2181,7 @@ async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracin
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     assert_eq!(added.len(), 4);
     for (_, entry) in added {
@@ -2217,6 +2280,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let producer = DurableStreamProducer::load(
@@ -2263,6 +2327,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let restarted = DurableStreamProducer::load(
@@ -2338,6 +2403,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -2351,12 +2417,12 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let entry4 = OplogEntry::interrupted().rounded();
     let entry5 = OplogEntry::no_op().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
-    oplog.add(entry4.clone()).await;
-    oplog.add(entry5.clone()).await; // uncommitted entries
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    oplog.add(entry4.clone()).await.unwrap();
+    oplog.add(entry5.clone()).await.unwrap(); // uncommitted entries
 
     let read_count = indexed_storage.read_count();
     let buffered_entries = oplog
@@ -2445,6 +2511,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -2457,10 +2524,10 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let entry3 = OplogEntry::exited().rounded();
 
     let last_oplog_idx = oplog.current_oplog_index().await;
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -2533,6 +2600,7 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -2545,11 +2613,11 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
     let entry3 = OplogEntry::exited().rounded();
     let entry4 = OplogEntry::interrupted().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
-    oplog.add(entry4.clone()).await; // uncommitted
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    oplog.add(entry4.clone()).await.unwrap(); // uncommitted
 
     let entries = oplog
         .read_exact(OplogIndex::INITIAL, 4)
@@ -2602,6 +2670,7 @@ async fn ephemeral_read_exact_committed_only(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -2609,10 +2678,10 @@ async fn ephemeral_read_exact_committed_only(_tracing: &Tracing) {
     let entry2 = OplogEntry::exited().rounded();
     let entry3 = OplogEntry::interrupted().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
-    oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
+    oplog.add(entry3.clone()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // All committed, no buffer entries
     let entries = oplog
@@ -2666,14 +2735,15 @@ async fn ephemeral_read_exact_uncommitted_only(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
     let entry1 = OplogEntry::suspend().rounded();
     let entry2 = OplogEntry::exited().rounded();
 
-    oplog.add(entry1.clone()).await;
-    oplog.add(entry2.clone()).await;
+    oplog.add(entry1.clone()).await.unwrap();
+    oplog.add(entry2.clone()).await.unwrap();
     // No commit — entries only in the buffer
 
     let entries = oplog
@@ -2727,6 +2797,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -2741,16 +2812,16 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
             retry_policy_state: None,
         }
         .rounded();
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
         entries.push(entry);
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Add 2 more uncommitted
     let uncommitted1 = OplogEntry::interrupted().rounded();
     let uncommitted2 = OplogEntry::suspend().rounded();
-    oplog.add(uncommitted1.clone()).await;
-    oplog.add(uncommitted2.clone()).await;
+    oplog.add(uncommitted1.clone()).await.unwrap();
+    oplog.add(uncommitted2.clone()).await.unwrap();
     entries.push(uncommitted1);
     entries.push(uncommitted2);
 
@@ -2829,6 +2900,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -2849,15 +2921,15 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
     let initial_oplog_idx = oplog.current_oplog_index().await;
 
     for entry in &entries {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Add 2 uncommitted entries
     let uncommitted1 = OplogEntry::interrupted().rounded();
     let uncommitted2 = OplogEntry::suspend().rounded();
-    oplog.add(uncommitted1.clone()).await;
-    oplog.add(uncommitted2.clone()).await;
+    oplog.add(uncommitted1.clone()).await.unwrap();
+    oplog.add(uncommitted2.clone()).await.unwrap();
     entries.push(uncommitted1);
     entries.push(uncommitted2);
 
@@ -2952,10 +3024,11 @@ async fn ephemeral_read_exact_zero_returns_empty(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
-    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
 
     let entries = oplog.read_exact(OplogIndex::INITIAL, 0).await;
     assert!(entries.is_empty());
@@ -2990,6 +3063,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -3051,9 +3125,9 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         description: desc.clone(),
     }
     .rounded();
-    oplog.add(entry4.clone()).await;
+    oplog.add(entry4.clone()).await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
     let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
@@ -3193,6 +3267,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let before = oplog.current_oplog_index().await;
@@ -3272,6 +3347,7 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let before = oplog.current_oplog_index().await;
@@ -3325,6 +3401,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -3397,9 +3474,9 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         description: desc.clone(),
     }
     .rounded();
-    oplog.add(entry4.clone()).await;
+    oplog.add(entry4.clone()).await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let r_start = oplog.read(last_oplog_idx.next()).await.rounded();
     let r_end = oplog.read(last_oplog_idx.next().next()).await.rounded();
@@ -3611,6 +3688,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let mut entries = Vec::new();
@@ -3632,8 +3710,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
             durable_function_type: DurableFunctionType::ReadLocal,
         }
         .rounded();
-        oplog.add(entry.clone()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(entry.clone()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         entries.push(entry);
     }
 
@@ -3647,6 +3725,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await
             .length()
@@ -3678,6 +3757,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
         .length()
@@ -3772,6 +3852,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -3792,13 +3873,13 @@ async fn read_from_archive_impl(use_blob: bool) {
     let initial_oplog_idx = oplog.current_oplog_index().await;
 
     for entry in &entries {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     let uncommitted1 = OplogEntry::interrupted().rounded();
     let uncommitted2 = OplogEntry::suspend().rounded();
-    oplog.add(uncommitted1.clone()).await;
-    oplog.add(uncommitted2.clone()).await;
+    oplog.add(uncommitted1.clone()).await.unwrap();
+    oplog.add(uncommitted2.clone()).await.unwrap();
 
     entries.push(uncommitted1);
     entries.push(uncommitted2);
@@ -3813,6 +3894,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
         .length()
@@ -3960,6 +4042,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -4094,9 +4177,10 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
             },
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let read_before_archive = oplog_service
         .read_exact(
@@ -4395,6 +4479,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let current = oplog.current_oplog_index().await;
@@ -4490,11 +4575,12 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
             },
             default_last_known_status(),
             default_execution_status(agent_mode),
+            None,
         )
         .await;
 
-    oplog.add(OplogEntry::no_op()).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.add(OplogEntry::no_op()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
     if agent_mode == AgentMode::Ephemeral {
         EphemeralOplog::try_archive(&oplog)
             .await
@@ -4584,6 +4670,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     info!("FIRST OPEN DONE");
@@ -4605,9 +4692,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let initial_oplog_idx = oplog.current_oplog_index().await;
 
     for entry in &entries {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -4618,6 +4705,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
         .length()
@@ -4648,6 +4736,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await
     } else if reopen == Reopen::Full {
@@ -4677,6 +4766,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await
     } else {
@@ -4697,12 +4787,12 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .collect();
 
     for (n, entry) in entries.iter().enumerate() {
-        oplog.add(entry.clone()).await;
+        oplog.add(entry.clone()).await.unwrap();
         if n % 100 == 0 {
-            oplog.commit(CommitLevel::Always).await;
+            oplog.commit(CommitLevel::Always).await.unwrap();
         }
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -4713,6 +4803,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
         .length()
@@ -4743,6 +4834,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await
     } else if reopen == Reopen::Full {
@@ -4772,6 +4864,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await
     } else {
@@ -4789,8 +4882,9 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             }
             .rounded(),
         )
-        .await;
-    oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(oplog);
 
     let entry1 = oplog_service
@@ -4936,6 +5030,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -4959,9 +5054,9 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             .collect();
 
         for entry in &entries {
-            oplog.add(entry.clone()).await;
+            oplog.add(entry.clone()).await.unwrap();
         }
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
@@ -4985,6 +5080,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
         .length()
@@ -5093,12 +5189,13 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await;
         for entry in &entries {
-            oplog.add(entry.clone()).await;
+            oplog.add(entry.clone()).await.unwrap();
         }
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
 
         let result = MultiLayerOplog::try_archive(&oplog).await;
         drop(oplog);
@@ -5119,6 +5216,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
         .length()
@@ -5159,6 +5257,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await;
         let result = MultiLayerOplog::try_archive(&oplog).await;
@@ -5176,6 +5275,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await
         .length()
@@ -5272,6 +5372,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await;
 
@@ -5292,7 +5393,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             "test".to_string(),
                             "test".to_string(),
                         ))
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
             2 => {
@@ -5311,7 +5413,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             "test".to_string(),
                             "test".to_string(),
                         ))
-                        .await;
+                        .await
+                        .unwrap();
                 }
 
                 debug!("[{r:?}] => archiving {agent_id} to tertiary layer");
@@ -5326,7 +5429,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             "test".to_string(),
                             "test".to_string(),
                         ))
-                        .await;
+                        .await
+                        .unwrap();
                 }
             }
             _ => unreachable!(),
@@ -5430,9 +5534,10 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(mode),
+                None,
             )
             .await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         owned_agent_id
     };
 
@@ -5537,9 +5642,10 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
             make_agent_metadata(worker_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
-    initial_oplog.commit(CommitLevel::Always).await;
+    initial_oplog.commit(CommitLevel::Always).await.unwrap();
     drop(initial_oplog);
 
     // Wait for the weak reference to become invalid so the cache entry is evicted
@@ -5576,6 +5682,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
                         make_agent_metadata(worker_id.clone(), account_id, environment_id),
                         default_last_known_status(),
                         default_execution_status(AgentMode::Durable),
+                        None,
                     )
                     .await;
 
@@ -5583,10 +5690,10 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
                 // different oplog instances (due to the get_or_open race), they'll
                 // have independent last_committed_idx and produce duplicate ids,
                 // causing a unique key violation on commit.
-                oplog.add(OplogEntry::suspend()).await;
-                // Use fallible_add pattern: commit can panic on unique key violation;
+                oplog.add(OplogEntry::suspend()).await.unwrap();
+                // `add` is fallible now: commit can panic on unique key violation;
                 // we use the Oplog trait method directly and let it propagate.
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
 
                 tokio::task::yield_now().await;
             }
@@ -5791,6 +5898,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let ephemeral_oplog = oplog_service
@@ -5801,10 +5909,11 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
-    durable_oplog.commit(CommitLevel::Always).await;
-    ephemeral_oplog.commit(CommitLevel::Always).await;
+    durable_oplog.commit(CommitLevel::Always).await.unwrap();
+    ephemeral_oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Both namespaces report the oplog exists, independently.
     assert!(
@@ -5899,9 +6008,10 @@ async fn make_workers(
                 make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(mode),
+                None,
             )
             .await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         out.push(owned_agent_id);
     }
     out
@@ -6149,6 +6259,7 @@ async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &T
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -6194,6 +6305,7 @@ async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &T
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     assert_eq!(
@@ -6243,6 +6355,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -6267,7 +6380,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
         .unwrap();
     assert_eq!(start_idx, last_oplog_idx.next());
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Read back from the service (storage), so the payload reference carries no in-memory cache and
     // the download must hit blob storage.
@@ -6331,6 +6444,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -6353,7 +6467,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
     // Inline payloads are already durable: waiting is a no-op.
     pending.wait().await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, start_idx, 1)
@@ -6455,6 +6569,7 @@ async fn multilayer_reserved_start_delegates_to_primary_and_tracks_last_index(_t
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -6483,7 +6598,7 @@ async fn multilayer_reserved_start_delegates_to_primary_and_tracks_last_index(_t
 
     first_pending.wait().await.unwrap();
     second_pending.wait().await.unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let entries = oplog_service
         .read_exact(&owned_agent_id, AgentMode::Durable, first_idx, 2)
@@ -6559,6 +6674,7 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
             metadata,
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
+            None,
         )
         .await;
 
@@ -6776,6 +6892,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -6806,7 +6923,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     assert_eq!(small_idx, large_idx.next());
     small_pending.wait().await.unwrap();
 
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     // Read back through the service stack (no in-memory cache).
     let entries = oplog_service
@@ -6867,4 +6984,242 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
         }
         other => panic!("unexpected request: {other:?}"),
     }
+}
+
+/// The fence, end to end through the real oplog service and a backend that enforces it.
+///
+/// SQLite rather than the in-memory backend on purpose: in-memory does not fence, so it would
+/// pass these no matter what the service does.
+async fn fencing_oplog_service(tempdir: &tempfile::TempDir, name: &str) -> PrimaryOplogService {
+    let config = golem_common::config::DbSqliteConfig {
+        database: tempdir
+            .path()
+            .join(format!("{name}.db"))
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 4,
+        foreign_keys: false,
+    };
+    let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(SqliteIndexedStorage::configured(&config).await.unwrap());
+    assert!(
+        indexed_storage.supports_epoch_fencing(),
+        "this test is meaningless on a backend that cannot fence"
+    );
+    PrimaryOplogService::new(
+        indexed_storage,
+        Arc::new(InMemoryBlobStorage::new()),
+        100,
+        1,
+        128,
+        RetryConfig::default(),
+    )
+    .await
+}
+
+#[test]
+async fn an_oplog_opened_at_the_owning_epoch_can_be_written(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let service = fencing_oplog_service(&tempdir, "owning").await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "owned".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    let oplog = service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(7)),
+        )
+        .await;
+
+    // Opening records the epoch, so the writes that follow are accepted.
+    oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(oplog.length().await, 1);
+}
+
+#[test]
+async fn an_oplog_opened_at_a_stale_epoch_refuses_every_write(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "moved".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    // Two services over one database, because that is what two executors are. A single service
+    // would not do: `OpenOplogs` caches by agent id, so a second `open` on it hands back the
+    // first oplog - epoch and all - instead of constructing a new one.
+    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
+    let losing_executor = fencing_oplog_service(&tempdir, "shared").await;
+
+    // The shard's new owner takes it over at a higher epoch and writes.
+    let owner = owning_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(9)),
+        )
+        .await;
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+
+    // The executor that lost the shard still believes it holds epoch 8. It is refused at its
+    // very first write, and told which epoch owns the oplog now.
+    let loser = losing_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(8)),
+        )
+        .await;
+    // `add` only buffers; the storage write happens at the commit, so the refusal is asserted
+    // over the pair rather than over `add` alone.
+    let write = async {
+        loser.add(OplogEntry::exited().rounded()).await?;
+        loser.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    match write {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.agent_id, agent_id);
+            assert_eq!(fence.expected_epoch, golem_common::model::ShardEpoch(8));
+            assert_eq!(
+                fence.actual_epoch,
+                Some(golem_common::model::ShardEpoch(9)),
+                "the fence must name the epoch that owns the oplog now"
+            );
+        }
+        other => panic!("expected the write to be fenced, got {other:?}"),
+    }
+
+    // ... and stays refused: the oplog is poisoned, so it does not even ask the storage again.
+    assert!(matches!(
+        loser.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(
+        owner.length().await,
+        1,
+        "the losing executor must not have appended to the owner's oplog"
+    );
+}
+
+#[test]
+async fn an_oplog_opened_without_an_epoch_asserts_nothing(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let service = fencing_oplog_service(&tempdir, "unfenced").await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "unfenced".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    // `None` is what the debugging service and a fork of a remote target pass: no ownership
+    // claim, so the record is neither written nor checked.
+    let oplog = service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await;
+    oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(oplog.length().await, 1);
+}
+
+#[test]
+async fn an_executor_that_loses_the_shard_mid_flight_is_refused_at_its_next_write(
+    _tracing: &Tracing,
+) {
+    // The realistic sequence, and the one only the per-write assertion can catch: this executor
+    // opened the oplog while it still owned the shard, so its epoch record went in cleanly and
+    // nothing was poisoned at open. The shard moves underneath it afterwards.
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "mid-flight".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    let losing_executor = fencing_oplog_service(&tempdir, "mid-flight").await;
+    let gaining_executor = fencing_oplog_service(&tempdir, "mid-flight").await;
+
+    let loser = losing_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(4)),
+        )
+        .await;
+    loser.add(OplogEntry::suspend().rounded()).await.unwrap();
+    loser.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(loser.length().await, 1, "it owned the shard at this point");
+
+    // The shard is re-granted to another executor, which opens the oplog at the new epoch.
+    let _gainer = gaining_executor
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(5)),
+        )
+        .await;
+
+    // The loser's already-open oplog is not poisoned - it had no reason to be - so this is the
+    // per-write epoch assertion doing the work, and nothing of its is written.
+    let write = async {
+        loser.add(OplogEntry::exited().rounded()).await?;
+        loser.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    match write {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.expected_epoch, golem_common::model::ShardEpoch(4));
+            assert_eq!(fence.actual_epoch, Some(golem_common::model::ShardEpoch(5)));
+        }
+        other => panic!("expected the in-flight write to be fenced, got {other:?}"),
+    }
+    assert_eq!(
+        loser.length().await,
+        1,
+        "the refused entry must not be there"
+    );
 }

@@ -1081,6 +1081,118 @@ async fn a_write_after_the_leader_key_is_recreated_is_rejected_as_leadership_los
     );
 }
 
+#[test]
+#[tracing::instrument(skip_all)]
+async fn compact_drops_the_history_behind_the_retention(etcd: &Arc<DockerEtcd>) {
+    // etcd keeps every past revision of a key until told to compact, and every lease renewal is
+    // a write, so a leader that never compacted would fill the backend within hours.
+    let store = etcd_store_with_retention(etcd, 3).await;
+    let (_, fence) = store.mint_leader_key().await;
+    let persistence = store.persistence_with(fence).await;
+
+    let (revisions, latest) = write_six_times(&persistence).await;
+    let target = latest - 3;
+
+    persistence
+        .compact(latest)
+        .await
+        .expect("Compacting should succeed");
+
+    let mut kv = store.kv().await;
+    let at = |revision| Some(etcd_client::GetOptions::new().with_revision(revision));
+    // The oldest write is well behind the target, so its history is gone: etcd answers a read at a
+    // compacted revision with OutOfRange, not an empty result.
+    let compacted = kv.get(STATE_KEY, at(revisions[0])).await;
+    assert!(
+        matches!(&compacted, Err(etcd_client::Error::GRpcStatus(status)) if status.code() == tonic::Code::OutOfRange),
+        "History behind the retention must be compacted away, got {compacted:?}"
+    );
+    // The target itself and everything after it survives, so the retention is what it says.
+    for revision in [target, latest] {
+        let kept = kv
+            .get(STATE_KEY, at(revision))
+            .await
+            .unwrap_or_else(|error| panic!("Revision {revision} must still be readable: {error}"));
+        assert_eq!(
+            kept.kvs().len(),
+            1,
+            "Revision {revision} must still hold the state"
+        );
+    }
+
+    // Nothing new was stored, so the leader has nothing to compact and skips the round trip.
+    persistence
+        .compact(latest)
+        .await
+        .expect("Re-compacting to the same target must be a no-op, not an error");
+
+    // Someone else - an operator, or a previous leader - compacted further than this leader would.
+    // The history it wanted gone is gone, so that is success, not a failure to log every pass.
+    kv.compact(latest - 1, None)
+        .await
+        .expect("Compacting by hand should succeed");
+    let (_, fence) = store.mint_leader_key().await;
+    let fresh_leader = store.persistence_with(fence).await;
+    fresh_leader
+        .compact(latest)
+        .await
+        .expect("A target already compacted past must be accepted");
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_zero_retention_disables_compaction(etcd: &Arc<DockerEtcd>) {
+    // On an etcd cluster shared with other applications, compacting would drop their history too,
+    // so `0` hands compaction back to the cluster's operator.
+    let store = etcd_store_with_retention(etcd, 0).await;
+    let (_, fence) = store.mint_leader_key().await;
+    let persistence = store.persistence_with(fence).await;
+
+    let (revisions, latest) = write_six_times(&persistence).await;
+
+    persistence
+        .compact(latest)
+        .await
+        .expect("A disabled compaction should succeed by doing nothing");
+
+    let oldest = store
+        .kv()
+        .await
+        .get(
+            STATE_KEY,
+            Some(etcd_client::GetOptions::new().with_revision(revisions[0])),
+        )
+        .await
+        .expect("With compaction disabled the oldest revision must still be readable");
+    assert_eq!(oldest.kvs().len(), 1);
+}
+
+/// A wiped etcd store whose persistence compacts to the given retention.
+async fn etcd_store_with_retention(etcd: &Arc<DockerEtcd>, retention: u64) -> EtcdStore {
+    let mut store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
+        .new_etcd_store()
+        .await;
+    store.config.compaction_retention_revisions = retention;
+    store
+}
+
+/// Six sequential writes of the same state, returning their revisions and the last of them.
+async fn write_six_times(
+    persistence: &Arc<dyn RoutingTablePersistence>,
+) -> (Vec<ExternalRevision>, ExternalRevision) {
+    let shard_state = sample_shard_state(NUMBER_OF_SHARDS);
+    let mut revisions = Vec::new();
+    let mut prev_revision = NO_REVISION;
+    for _ in 0..6 {
+        prev_revision = persistence
+            .write(&shard_state, prev_revision)
+            .await
+            .expect("Writing the shard state should succeed");
+        revisions.push(prev_revision);
+    }
+    (revisions, prev_revision)
+}
+
 fn granted_at() -> DateTime<Utc> {
     DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp")
 }

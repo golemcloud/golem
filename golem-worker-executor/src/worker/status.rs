@@ -1716,6 +1716,7 @@ mod test {
     use golem_common::base_model::OplogIndex;
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
+    use golem_common::model::ShardEpoch;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, Principal};
     use golem_common::model::application::ApplicationId;
@@ -2806,6 +2807,7 @@ mod test {
                     trace_states: vec![],
                     invocation_context: vec![],
                     wallet_pin: None,
+                    shard_epoch: None,
                 },
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);
@@ -3237,6 +3239,7 @@ mod test {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
@@ -3249,6 +3252,7 @@ mod test {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
@@ -3261,6 +3265,7 @@ mod test {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }

@@ -2359,9 +2359,10 @@ mod rejection_mapping_tests {
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
-    use golem_common::model::{AgentId, RetryConfig, RoutingTable};
+    use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
     use golem_service_base::clients::shard_manager::{
-        BatchRenewalEntry, QuotaError, ShardManager, ShardManagerError,
+        BatchRenewalEntry, QuotaError, ShardLease, ShardLeaseError, ShardManager,
+        ShardManagerError, ShardRegistration,
     };
     use golem_service_base::grpc::client::{GrpcClientConfig, MultiTargetGrpcClient};
     use golem_service_base::model::auth::AuthCtx;
@@ -2424,7 +2425,24 @@ mod rejection_mapping_tests {
             &self,
             _port: u16,
             _pod_name: Option<String>,
-        ) -> Result<u32, ShardManagerError> {
+            _executor_id: uuid::Uuid,
+        ) -> Result<ShardRegistration, ShardManagerError> {
+            unreachable!()
+        }
+
+        async fn renew_shard_lease(
+            &self,
+            _executor_id: uuid::Uuid,
+            _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
+        ) -> Result<ShardLease, ShardLeaseError> {
+            unreachable!()
+        }
+
+        async fn deregister(
+            &self,
+            _executor_id: uuid::Uuid,
+            _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
+        ) -> Result<(), ShardLeaseError> {
             unreachable!()
         }
 
@@ -2518,11 +2536,6 @@ mod rejection_mapping_tests {
         );
         unimplemented_unary!(revoke_shards, RevokeShardsRequest, RevokeShardsResponse);
         unimplemented_unary!(assign_shards, AssignShardsRequest, AssignShardsResponse);
-        unimplemented_unary!(
-            set_shard_assignment,
-            SetShardAssignmentRequest,
-            SetShardAssignmentResponse
-        );
         unimplemented_unary!(
             get_agent_metadata,
             GetAgentMetadataRequest,

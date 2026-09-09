@@ -62,39 +62,42 @@ impl InMemoryOplog {
 
 #[async_trait]
 impl Oplog for InMemoryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
-        OplogIndex::from_u64(entries.len() as u64)
+        Ok(OplogIndex::from_u64(entries.len() as u64))
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
         let index = OplogIndex::from_u64(entries.len() as u64);
-        Box::pin(async move { index })
+        Box::pin(async move { Ok(index) })
     }
 
     async fn add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
         let second_idx = OplogIndex::from_u64(entries.len() as u64);
-        (first_idx, second_idx)
+        Ok((first_idx, second_idx))
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(OrderedOplogStart {
             index,
             entry,
@@ -105,7 +108,7 @@ impl Oplog for InMemoryOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         let index = OplogIndex::from_u64(entries.len() as u64 + 1);
         let (serialized_request, build_start) = build_request(index)?;
@@ -122,8 +125,11 @@ impl Oplog for InMemoryOplog {
         0
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        BTreeMap::new()
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+        Ok(BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -237,6 +243,7 @@ fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
         trace_states: Vec::new(),
         invocation_context: Vec::new(),
         wallet_pin: Some(wallet_pin),
+        shard_epoch: None,
     }
 }
 
@@ -1041,7 +1048,7 @@ fn fork_start() -> OplogEntry {
 async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in entries {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
@@ -1073,9 +1080,9 @@ async fn held_completed_reconstruction() -> (
     let parent = OplogIndex::from_u64(1);
     let (start, identity) = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
-    oplog.add(start).await;
-    oplog.add(end_for(2, 1)).await;
+    oplog.add(noop()).await.unwrap();
+    oplog.add(start).await.unwrap();
+    oplog.add(end_for(2, 1)).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -1099,7 +1106,7 @@ async fn held_completed_reconstruction() -> (
 #[test]
 async fn growing_replay_target_revokes_published_live_state() {
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
+    oplog.add(noop()).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -1110,7 +1117,7 @@ async fn growing_replay_target_revokes_published_live_state() {
     .expect("failed to build replay state");
     assert!(replay.is_live_published());
 
-    let new_target = oplog.add(noop()).await;
+    let new_target = oplog.add(noop()).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1146,7 +1153,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
     .await
     .expect("primary transition did not enter settling");
 
-    let new_target = oplog.add(noop()).await;
+    let new_target = oplog.add(noop()).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1256,10 +1263,10 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
     let (first_start, identity) = rejected_tool_reconstruction_start(parent);
     let (second_start, _) = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
-    oplog.add(first_start).await;
-    oplog.add(second_start).await;
-    oplog.add(end_for(3, 2)).await;
+    oplog.add(noop()).await.unwrap();
+    oplog.add(first_start).await.unwrap();
+    oplog.add(second_start).await.unwrap();
+    oplog.add(end_for(3, 2)).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -1305,7 +1312,7 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
         "the incomplete candidate bypassed the completed reconstruction fence"
     );
 
-    let new_target = oplog.add(end_for(2, 1)).await;
+    let new_target = oplog.add(end_for(2, 1)).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1380,7 +1387,7 @@ async fn concurrent_same_target_transitions_are_idempotent() {
 async fn old_settler_cannot_publish_a_grown_target() {
     let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
     let old_target = replay.switch_cursor_to_live().await.unwrap();
-    let new_target = oplog.add(noop()).await;
+    let new_target = oplog.add(noop()).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1430,7 +1437,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
 #[test]
 async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
+    oplog.add(noop()).await.unwrap();
     let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
     let replay = ReplayState::new_for_owner(
         test_agent_id(),
@@ -1528,7 +1535,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
         },
         start_now(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let replay_state = test_replay_state(owned_agent_id, oplog, DeletedRegions::default(), None)
@@ -1653,7 +1660,7 @@ async fn permission_events_are_recovered_from_skipped_regions() {
         },
         start_now(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1688,7 +1695,7 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
         },
         start_now(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1815,7 +1822,7 @@ async fn missing_start_claim_remains_divergence_while_replaying() {
 async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), start_with_parent(1)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1845,7 +1852,7 @@ async fn assert_request_payload_failure_is_not_reclassified_as_deleted_region(
         start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
         start_now_with_request_payload(failing_payload),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1908,7 +1915,7 @@ async fn genuine_request_mismatch_still_reports_matching_deleted_region() {
         start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
         start_now_with_request_payload(OplogPayload::Inline(Box::new(different_request))),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1931,7 +1938,7 @@ async fn genuine_request_mismatch_still_reports_matching_deleted_region() {
 #[test]
 async fn request_matching_downloads_uncached_external_payloads() {
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
+    oplog.add(noop()).await.unwrap();
 
     let first_request: HostRequest = HostRequestPollCount { count: 1 }.into();
     let second_request: HostRequest = HostRequestPollCount { count: 2 }.into();
@@ -1949,7 +1956,8 @@ async fn request_matching_downloads_uncached_external_payloads() {
                 request: Some(payload),
                 durable_function_type: DurableFunctionType::ReadLocal,
             })
-            .await;
+            .await
+            .unwrap();
     }
 
     let oplog: Arc<dyn Oplog> = oplog;
@@ -3425,7 +3433,7 @@ async fn marker_in_deleted_region_delivers_end_normally() {
     // the still-visible End must be delivered normally.
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 42), discarded_for(2)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped =
@@ -3468,7 +3476,7 @@ async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
         delivered_for(2),
         noop(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped =
@@ -3500,7 +3508,7 @@ async fn duplicate_completion_discarded_markers_fail_construction() {
         discarded_for(2),
         discarded_for(2),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let err = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
@@ -3522,7 +3530,7 @@ async fn conflicting_completion_markers_fail_construction() {
         delivered_for(2),
         discarded_for(2),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let err = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
@@ -3544,7 +3552,7 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
     // already-recorded marker must be idempotent, not a duplicate-marker error.
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 42)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let rs = test_replay_state(
@@ -3555,7 +3563,7 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
     )
     .await
     .expect("failed to build replay state");
-    let marker_idx = oplog.add(discarded_for(2)).await;
+    let marker_idx = oplog.add(discarded_for(2)).await.unwrap();
     rs.record_discarded_completion(OplogIndex::from_u64(2), marker_idx);
     rs.set_replay_target(marker_idx)
         .await
@@ -4310,7 +4318,7 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
     // jumps the cursor over the deleted tail straight to the target (4).
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), log_entry(), log_entry()] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -4876,7 +4884,7 @@ async fn orphan_end_with_deleted_start_is_skipped() {
         start_now(),
         end_for(4, 2),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -4915,7 +4923,7 @@ async fn orphan_cancelled_with_deleted_start_is_skipped() {
     // [NoOp(1), Start(2), Cancelled(2→3)] with deleted region [2, 2].
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), cancelled_for(2)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -4942,7 +4950,7 @@ async fn positional_reader_skips_orphan_terminal() {
     // must consume the orphan End at 3 and return the NoOp at 4.
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 1), noop()] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -4966,7 +4974,7 @@ async fn deleted_terminal_reports_incomplete() {
     // [NoOp(1), Start(2), End(2→3)] with deleted region [3, 3].
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 1)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -5095,7 +5103,7 @@ async fn replay_skips_deleted_regions_fuzz() {
 
         let oplog = Arc::new(InMemoryOplog::new());
         for entry in entries {
-            oplog.add(entry).await;
+            oplog.add(entry).await.unwrap();
         }
         let oplog: Arc<dyn Oplog> = oplog;
         let skipped = DeletedRegions::from_regions(regions.iter().map(|&(s, e)| OplogRegion {

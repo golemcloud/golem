@@ -17,7 +17,8 @@ use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    OplogAddReceipt, OplogConstructor, OplogError, OplogFence, OplogService, OrderedOplogStart,
+    ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -30,6 +31,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
@@ -198,7 +200,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         let current_assignment = self.shard_service.current_assignment()?;
         let agent_id = Self::generate_local_agent_id(
             plugin_component_id,
-            &current_assignment.shard_ids,
+            &current_assignment.shard_id_set(),
             current_assignment.number_of_shards,
         );
 
@@ -414,7 +416,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
         let assignment = self.shard_service.current_assignment()?;
         let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
-        Ok(assignment.shard_ids.contains(&shard_id))
+        Ok(assignment.contains(&shard_id))
     }
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
@@ -430,7 +432,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         &entry.get().owned_agent_id.agent_id,
                         new_assignment.number_of_shards,
                     );
-                    if new_assignment.shard_ids.contains(&shard_id) {
+                    if new_assignment.contains(&shard_id) {
                         continue;
                     } else {
                         // The worker is removed from the in-memory map, but we leave it running to finish any pending invocations.
@@ -518,6 +520,7 @@ struct CreateOplogConstructor {
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     plugin_max_commit_count: usize,
     plugin_max_elapsed_time: Duration,
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl CreateOplogConstructor {
@@ -536,6 +539,7 @@ impl CreateOplogConstructor {
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         plugin_max_commit_count: usize,
         plugin_max_elapsed_time: Duration,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Self {
         Self {
             owned_agent_id,
@@ -551,6 +555,7 @@ impl CreateOplogConstructor {
             execution_status,
             plugin_max_commit_count,
             plugin_max_elapsed_time,
+            shard_epoch,
         }
     }
 }
@@ -576,6 +581,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         self.initial_worker_metadata.clone(),
                         self.last_known_status.clone(),
                         self.execution_status.clone(),
+                        self.shard_epoch,
                     )
                     .await
             } else {
@@ -587,6 +593,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         self.initial_worker_metadata.clone(),
                         self.last_known_status.clone(),
                         self.execution_status.clone(),
+                        self.shard_epoch,
                     )
                     .await
             }
@@ -599,6 +606,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
+                    self.shard_epoch,
                 )
                 .await
         };
@@ -673,6 +681,7 @@ impl OplogService for ForwardingOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -691,6 +700,7 @@ impl OplogService for ForwardingOplogService {
                     execution_status,
                     self.plugin_max_commit_count,
                     self.plugin_max_elapsed_time,
+                    shard_epoch,
                 ),
             )
             .await
@@ -704,6 +714,7 @@ impl OplogService for ForwardingOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -722,6 +733,7 @@ impl OplogService for ForwardingOplogService {
                     execution_status,
                     self.plugin_max_commit_count,
                     self.plugin_max_elapsed_time,
+                    shard_epoch,
                 ),
             )
             .await
@@ -735,6 +747,7 @@ impl OplogService for ForwardingOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -753,6 +766,7 @@ impl OplogService for ForwardingOplogService {
                     execution_status,
                     self.plugin_max_commit_count,
                     self.plugin_max_elapsed_time,
+                    shard_epoch,
                 ),
             )
             .await
@@ -862,29 +876,29 @@ pub struct ForwardingOplog {
 enum ForwardingJob {
     Add {
         entry: OplogEntry,
-        done: tokio::sync::oneshot::Sender<OplogIndex>,
+        done: tokio::sync::oneshot::Sender<Result<OplogIndex, OplogError>>,
     },
     AddDurableStreamBatch {
         make_batch: DurableStreamBatchBuilder,
-        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
+        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, OplogError>>,
     },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+        done: tokio::sync::oneshot::Sender<Result<(OplogIndex, OplogIndex), OplogError>>,
     },
     AddStart {
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, OplogError>>,
     },
     AddIndexedStart {
         build_request: IndexedReservedStartBuilder,
-        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, OplogError>>,
     },
     Commit {
         level: CommitLevel,
-        done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
+        done: tokio::sync::oneshot::Sender<Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>>,
     },
     SetWorkerEventService {
         service: Arc<dyn WorkerEventService>,
@@ -1031,40 +1045,46 @@ impl ForwardingOplog {
                         let _ = done.send(result);
                     }
                     ForwardingJob::Commit { level, done } => {
-                        let mut result = state.inner.commit(level).await;
-                        // Update last_committed_idx from committed entries
-                        if let Some(max_idx) = result.keys().max()
-                            && *max_idx > state.last_committed_idx
-                        {
-                            state.last_committed_idx = *max_idx;
+                        match state.inner.commit(level).await {
+                            Err(error) => {
+                                let _ = done.send(Err(error));
+                            }
+                            Ok(mut result) => {
+                                // Update last_committed_idx from committed entries
+                                if let Some(max_idx) = result.keys().max()
+                                    && *max_idx > state.last_committed_idx
+                                {
+                                    state.last_committed_idx = *max_idx;
+                                }
+                                state.commit_count += 1;
+                                if state.commit_count >= max_commit_count {
+                                    // Spanned inside the threshold check, not around the commit:
+                                    // this arm runs per oplog commit, the flush only every
+                                    // `max_commit_count` of them. The actor has no ambient span,
+                                    // so without this the flush would be untraceable.
+                                    //
+                                    // Named apart from the periodic `oplog_forwarding_flush` so the
+                                    // two triggers stay distinguishable in a trace backend. The link
+                                    // points at the worker's startup rather than at the commit that
+                                    // tripped the threshold: the actor receives commits over a
+                                    // channel, so the committing invocation's context is not
+                                    // available here.
+                                    state
+                                        .try_flush()
+                                        .instrument(related_span!(
+                                            flush_origin,
+                                            tracing::Level::INFO,
+                                            "oplog_forwarding_threshold_flush",
+                                            agent_id = %agent_id
+                                        ))
+                                        .await;
+                                }
+                                // Merge entries committed directly to inner during flush
+                                // so the Worker folds them into AgentStatusRecord
+                                result.append(&mut state.pending_direct_commits);
+                                let _ = done.send(Ok(result));
+                            }
                         }
-                        state.commit_count += 1;
-                        if state.commit_count >= max_commit_count {
-                            // Spanned inside the threshold check, not around the commit:
-                            // this arm runs per oplog commit, the flush only every
-                            // `max_commit_count` of them. The actor has no ambient span,
-                            // so without this the flush would be untraceable.
-                            //
-                            // Named apart from the periodic `oplog_forwarding_flush` so the
-                            // two triggers stay distinguishable in a trace backend. The link
-                            // points at the worker's startup rather than at the commit that
-                            // tripped the threshold: the actor receives commits over a
-                            // channel, so the committing invocation's context is not
-                            // available here.
-                            state
-                                .try_flush()
-                                .instrument(related_span!(
-                                    flush_origin,
-                                    tracing::Level::INFO,
-                                    "oplog_forwarding_threshold_flush",
-                                    agent_id = %agent_id
-                                ))
-                                .await;
-                        }
-                        // Merge entries committed directly to inner during flush
-                        // so the Worker folds them into AgentStatusRecord
-                        result.append(&mut state.pending_direct_commits);
-                        let _ = done.send(result);
                     }
                     ForwardingJob::SetWorkerEventService { service, done } => {
                         state.worker_event_service = Some(service);
@@ -1178,7 +1198,7 @@ impl Oplog for ForwardingOplog {
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         self.run_job(|done| ForwardingJob::AddDurableStreamBatch { make_batch, done })
             .await
     }
@@ -1187,7 +1207,10 @@ impl Oplog for ForwardingOplog {
         self.inner.drop_prefix(last_dropped_id).await
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         self.run_job(|done| ForwardingJob::Commit { level, done })
             .await
     }
@@ -1253,7 +1276,7 @@ impl Oplog for ForwardingOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         self.run_job(|done| ForwardingJob::AddPair {
             start,
             make_second,
@@ -1266,7 +1289,7 @@ impl Oplog for ForwardingOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         self.run_job(|done| ForwardingJob::AddStart {
             serialized_request,
             build_start,
@@ -1278,7 +1301,7 @@ impl Oplog for ForwardingOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         self.run_job(|done| ForwardingJob::AddIndexedStart {
             build_request,
             done,
@@ -1486,14 +1509,19 @@ impl ForwardingOplogState {
                         target_agent = %id,
                         "Oplog processor: resolved target plugin worker"
                     );
-                    self.write_checkpoint(
-                        grant_id,
-                        &id,
-                        live.confirmed_up_to,
-                        live.confirmed_up_to,
-                        live.last_batch_start,
-                    )
-                    .await;
+                    if self
+                        .write_checkpoint(
+                            grant_id,
+                            &id,
+                            live.confirmed_up_to,
+                            live.confirmed_up_to,
+                            live.last_batch_start,
+                        )
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
                     if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                         s.target_agent_id = Some(id.clone());
                     }
@@ -1536,14 +1564,19 @@ impl ForwardingOplogState {
         }
 
         if !is_retry {
-            self.write_checkpoint(
-                grant_id,
-                &target_agent_id,
-                live.confirmed_up_to,
-                batch_end,
-                batch_start,
-            )
-            .await;
+            if self
+                .write_checkpoint(
+                    grant_id,
+                    &target_agent_id,
+                    live.confirmed_up_to,
+                    batch_end,
+                    batch_start,
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.sending_up_to = batch_end;
             }
@@ -1570,14 +1603,19 @@ impl ForwardingOplogState {
                     "Oplog processor: batch enqueued successfully"
                 );
                 // Enqueue succeeded — immediately confirm
-                self.write_checkpoint(
-                    grant_id,
-                    &target_agent_id,
-                    batch_end,
-                    batch_end,
-                    batch_start,
-                )
-                .await;
+                if self
+                    .write_checkpoint(
+                        grant_id,
+                        &target_agent_id,
+                        batch_end,
+                        batch_end,
+                        batch_start,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
                 if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                     s.confirmed_up_to = batch_end;
                     s.sending_up_to = batch_end;
@@ -1732,6 +1770,13 @@ impl ForwardingOplogState {
     }
 
     /// Write an OplogProcessorCheckpoint entry, commit it, and update index tracking.
+    ///
+    /// `Err` means the agent's oplog was fenced: its shard has a new owner, so nothing more may be
+    /// written and forwarding stops. Giving the agent up is deliberately not this layer's call - a
+    /// storage decorator has no business stopping agents - and it does not need to be: the fence
+    /// latches on the oplog, so the worker's own commit path is refused too and relinquishes it.
+    ///
+    /// Any other storage failure keeps the fail-stop behaviour it has always had.
     async fn write_checkpoint(
         &mut self,
         grant_id: EnvironmentPluginGrantId,
@@ -1739,7 +1784,7 @@ impl ForwardingOplogState {
         confirmed_up_to: OplogIndex,
         sending_up_to: OplogIndex,
         last_batch_start: OplogIndex,
-    ) {
+    ) -> Result<(), OplogFence> {
         let checkpoint = OplogEntry::OplogProcessorCheckpoint {
             timestamp: golem_common::model::Timestamp::now_utc(),
             plugin_grant_id: grant_id,
@@ -1749,15 +1794,35 @@ impl ForwardingOplogState {
             last_batch_start,
         };
         self.buffer.push_back(checkpoint.clone());
-        let idx = self.inner.add(checkpoint).await;
+        let idx = match self.inner.add(checkpoint).await {
+            Ok(idx) => idx,
+            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
+            Err(error) => panic!("oplog write: {error}"),
+        };
         self.last_oplog_idx = idx;
-        let committed = self.inner.commit(CommitLevel::Always).await;
+        let committed = match self.inner.commit(CommitLevel::Always).await {
+            Ok(committed) => committed,
+            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
+            Err(error) => panic!("oplog write: {error}"),
+        };
         if let Some(max_idx) = committed.keys().max().copied() {
             self.last_committed_idx = self.last_committed_idx.max(max_idx);
         }
         // Track all directly committed entries so ForwardingOplog::commit()
         // can surface them to the Worker for status folding
         self.pending_direct_commits.extend(committed);
+        Ok(())
+    }
+
+    /// Logs a fenced checkpoint once and hands the fence back to the caller, which stops
+    /// forwarding for this agent.
+    fn stop_forwarding(&self, fence: OplogFence) -> OplogFence {
+        tracing::info!(
+            source_agent = %self.initial_worker_metadata.agent_id,
+            expected_epoch = fence.expected_epoch.0,
+            "Oplog processor: checkpoint fenced, the shard has a new owner - forwarding stopped"
+        );
+        fence
     }
 
     /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
@@ -1963,14 +2028,19 @@ impl ForwardingOplogState {
                 }
             }
 
-            self.write_checkpoint(
-                grant_id,
-                &new_target,
-                confirmed,
-                confirmed,
-                last_batch_start,
-            )
-            .await;
+            if self
+                .write_checkpoint(
+                    grant_id,
+                    &new_target,
+                    confirmed,
+                    confirmed,
+                    last_batch_start,
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.target_agent_id = Some(new_target.clone());
             }
@@ -2377,14 +2447,14 @@ mod tests {
             *idx = idx.next();
             entries.push(entry);
             let result = *idx;
-            Box::pin(async move { result })
+            Box::pin(async move { Ok(result) })
         }
 
         async fn add_pair(
             &self,
             start: OplogEntry,
             make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
+        ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
             let mut entries = self.entries.lock().unwrap();
             let mut idx = self.current_idx.lock().unwrap();
             *idx = idx.next();
@@ -2393,16 +2463,16 @@ mod tests {
             *idx = idx.next();
             let second_idx = *idx;
             entries.push(make_second(first_idx));
-            (first_idx, second_idx)
+            Ok((first_idx, second_idx))
         }
 
         async fn add_start_with_reserved_raw_payload(
             &self,
             serialized_request: Vec<u8>,
             build_start: ReservedRawStartBuilder,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, OplogError> {
             let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
-            let index = self.add(entry.clone()).await;
+            let index = self.add(entry.clone()).await?;
             Ok(OrderedOplogStart {
                 index,
                 entry,
@@ -2413,7 +2483,7 @@ mod tests {
         async fn add_start_with_indexed_reserved_raw_payload(
             &self,
             build_request: IndexedReservedStartBuilder,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, OplogError> {
             let mut entries = self.entries.lock().unwrap();
             let mut idx = self.current_idx.lock().unwrap();
             let index = idx.next();
@@ -2432,7 +2502,10 @@ mod tests {
             0
         }
 
-        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        async fn commit(
+            &self,
+            _level: CommitLevel,
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
             let entries = self.entries.lock().unwrap();
             let current = *self.current_idx.lock().unwrap();
             let mut committed = self.committed_idx.lock().unwrap();
@@ -2443,7 +2516,7 @@ mod tests {
                 result.insert(idx, entries[(idx.as_u64() - 1) as usize].clone());
             }
             *committed = current;
-            result
+            Ok(result)
         }
 
         async fn current_oplog_index(&self) -> OplogIndex {
@@ -2649,8 +2722,8 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             delta: 200,
         };
-        inner.add(entry1.clone()).await;
-        inner.add(entry2.clone()).await;
+        inner.add(entry1.clone()).await.unwrap();
+        inner.add(entry2.clone()).await.unwrap();
 
         let mut state = ForwardingOplogState {
             buffer: VecDeque::from([entry1, entry2]),
@@ -2701,7 +2774,7 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             delta: 100,
         };
-        inner.add(entry.clone()).await;
+        inner.add(entry.clone()).await.unwrap();
 
         let mut state = ForwardingOplogState {
             buffer: VecDeque::from([entry]),
@@ -2775,9 +2848,10 @@ mod tests {
             .add(OplogEntry::NoOp {
                 timestamp: Timestamp::now_utc(),
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert_eq!(first.await, OplogIndex::INITIAL);
+        assert_eq!(first.await.unwrap(), OplogIndex::INITIAL);
         assert_eq!(second, OplogIndex::INITIAL.next());
     }
 
@@ -2848,7 +2922,7 @@ mod tests {
         second_pending.wait().await.unwrap();
 
         // With max_commit_count = 1 the first commit triggers a flush to the plugin.
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
 
         let sends = recording_plugin.sends().await;
         assert_eq!(sends.len(), 1, "Expected exactly one batch");

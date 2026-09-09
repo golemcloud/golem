@@ -640,8 +640,8 @@ impl TestWorkerExecutor {
             .await
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         let oplog = golem_worker_executor::services::HasOplog::oplog(worker.as_ref());
-        let oplog_index = oplog.add(entry).await;
-        oplog.commit(CommitLevel::Always).await;
+        let oplog_index = oplog.add(entry).await?;
+        oplog.commit(CommitLevel::Always).await?;
         Ok(oplog_index)
     }
 
@@ -675,7 +675,7 @@ impl TestWorkerExecutor {
             .add_to_oplog(OplogEntry::card_event_queued(
                 golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
             ))
-            .await)
+            .await?)
     }
 
     pub async fn queue_card_install(
@@ -2453,6 +2453,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn golem_worker_executor::services::shard_manager::ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -2600,6 +2602,8 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn golem_worker_executor::services::shard_manager::ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -3527,7 +3531,16 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, golem_worker_executor::services::oplog::OplogError> {
+        // Tests inject write failures by entry name; they used to go through `fallible_add`.
+        if let Err(details) = self.check_oplog_add(&entry).await {
+            return Err(golem_worker_executor::services::oplog::OplogError::Storage(
+                details,
+            ));
+        }
         if Self::is_consume_body_scope_start(&entry)
             && self.pause_before_consume_body_scope_start().await
         {
@@ -3540,7 +3553,7 @@ impl Oplog for TestOplog {
         }
         let track_scope_start = Self::is_consume_body_scope_start(&entry);
         let gated = self.is_consume_body_chunk_data_end(&entry);
-        let index = self.oplog.add(entry).await;
+        let index = self.oplog.add(entry).await?;
         if track_scope_start
             && self
                 .additional_test_deps
@@ -3553,7 +3566,7 @@ impl Oplog for TestOplog {
         if gated {
             self.pause_at_consume_body_chunk_end_gate().await;
         }
-        index
+        Ok(index)
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
@@ -3561,41 +3574,31 @@ impl Oplog for TestOplog {
         let pending = self.oplog.enqueue_add(entry);
         let this = self.clone();
         Box::pin(async move {
-            let index = pending.await;
+            let index = pending.await?;
             if gated {
                 this.pause_at_consume_body_chunk_end_gate().await;
             }
-            index
+            Ok(index)
         })
     }
 
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, golem_worker_executor::services::oplog::OplogError>
+    {
         self.oplog.add_durable_stream_batch(make_batch).await
-    }
-
-    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
-        self.check_oplog_add(&entry).await?;
-        self.oplog.fallible_add(entry).await
-    }
-
-    async fn fallible_add_pair(
-        &self,
-        first: OplogEntry,
-        second: OplogEntry,
-    ) -> Result<(OplogIndex, OplogIndex), String> {
-        self.check_oplog_add(&first).await?;
-        self.check_oplog_add(&second).await?;
-        self.oplog.fallible_add_pair(first, second).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.oplog.drop_prefix(last_dropped_id).await
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, golem_worker_executor::services::oplog::OplogError>
+    {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
         self.oplog.commit(level).await
@@ -3676,7 +3679,7 @@ impl Oplog for TestOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
         let ordered = self
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
@@ -3704,7 +3707,7 @@ impl Oplog for TestOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
         let ordered = self
             .oplog
             .add_start_with_indexed_reserved_raw_payload(build_request)
@@ -3733,7 +3736,14 @@ impl Oplog for TestOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), golem_worker_executor::services::oplog::OplogError> {
+        // The second entry is only built once the first has its index, so the injected failure
+        // check covers the pair through the first entry alone.
+        if let Err(details) = self.check_oplog_add(&start).await {
+            return Err(golem_worker_executor::services::oplog::OplogError::Storage(
+                details,
+            ));
+        }
         self.oplog.add_pair(start, make_second).await
     }
 

@@ -480,8 +480,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        // We assume the source worker belongs to this executor
-        self.shard_service.check_worker(source_agent_id)?;
+        // ADMISSION: this is the only ownership check on the
+        // fork path and it rejects rather than routing, so a fork started after
+        // the lease lapsed must be refused.
+        self.shard_service.check_admission(source_agent_id)?;
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, source_agent_id);
 
@@ -621,6 +623,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                         timestamp: Timestamp::now_utc(),
                     },
                 ))),
+                // Unfenced: the target's shard may belong to another executor, and
+                // this is a one-shot copy, not a live oplog. Its owner writes the metadata
+                // row on its first open.
+                None,
             )
             .await;
 
@@ -639,7 +645,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
-            new_oplog.add(entry.clone()).await;
+            new_oplog.add(entry.clone()).await?;
 
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
                 deleted_regions_builder.add(dropped_region.clone());
@@ -698,7 +704,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     timestamp: now,
                     idempotency_key,
                 })
-                .await;
+                .await?;
         }
 
         for target_revision in pending_update_revisions {
@@ -711,7 +717,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     target_revision,
                     details: Some("cancelled by fork".to_string()),
                 })
-                .await;
+                .await?;
         }
 
         Ok(new_oplog)
@@ -837,7 +843,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        new_oplog.commit(CommitLevel::Always).await;
+        new_oplog.commit(CommitLevel::Always).await?;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
@@ -914,7 +920,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                     forced_commit: false,
                 }),
             )
-            .await;
+            .await?;
 
         if let Some(scope_start) = copied_scope_start {
             new_oplog
@@ -924,10 +930,10 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                     response: None,
                     forced_commit: true,
                 })
-                .await;
+                .await?;
         }
 
-        new_oplog.commit(CommitLevel::Always).await;
+        new_oplog.commit(CommitLevel::Always).await?;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
@@ -989,6 +995,7 @@ mod tests {
                 pinned_card_ids: Vec::new(),
                 scope_card_id: None,
             }),
+            shard_epoch: None,
         };
 
         match rewrite_forked_oplog_entry(entry, &source, &target) {

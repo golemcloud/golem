@@ -24,10 +24,11 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
-    downcast_oplog, scan_modes,
+    OplogAddReceipt, OplogConstructor, OplogError, OplogService, OrderedOplogStart,
+    ReservedRawStartBuilder, downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -386,6 +387,7 @@ struct CreateOplogConstructor {
     initial_worker_metadata: AgentMetadata,
     last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl CreateOplogConstructor {
@@ -401,6 +403,7 @@ impl CreateOplogConstructor {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Self {
         Self {
             owned_agent_id,
@@ -413,6 +416,7 @@ impl CreateOplogConstructor {
             initial_worker_metadata,
             last_known_status,
             execution_status,
+            shard_epoch,
         }
     }
 }
@@ -444,6 +448,7 @@ impl OplogConstructor for CreateOplogConstructor {
                                 self.initial_worker_metadata,
                                 self.last_known_status,
                                 self.execution_status,
+                                self.shard_epoch,
                             )
                             .await
                     } else {
@@ -455,6 +460,7 @@ impl OplogConstructor for CreateOplogConstructor {
                                 self.initial_worker_metadata,
                                 self.last_known_status,
                                 self.execution_status,
+                                self.shard_epoch,
                             )
                             .await
                     }
@@ -467,6 +473,7 @@ impl OplogConstructor for CreateOplogConstructor {
                             self.initial_worker_metadata,
                             self.last_known_status,
                             self.execution_status,
+                            self.shard_epoch,
                         )
                         .await
                 };
@@ -551,6 +558,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -566,6 +574,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -579,6 +588,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -594,6 +604,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -607,6 +618,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -622,6 +634,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -1108,16 +1121,16 @@ impl Oplog for MultiLayerOplog {
         let pending = self.primary.enqueue_add(entry);
         let last_oplog_index = self.last_oplog_index.clone();
         Box::pin(async move {
-            let result = pending.await;
-            last_oplog_index.set(result);
-            result
+            let index = pending.await?;
+            last_oplog_index.set(index);
+            Ok(index)
         })
     }
 
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         let result = self.primary.add_durable_stream_batch(make_batch).await?;
         if let Some((last_index, _)) = result.last() {
             self.last_oplog_index.set(*last_index);
@@ -1131,8 +1144,11 @@ impl Oplog for MultiLayerOplog {
         dropped_entries
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        let result = self.primary.commit(level).await;
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
+        let result = self.primary.commit(level).await?;
 
         let last_committed_idx = self.last_oplog_index.get();
         let last_transferred_idx = self.last_transfer_point.get();
@@ -1149,7 +1165,7 @@ impl Oplog for MultiLayerOplog {
             });
             self.last_transfer_point.set(last_committed_idx);
         }
-        result
+        Ok(result)
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -1219,17 +1235,17 @@ impl Oplog for MultiLayerOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        let (first_idx, second_idx) = self.primary.add_pair(start, make_second).await;
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
+        let (first_idx, second_idx) = self.primary.add_pair(start, make_second).await?;
         self.last_oplog_index.set(second_idx);
-        (first_idx, second_idx)
+        Ok((first_idx, second_idx))
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         // Delegate to the primary (which owns the Start-ordering critical section) and mirror the
         // assigned index into `last_oplog_index`, like `add`/`add_pair` do.
         let ordered = self
@@ -1243,7 +1259,7 @@ impl Oplog for MultiLayerOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         let ordered = self
             .primary
             .add_start_with_indexed_reserved_raw_payload(build_request)
