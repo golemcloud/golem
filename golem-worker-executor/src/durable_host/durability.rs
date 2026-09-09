@@ -1481,7 +1481,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             .await
             .map_err(|err| err.source)?;
         let response = oplog
-            .upload_payload(&HostResponse::Custom(response))
+            .upload_payload_owned(HostResponse::Custom(response))
             .await
             .map_err(|err| anyhow::anyhow!("Failed to store durable function response: {err}"))?;
         worker
@@ -1648,7 +1648,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let start_invocation_id = invocation_id;
             let start = tokio::spawn(async move {
                 let persisted_request = oplog
-                    .upload_payload(&request)
+                    .upload_payload_owned(request)
                     .await
                     .map_err(|err| format!("Failed to store durable function request: {err}"))?;
                 Ok::<_, String>(
