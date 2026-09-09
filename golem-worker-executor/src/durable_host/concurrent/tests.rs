@@ -460,6 +460,58 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
     }
 }
 
+/// A completion marker whose oplog write is refused because the shard moved must be reported to
+/// whoever awaits the receipt. Panicking here would abort the executor - and every other healthy
+/// agent resident on it - over one agent that another executor now owns.
+#[test]
+async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
+    let agent_id = golem_common::model::AgentId {
+        component_id: golem_common::model::component::ComponentId::new(),
+        agent_id: "fenced-completion-marker-test".to_string(),
+    };
+    let oplog = Arc::new(InMemoryOplog::fenced(crate::services::oplog::OplogFence {
+        agent_id: agent_id.clone(),
+        expected_epoch: golem_common::model::ShardEpoch(3),
+        actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+    }));
+    let seed_oplog = Arc::new(InMemoryOplog::new());
+    seed_oplog
+        .add(OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        })
+        .await
+        .unwrap();
+    let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
+    let replay_state = ReplayState::new_for_owner(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id,
+        },
+        seed_oplog_dyn,
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+    )
+    .await
+    .expect("failed to build replay state");
+    let oplog_dyn: Arc<dyn Oplog> = oplog;
+    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
+
+    let mut receipt = recorder.record(idx(10), CompletionMarkerKind::Delivered, None);
+
+    match await_marker_receipt(&mut receipt).await {
+        Err(WorkerExecutorError::OplogFenced {
+            expected_epoch,
+            actual_epoch,
+            ..
+        }) => {
+            assert_eq!(expected_epoch, 3);
+            assert_eq!(actual_epoch, Some(4));
+        }
+        other => panic!("expected the fenced marker append to be reported, got {other:?}"),
+    }
+}
+
 #[test]
 async fn completion_delivery_markers_preserve_handoff_order() {
     let oplog = Arc::new(InMemoryOplog::new());
@@ -895,6 +947,9 @@ struct InMemoryOplog {
     next_reserved: Arc<std::sync::atomic::AtomicU64>,
     next_commit: Arc<tokio::sync::Mutex<u64>>,
     append_progress: Arc<tokio::sync::Notify>,
+    /// When set, every append is refused the way a fencing backend refuses one whose asserted
+    /// shard epoch is stale: the shard moved to another executor while this oplog was open.
+    fence: Option<crate::services::oplog::OplogFence>,
 }
 
 impl InMemoryOplog {
@@ -905,6 +960,15 @@ impl InMemoryOplog {
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
+            fence: None,
+        }
+    }
+
+    /// An oplog whose shard has already moved: every append is refused with `fence`.
+    fn fenced(fence: crate::services::oplog::OplogFence) -> Self {
+        Self {
+            fence: Some(fence),
+            ..Self::new()
         }
     }
 
@@ -918,6 +982,7 @@ impl InMemoryOplog {
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
+            fence: None,
         }
     }
 }
@@ -932,6 +997,9 @@ impl Oplog for InMemoryOplog {
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+        if let Some(fence) = self.fence.clone() {
+            return Box::pin(async move { Err(crate::services::oplog::OplogError::Fenced(fence)) });
+        }
         let index = self
             .next_reserved
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -418,12 +418,6 @@ impl OwnerExecution {
     pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
         self.commit.commit_and_update_state(level).await.0
     }
-
-    pub async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let index = self.oplog.add(entry).await.expect("oplog write");
-        self.commit(CommitLevel::Always).await;
-        index
-    }
 }
 
 /// Owner-scoped runtime resources reused by primary and entity Store construction.

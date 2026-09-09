@@ -675,7 +675,7 @@ impl TestWorkerExecutor {
             .add_to_oplog(OplogEntry::card_event_queued(
                 golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
             ))
-            .await)
+            .await?)
     }
 
     pub async fn queue_card_install(

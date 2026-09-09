@@ -922,6 +922,57 @@ mod tests {
         ));
     }
 
+    /// The contract every fenced host-call site depends on: a fence that escapes a host function
+    /// as an `anyhow` error must classify as `ShardLost`, so the loop gives the agent up instead
+    /// of appending an `Error` entry to the very oplog that refused the write.
+    #[test]
+    fn a_fenced_oplog_write_escaping_a_host_call_classifies_as_shard_lost() {
+        let fence = crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "fenced-host-call".to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(7),
+            actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+        };
+
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(WorkerExecutorError::from(
+                crate::services::oplog::OplogError::Fenced(fence)
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a fenced write must be an interrupt, got {trap:?}"
+        );
+    }
+
+    /// The deliberate other half: a transient storage failure is not a fence and must stay a
+    /// retriable failure. Classifying it as `ShardLost` would hand an agent to another executor
+    /// over a blip that retrying would have cleared.
+    #[test]
+    fn a_transient_oplog_storage_failure_does_not_relinquish_the_agent() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(WorkerExecutorError::from(
+                crate::services::oplog::OplogError::Storage("connection reset".to_string())
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a transient storage failure must not be treated as a lost shard, got {trap:?}"
+        );
+    }
+
     #[test]
     fn semantic_trap_retry_override_carries_retry_point() {
         use crate::durable_host::durability::{

@@ -17,7 +17,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogError, OplogService, OrderedOplogStart,
+    OplogAddReceipt, OplogConstructor, OplogError, OplogFence, OplogService, OrderedOplogStart,
     ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
@@ -1512,14 +1512,19 @@ impl ForwardingOplogState {
                         target_agent = %id,
                         "Oplog processor: resolved target plugin worker"
                     );
-                    self.write_checkpoint(
-                        grant_id,
-                        &id,
-                        live.confirmed_up_to,
-                        live.confirmed_up_to,
-                        live.last_batch_start,
-                    )
-                    .await;
+                    if self
+                        .write_checkpoint(
+                            grant_id,
+                            &id,
+                            live.confirmed_up_to,
+                            live.confirmed_up_to,
+                            live.last_batch_start,
+                        )
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
                     if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                         s.target_agent_id = Some(id.clone());
                     }
@@ -1562,14 +1567,19 @@ impl ForwardingOplogState {
         }
 
         if !is_retry {
-            self.write_checkpoint(
-                grant_id,
-                &target_agent_id,
-                live.confirmed_up_to,
-                batch_end,
-                batch_start,
-            )
-            .await;
+            if self
+                .write_checkpoint(
+                    grant_id,
+                    &target_agent_id,
+                    live.confirmed_up_to,
+                    batch_end,
+                    batch_start,
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.sending_up_to = batch_end;
             }
@@ -1596,14 +1606,19 @@ impl ForwardingOplogState {
                     "Oplog processor: batch enqueued successfully"
                 );
                 // Enqueue succeeded — immediately confirm
-                self.write_checkpoint(
-                    grant_id,
-                    &target_agent_id,
-                    batch_end,
-                    batch_end,
-                    batch_start,
-                )
-                .await;
+                if self
+                    .write_checkpoint(
+                        grant_id,
+                        &target_agent_id,
+                        batch_end,
+                        batch_end,
+                        batch_start,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
                 if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                     s.confirmed_up_to = batch_end;
                     s.sending_up_to = batch_end;
@@ -1758,6 +1773,13 @@ impl ForwardingOplogState {
     }
 
     /// Write an OplogProcessorCheckpoint entry, commit it, and update index tracking.
+    ///
+    /// `Err` means the agent's oplog was fenced: its shard has a new owner, so nothing more may be
+    /// written and forwarding stops. Giving the agent up is deliberately not this layer's call - a
+    /// storage decorator has no business stopping agents - and it does not need to be: the fence
+    /// latches on the oplog, so the worker's own commit path is refused too and relinquishes it.
+    ///
+    /// Any other storage failure keeps the fail-stop behaviour it has always had.
     async fn write_checkpoint(
         &mut self,
         grant_id: EnvironmentPluginGrantId,
@@ -1765,7 +1787,7 @@ impl ForwardingOplogState {
         confirmed_up_to: OplogIndex,
         sending_up_to: OplogIndex,
         last_batch_start: OplogIndex,
-    ) {
+    ) -> Result<(), OplogFence> {
         let checkpoint = OplogEntry::OplogProcessorCheckpoint {
             timestamp: golem_common::model::Timestamp::now_utc(),
             plugin_grant_id: grant_id,
@@ -1775,19 +1797,35 @@ impl ForwardingOplogState {
             last_batch_start,
         };
         self.buffer.push_back(checkpoint.clone());
-        let idx = self.inner.add(checkpoint).await.expect("oplog write");
+        let idx = match self.inner.add(checkpoint).await {
+            Ok(idx) => idx,
+            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
+            Err(error) => panic!("oplog write: {error}"),
+        };
         self.last_oplog_idx = idx;
-        let committed = self
-            .inner
-            .commit(CommitLevel::Always)
-            .await
-            .expect("oplog write");
+        let committed = match self.inner.commit(CommitLevel::Always).await {
+            Ok(committed) => committed,
+            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
+            Err(error) => panic!("oplog write: {error}"),
+        };
         if let Some(max_idx) = committed.keys().max().copied() {
             self.last_committed_idx = self.last_committed_idx.max(max_idx);
         }
         // Track all directly committed entries so ForwardingOplog::commit()
         // can surface them to the Worker for status folding
         self.pending_direct_commits.extend(committed);
+        Ok(())
+    }
+
+    /// Logs a fenced checkpoint once and hands the fence back to the caller, which stops
+    /// forwarding for this agent.
+    fn stop_forwarding(&self, fence: OplogFence) -> OplogFence {
+        tracing::info!(
+            source_agent = %self.initial_worker_metadata.agent_id,
+            expected_epoch = fence.expected_epoch.0,
+            "Oplog processor: checkpoint fenced, the shard has a new owner - forwarding stopped"
+        );
+        fence
     }
 
     /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
@@ -1995,14 +2033,19 @@ impl ForwardingOplogState {
                 }
             }
 
-            self.write_checkpoint(
-                grant_id,
-                &new_target,
-                confirmed,
-                confirmed,
-                last_batch_start,
-            )
-            .await;
+            if self
+                .write_checkpoint(
+                    grant_id,
+                    &new_target,
+                    confirmed,
+                    confirmed,
+                    last_batch_start,
+                )
+                .await
+                .is_err()
+            {
+                return;
+            }
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.target_agent_id = Some(new_target.clone());
             }

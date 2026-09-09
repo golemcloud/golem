@@ -624,7 +624,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .oplog
                 .add(OplogEntry::no_op())
                 .await
-                .expect("oplog write")
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -763,7 +763,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .oplog
                 .add(OplogEntry::begin_atomic_region())
                 .await
-                .expect("oplog write")
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
