@@ -367,13 +367,25 @@ async fn durable_streaming_output_recovers_after_executor_restart(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 0;
+            config.invocation_results.bloom_bits = 1;
+            config.invocation_results.bloom_hashes = 1;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingRpcTarget", "output-restart");
-    let worker_agent_id = executor.start_agent(&component.id, agent_id).await?;
+    let worker_agent_id = executor
+        .start_agent(
+            &component.id,
+            agent_id!("StreamingRpcTarget", "output-restart"),
+        )
+        .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
     let (_, input) = data_value!().into_parts();
     let start_request = InvocationRequest {
@@ -445,7 +457,7 @@ async fn durable_streaming_output_recovers_after_executor_restart(
     drop(responses);
     drop(executor);
 
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
         anyhow::bail!("durable output restart request is not Start");
     };

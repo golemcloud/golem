@@ -73,8 +73,17 @@ impl SqliteKeyValueStorage {
             KeyValueStorageNamespace::AgentStatus { agent_id } => {
                 format!("agent-status:{}", agent_id.to_redis_key())
             }
+            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id } => {
+                format!("agent-invocation-result-index:{}", agent_id.to_redis_key())
+            }
             KeyValueStorageNamespace::AgentStatusCheckpoint { agent_id } => {
                 format!("agent-status-checkpoint:{}", agent_id.to_redis_key())
+            }
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => {
+                format!(
+                    "agent:durable_stream_session_index:{}",
+                    agent_id.to_redis_key()
+                )
             }
             KeyValueStorageNamespace::Promise { .. } => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
@@ -154,6 +163,46 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             }
         })
         .await
+    }
+
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        for (_, value) in pairs {
+            record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+        }
+        let namespace = Self::namespace(namespace);
+        retry_on_pool_timeout(&self.retry_config, "compare_and_set_many", || async {
+            let api = self.pool.with_rw(svc_name, api_name);
+            let mut tx = api.begin().await?;
+            // SQLite transactions are deferred. A write statement before the read prevents two
+            // connections from both validating the same value before either obtains the writer lock.
+            tx.execute(sqlx::query("UPDATE kv_storage SET value = value WHERE namespace = ? AND key = ?;").bind(&namespace).bind(key)).await?;
+            let current = tx
+                .fetch_optional_as::<DBValue, _>(
+                    sqlx::query_as("SELECT value FROM kv_storage WHERE key = ? AND namespace = ?;")
+                        .bind(key)
+                        .bind(&namespace),
+                )
+                .await?;
+            if current.map(DBValue::into_bytes).as_deref() != expected {
+                tx.rollback().await?;
+                return Ok(false);
+            }
+            for (field_key, field_value) in pairs {
+                tx.execute(sqlx::query("INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);")
+                    .bind(field_key).bind(field_value).bind(&namespace)).await?;
+            }
+            tx.commit().await?;
+            Ok(true)
+        }).await
     }
 
     async fn set_if_not_exists(

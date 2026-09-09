@@ -28,6 +28,7 @@ fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
             config.durable_stream.validate()?;
+            config.invocation_results.validate()?;
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .expect("Failed to install crypto provider");
@@ -38,11 +39,7 @@ fn main() -> Result<(), anyhow::Error> {
 
             let prometheus = metrics::register_all();
 
-            let runtime = Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()?,
-            );
+            let runtime = Arc::new(bootstrap::create_runtime()?);
 
             runtime.block_on(async_main(config, prometheus, runtime.clone()))
         }
