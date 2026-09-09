@@ -227,12 +227,12 @@ impl ShardManagement {
         let now = Utc::now();
         let lease_ttl = self.lease_ttl;
 
-        let ((already_known, replaced, mut ack), stored_at) = self
+        let ((already_known, replaced, number_of_shards, pending), stored_at) = self
             .persist_for_request(move |shard_state| {
                 let already_known = shard_state.has_executor(executor_id);
                 let replaced =
                     shard_state.add_executor(executor_id, addr, pod_name, now, lease_ttl);
-                let grant = shard_state.lease_grant_for(executor_id).ok_or_else(|| {
+                let pending = shard_state.lease_grant_for(executor_id).ok_or_else(|| {
                     ShardManagerError::Internal(format!(
                         "executor {executor_id} holds no lease right after being registered"
                     ))
@@ -240,16 +240,17 @@ impl ShardManagement {
                 Ok((
                     already_known,
                     replaced,
-                    RegisterAck {
-                        number_of_shards: shard_state.number_of_shards,
-                        grant,
-                    },
+                    shard_state.number_of_shards,
+                    pending,
                 ))
             })
             .await?;
         // The grant was read off the clone before the persist bumped its revision; the ack names
         // the revision the state holding this set was actually stored under.
-        ack.grant.revision = stored_at;
+        let ack = RegisterAck {
+            number_of_shards,
+            grant: pending.stamp(stored_at),
+        };
 
         if let Some(replaced) = replaced {
             // A restarted instance inherited its predecessor's shards, so it has to be told the
@@ -293,7 +294,7 @@ impl ShardManagement {
     pub async fn renew_shard_lease(
         &self,
         executor_id: ExecutorId,
-        claimed: &BTreeMap<ShardId, ShardEpoch>,
+        claimed: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLeaseGrant, ShardManagerError> {
         debug!(
             executor_id = %executor_id,
@@ -320,8 +321,7 @@ impl ShardManagement {
         })
         .await?;
 
-        let claimed = claimed.clone();
-        let (mut grant, stored_at) = self
+        let (pending, stored_at) = self
             .persist_for_request(move |shard_state| {
             if !shard_state.has_executor(executor_id) {
                 return Err(ShardManagerError::ShardLeaseNotFound { executor_id });
@@ -370,8 +370,7 @@ impl ShardManagement {
         .await?;
         // Read off the clone before its revision was bumped; stamped with the revision the state
         // was then stored at, so the grant names exactly the persisted state it describes.
-        grant.revision = stored_at;
-        Ok(grant)
+        Ok(pending.stamp(stored_at))
     }
 
     /// Releases `executor_id`'s shard lease on a graceful shutdown.
@@ -386,7 +385,7 @@ impl ShardManagement {
     pub async fn deregister_executor(
         &self,
         executor_id: ExecutorId,
-        claimed: &BTreeMap<ShardId, ShardEpoch>,
+        claimed: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<(), ShardManagerError> {
         debug!(
             executor_id = %executor_id,
@@ -394,7 +393,6 @@ impl ShardManagement {
             "Deregistering executor"
         );
 
-        let claimed = claimed.clone();
         self.persist_for_request(move |shard_state| {
             if !shard_state.has_executor(executor_id) {
                 debug!(
@@ -670,9 +668,20 @@ impl ShardManagement {
         F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError> + Send + 'static,
         T: Send + 'static,
     {
+        // Must not be called while holding `shard_state`: the spawned task takes the write lock
+        // and this awaits it, so the two would wait on each other. Not checkable at runtime - the
+        // lock has no notion of which task holds it, and a `try_write` probe fails for any holder,
+        // including the loop and other requests running legitimately alongside this one.
         let this = self.clone();
         match tokio::spawn(async move { this.try_mutate_and_persist_stamped(mutate).await }).await {
             Ok(outcome) => outcome,
+            // A panic must not become an ordinary error: `panic = "abort"` makes this unreachable
+            // in the shipped profiles, but under an unwinding one the mutation's own invariant
+            // assertions run, and laundering those into a `Result` would let a test assert `Err`
+            // over a genuine state corruption.
+            Err(join_error) if join_error.is_panic() => {
+                std::panic::resume_unwind(join_error.into_panic())
+            }
             Err(join_error) => Err(ShardManagerError::Internal(format!(
                 "persisting the shard lease state did not complete: {join_error}"
             ))),

@@ -638,6 +638,8 @@ mod tests {
         renew_fn: StdMutex<Option<RenewFn>>,
         /// Holds a renewal inside the RPC, so a test can act while one is still in flight.
         renew_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
+        /// The same for a deregistration.
+        deregister_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
         register_calls: StdMutex<Vec<Uuid>>,
         renew_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
         deregister_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
@@ -649,6 +651,7 @@ mod tests {
                 register_fn: StdMutex::new(None),
                 renew_fn: StdMutex::new(None),
                 renew_gate: StdMutex::new(None),
+                deregister_gate: StdMutex::new(None),
                 register_calls: StdMutex::new(Vec::new()),
                 renew_calls: StdMutex::new(Vec::new()),
                 deregister_calls: StdMutex::new(Vec::new()),
@@ -676,6 +679,11 @@ mod tests {
 
         fn with_renew_gate(self, gate: Arc<tokio::sync::Notify>) -> Self {
             *self.renew_gate.lock().unwrap() = Some(gate);
+            self
+        }
+
+        fn with_deregister_gate(self, gate: Arc<tokio::sync::Notify>) -> Self {
+            *self.deregister_gate.lock().unwrap() = Some(gate);
             self
         }
 
@@ -738,6 +746,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((executor_id, shard_epochs));
+            // Recorded before the gate, so a test can see the call was issued and then parked.
+            // Cloned out before the await: the guard must not be held across it.
+            let gate = self.deregister_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
             Ok(())
         }
 
@@ -981,6 +995,58 @@ mod tests {
         assert!(
             mock.renew_calls().len() >= 2,
             "a renewal that never answers must time out so the loop can try again"
+        );
+    }
+
+    #[test]
+    // The deregister has a deadline of its own, sized against the grace `main` waits rather than
+    // against the lease, so a shard manager that accepts the call and never answers cannot hold
+    // the process past that grace. The arm it makes reachable is the one that says the lease is
+    // being left to lapse - and it still clears the local assignment on the way out, so nothing
+    // is admitted against a lease this executor has stopped renewing.
+    async fn a_deregister_that_never_answers_gives_up_inside_the_shutdown_grace() {
+        let expiry = Utc::now() + ChronoDuration::seconds(300);
+        // Never released: the deregister parks in the RPC until its deadline.
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_renew(move |_, claimed| {
+                    Ok(ShardLease {
+                        shard_epochs: claimed,
+                        expires_at: Some(expiry),
+                        revision: ShardLeaseRevision(1),
+                    })
+                })
+                .with_deregister_gate(gate.clone()),
+        );
+        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
+        shard_service.register(
+            SHARDS,
+            &epochs([(0, 1)]),
+            Some(expiry),
+            ShardLeaseRevision(1),
+        );
+
+        let started = std::time::Instant::now();
+        service.deregister().await;
+        let waited = started.elapsed();
+
+        assert_eq!(
+            mock.deregister_calls().len(),
+            1,
+            "the RPC must have been issued"
+        );
+        assert!(
+            waited < shutdown::SHUTDOWN_GRACE,
+            "deregister waited {waited:?}, which does not fit inside the {:?} grace `main` allows",
+            shutdown::SHUTDOWN_GRACE
+        );
+        let assignment = shard_service
+            .try_get_current_assignment()
+            .expect("the assignment is installed, just cleared");
+        assert!(
+            assignment.shard_id_set().is_empty() && !shard_service.is_ready(),
+            "a deregister that timed out must still clear the assignment locally"
         );
     }
 

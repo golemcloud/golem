@@ -343,7 +343,7 @@ impl WorkerExecutorService for TestWorkerExecutors {
         let armed = self.renew_during_revoke.lock().await.take();
         if let Some((shard_management, executor_id, claimed)) = armed {
             let grant = shard_management
-                .renew_shard_lease(executor_id, &claimed)
+                .renew_shard_lease(executor_id, claimed)
                 .await
                 .expect("the renewal served during the fan-out should have been granted");
             *self.grant_during_revoke.lock().await = Some(grant);
@@ -1985,11 +1985,11 @@ async fn renewing_twice_with_the_same_epochs_moves_nothing() {
     );
 
     let first = shard_management
-        .renew_shard_lease(executor(1), &claimed)
+        .renew_shard_lease(executor(1), claimed.clone())
         .await
         .expect("the first renewal should have been granted");
     let second = shard_management
-        .renew_shard_lease(executor(1), &claimed)
+        .renew_shard_lease(executor(1), claimed.clone())
         .await
         .expect("the second renewal of the same set should have been granted too");
 
@@ -2036,7 +2036,7 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
 
     // an executor the manager has never heard of: still the one refusal
     let err = shard_management
-        .renew_shard_lease(executor(9), &BTreeMap::new())
+        .renew_shard_lease(executor(9), BTreeMap::new())
         .await
         .expect_err("an unknown executor holds no lease to renew");
     assert!(
@@ -2052,7 +2052,7 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
     wrong_epoch.insert(ShardId::new(1), ShardEpoch(7));
     let expiry_before = expiry_of(&persistence.latest().await, executor(1));
     let grant = shard_management
-        .renew_shard_lease(executor(1), &wrong_epoch)
+        .renew_shard_lease(executor(1), wrong_epoch)
         .await
         .expect("a claim at the wrong epoch is renewed and corrected");
     assert_eq!(
@@ -2064,7 +2064,7 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
     // a shard that belongs to another executor
     let moved = BTreeMap::from([(ShardId::new(2), ShardEpoch(0))]);
     let grant = shard_management
-        .renew_shard_lease(executor(1), &moved)
+        .renew_shard_lease(executor(1), moved)
         .await
         .expect("claiming another executor's shard is renewed and corrected");
     assert_eq!(grant.shard_epochs, truth);
@@ -2072,7 +2072,7 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
     // ...and a shard nobody owns any more. Deregistering executor 2 releases its shards without
     // waking the loop, so they stay unassigned for the rest of this test.
     shard_management
-        .deregister_executor(executor(2), &claim_of(&before, executor(2)))
+        .deregister_executor(executor(2), claim_of(&before, executor(2)))
         .await
         .expect("a graceful deregistration should have been persisted");
     let revoked = BTreeMap::from([
@@ -2080,7 +2080,7 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
         (ShardId::new(2), ShardEpoch(0)),
     ]);
     let grant = shard_management
-        .renew_shard_lease(executor(1), &revoked)
+        .renew_shard_lease(executor(1), revoked)
         .await
         .expect("claiming a released shard is renewed and corrected");
     assert_eq!(grant.shard_epochs, truth);
@@ -2106,7 +2106,7 @@ async fn a_grant_carries_the_revision_it_was_stored_at() {
 
     let before = persistence.latest().await;
     let grant = shard_management
-        .renew_shard_lease(executor(1), &claim_of(&before, executor(1)))
+        .renew_shard_lease(executor(1), claim_of(&before, executor(1)))
         .await
         .expect("a valid claim should have been renewed");
 
@@ -2137,7 +2137,7 @@ async fn an_owned_shard_the_executor_did_not_claim_is_not_an_error() {
     let partial = BTreeMap::from([(ShardId::new(0), ShardEpoch(0))]);
 
     let grant = shard_management
-        .renew_shard_lease(executor(1), &partial)
+        .renew_shard_lease(executor(1), partial)
         .await
         .expect("a claim that is behind the manager must still renew");
 
@@ -2175,7 +2175,7 @@ async fn a_lease_that_lapsed_before_its_renewal_is_not_found() {
     tokio::time::sleep(Duration::from_millis(1200)).await;
 
     let err = shard_management
-        .renew_shard_lease(executor(1), &claimed)
+        .renew_shard_lease(executor(1), claimed)
         .await
         .expect_err("a lease that had already lapsed must not be renewable");
     assert!(
@@ -2214,7 +2214,7 @@ async fn a_refused_renewal_does_not_discard_the_reaping_of_lapsed_leases() {
 
     // An unknown executor's renewal is refused and writes nothing...
     let err = shard_management
-        .renew_shard_lease(executor(9), &BTreeMap::new())
+        .renew_shard_lease(executor(9), BTreeMap::new())
         .await
         .expect_err("an unknown executor holds no lease to renew");
     assert!(
@@ -2396,7 +2396,7 @@ async fn deregistering_an_executor_re_homes_its_shards_within_one_tick() {
 
     let before = persistence.latest().await;
     shard_management
-        .deregister_executor(executor(1), &claim_of(&before, executor(1)))
+        .deregister_executor(executor(1), claim_of(&before, executor(1)))
         .await
         .expect("a graceful deregistration should have been persisted");
 
@@ -2467,7 +2467,7 @@ async fn deregistering_an_unknown_executor_succeeds() {
     shard_management
         .deregister_executor(
             executor(9),
-            &BTreeMap::from([(ShardId::new(0), ShardEpoch(4))]),
+            BTreeMap::from([(ShardId::new(0), ShardEpoch(4))]),
         )
         .await
         .expect("deregistering an unknown executor must succeed");
@@ -2555,7 +2555,7 @@ async fn a_persist_failure_while_renewing_stops_the_loop() {
         .await;
 
     let err = shard_management
-        .renew_shard_lease(executor(1), &claimed)
+        .renew_shard_lease(executor(1), claimed)
         .await
         .expect_err("a renewal whose persist was refused must not be granted");
     assert!(

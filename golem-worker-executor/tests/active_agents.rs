@@ -48,6 +48,71 @@ async fn wait_until(message: &str, mut condition: impl AsyncFnMut() -> bool) -> 
     .map_err(|_| anyhow::anyhow!("timed out waiting for {message}"))
 }
 
+/// `ShardId::from_agent_id` divides by the shard count, so a push carrying zero would abort this
+/// executor on its next routing decision rather than fail the call. Refused at the door, and the
+/// set it already holds is left alone.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_push_of_zero_shards_is_refused_rather_than_applied(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let parsed_agent_id = agent_id!("Clock", "zero-shard-push");
+    let agent_id = executor
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+
+    let mut client = executor.client.clone();
+    let refused = client
+        .assign_shards(AssignShardsRequest {
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 0,
+            }],
+            lease_ttl: Some(prost_types::Duration {
+                seconds: 3600,
+                nanos: 0,
+            }),
+            revision: 5,
+            number_of_shards: 0,
+        })
+        .await?
+        .into_inner();
+    assert!(
+        !matches!(
+            refused.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "a push naming zero shards must be refused, not applied"
+    );
+
+    // The executor is still serving the set it had: the refusal happened before anything was
+    // installed, so its routing hash never sees a zero to divide by.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(executor.worker_is_loaded(&owned_agent_id).await);
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+
+    drop(client);
+    drop(executor);
+    Ok(())
+}
+
 /// A revoke read from a state older than the last delivery this executor applied must be dropped
 /// whole - not merely ignored for bookkeeping, but *without sweeping*. The sweep is the part with
 /// teeth: it restarts every agent whose shard has gone, so a stale revoke that still swept would

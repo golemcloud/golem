@@ -147,6 +147,30 @@ pub struct ExecutorShards {
     pub shard_ids: BTreeSet<ShardId>,
 }
 
+/// A grant read off a shard state, before the revision it will name is known.
+///
+/// Fields are private and there is no constructor but [`ShardLeaseState::lease_grant_for`], so
+/// the only route from a state to a [`ShardLeaseGrant`] is through [`PendingGrant::stamp`]. A
+/// grant therefore cannot reach an executor naming a revision no state was ever stored at - the
+/// failure that would otherwise follow from a writer reading a grant off its clone and forgetting
+/// to re-stamp it, which is invisible at the call site and silent on the wire.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingGrant {
+    shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    expires_at: DateTime<Utc>,
+}
+
+impl PendingGrant {
+    /// Completes the grant with the revision the state carrying this set was stored under.
+    pub fn stamp(self, revision: ShardLeaseRevision) -> ShardLeaseGrant {
+        ShardLeaseGrant {
+            shard_epochs: self.shard_epochs,
+            expires_at: self.expires_at,
+            revision,
+        }
+    }
+}
+
 /// What the manager hands an executor when it grants or renews a shard lease: the complete set of
 /// shards that executor owns with the ownership epoch of each, and the absolute time the lease
 /// lapses if it is not renewed.
@@ -254,11 +278,14 @@ impl ShardLeaseState {
 
     /// The lease `executor_id` currently holds, or `None` if it holds none.
     ///
-    /// `revision` is this state's. A writer that reads the grant off a clone it is about to
-    /// persist re-stamps it with the revision the clone was stored at.
-    pub fn lease_grant_for(&self, executor_id: ExecutorId) -> Option<ShardLeaseGrant> {
+    /// Unstamped, because a read cannot know the answer: the revision a grant carries must name
+    /// the state its set was *stored* under, and a writer reading off a clone it is about to
+    /// persist does not learn that number until the write lands. The caller completes it with
+    /// [`PendingGrant::stamp`] - with the write's revision on the request paths, with this
+    /// state's own on a read of state already stored.
+    pub fn lease_grant_for(&self, executor_id: ExecutorId) -> Option<PendingGrant> {
         let lease = self.executor_leases.get(&executor_id)?;
-        Some(ShardLeaseGrant {
+        Some(PendingGrant {
             shard_epochs: self
                 .shard_assignments
                 .iter()
@@ -266,7 +293,6 @@ impl ShardLeaseState {
                 .map(|(shard_id, entry)| (*shard_id, entry.epoch))
                 .collect(),
             expires_at: lease.expires_at,
-            revision: self.revision,
         })
     }
 
@@ -275,13 +301,16 @@ impl ShardLeaseState {
     /// An executor that holds a lease but no shards still gets a payload: an empty `shard_epochs`
     /// is how the manager tells it to drop everything it thinks it owns.
     pub fn assignment_push_for(&self, executor_id: ExecutorId) -> Option<ShardAssignmentPush> {
-        self.lease_grant_for(executor_id)
-            .map(|grant| ShardAssignmentPush {
-                shard_epochs: grant.shard_epochs,
-                expires_at: grant.expires_at,
-                number_of_shards: self.number_of_shards,
-                revision: grant.revision,
-            })
+        // Read off a state that is already stored, so this state's own revision is the one its
+        // set was stored under. The loop persists a rebalance before it pushes anything, so the
+        // revision here is a real one and never a prediction.
+        let grant = self.lease_grant_for(executor_id)?.stamp(self.revision);
+        Some(ShardAssignmentPush {
+            shard_epochs: grant.shard_epochs,
+            expires_at: grant.expires_at,
+            number_of_shards: self.number_of_shards,
+            revision: grant.revision,
+        })
     }
 
     pub fn executor_shard_sets(&self) -> Vec<ExecutorShards> {

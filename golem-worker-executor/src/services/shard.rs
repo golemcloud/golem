@@ -157,8 +157,7 @@ impl ShardService for ShardServiceDefault {
                     expires_at,
                     revision,
                 );
-                let assigned_shard_count = shard_assignment.len();
-                record_assigned_shard_count(assigned_shard_count);
+                record_delivery(ShardDelivery::Assign, &outcome, shard_assignment.len());
                 Ok(outcome)
             }
             None => Err(sharding_not_ready_error()),
@@ -212,8 +211,7 @@ impl ShardService for ShardServiceDefault {
             );
             let outcome =
                 shard_assignment.set_shards(number_of_shards, shard_epochs, expires_at, revision);
-            let assigned_shard_count = shard_assignment.len();
-            record_assigned_shard_count(assigned_shard_count);
+            record_delivery(ShardDelivery::Register, &outcome, shard_assignment.len());
             outcome
         })
     }
@@ -232,8 +230,7 @@ impl ShardService for ShardServiceDefault {
                     "ShardService.revoke_shards"
                 );
                 let outcome = shard_assignment.revoke_shards(shard_ids, revision);
-                let assigned_shard_count = shard_assignment.len();
-                record_assigned_shard_count(assigned_shard_count);
+                record_delivery(ShardDelivery::Revoke, &outcome, shard_assignment.len());
                 Ok(outcome)
             }
             None => Err(sharding_not_ready_error()),
@@ -255,8 +252,7 @@ impl ShardService for ShardServiceDefault {
                     "ShardService.update_lease"
                 );
                 let outcome = shard_assignment.update_lease(shard_epochs, expires_at, revision);
-                let assigned_shard_count = shard_assignment.len();
-                record_assigned_shard_count(assigned_shard_count);
+                record_delivery(ShardDelivery::Renewal, &outcome, shard_assignment.len());
                 Ok(outcome)
             }
             None => Err(sharding_not_ready_error()),
@@ -283,10 +279,25 @@ impl ShardService for ShardServiceDefault {
     }
 }
 
-fn sharding_not_ready_error() -> WorkerExecutorError {
-    WorkerExecutorError::Unknown {
-        details: "Sharding is not ready".to_string(),
+/// Records what every delivery updates: the resulting shard count, and, when the delivery was
+/// dropped for being older than the last applied, the staleness itself.
+///
+/// One function rather than a line per delivery, so a delivery added later cannot record the
+/// count and silently forget the staleness.
+fn record_delivery(delivery: ShardDelivery, outcome: &ShardDeliveryOutcome, assigned: usize) {
+    record_assigned_shard_count(assigned);
+    if matches!(outcome, ShardDeliveryOutcome::Stale { .. }) {
+        record_stale_shard_delivery(delivery);
     }
+}
+
+/// No assignment is installed yet, so this executor cannot answer for any shard.
+///
+/// The same variant as [`shard_lease_expired_error`], because a caller wants the same thing of
+/// both: refresh the routing table and retry elsewhere. They stay separate names so the two
+/// states read differently at the call sites, which is the only place they differ.
+fn sharding_not_ready_error() -> WorkerExecutorError {
+    WorkerExecutorError::ShardingNotReady
 }
 
 /// The self-fence. Surfaced as `ShardingNotReady` because the worker service
@@ -363,23 +374,49 @@ mod tests {
     fn a_delivery_before_registration_is_refused() {
         let service = ShardServiceDefault::new();
 
-        assert!(
-            service
-                .assign_shards(SHARDS, &epochs([(0, 1)]), live(), ShardLeaseRevision(1))
-                .is_err()
-        );
-        assert!(
-            service
-                .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(1))
-                .is_err()
-        );
-        assert!(
-            service
-                .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(1))
-                .is_err()
-        );
+        // The variant is the contract, not merely that it failed: the worker service answers
+        // `ShardingNotReady` by refreshing its routing table and retrying, and answers an opaque
+        // error by failing the call.
+        for refused in [
+            service.assign_shards(SHARDS, &epochs([(0, 1)]), live(), ShardLeaseRevision(1)),
+            service.update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(1)),
+            service.revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(1)),
+        ] {
+            assert!(
+                matches!(refused, Err(WorkerExecutorError::ShardingNotReady)),
+                "a delivery before registration must be refused as ShardingNotReady, got {refused:?}"
+            );
+        }
         assert!(!service.is_ready());
         assert!(service.try_get_current_assignment().is_none());
+    }
+
+    /// The revision gate is silent by design - dropping the older of two crossed deliveries is
+    /// correct, so it only warns. That makes a *sustained* drop rate invisible in logs, which is
+    /// what the counter is for.
+    #[test]
+    fn a_dropped_delivery_is_counted_and_not_only_logged() {
+        let service = ShardServiceDefault::new();
+        service.register(
+            SHARDS,
+            &epochs([(0, 1), (1, 1)]),
+            live(),
+            ShardLeaseRevision(5),
+        );
+
+        let before = stale_shard_delivery_count(ShardDelivery::Renewal);
+        let outcome = service
+            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(3))
+            .expect("a registered executor can be renewed");
+
+        assert!(
+            matches!(outcome, ShardDeliveryOutcome::Stale { .. }),
+            "a renewal below the applied revision is dropped"
+        );
+        assert!(
+            stale_shard_delivery_count(ShardDelivery::Renewal) > before,
+            "and dropping it moves the counter for its own delivery kind"
+        );
     }
 
     /// A revoke is a delta rather than a full set, and it is gated on the revision like every

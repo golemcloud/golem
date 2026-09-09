@@ -129,7 +129,11 @@ pub struct ShardRegistration {
 
 /// An executor's shard lease: the complete set of shards it owns with the epoch
 /// of each, and when the lease lapses if it is not renewed.
-#[derive(Debug, Clone, Default)]
+///
+/// Deliberately not `Default`: the default expiry would be `None`, which is the never-expires
+/// sentinel, and a lease that never expires is something only the single-shard executor may
+/// declare - never something a wire decode falls back to.
+#[derive(Debug, Clone)]
 pub struct ShardLease {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     /// On this executor's own clock. The wire carries the time left on the

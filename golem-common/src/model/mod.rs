@@ -565,7 +565,8 @@ pub enum ShardDeliveryOutcome {
 }
 
 /// The shards this executor currently holds, with the epoch each was granted
-/// at, and the absolute server time at which the lease over them lapses.
+/// at, and when the lease over them lapses on this executor's own clock, if
+/// it lapses at all.
 #[derive(Clone, Debug, Default)]
 pub struct ShardAssignment {
     pub number_of_shards: usize,
@@ -635,9 +636,9 @@ impl ShardAssignment {
     }
 
     /// Full replace from a registration or a push: hold exactly these shards,
-    /// drop everything else. One of the two doors a delivery comes through;
-    /// the other is [`Self::update_lease`], and both gate on the revision the
-    /// same way in [`Self::apply`].
+    /// drop everything else. One of the three doors a delivery comes through,
+    /// with [`Self::update_lease`] and [`Self::revoke_shards`]; all three gate
+    /// on the revision the same way in [`Self::apply`].
     pub fn set_shards(
         &mut self,
         number_of_shards: usize,
@@ -662,8 +663,8 @@ impl ShardAssignment {
         self.apply(None, shard_epochs, expires_at, revision)
     }
 
-    /// The one place a full set is applied; [`Self::revoke_shards`], the one
-    /// delta, gates the same way.
+    /// The one place any delivery is applied, including [`Self::revoke_shards`], which turns its
+    /// delta into the set it leaves behind and comes through here.
     ///
     /// Two deliveries can cross on the network - a renewal response computed
     /// before a push, arriving after it - and both say "hold exactly this", so
@@ -694,30 +695,25 @@ impl ShardAssignment {
         ShardDeliveryOutcome::Applied { set_changed }
     }
 
-    /// A revoke: `shard_ids` are dropped and everything else is kept. The one
-    /// delta among the deliveries, gated on `revision` like the rest, so a
-    /// grant read before the shards moved and arriving after this cannot put
-    /// them back. The expiry is left alone: a revoke says nothing about the
-    /// lease.
+    /// A revoke: `shard_ids` are dropped and everything else is kept.
+    ///
+    /// The one delta among the deliveries, but applied as the set it leaves behind, so it goes
+    /// through the same gate as the rest: a grant read before the shards moved and arriving after
+    /// this is older, and cannot put them back. The expiry is carried through unchanged - a revoke
+    /// says nothing about the lease.
+    ///
+    /// Adopting the revoke's revision is safe even though this is a delta, because the shard
+    /// manager sends the full set at that same revision in the same pass: nothing older than it is
+    /// still needed.
     pub fn revoke_shards(
         &mut self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
     ) -> ShardDeliveryOutcome {
-        if revision < self.revision {
-            return ShardDeliveryOutcome::Stale {
-                delivered: revision,
-                applied: self.revision,
-            };
-        }
-        let before = self.shard_epochs.len();
-        for shard_id in shard_ids {
-            self.shard_epochs.remove(shard_id);
-        }
-        self.revision = revision;
-        ShardDeliveryOutcome::Applied {
-            set_changed: self.shard_epochs.len() != before,
-        }
+        let mut remaining = self.shard_epochs.clone();
+        remaining.retain(|shard_id, _| !shard_ids.contains(shard_id));
+        let expires_at = self.expires_at;
+        self.apply(None, &remaining, expires_at, revision)
     }
 
     /// Drops every shard, keeping `number_of_shards`, and leaves the lease
@@ -2594,7 +2590,13 @@ mod shard_assignment_tests {
     #[test]
     fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
-        assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), None, ShardLeaseRevision(3));
+        let expiry = chrono::Utc::now() + chrono::Duration::seconds(60);
+        assignment.set_shards(
+            8,
+            &epochs([(0, 1), (1, 1)]),
+            Some(expiry),
+            ShardLeaseRevision(3),
+        );
         let revoked = HashSet::from([ShardId::new(0)]);
 
         let stale = assignment.revoke_shards(&revoked, ShardLeaseRevision(2));
@@ -2617,6 +2619,11 @@ mod shard_assignment_tests {
             assignment.revision,
             ShardLeaseRevision(5),
             "the revoke's revision is recorded like any other delivery's"
+        );
+        assert_eq!(
+            assignment.expires_at,
+            Some(expiry),
+            "a revoke drops shards; it does not touch the lease"
         );
 
         let late_grant =

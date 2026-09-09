@@ -157,7 +157,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let result = match self
             .shard_management
-            .renew_shard_lease(executor_id, &claimed)
+            .renew_shard_lease(executor_id, claimed)
             .await
         {
             Ok(grant) => golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
@@ -190,7 +190,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let result = match self
             .shard_management
-            .deregister_executor(executor_id, &claimed)
+            .deregister_executor(executor_id, claimed)
             .await
         {
             Ok(()) => golem::shardmanager::v1::deregister_response::Result::Success(
