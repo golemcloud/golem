@@ -371,10 +371,10 @@ impl SchedulerServiceDefault {
         let lag_secs = lag.num_milliseconds().max(0) as f64 / 1000.0;
         crate::metrics::scheduler::record_scheduled_action_lag(Duration::from_secs_f64(lag_secs));
 
+        let schedule_id = claimed_action.schedule_id;
+        let lease_owner = claimed_action.lease_owner;
         let action_start = std::time::Instant::now();
-        let processed = self
-            .process_claimed_action(claimed_action.clone(), now)
-            .await;
+        let processed = self.process_claimed_action(claimed_action, now).await;
         crate::metrics::scheduler::record_scheduled_action_processing(
             action_kind,
             action_start.elapsed(),
@@ -385,12 +385,12 @@ impl SchedulerServiceDefault {
 
         let acked = self
             .scheduler_storage
-            .ack(&claimed_action.schedule_id, claimed_action.lease_owner)
+            .ack(&schedule_id, lease_owner)
             .await
             .map_err(|error| {
                 warn!(
-                    schedule_id = %claimed_action.schedule_id,
-                    lease_owner = %claimed_action.lease_owner,
+                    schedule_id = %schedule_id,
+                    lease_owner = %lease_owner,
                     error = %error,
                     "Failed to acknowledge scheduled action; aborting scheduler tick"
                 );
@@ -398,8 +398,8 @@ impl SchedulerServiceDefault {
             })?;
         if !acked {
             warn!(
-                schedule_id = %claimed_action.schedule_id,
-                lease_owner = %claimed_action.lease_owner,
+                schedule_id = %schedule_id,
+                lease_owner = %lease_owner,
                 "Failed to acknowledge scheduled action because the lease was lost"
             );
         }
@@ -408,7 +408,8 @@ impl SchedulerServiceDefault {
 
     async fn with_lease_renewal<T, F>(
         &self,
-        claimed_action: &ClaimedScheduledAction,
+        schedule_id: ScheduleId,
+        lease_owner: uuid::Uuid,
         operation: F,
     ) -> Result<T, String>
     where
@@ -426,8 +427,8 @@ impl SchedulerServiceDefault {
                     let lease_until = Utc::now().add(self.lease_ttl);
                     let renewed = self.scheduler_storage
                         .extend_lease(
-                            &claimed_action.schedule_id,
-                            claimed_action.lease_owner,
+                            &schedule_id,
+                            lease_owner,
                             lease_until,
                         )
                         .await?;
@@ -435,7 +436,7 @@ impl SchedulerServiceDefault {
                     if !renewed {
                         return Err(format!(
                             "lease for scheduled action {} was lost before processing completed",
-                            claimed_action.schedule_id
+                            schedule_id
                         ));
                     }
                 }
@@ -448,7 +449,9 @@ impl SchedulerServiceDefault {
         claimed_action: ClaimedScheduledAction,
         now: DateTime<Utc>,
     ) -> bool {
-        match claimed_action.action.clone() {
+        let schedule_id = claimed_action.schedule_id;
+        let lease_owner = claimed_action.lease_owner;
+        match claimed_action.action {
             ScheduledAction::CompletePromise {
                 account_id: _,
                 promise_id,
@@ -512,7 +515,7 @@ impl SchedulerServiceDefault {
                             Ok(oplog) => {
                                 let start = Instant::now();
                                 let archive_result = self
-                                    .with_lease_renewal(&claimed_action, async {
+                                    .with_lease_renewal(schedule_id, lease_owner, async {
                                         match MultiLayerOplog::try_archive(&oplog).await {
                                             Some(r) => Some(r),
                                             None => EphemeralOplog::try_archive(&oplog).await,
@@ -523,7 +526,7 @@ impl SchedulerServiceDefault {
                                     Ok(result) => result,
                                     Err(error) => {
                                         warn!(
-                                            schedule_id = %claimed_action.schedule_id,
+                                            schedule_id = %schedule_id,
                                             agent_id = owned_agent_id.to_string(),
                                             "Stopped scheduled oplog archival because lease renewal failed: {error}"
                                         );
