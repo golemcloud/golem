@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::ExecutionStatus;
+use crate::services::stream_session_index::StreamSessionIndexService;
 use async_trait::async_trait;
 pub use blob::BlobOplogArchiveService;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
@@ -34,10 +35,10 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    OwnedAgentId, ScanCursor, Timestamp,
+    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, Timestamp,
 };
 use golem_common::read_only_lock;
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 pub use ephemeral::EphemeralOplog;
@@ -59,6 +60,7 @@ mod multilayer;
 pub mod plugin;
 mod primary;
 pub mod rate_limited;
+mod raw_session;
 mod reader;
 
 #[cfg(test)]
@@ -83,6 +85,16 @@ pub mod tests;
 ///
 #[async_trait]
 pub trait OplogService: Debug + Send + Sync {
+    /// Installs the shared index after the complete oplog layer stack has been constructed.
+    /// Primary actors need the index, but reconstruction must read through the outer service so
+    /// archived entries and payloads remain visible. Constructing an index from primary storage
+    /// alone would bypass those layers. The index therefore holds only a Weak reference back to
+    /// the completed service; this dependency does not form an owning Arc cycle. Installation is
+    /// single-shot so actors and worker-status persistence share the same index instance.
+    fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>);
+
+    fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>>;
+
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -462,6 +474,12 @@ pub type IndexedReservedStartBuilder =
 /// index after the append finishes.
 pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawDurableStreamSessionStatus {
+    pub watermark: OplogIndex,
+    pub status: Result<Option<DurableStreamSessionStatus>, String>,
+}
+
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
@@ -525,6 +543,18 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
+
+    /// Returns actor-ordered lifecycle metadata including buffered raw appends. Absence is proven
+    /// through the returned watermark; storage failures must not be reported as absence.
+    async fn raw_durable_stream_session_status(
+        &self,
+        _session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> RawDurableStreamSessionStatus {
+        RawDurableStreamSessionStatus {
+            watermark: self.current_oplog_index().await,
+            status: Err("raw stream session metadata is unavailable".into()),
+        }
+    }
 
     /// Returns the index of the last non-hint entry which was added in this session with `add`. If
     /// there is no such entry, returns `None`.
@@ -696,9 +726,13 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
 ) -> Result<T, String> {
-    tokio::task::spawn_blocking(move || deserialize(&bytes))
-        .await
-        .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
+    tokio::task::spawn_blocking(move || {
+        golem_common::serialization::try_deserialize(&bytes)?.ok_or_else(|| {
+            "oplog payload has an unsupported or missing serialization version".into()
+        })
+    })
+    .await
+    .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
 }
 
 #[async_trait]

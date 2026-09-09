@@ -546,7 +546,12 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                 last_known_status,
             )
             .await
-            .expect("Failed to calculate worker status for worker even though it is initialized");
+            .map_err(WorkerExecutorError::runtime)?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "worker oplog disappeared while activating worker for promise",
+                )
+            })?;
             initial_worker_metadata.last_known_status = last_known_status;
             initial_worker_metadata
         } else {

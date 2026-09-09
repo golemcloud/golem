@@ -48,6 +48,10 @@ impl RedisKeyValueStorage {
                 "agent-status-checkpoint:{}",
                 agent_id.to_redis_key()
             )),
+            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => Some(format!(
+                "agent:durable_stream_session_index:{}",
+                agent_id.to_redis_key()
+            )),
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,
@@ -115,6 +119,31 @@ impl KeyValueStorage for RedisKeyValueStorage {
                 .await
                 .map_err(|redis_err| redis_err.to_string()),
         }
+    }
+
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        for (_, value) in pairs {
+            record_redis_serialized_size(svc_name, entity_name, value.len());
+        }
+        let Some(namespace) = Self::use_hash(&namespace) else {
+            return Err(
+                "compare_and_set_many is unsupported for non-hash Redis namespaces".to_string(),
+            );
+        };
+        self.redis
+            .with(svc_name, api_name)
+            .compare_and_set_many_hash(namespace, key, expected, pairs)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn set_if_not_exists(

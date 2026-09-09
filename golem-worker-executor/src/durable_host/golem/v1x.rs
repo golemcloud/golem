@@ -1119,6 +1119,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         result.last_known_status,
                     )
                     .await
+                    .map_err(anyhow::Error::msg)?
                     {
                         metadata.last_known_status = status;
                     }

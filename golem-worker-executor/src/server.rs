@@ -39,11 +39,7 @@ fn main() -> Result<(), anyhow::Error> {
 
             let prometheus = metrics::register_all();
 
-            let runtime = Arc::new(
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()?,
-            );
+            let runtime = Arc::new(bootstrap::create_runtime()?);
 
             runtime.block_on(async_main(config, prometheus, runtime.clone()))
         }
