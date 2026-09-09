@@ -4905,16 +4905,67 @@ impl KeyValueService for FailingKeyValueService {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BlobStoreMutationCall {
+    WriteData {
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_name: String,
+        data: Vec<u8>,
+    },
+    DeleteObjects {
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_names: Vec<String>,
+    },
+}
+
+#[derive(Default)]
+pub struct BlobStoreMutationRecorder {
+    calls: RwLock<Vec<BlobStoreMutationCall>>,
+}
+
+impl BlobStoreMutationRecorder {
+    pub fn calls(&self) -> Vec<BlobStoreMutationCall> {
+        self.calls.read().unwrap().clone()
+    }
+
+    fn record(&self, call: BlobStoreMutationCall) {
+        self.calls.write().unwrap().push(call);
+    }
+}
+
 pub struct FailingBlobStoreService {
     inner: Arc<dyn BlobStoreService>,
-    remaining_failures: AtomicU32,
+    remaining_get_data_failures: AtomicU32,
+    remaining_write_data_failures: AtomicU32,
+    remaining_delete_objects_failures: AtomicU32,
+    mutation_recorder: Option<Arc<BlobStoreMutationRecorder>>,
 }
 
 impl FailingBlobStoreService {
     pub fn new(inner: Arc<dyn BlobStoreService>, failure_count: u32) -> Self {
         Self {
             inner,
-            remaining_failures: AtomicU32::new(failure_count),
+            remaining_get_data_failures: AtomicU32::new(failure_count),
+            remaining_write_data_failures: AtomicU32::new(0),
+            remaining_delete_objects_failures: AtomicU32::new(0),
+            mutation_recorder: None,
+        }
+    }
+
+    pub fn with_mutation_failures(
+        inner: Arc<dyn BlobStoreService>,
+        write_data_failures: u32,
+        delete_objects_failures: u32,
+        recorder: Arc<BlobStoreMutationRecorder>,
+    ) -> Self {
+        Self {
+            inner,
+            remaining_get_data_failures: AtomicU32::new(0),
+            remaining_write_data_failures: AtomicU32::new(write_data_failures),
+            remaining_delete_objects_failures: AtomicU32::new(delete_objects_failures),
+            mutation_recorder: Some(recorder),
         }
     }
 }
@@ -4992,12 +5043,29 @@ impl BlobStoreService for FailingBlobStoreService {
     async fn delete_objects(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_names: Vec<String>,
+        container_name: &str,
+        object_names: &[String],
     ) -> Result<(), BlobStoreError> {
-        self.inner
-            .delete_objects(environment_id, container_name, object_names)
-            .await
+        if let Some(recorder) = &self.mutation_recorder {
+            recorder.record(BlobStoreMutationCall::DeleteObjects {
+                environment_id,
+                container_name: container_name.to_string(),
+                object_names: object_names.to_vec(),
+            });
+        }
+        if self
+            .remaining_delete_objects_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(BlobStoreError::TransientBackend(
+                "transient test failure".to_string(),
+            ))
+        } else {
+            self.inner
+                .delete_objects(environment_id, container_name, object_names)
+                .await
+        }
     }
 
     async fn get_container(
@@ -5019,7 +5087,7 @@ impl BlobStoreService for FailingBlobStoreService {
         end: u64,
     ) -> Result<Vec<u8>, BlobStoreError> {
         if self
-            .remaining_failures
+            .remaining_get_data_failures
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
@@ -5087,13 +5155,31 @@ impl BlobStoreService for FailingBlobStoreService {
     async fn write_data(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_name: String,
-        data: Vec<u8>,
+        container_name: &str,
+        object_name: &str,
+        data: &[u8],
     ) -> Result<(), BlobStoreError> {
-        self.inner
-            .write_data(environment_id, container_name, object_name, data)
-            .await
+        if let Some(recorder) = &self.mutation_recorder {
+            recorder.record(BlobStoreMutationCall::WriteData {
+                environment_id,
+                container_name: container_name.to_string(),
+                object_name: object_name.to_string(),
+                data: data.to_vec(),
+            });
+        }
+        if self
+            .remaining_write_data_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(BlobStoreError::TransientBackend(
+                "transient test failure".to_string(),
+            ))
+        } else {
+            self.inner
+                .write_data(environment_id, container_name, object_name, data)
+                .await
+        }
     }
 }
 

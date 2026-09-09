@@ -95,8 +95,8 @@ pub trait BlobStoreService: Send + Sync {
     async fn delete_objects(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_names: Vec<String>,
+        container_name: &str,
+        object_names: &[String],
     ) -> Result<(), BlobStoreError>;
 
     async fn get_container(
@@ -146,9 +146,9 @@ pub trait BlobStoreService: Send + Sync {
     async fn write_data(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_name: String,
-        data: Vec<u8>,
+        container_name: &str,
+        object_name: &str,
+        data: &[u8],
     ) -> Result<(), BlobStoreError>;
 }
 
@@ -280,12 +280,12 @@ impl BlobStoreService for DefaultBlobStoreService {
     async fn delete_objects(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_names: Vec<String>,
+        container_name: &str,
+        object_names: &[String],
     ) -> Result<(), BlobStoreError> {
         let paths: Vec<PathBuf> = object_names
             .iter()
-            .map(|object_name| Path::new(&container_name).join(object_name))
+            .map(|object_name| Path::new(container_name).join(object_name))
             .collect();
         self.blob_storage
             .delete_many(
@@ -440,17 +440,17 @@ impl BlobStoreService for DefaultBlobStoreService {
     async fn write_data(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_name: String,
-        data: Vec<u8>,
+        container_name: &str,
+        object_name: &str,
+        data: &[u8],
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .put_raw(
                 "blob_store",
                 "write_data",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&container_name).join(&object_name),
-                &data,
+                &Path::new(container_name).join(object_name),
+                data,
             )
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
@@ -522,12 +522,7 @@ mod tests {
 
         let original_data = vec![1, 2, 3, 4];
         blob_store
-            .write_data(
-                environment_id,
-                "container1".to_string(),
-                "obj1".to_string(),
-                original_data.clone(),
-            )
+            .write_data(environment_id, "container1", "obj1", &original_data)
             .await
             .unwrap();
 
@@ -573,12 +568,7 @@ mod tests {
 
         let original_data = vec![1, 2, 3, 4];
         blob_store
-            .write_data(
-                environment_id,
-                "container1".to_string(),
-                "obj1".to_string(),
-                original_data.clone(),
-            )
+            .write_data(environment_id, "container1", "obj1", &original_data)
             .await
             .unwrap();
 
