@@ -1328,13 +1328,11 @@ impl ForwardingOplogState {
 
         if flush_set.is_empty() {
             self.finish_empty_flush();
-        } else if let Some((metadata, component_metadata)) =
-            self.prepare_flush_context(&status).await
-        {
+        } else if let Some(component_metadata) = self.get_component_metadata(&status).await {
             let committed_tail = self.last_committed_idx;
 
             for grant_id in flush_set {
-                self.flush_one_plugin(grant_id, committed_tail, &metadata, &component_metadata)
+                self.flush_one_plugin(grant_id, committed_tail, &status, &component_metadata)
                     .await;
             }
 
@@ -1387,26 +1385,18 @@ impl ForwardingOplogState {
             .collect()
     }
 
-    /// Build the AgentMetadata and fetch component metadata needed for the flush.
+    /// Fetch component metadata needed for the flush.
     /// Returns `None` if component metadata cannot be retrieved.
-    async fn prepare_flush_context(
-        &self,
-        status: &AgentStatusRecord,
-    ) -> Option<(AgentMetadata, Component)> {
-        let metadata = AgentMetadata {
-            last_known_status: status.clone(),
-            ..self.initial_worker_metadata.clone()
-        };
-
+    async fn get_component_metadata(&self, status: &AgentStatusRecord) -> Option<Component> {
         match self
             .components
             .get_metadata(
-                metadata.owned_agent_id().component_id(),
+                self.initial_worker_metadata.owned_agent_id().component_id(),
                 Some(status.component_revision),
             )
             .await
         {
-            Ok(component_metadata) => Some((metadata, component_metadata)),
+            Ok(component_metadata) => Some(component_metadata),
             Err(err) => {
                 tracing::error!(
                     "Failed to get component metadata for oplog processor flush: {err}"
@@ -1425,7 +1415,7 @@ impl ForwardingOplogState {
         &mut self,
         grant_id: EnvironmentPluginGrantId,
         committed_tail: OplogIndex,
-        metadata: &AgentMetadata,
+        status: &AgentStatusRecord,
         component_metadata: &Component,
     ) {
         let live = match self.plugin_state.get(&grant_id) {
@@ -1477,7 +1467,7 @@ impl ForwardingOplogState {
         } else {
             match self
                 .oplog_plugins
-                .resolve_target(metadata.environment_id, &plugin)
+                .resolve_target(self.initial_worker_metadata.environment_id, &plugin)
                 .await
             {
                 Ok(id) => {
@@ -1549,21 +1539,30 @@ impl ForwardingOplogState {
             }
         }
 
+        let metadata = AgentMetadata {
+            agent_id: self.initial_worker_metadata.agent_id.clone(),
+            env: self.initial_worker_metadata.env.clone(),
+            environment_id: self.initial_worker_metadata.environment_id,
+            created_by: self.initial_worker_metadata.created_by,
+            created_by_email: self.initial_worker_metadata.created_by_email.clone(),
+            config: self.initial_worker_metadata.config.clone(),
+            created_at: self.initial_worker_metadata.created_at,
+            parent: self.initial_worker_metadata.parent.clone(),
+            last_known_status: status.clone(),
+            original_phantom_id: self.initial_worker_metadata.original_phantom_id,
+            fingerprint: self.initial_worker_metadata.fingerprint,
+            agent_mode: self.initial_worker_metadata.agent_mode,
+        };
+
         match self
             .oplog_plugins
-            .send(
-                metadata.clone(),
-                &plugin,
-                &target_agent_id,
-                batch_start,
-                entries,
-            )
+            .send(metadata, &plugin, &target_agent_id, batch_start, entries)
             .await
         {
             Ok(()) => {
                 tracing::info!(
                     plugin_name = plugin.plugin_name,
-                    source_agent = %metadata.agent_id,
+                    source_agent = %self.initial_worker_metadata.agent_id,
                     target_agent = %target_agent_id,
                     batch_start = %batch_start,
                     batch_end = %batch_end,
@@ -1589,15 +1588,15 @@ impl ForwardingOplogState {
                 // Compute the idempotency key here so only lightweight data
                 // needs to be moved into the task.
                 let idempotency_key = oplog_processor_idempotency_key(
-                    &metadata.agent_id,
+                    &self.initial_worker_metadata.agent_id,
                     &plugin.environment_plugin_grant_id,
                     batch_start,
                     batch_end,
                 );
                 let worker_event_service = self.worker_event_service.clone();
                 let oplog_plugins = self.oplog_plugins.clone();
-                let environment_id = metadata.environment_id;
-                let caller_account_id = metadata.created_by;
+                let environment_id = self.initial_worker_metadata.environment_id;
+                let caller_account_id = self.initial_worker_metadata.created_by;
                 let target_clone = target_agent_id.clone();
                 // The task polls on after this flush returned, so it links back to
                 // the flush rather than running inside its span. See `TraceOrigin`.
@@ -1605,7 +1604,7 @@ impl ForwardingOplogState {
                     TraceOrigin::capture_current(),
                     tracing::Level::INFO,
                     "oplog_plugin_batch_monitor",
-                    agent_id = %metadata.agent_id,
+                    agent_id = %self.initial_worker_metadata.agent_id,
                     grant_id = %grant_id,
                     batch_start = %batch_start,
                     batch_end = %batch_end
@@ -1683,7 +1682,7 @@ impl ForwardingOplogState {
                 if target_is_local {
                     // Local failure: invalidate target so next flush creates a fresh instance
                     self.oplog_plugins
-                        .invalidate_target(metadata.environment_id, &plugin)
+                        .invalidate_target(self.initial_worker_metadata.environment_id, &plugin)
                         .await;
                     if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                         s.target_agent_id = None;
@@ -1825,8 +1824,8 @@ impl ForwardingOplogState {
             return;
         }
 
-        let component_metadata = match self.prepare_flush_context(&status).await {
-            Some((_, cm)) => cm,
+        let component_metadata = match self.get_component_metadata(&status).await {
+            Some(cm) => cm,
             None => return,
         };
 
