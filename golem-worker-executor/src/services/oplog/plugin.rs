@@ -1323,7 +1323,7 @@ impl ForwardingOplogState {
     /// Entries are always read from the persisted oplog (canonical source) to avoid
     /// buffer/index drift caused by checkpoint entries injected during flush.
     pub async fn try_flush(&mut self) {
-        let status = self.last_known_status.get().as_ref().clone();
+        let status = self.last_known_status.get();
         let flush_set = self.reconcile_plugin_state(&status);
 
         if flush_set.is_empty() {
@@ -1804,7 +1804,7 @@ impl ForwardingOplogState {
     /// delivery always goes to the recorded `target_agent_id` with deterministic
     /// idempotency keys.
     async fn try_locality_recovery(&mut self) {
-        let status = self.last_known_status.get().as_ref().clone();
+        let status = self.last_known_status.get();
         // Ensure plugin_state is reconciled with current status
         self.reconcile_plugin_state(&status);
         let environment_id = self.initial_worker_metadata.environment_id;
