@@ -595,14 +595,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             .filter(|entry| is_authority_state_entry(entry))
             .count() as u64;
 
-        let changed = if self.detached.load(Ordering::Acquire) {
-            false
-        } else if new_entries.is_empty() {
-            // Folding no entries onto the record is the identity, so there is nothing to install
-            // and nothing to notify about. Deciding it here skips the copy of the record the fold
-            // would otherwise need on every commit that turned out to be empty.
-            false
-        } else {
+        let changed = if !self.detached.load(Ordering::Acquire) {
             let old_status = self.last_known_status.load_full();
 
             let updated_status = update_status_with_new_entries(
@@ -613,10 +606,11 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             );
 
             match updated_status {
-                // No `!=` against the old record: the fold takes `oplog_idx` from the highest new
-                // entry, so a non-empty fold always produces a different record, and comparing
-                // them would walk the whole record on every commit.
-                Ok(Some(updated_status)) => {
+                // The comparison stays. Skipping the fold when the commit produced no entries
+                // would not be equivalent: the fold's `finalize` step prunes oplog-processor
+                // checkpoints that are neither active nor in-flight, and it runs whether or not
+                // there were entries (see `empty_fold_is_not_the_identity` in `status`).
+                Ok(Some(updated_status)) if updated_status != *old_status => {
                     let updated_status = self.update_last_known_status(updated_status).await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
@@ -624,6 +618,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
 
                     true
                 }
+                Ok(Some(_)) => false,
                 Ok(None) => {
                     // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
                     // This can happen during a revert or a snapshot update for example.
@@ -646,6 +641,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     true
                 }
             }
+        } else {
+            false
         };
 
         // This release-publish is deliberately owned by the cancellation-proof
