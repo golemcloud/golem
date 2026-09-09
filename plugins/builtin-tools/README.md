@@ -28,4 +28,4 @@ Component-implemented built-ins are grantable registry releases, not ambient too
 manifest must select the exact release under `tools.<name>.release` **and** bind that logical name
 under `agents.<agent>.tools`. Native tools compiled into the host use separate registry/executor
 startup inventories and are ambient, so they have no top-level release declaration. See
-`sdks/rust/golem-native-tool/README.md` for that path.
+`golem-native-tool/README.md` for that path.

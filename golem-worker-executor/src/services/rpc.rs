@@ -28,9 +28,9 @@ use crate::services::worker_proxy::{InvocationResponseStream, WorkerProxy, Worke
 use crate::services::{
     HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
-    HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog, HasOplogProcessorPlugin,
+    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
+    HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
     active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
@@ -814,6 +814,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     resource_limits: Arc<dyn ResourceLimits>,
     shutdown_token: tokio_util::sync::CancellationToken,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
     http_connection_pool: Option<HttpConnectionPool>,
@@ -854,6 +855,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            native_tool_catalog: self.native_tool_catalog.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
@@ -1072,6 +1074,12 @@ impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ct
     }
 }
 
+impl<Ctx: WorkerCtx> HasNativeToolCatalog<Ctx> for DirectWorkerInvocationRpc<Ctx> {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>> {
+        self.native_tool_catalog.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -1107,6 +1115,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         resource_limits: Arc<dyn ResourceLimits>,
         shutdown_token: tokio_util::sync::CancellationToken,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         http_connection_pool: Option<HttpConnectionPool>,
@@ -1144,6 +1153,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             resource_limits,
             shutdown_token,
             environment_state_service,
+            native_tool_catalog,
             agent_types_service,
             agent_webhooks_service,
             http_connection_pool,

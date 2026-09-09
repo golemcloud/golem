@@ -988,6 +988,14 @@ impl From<DeploymentWriteError> for ApiError {
             DeploymentWriteError::DeploymentNotFound(_) => {
                 Self::not_found(api::error_code::DEPLOYMENT_NOT_FOUND, error)
             }
+            DeploymentWriteError::AmbientToolConflict(_)
+            | DeploymentWriteError::DuplicateRemoteToolName(_) => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::deployment_validation::FAILED.to_string(),
+                    cause: None,
+                }))
+            }
 
             DeploymentWriteError::DeploymentValidationFailed(failed_validations) => {
                 Self::BadRequest(Json(ErrorsBody {

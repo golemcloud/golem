@@ -473,6 +473,11 @@ impl ToolReleaseService {
         &self,
         provision: SystemToolReleaseProvision,
     ) -> Result<ToolRelease, ToolReleaseError> {
+        if !is_valid_system_release_source(&provision.source, provision.availability) {
+            return Err(ToolReleaseError::InternalError(anyhow::anyhow!(
+                "system tool release availability does not match its source"
+            )));
+        }
         if let ToolSource::Component {
             component_id,
             component_revision,
@@ -639,6 +644,21 @@ fn is_user_grantable(
     origin == ToolReleaseOrigin::Ordinary || availability == Some(SystemToolAvailability::Grantable)
 }
 
+fn is_valid_system_release_source(
+    source: &ToolSource,
+    availability: SystemToolAvailability,
+) -> bool {
+    matches!(
+        (availability, source),
+        (SystemToolAvailability::Ambient, ToolSource::Host { .. })
+            | (
+                SystemToolAvailability::Grantable,
+                ToolSource::Component { .. }
+            )
+            | (SystemToolAvailability::AutoGranted, _)
+    )
+}
+
 fn authorize_account_tool_release_permission(
     auth: &AuthCtx,
     account_email: &AccountEmail,
@@ -658,7 +678,9 @@ fn authorize_account_tool_release_permission(
 
 #[cfg(test)]
 mod tests {
-    use super::is_user_grantable;
+    use super::{is_user_grantable, is_valid_system_release_source};
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::tool::{HostToolId, ToolSource};
     use golem_common::model::tool_release::{SystemToolAvailability, ToolReleaseOrigin};
     use test_r::test;
 
@@ -676,6 +698,44 @@ mod tests {
         assert!(!is_user_grantable(
             ToolReleaseOrigin::ProtectedSystem,
             Some(SystemToolAvailability::Ambient)
+        ));
+    }
+
+    #[test]
+    fn protected_release_source_matches_availability() {
+        let host = ToolSource::Host {
+            host_tool_id: HostToolId::try_from("native".to_string()).unwrap(),
+            implementation_version: "1".to_string(),
+        };
+        let component = ToolSource::Component {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::INITIAL,
+            component_name: ComponentName("builtin".to_string()),
+        };
+
+        assert!(is_valid_system_release_source(
+            &host,
+            SystemToolAvailability::Ambient
+        ));
+        assert!(is_valid_system_release_source(
+            &component,
+            SystemToolAvailability::Grantable
+        ));
+        assert!(!is_valid_system_release_source(
+            &component,
+            SystemToolAvailability::Ambient
+        ));
+        assert!(!is_valid_system_release_source(
+            &host,
+            SystemToolAvailability::Grantable
+        ));
+        assert!(is_valid_system_release_source(
+            &host,
+            SystemToolAvailability::AutoGranted
+        ));
+        assert!(is_valid_system_release_source(
+            &component,
+            SystemToolAvailability::AutoGranted
         ));
     }
 }

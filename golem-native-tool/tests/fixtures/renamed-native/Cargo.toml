@@ -1,0 +1,15 @@
+[package]
+name = "renamed-native-tool-fixture"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+native_sdk = { package = "golem-native-tool", path = "../../.." }
+
+[patch.crates-io]
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
+wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }

@@ -67,6 +67,7 @@ use crate::services::environment_state::EnvironmentStateService;
 use crate::services::environment_tool_grant::EnvironmentToolGrantService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
+use crate::services::native_tool_catalog::{NativeToolCatalog, compiled_native_tools};
 use crate::services::permission_share::PermissionShareService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
@@ -121,7 +122,7 @@ pub struct Services {
     pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
-    pub native_tool_catalog: Arc<crate::services::native_tool_catalog::NativeToolCatalog>,
+    pub native_tool_catalog: Arc<NativeToolCatalog>,
     pub login_system: LoginSystem,
     pub permission_share_service: Arc<PermissionShareService>,
     pub plan_service: Arc<PlanService>,
@@ -284,13 +285,11 @@ impl Services {
             permission_share_service.clone(),
         ));
 
-        let native_tool_catalog =
-            Arc::new(crate::services::native_tool_catalog::NativeToolCatalog::default());
+        let native_tool_catalog = Arc::new(NativeToolCatalog::default());
         let deployment_service = Arc::new(DeploymentService::new(
             environment_service.clone(),
             application_service.clone(),
             repos.deployment_repo.clone(),
-            repos.component_repo.clone(),
             native_tool_catalog.clone(),
         ));
 
@@ -453,7 +452,7 @@ impl Services {
             });
         }
 
-        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+        crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
             &config.builtin_plugins,
             builtin_plugin_owner_account_id,
             &repos.plugin_repo,
@@ -466,9 +465,7 @@ impl Services {
             &plugin_registration_service,
         )
         .await
-        {
-            tracing::warn!("Failed to provision built-in plugins: {e}");
-        }
+        .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
 
         crate::services::builtin_tool_provisioner::provision_builtin_tools(
             builtin_tool_owner_account_id,
@@ -483,11 +480,15 @@ impl Services {
         .await
         .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
 
-        let builtin_tool_owner_email = config.initial_accounts["builtin_tool_owner"].email.clone();
+        let builtin_tool_owner = &config.initial_accounts["builtin_tool_owner"];
         native_tool_catalog
             .provision(
-                crate::services::native_tool_catalog::compiled_native_tools(),
-                builtin_tool_owner_email,
+                compiled_native_tools(),
+                golem_common::model::account::AccountSummary {
+                    id: builtin_tool_owner.id,
+                    name: builtin_tool_owner.name.clone(),
+                    email: builtin_tool_owner.email.clone(),
+                },
                 &tool_release_service,
             )
             .await

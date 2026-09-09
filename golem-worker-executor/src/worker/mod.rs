@@ -77,9 +77,9 @@ use crate::services::{
     All, HasActiveAgents, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasQuotaService,
-    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
-    HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
+    HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService, HasPromiseService,
+    HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
+    HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
@@ -1217,6 +1217,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.card_service(),
             self.card_interest_index.clone(),
             self.component_service(),
+            self.native_tool_catalog(),
             self.extra_deps(),
             self.config(),
             filesystem_context,
@@ -7176,6 +7177,7 @@ impl RunningWorker {
             parent.card_service(),
             parent.card_interest_index.clone(),
             parent.component_service(),
+            parent.native_tool_catalog(),
             parent.extra_deps(),
             parent.config(),
             filesystem_context,

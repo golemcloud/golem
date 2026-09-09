@@ -365,6 +365,13 @@ pub enum ManifestSecretKeyScope {
     Keys(Vec<String>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ManifestConfigKeyScope {
+    All(String),
+    Keys(Vec<String>),
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolBinding {
@@ -379,7 +386,7 @@ pub struct ToolBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_keys_readable_merge_mode: Option<SecretKeyMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_keys_readable: Option<ManifestSecretKeyScope>,
+    pub config_keys_readable: Option<ManifestConfigKeyScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_keys_readable_merge_mode: Option<SecretKeyMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1726,6 +1733,14 @@ mod test {
         .boxed()
     }
 
+    fn arb_config_key_scope_model() -> BoxedStrategy<ManifestConfigKeyScope> {
+        prop_oneof![
+            Just(ManifestConfigKeyScope::All("*".to_string())),
+            prop::collection::vec(arb_ident(), 0..=3).prop_map(ManifestConfigKeyScope::Keys),
+        ]
+        .boxed()
+    }
+
     fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
         (
             arb_opt(arb_semver()),
@@ -1741,7 +1756,7 @@ mod test {
                     .boxed(),
             ),
             arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
-            arb_opt(arb_secret_key_scope_model()),
+            arb_opt(arb_config_key_scope_model()),
             arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
             arb_opt(arb_secret_key_scope_model()),
             arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),

@@ -615,6 +615,7 @@ impl WorkerCtx for DebugContext {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<golem_worker_executor::native_tool::NativeToolCatalog<Self>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_filesystem: WorkerFilesystemContext,
@@ -637,7 +638,7 @@ impl WorkerCtx for DebugContext {
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem: FilesystemCapability,
-        executable_component: Component,
+        executable: golem_worker_executor::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         let account_resource_limits = owner_resources.resource_limits();
@@ -662,6 +663,7 @@ impl WorkerCtx for DebugContext {
             card_service,
             card_interest_index,
             component_service,
+            native_tool_catalog,
             account_resource_limits,
             config,
             worker_filesystem,
@@ -686,7 +688,7 @@ impl WorkerCtx for DebugContext {
             owner_resources,
             None,
             filesystem,
-            executable_component,
+            executable,
             entity_activation,
         )
         .await?;
@@ -741,6 +743,10 @@ impl WorkerCtx for DebugContext {
 
     fn component_metadata(&self) -> &Component {
         self.durable_ctx.component_metadata()
+    }
+
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {

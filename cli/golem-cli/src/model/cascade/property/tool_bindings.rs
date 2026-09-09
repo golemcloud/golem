@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app_raw::{ManifestSecretKeyScope, ToolBinding};
+use crate::model::app_raw::{ManifestConfigKeyScope, ManifestSecretKeyScope, ToolBinding};
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::map::MapMergeMode;
@@ -25,7 +25,7 @@ pub struct ToolBindingState {
     pub version: Option<String>,
     pub parameters: IndexMap<String, serde_json::Value>,
     pub account: Option<String>,
-    pub config_keys_readable: Vec<ManifestSecretKeyScope>,
+    pub config_keys_readable: Vec<ManifestConfigKeyScope>,
     pub secret_keys_readable: Vec<ManifestSecretKeyScope>,
     pub secret_keys_revealable: Vec<ManifestSecretKeyScope>,
 }

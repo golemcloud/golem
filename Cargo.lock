@@ -4004,8 +4004,7 @@ name = "golem-native-tool"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "blake3",
- "desert_rust",
+ "golem-common",
  "golem-rust-macro",
  "golem-schema",
  "golem-tool-metadata",
@@ -4113,6 +4112,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+ "test-r",
 ]
 
 [[package]]

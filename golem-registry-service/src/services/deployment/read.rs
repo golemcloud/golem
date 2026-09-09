@@ -93,7 +93,6 @@ impl DeploymentService {
         environment_service: Arc<EnvironmentService>,
         application_service: Arc<ApplicationService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
-        _component_repo: Arc<dyn crate::repo::component::ComponentRepo>,
         native_tool_catalog: Arc<NativeToolCatalog>,
     ) -> Self {
         Self {

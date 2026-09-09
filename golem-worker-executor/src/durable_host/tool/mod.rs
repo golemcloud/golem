@@ -61,7 +61,7 @@ use crate::preview2::tool_guest::exports::golem::tool::guest as tool_guest_expor
 use crate::services::environment_state::{
     ToolActivationOutcome, ToolDiscoveryError, ToolDispatchTarget,
 };
-use crate::services::{HasActiveAgents, HasWorker};
+use crate::services::{HasActiveAgents, HasNativeToolCatalog, HasWorker};
 use crate::worker::entity_invocation::{RetainedEntityStore, RetainedNativeContext};
 use crate::worker::instance::EntityInvocationBody;
 use crate::worker::invocation::{
@@ -2027,7 +2027,8 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
         host_tool_id: host_tool_id.clone(),
         implementation_version: implementation_version.clone(),
     };
-    let Some(native_registration) = Ctx::native_tool_catalog().get(&key) else {
+    let native_tool_catalog = worker.native_tool_catalog();
+    let Some(native_registration) = native_tool_catalog.get(&key) else {
         return (
             Err(WorkerExecutorError::runtime(format!(
                 "native tool implementation '{:?}@{}' is not installed",
@@ -2054,16 +2055,18 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
         host_tool_id: host_tool_id.clone(),
         implementation_version: implementation_version.clone(),
     };
-    let mut ctx = match worker
-        .create_entity_context(
+    let mut ctx = match await_native_entity_body(
+        &runner_abort,
+        worker.create_entity_context(
             golem_common::model::entity::OwnerRuntime::Entity(scope.activation().entity()),
             scope.mode(),
             scope.activation().filesystem(),
             executable,
             scope.activation().clone(),
             owner_component_metadata,
-        )
-        .await
+        ),
+    )
+    .await
     {
         Ok(ctx) => ctx,
         Err(error) => return (Err(error), None),
@@ -2110,10 +2113,11 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             .as_ref()
             .map(ToolStdoutWriterEntry::native_writer),
     };
-    let result = tokio::select! {
-        result = handler.invoke(retained.context_mut(), native_invocation) => result,
-        _ = runner_abort.cancelled() => Err(WorkerExecutorError::runtime("native entity body was aborted")),
-    };
+    let result = await_native_entity_body(
+        &runner_abort,
+        handler.invoke(retained.context_mut(), native_invocation),
+    )
+    .await;
     retained
         .context_mut()
         .durable_ctx_mut()
@@ -2138,6 +2142,17 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
     };
     let retained = Box::new(retained) as Box<dyn RetainedEntityStore>;
     (result, Some(retained))
+}
+
+async fn await_native_entity_body<T>(
+    runner_abort: &tokio_util::sync::CancellationToken,
+    body: impl Future<Output = Result<T, WorkerExecutorError>>,
+) -> Result<T, WorkerExecutorError> {
+    tokio::select! {
+        biased;
+        _ = runner_abort.cancelled() => Err(WorkerExecutorError::runtime("native entity body was aborted")),
+        result = body => result,
+    }
 }
 
 async fn guest_trap_stdout_failure(
@@ -4713,9 +4728,10 @@ mod tests {
     use super::{
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry,
         ToolStdinStreamConsumer, ToolStdoutWriterEntry, UnderlyingToolStdinStreamConsumer,
-        WitRegisteredTool, caller_tool_owner, classify_tool_discovery_error,
-        cleanup_tool_endpoints, recorded_tool_body_is_skipped, resolve_tool_command,
-        stdout_limit_error, terminal_tool_discovery_error, validate_stream_attachments,
+        WitRegisteredTool, await_native_entity_body, caller_tool_owner,
+        classify_tool_discovery_error, cleanup_tool_endpoints, recorded_tool_body_is_skipped,
+        resolve_tool_command, stdout_limit_error, terminal_tool_discovery_error,
+        validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -4747,8 +4763,11 @@ mod tests {
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll};
     use test_r::test;
+    use test_r::timeout;
     use tokio::sync::mpsc;
     use wasmtime::component::{
         Component, Destination, Linker, StreamProducer, StreamReader, StreamResult,
@@ -4757,6 +4776,49 @@ mod tests {
 
     struct OneBufferProducer {
         buffer: Option<bytes::Bytes>,
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn pending_native_entity_setup_is_cancelled_by_runner_abort() {
+        let runner_abort = tokio_util::sync::CancellationToken::new();
+        let setup_polled = Arc::new(tokio::sync::Notify::new());
+        let setup_polled_by_future = setup_polled.clone();
+        let abort = runner_abort.clone();
+        let cancel = tokio::spawn(async move {
+            setup_polled.notified().await;
+            abort.cancel();
+        });
+        let setup = std::future::poll_fn(move |_| {
+            setup_polled_by_future.notify_one();
+            Poll::<Result<(), WorkerExecutorError>>::Pending
+        });
+
+        let error = await_native_entity_body(&runner_abort, setup)
+            .await
+            .unwrap_err();
+        cancel.await.unwrap();
+
+        assert!(format!("{error}").contains("native entity body was aborted"));
+    }
+
+    #[test]
+    async fn pre_cancelled_runner_abort_does_not_poll_native_handler() {
+        let runner_abort = tokio_util::sync::CancellationToken::new();
+        runner_abort.cancel();
+        let handler_polls = Arc::new(AtomicUsize::new(0));
+        let handler_polls_by_future = handler_polls.clone();
+        let handler = std::future::poll_fn(move |_| {
+            handler_polls_by_future.fetch_add(1, Ordering::SeqCst);
+            Poll::Ready(Ok::<_, WorkerExecutorError>(()))
+        });
+
+        let error = await_native_entity_body(&runner_abort, handler)
+            .await
+            .unwrap_err();
+
+        assert!(format!("{error}").contains("native entity body was aborted"));
+        assert_eq!(handler_polls.load(Ordering::SeqCst), 0);
     }
 
     impl<D> StreamProducer<D> for OneBufferProducer {

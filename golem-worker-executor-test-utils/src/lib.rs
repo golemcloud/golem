@@ -168,7 +168,7 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, RwLock, Weak};
+use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
@@ -585,6 +585,12 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    pub fn native_test_helper_effect_count(&self) -> usize {
+        self.additional_test_deps
+            .native_test_helper_effects
+            .load(Ordering::SeqCst)
+    }
+
     /// Returns a weak reference that can be used to verify that the
     /// service graph (`All`) was properly deallocated after the executor
     /// is dropped. If `upgrade()` returns `Some`, services have leaked.
@@ -1408,6 +1414,7 @@ pub struct TestExecutorOverrides {
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
+    pub native_tool_metadata: Option<golem_common::schema::tool::Tool>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
     /// `golem.yaml`).  When `None`, an empty policy list is used.
@@ -1659,29 +1666,25 @@ pub struct TestWorkerCtx {
     agent_id: AgentId,
 }
 
-static NATIVE_TEST_EFFECTS: AtomicUsize = AtomicUsize::new(0);
-static NATIVE_TEST_HELPER_EFFECTS: AtomicUsize = AtomicUsize::new(0);
-static NATIVE_TEST_TOOL_METADATA: OnceLock<golem_common::schema::tool::Tool> = OnceLock::new();
-
 #[golem_native_tool::tool_definition(version = "1.0.0")]
 trait NativeDurableHelper {
     async fn touch(&self, context: &mut TestWorkerCtx) -> golem_native_tool::HostResult<()>;
 }
 
-struct NativeDurableHelperImpl;
+struct NativeDurableHelperImpl(Arc<AtomicUsize>);
 
 #[golem_native_tool::tool_implementation]
 impl NativeDurableHelper for NativeDurableHelperImpl {
     async fn touch(&self, ctx: &mut TestWorkerCtx) -> golem_native_tool::HostResult<()> {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(ctx).await?;
         if ctx.is_live() {
-            NATIVE_TEST_HELPER_EFFECTS.fetch_add(1, Ordering::SeqCst);
+            self.0.fetch_add(1, Ordering::SeqCst);
         }
         Ok(())
     }
 }
 
-struct NativeTestTool;
+struct NativeTestTool(Arc<AtomicUsize>);
 
 #[async_trait]
 impl NativeToolHandler<TestWorkerCtx> for NativeTestTool {
@@ -1698,7 +1701,7 @@ impl NativeToolHandler<TestWorkerCtx> for NativeTestTool {
             _ => "",
         };
         if mode != "read-counter" && ctx.is_live() {
-            NATIVE_TEST_EFFECTS.fetch_add(1, Ordering::SeqCst);
+            self.0.fetch_add(1, Ordering::SeqCst);
         }
 
         if mode == "wait-cancel" {
@@ -1719,12 +1722,7 @@ impl NativeToolHandler<TestWorkerCtx> for NativeTestTool {
         if let Some(stdout) = invocation.stdout {
             if mode == "read-counter" {
                 stdout
-                    .write(
-                        NATIVE_TEST_EFFECTS
-                            .load(Ordering::SeqCst)
-                            .to_string()
-                            .into_bytes(),
-                    )
+                    .write(self.0.load(Ordering::SeqCst).to_string().into_bytes())
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
             } else {
@@ -1754,29 +1752,19 @@ impl NativeToolHandler<TestWorkerCtx> for NativeTestTool {
 
 pub fn native_test_tool_metadata() -> golem_common::schema::tool::Tool {
     use golem_native_tool::NativeToolInvoker;
-    __GolemNativeToolInvokerNativeDurableHelperImplNativeDurableHelper::new(NativeDurableHelperImpl)
+    NativeDurableHelperImpl(Arc::new(AtomicUsize::new(0)))
+        .native_tool_invoker()
         .metadata()
 }
 
-pub fn install_native_test_tool_metadata(metadata: golem_common::schema::tool::Tool) {
-    if let Some(installed) = NATIVE_TEST_TOOL_METADATA.get() {
-        assert_eq!(installed, &metadata);
-    } else {
-        NATIVE_TEST_TOOL_METADATA
-            .set(metadata)
-            .expect("native test metadata was concurrently installed");
-    }
-}
-
-fn native_test_helper_definition() -> golem_native_tool::NativeToolDefinition {
+fn native_test_helper_definition(
+    effects: Arc<AtomicUsize>,
+) -> golem_native_tool::NativeToolDefinition {
     use golem_native_tool::NativeToolInvoker;
-    __GolemNativeToolInvokerNativeDurableHelperImplNativeDurableHelper::new(NativeDurableHelperImpl)
+    NativeDurableHelperImpl(effects)
+        .native_tool_invoker()
         .definition("executor-native-helper", "1.0.0")
         .unwrap()
-}
-
-pub fn native_test_helper_effect_count() -> usize {
-    NATIVE_TEST_HELPER_EFFECTS.load(Ordering::SeqCst)
 }
 
 impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
@@ -2078,29 +2066,6 @@ struct TestServerBootstrap {
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
-    fn native_tool_catalog() -> Arc<NativeToolCatalog<Self>> {
-        let mut registrations = vec![NativeToolRegistration {
-            definition: native_test_helper_definition(),
-            handler: Arc::new(NativeToolAdapter(
-                __GolemNativeToolInvokerNativeDurableHelperImplNativeDurableHelper::new(
-                    NativeDurableHelperImpl,
-                ),
-            )),
-        }];
-        if let Some(metadata) = NATIVE_TEST_TOOL_METADATA.get() {
-            registrations.push(NativeToolRegistration {
-                definition: golem_native_tool::NativeToolDefinition::new(
-                    "executor-native-test",
-                    "1.0.0",
-                    metadata.clone(),
-                )
-                .unwrap(),
-                handler: Arc::new(NativeTestTool),
-            });
-        }
-        Arc::new(NativeToolCatalog::new(registrations).unwrap())
-    }
-
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
@@ -2149,6 +2114,7 @@ impl WorkerCtx for TestWorkerCtx {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<NativeToolCatalog<Self>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -2210,6 +2176,7 @@ impl WorkerCtx for TestWorkerCtx {
             card_service,
             card_interest_index,
             component_service,
+            native_tool_catalog,
             account_resource_limits,
             config,
             filesystem,
@@ -2293,6 +2260,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn executable_component_metadata(&self) -> Option<&Component> {
         self.durable_ctx.executable_component_metadata()
+    }
+
+    fn component_metadata(&self) -> &Component {
+        self.durable_ctx.component_metadata()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {
@@ -2545,6 +2516,33 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn create_native_tool_catalog(&self) -> anyhow::Result<Arc<NativeToolCatalog<TestWorkerCtx>>> {
+        use golem_native_tool::NativeToolInvoker;
+
+        let helper_effects = self.additional_test_deps.native_test_helper_effects.clone();
+        let helper = NativeDurableHelperImpl(helper_effects.clone());
+        let mut registrations = vec![NativeToolRegistration {
+            definition: native_test_helper_definition(helper_effects),
+            handler: Arc::new(NativeToolAdapter(helper.native_tool_invoker())),
+        }];
+        if let Some(metadata) = &self.overrides.native_tool_metadata {
+            registrations.push(NativeToolRegistration {
+                definition: golem_native_tool::NativeToolDefinition::new(
+                    "executor-native-test",
+                    "1.0.0",
+                    metadata.clone(),
+                )
+                .map_err(anyhow::Error::msg)?,
+                handler: Arc::new(NativeTestTool(
+                    self.additional_test_deps.native_test_effects.clone(),
+                )),
+            });
+        }
+        Ok(Arc::new(
+            NativeToolCatalog::new(registrations).map_err(anyhow::Error::msg)?,
+        ))
+    }
+
     fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
@@ -4066,6 +4064,8 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
+    native_test_effects: Arc<AtomicUsize>,
+    native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
@@ -4108,6 +4108,8 @@ impl AdditionalTestDeps {
         let oplog_failures = Arc::new(scc::HashMap::new());
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
+            native_test_effects: Arc::new(AtomicUsize::new(0)),
+            native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),

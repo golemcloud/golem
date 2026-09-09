@@ -1442,7 +1442,8 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     update: AccessRevisionUpdate,
 ) -> Result<(), WorkerExecutorError> {
-    ctx.state.component_metadata = Some(update.metadata);
+    ctx.state.component_metadata = update.metadata.clone();
+    ctx.executable = crate::workerctx::WorkerCtxExecutable::Component(update.metadata);
 
     if let Some((agent_config, initial_wallet_cards)) = update.agent_state {
         ctx.state.agent_config = agent_config;

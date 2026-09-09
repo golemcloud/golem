@@ -56,8 +56,7 @@ use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, install_native_test_tool_metadata,
-    native_test_helper_effect_count, native_test_tool_metadata, start_with_overrides,
+    WorkerExecutorTestDependencies, native_test_tool_metadata, start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -963,12 +962,12 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
         .find(|tool| tool.commands.nodes[0].name == "streaming")
         .expect("streaming tool definition");
     streaming.commands.nodes[0].name = "native-streaming".to_string();
-    install_native_test_tool_metadata(streaming.clone());
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
             environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
             ..Default::default()
         },
     )
@@ -984,7 +983,7 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
         Some(native_deployment_state(
             context.account_id,
             "ToolStreamingCaller",
-            streaming,
+            streaming.clone(),
             native_test_tool_metadata(),
         )),
     );
@@ -993,7 +992,7 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let helper_effects_before = native_test_helper_effect_count();
+    let helper_effects_before = executor.native_test_helper_effect_count();
     let evidence: Vec<String> = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -1015,8 +1014,47 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
         ]
     );
     assert_eq!(evidence[6], "5");
-    let helper_effects = native_test_helper_effect_count();
+    let helper_effects = executor.native_test_helper_effect_count();
     assert_eq!(helper_effects, helper_effects_before + 1);
+
+    let isolated_context = TestContext::new(last_unique_id);
+    let isolated_environment_state = Arc::new(TestEnvironmentStateService::default());
+    let isolated_executor = start_with_overrides(
+        deps,
+        &isolated_context,
+        TestExecutorOverrides {
+            environment_state_service: Some(isolated_environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(isolated_executor.native_test_helper_effect_count(), 0);
+    let isolated_caller_component = isolated_executor
+        .component_dep(&isolated_context.default_environment_id, caller)
+        .store()
+        .await?;
+    isolated_environment_state.set_tool_deployment(
+        isolated_context.default_environment_id,
+        isolated_caller_component.id,
+        isolated_caller_component.revision,
+        Some(native_deployment_state(
+            isolated_context.account_id,
+            "ToolStreamingCaller",
+            streaming,
+            native_test_tool_metadata(),
+        )),
+    );
+    isolated_executor
+        .invoke_and_await_agent(
+            &isolated_caller_component,
+            &agent_id!("ToolStreamingCaller", "isolated-native-runtime"),
+            "native_modes_stream_cancel_overlap",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(isolated_executor.native_test_helper_effect_count(), 1);
+    assert_eq!(executor.native_test_helper_effect_count(), helper_effects);
 
     executor.simulated_crash(&worker_id).await?;
     executor.resume(&worker_id, true).await?;
@@ -1033,7 +1071,7 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
         count, "5",
         "completed replay must not repeat native effects"
     );
-    assert_eq!(native_test_helper_effect_count(), helper_effects);
+    assert_eq!(executor.native_test_helper_effect_count(), helper_effects);
     assert!(environment_state.tool_activation_calls() >= 5);
     Ok(())
 }

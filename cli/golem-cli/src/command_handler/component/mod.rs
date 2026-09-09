@@ -65,6 +65,7 @@ use golem_common::cache::SimpleCache;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
@@ -2411,15 +2412,15 @@ fn resolve_secret_scope(
 
 fn resolve_config_scope(
     issues: &mut Vec<ToolValidationIssue>,
-    layers: &[app_raw::ManifestSecretKeyScope],
+    layers: &[app_raw::ManifestConfigKeyScope],
     path: ToolEntityPath,
     source: Option<&std::path::Path>,
 ) -> golem_common::model::tool::ConfigKeyScope {
     use golem_common::model::tool::ConfigKeyScope;
     layers.iter().fold(ConfigKeyScope::All, |resolved, layer| {
         let next = match layer {
-            app_raw::ManifestSecretKeyScope::All(value) if value == "*" => ConfigKeyScope::All,
-            app_raw::ManifestSecretKeyScope::All(value) => {
+            app_raw::ManifestConfigKeyScope::All(value) if value == "*" => ConfigKeyScope::All,
+            app_raw::ManifestConfigKeyScope::All(value) => {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::BindingSemantics,
                     ToolValidationCode::InvalidConfigScope,
@@ -2429,7 +2430,7 @@ fn resolve_config_scope(
                 ));
                 ConfigKeyScope::All
             }
-            app_raw::ManifestSecretKeyScope::Keys(paths) => {
+            app_raw::ManifestConfigKeyScope::Keys(paths) => {
                 let mut canonical_paths = BTreeSet::new();
                 for raw_path in paths {
                     if raw_path == "*" {
@@ -2444,7 +2445,7 @@ fn resolve_config_scope(
                     }
                     match crate::args::parse_agent_config_path(raw_path) {
                         Ok(segments) => canonical_paths.insert(
-                            CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments),
+                            CanonicalAgentConfigPath::from_path_in_unknown_casing(&segments),
                         ),
                         Err(error) => {
                             issues.push(ToolValidationIssue::error(
@@ -2754,14 +2755,16 @@ fn collect_unused_agent_config_paths(
 #[cfg(test)]
 mod tool_binding_tests {
     use super::{
-        effective_remote_tool_bindings, resolve_secret_scope, validate_effective_tool_binding,
+        effective_remote_tool_bindings, resolve_config_scope, resolve_secret_scope,
+        validate_effective_tool_binding,
     };
-    use crate::model::app_raw::ManifestSecretKeyScope;
+    use crate::model::app_raw::{ManifestConfigKeyScope, ManifestSecretKeyScope};
     use crate::model::tool_deployment::{
         ToolEntityPath, ToolValidationCode, ToolValidationSeverity,
     };
     use golem_common::model::account::AccountEmail;
     use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
     use golem_common::model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::model::component::ComponentName;
     use golem_common::model::json::NormalizedJsonValue;
@@ -2832,6 +2835,28 @@ mod tool_binding_tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].code, ToolValidationCode::InvalidSecretScope);
         assert_eq!(issues[0].source.as_deref(), Some(Path::new("golem.yaml")));
+    }
+
+    #[test]
+    fn config_scope_uses_config_path_type_and_canonicalization() {
+        let mut issues = Vec::new();
+        let scope = resolve_config_scope(
+            &mut issues,
+            &[ManifestConfigKeyScope::Keys(vec![
+                "Service.APIKey".to_string(),
+                "service.api-key".to_string(),
+            ])],
+            ToolEntityPath::tool("grep", "tools.grep.configKeysReadable"),
+            Some(Path::new("golem.yaml")),
+        );
+
+        assert!(issues.is_empty());
+        assert_eq!(
+            scope,
+            golem_common::model::tool::ConfigKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentConfigPath(vec!["service".to_string(), "apiKey".to_string()]),
+            ]))
+        );
     }
 
     #[test]

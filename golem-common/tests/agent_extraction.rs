@@ -71,9 +71,8 @@ async fn can_extract_agent_type_schemas_from_component_importing_p3_http() -> an
 
 #[test]
 async fn can_extract_tool_metadata_from_component_bytes() -> anyhow::Result<()> {
-    let wasm = std::fs::read(
-        "../test-components/tool-streaming/golem-temp/agents/golem_it_tool_streaming_rust_provider_release.wasm",
-    )?;
+    let wasm =
+        std::fs::read("../test-components/golem_it_tool_streaming_rust_provider_release.wasm")?;
     let metadata = extract_component_metadata_from_bytes(&wasm, true, false).await?;
     assert!(!metadata.tools.is_empty());
     Ok(())

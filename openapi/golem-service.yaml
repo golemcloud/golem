@@ -19474,7 +19474,7 @@ components:
           keys:
             type: array
             items:
-              title: Canonical representation of an agent secret path (segments are each camelCase)
+              title: Canonical representation of an agent config path (segments are each camelCase)
               type: array
               items:
                 type: string

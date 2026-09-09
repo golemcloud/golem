@@ -624,6 +624,7 @@ mod protobuf {
     use crate::base_model::json::NormalizedJsonValue;
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
+    use crate::model::agent_config::CanonicalAgentConfigPath;
     use crate::model::agent_secret::CanonicalAgentSecretPath;
     use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
     use crate::model::component_metadata::{
@@ -984,7 +985,7 @@ mod protobuf {
                 Value::Keys(keys) => Ok(Self::Keys(
                     keys.paths
                         .into_iter()
-                        .map(|path| CanonicalAgentSecretPath(path.segments))
+                        .map(|path| CanonicalAgentConfigPath(path.segments))
                         .collect(),
                 )),
             }
@@ -1001,11 +1002,11 @@ mod protobuf {
                     Value::All(golem_api_grpc::proto::golem::common::Empty {})
                 }
                 crate::model::tool::ConfigKeyScope::Keys(keys) => {
-                    Value::Keys(golem_api_grpc::proto::golem::component::SecretKeyPaths {
+                    Value::Keys(golem_api_grpc::proto::golem::component::ConfigKeyPaths {
                         paths: keys
                             .into_iter()
                             .map(
-                                |path| golem_api_grpc::proto::golem::component::SecretKeyPath {
+                                |path| golem_api_grpc::proto::golem::component::ConfigKeyPath {
                                     segments: path.0,
                                 },
                             )

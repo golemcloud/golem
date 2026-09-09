@@ -81,11 +81,11 @@ impl DeploymentPlanAmbientToolEntry {
             .collect();
         diff::RemoteToolDeployment {
             release_id: self.release_id,
-            version: self.version.clone(),
+            version: self.version.0.clone(),
             source_digest: self.source_digest,
             owner_account_id: self.owner_account_id,
             owner_account_email: self.owner_account_email.clone(),
-            metadata_version: self.metadata_version.clone(),
+            metadata_version: self.metadata_version.0.clone(),
             metadata_digest: self.metadata_digest,
             provision: self.provision.clone(),
             bindings,

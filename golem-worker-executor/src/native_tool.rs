@@ -117,27 +117,6 @@ where
         ctx: &mut Ctx,
         invocation: NativeToolInvocation,
     ) -> Result<NativeToolResult, WorkerExecutorError> {
-        let principal = match invocation.principal {
-            Principal::Oidc(p) => golem_native_tool::Principal::Oidc {
-                subject: p.sub,
-                issuer: p.issuer,
-                email: p.email,
-                name: p.name,
-                email_verified: p.email_verified,
-                given_name: p.given_name,
-                family_name: p.family_name,
-                picture: p.picture,
-                preferred_username: p.preferred_username,
-                claims: p.claims,
-            },
-            Principal::Agent(p) => golem_native_tool::Principal::Agent {
-                agent_id: p.agent_id.to_string(),
-            },
-            Principal::GolemUser(p) => golem_native_tool::Principal::GolemUser {
-                user_id: p.account_id.to_string(),
-            },
-            Principal::Anonymous(_) => golem_native_tool::Principal::Anonymous,
-        };
         let result = self
             .0
             .invoke(
@@ -145,7 +124,7 @@ where
                 golem_native_tool::NativeToolInvocation {
                     command_path: invocation.command_path,
                     input: invocation.input,
-                    principal,
+                    principal: invocation.principal,
                     stdin: invocation.stdin.map(|input| Box::new(input) as _),
                     stdout: invocation.stdout.map(|output| Box::new(output) as _),
                 },
@@ -243,7 +222,6 @@ impl<Ctx: WorkerCtx> NativeToolCatalog<Ctx> {
 
 impl<Ctx: WorkerCtx> NativeToolRegistration<Ctx> {
     pub fn validate_dispatch(&self, binding: &CompiledToolBinding) -> Result<(), String> {
-        self.definition.validate()?;
         let source_matches = matches!(
             &binding.source,
             golem_common::model::tool::ToolSource::Host { host_tool_id, implementation_version }

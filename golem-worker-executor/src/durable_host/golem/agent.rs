@@ -27,6 +27,7 @@ use golem_common::model::PromiseId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
 };
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::oplog::host_functions::{
@@ -655,7 +656,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let is_live = self.state.is_live();
         let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
             !scope.activation().policy().config_keys_readable().contains(
-                &CanonicalAgentSecretPath::from_path_in_unknown_casing(&path),
+                &CanonicalAgentConfigPath::from_path_in_unknown_casing(&path),
             )
         });
         let denied = if binding_denied {

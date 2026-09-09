@@ -371,6 +371,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
     runtime: OwnerRuntime,
+    executable: crate::workerctx::WorkerCtxExecutable,
+    native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
     entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
@@ -765,6 +767,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
         filesystem: crate::workerctx::WorkerFilesystemContext,
@@ -896,13 +899,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
-        let component_metadata = match executable {
+        let component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => component.clone(),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => worker_config
+                .owner_component_metadata
+                .as_deref()
+                .expect("native entity Store has owner component metadata")
+                .clone(),
+        };
+
+        let executable_component_metadata = match &executable {
             crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
             crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
         };
-
-        if component_metadata
-            .as_ref()
+        if executable_component_metadata
             .is_some_and(|component| component.metadata.has_shared_linear_memory())
         {
             return Err(WorkerExecutorError::worker_creation_failed(
@@ -911,8 +921,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
-        let initial_linear_memory = component_metadata
-            .as_ref()
+        let initial_linear_memory = executable_component_metadata
             .map(|component| component.metadata.initial_linear_memory_bytes())
             .unwrap_or(0);
         if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
@@ -928,8 +937,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let agent_type_provision_configs = match &runtime {
             OwnerRuntime::Agent => agent_id.as_ref().and_then(|agent_id| {
                 component_metadata
-                    .as_ref()
-                    .expect("primary Store has component metadata")
                     .metadata
                     .agent_type_provision_configs()
                     .get(&agent_id.agent_type)
@@ -1068,6 +1075,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             runtime,
+            executable,
+            native_tool_catalog,
             filesystem: filesystem_capability,
             entity_invocation_scope: None,
             entity_tool_operation: None,
@@ -2226,27 +2235,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn component_metadata(&self) -> &Component {
-        self.executable_component_metadata()
-            .expect("native entity contexts have no executable component metadata")
+        &self.state.component_metadata
     }
 
     pub fn executable_component_metadata(&self) -> Option<&Component> {
-        self.state.component_metadata.as_ref()
+        match &self.executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        }
     }
 
     pub fn owner_component_metadata(&self) -> &Component {
         match &self.runtime {
-            OwnerRuntime::Agent => self
-                .state
-                .component_metadata
-                .as_ref()
-                .expect("primary Store has component metadata"),
+            OwnerRuntime::Agent => &self.state.component_metadata,
             OwnerRuntime::Entity(_) => self
                 .state
                 .owner_component_metadata
                 .as_deref()
                 .expect("Entity Store must pin owner component metadata at dispatch"),
         }
+    }
+
+    pub(crate) fn native_tool_catalog(&self) -> &crate::native_tool::NativeToolCatalog<Ctx> {
+        &self.native_tool_catalog
     }
 
     pub(crate) fn selected_tool_owner_failure(
@@ -4569,7 +4580,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
-        self.state.component_metadata = Some(new_metadata);
+        self.state.component_metadata = new_metadata.clone();
+        self.executable = crate::workerctx::WorkerCtxExecutable::Component(new_metadata);
 
         if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
             self.state.agent_config = updated_agent_config;
@@ -9701,7 +9713,7 @@ struct PrivateDurableWorkerState {
     /// executor-created `ProcessOplogEntries` invocation and reset before invocation teardown.
     operator_authorized_oplog_processor_invocation: Arc<AtomicBool>,
 
-    component_metadata: Option<Component>,
+    component_metadata: Component,
     owner_component_metadata: Option<Arc<Component>>,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
@@ -9937,7 +9949,7 @@ impl PrivateDurableWorkerState {
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         tail_work: tail_work::TailWorkTracker,
-        component_metadata: Option<Component>,
+        component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
         configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -9969,9 +9981,7 @@ impl PrivateDurableWorkerState {
                         match agent_id.as_ref() {
                             Some(agent_id) => {
                                 let card = agent_initial_card_from_component_metadata(
-                                    component_metadata
-                                        .as_ref()
-                                        .expect("primary Store has component metadata"),
+                                    &component_metadata,
                                     agent_id,
                                 )?;
                                 Ok(BTreeMap::from([(card.card_id(), card)]))
@@ -10006,13 +10016,8 @@ impl PrivateDurableWorkerState {
         .wallet_id_hash();
         let agent_effective_surface = match (&runtime, agent_id.as_ref()) {
             (OwnerRuntime::Agent, Some(agent_id)) => {
-                let context = agent_monomorphization_context(
-                    component_metadata
-                        .as_ref()
-                        .expect("primary Store has component metadata"),
-                    &owned_agent_id,
-                    agent_id,
-                );
+                let context =
+                    agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
                 golem_common::model::card::agent_effective_surface_from_wallet(
                     &context,
                     agent_wallet_cards.values(),

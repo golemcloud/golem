@@ -595,7 +595,8 @@ where
     Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
-    let registration = slot.register(&scope)?;
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let registration = slot.register(&scope, cancellation.clone())?;
     let invocation_id = scope.invocation_id().clone();
     let invocation = OwnerInvocationId::Entity(invocation_id.clone());
     let lane_await_required = ticket.is_some();
@@ -614,27 +615,6 @@ where
         activation_fingerprint = %scope.activation().fingerprint(),
         execution_mode = ?scope.mode(),
     );
-    struct AbortRelay(tokio_util::sync::CancellationToken);
-    impl Drop for AbortRelay {
-        fn drop(&mut self) {
-            self.0.cancel();
-        }
-    }
-    struct AbortRelayTask(tokio::task::JoinHandle<()>);
-    impl Drop for AbortRelayTask {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let abort = tokio_util::sync::CancellationToken::new();
-    let abort_relay = AbortRelayTask(tokio::spawn({
-        let relay = AbortRelay(abort.clone());
-        async move {
-            let _relay = relay;
-            std::future::pending::<()>().await;
-        }
-    }));
-    let body_abort = abort_relay.0.abort_handle();
     let task = tokio::spawn(super::invocation::with_invocation_stack(
         async move {
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
@@ -666,12 +646,11 @@ where
                     },
                     None => None,
                 };
-                let (result, retained) = run.run(scope, &registration, abort.clone()).await;
+                let (result, retained) = run.run(scope, &registration, cancellation).await;
                 hosted = retained;
                 result
             };
             let result = finalize(result).await;
-            abort_relay.0.abort();
             metrics.finish(&result);
             debug!(succeeded = result.is_ok(), "Entity invocation finished");
             EntityInvocationCompletion {
@@ -686,10 +665,6 @@ where
         .instrument(span),
     ));
     let task_abort = task.abort_handle();
-    if let Err(error) = slot.attach_abort(&invocation_id, body_abort) {
-        task_abort.abort();
-        return Err(error);
-    }
     if start_tx.send(()).is_err() {
         task_abort.abort();
         return Err(WorkerExecutorError::runtime(

@@ -56,8 +56,16 @@ message ToolBindingInput {
 message ConfigKeyScope {
   oneof value {
     golem.common.Empty all = 1;
-    SecretKeyPaths keys = 2;
+    ConfigKeyPaths keys = 2;
   }
+}
+
+message ConfigKeyPaths {
+  repeated ConfigKeyPath paths = 1;
+}
+
+message ConfigKeyPath {
+  repeated string segments = 1;
 }
 
 message SecretKeyScope {

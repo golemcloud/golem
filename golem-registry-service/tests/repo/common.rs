@@ -2421,7 +2421,6 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
-                Arc::new(DbComponentRepo::new(pool.clone())),
                 Arc::new(
                     golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
                 ),
@@ -2486,7 +2485,6 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
-                Arc::new(DbComponentRepo::new(pool.clone())),
                 Arc::new(
                     golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
                 ),

@@ -157,11 +157,6 @@ pub trait WorkerCtx:
     + Sized
     + 'static
 {
-    /// Native implementations installed in this executor process.
-    fn native_tool_catalog() -> Arc<crate::native_tool::NativeToolCatalog<Self>> {
-        Arc::new(crate::native_tool::NativeToolCatalog::default())
-    }
-
     /// PublicState is a subset of the worker context that is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
@@ -247,6 +242,7 @@ pub trait WorkerCtx:
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -305,13 +301,8 @@ pub trait WorkerCtx:
     /// Metadata for the executable component. Native entity contexts have none.
     fn executable_component_metadata(&self) -> Option<&Component>;
 
-    /// Metadata for the executable component.
-    ///
-    /// Panics for native entity contexts, matching component-only host API behavior.
-    fn component_metadata(&self) -> &Component {
-        self.executable_component_metadata()
-            .expect("native entity contexts have no executable component metadata")
-    }
+    /// Metadata for the owning component.
+    fn component_metadata(&self) -> &Component;
 
     fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig>;
 

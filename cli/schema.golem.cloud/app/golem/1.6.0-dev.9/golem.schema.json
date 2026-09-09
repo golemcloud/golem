@@ -914,7 +914,7 @@
           "$ref": "#/definitions/secretKeyMergeMode"
         },
         "configKeysReadable": {
-          "$ref": "#/definitions/secretKeyScope"
+          "$ref": "#/definitions/configKeyScope"
         },
         "secretKeysReadableMergeMode": {
           "$ref": "#/definitions/secretKeyMergeMode"
@@ -934,6 +934,22 @@
       "type": "string",
       "enum": [
         "intersect"
+      ]
+    },
+    "configKeyScope": {
+      "oneOf": [
+        {
+          "const": "*"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "not": {
+              "const": "*"
+            }
+          }
+        }
       ]
     },
     "secretKeyScope": {

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::{AccountEmail, AccountId};
+use crate::base_model::agent_config::CanonicalAgentConfigPath;
 use crate::base_model::agent_secret::CanonicalAgentSecretPath;
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::diff::Hash;
@@ -107,11 +108,11 @@ pub enum SecretKeyScope {
 pub enum ConfigKeyScope {
     #[default]
     All,
-    Keys(BTreeSet<CanonicalAgentSecretPath>),
+    Keys(BTreeSet<CanonicalAgentConfigPath>),
 }
 
 impl ConfigKeyScope {
-    pub fn contains(&self, key: &CanonicalAgentSecretPath) -> bool {
+    pub fn contains(&self, key: &CanonicalAgentConfigPath) -> bool {
         match self {
             Self::All => true,
             Self::Keys(keys) => keys.contains(key),
@@ -422,6 +423,7 @@ pub struct ToolDeploymentState {
 #[cfg(test)]
 mod tests {
     use super::{ConfigKeyScope, SecretKeyScope, ToolName};
+    use crate::model::agent_config::CanonicalAgentConfigPath;
     use crate::model::agent_secret::CanonicalAgentSecretPath;
     use std::collections::BTreeSet;
     use test_r::test;
@@ -459,14 +461,14 @@ mod tests {
 
     #[test]
     fn config_key_scope_intersection_allows_only_shared_keys() {
-        let a = CanonicalAgentSecretPath(vec!["a".to_string()]);
-        let b = CanonicalAgentSecretPath(vec!["b".to_string()]);
+        let a = CanonicalAgentConfigPath(vec!["a".to_string()]);
+        let b = CanonicalAgentConfigPath(vec!["b".to_string()]);
         let environment = ConfigKeyScope::Keys(BTreeSet::from([a.clone(), b]));
         let agent = ConfigKeyScope::Keys(BTreeSet::from([a.clone()]));
 
         let effective = environment.intersection(&agent);
         assert!(effective.contains(&a));
-        assert!(!effective.contains(&CanonicalAgentSecretPath(vec!["b".to_string()])));
+        assert!(!effective.contains(&CanonicalAgentConfigPath(vec!["b".to_string()])));
         assert_eq!(ConfigKeyScope::All.intersection(&agent), agent);
     }
 }

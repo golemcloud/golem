@@ -906,13 +906,22 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         >,
     {
         tokio::spawn(async move {
+            let cancellation = tokio_util::sync::CancellationToken::new();
             let registration = self
                 .slot
                 .as_ref()
                 .ok_or_else(|| WorkerExecutorError::runtime("Entity instance has no slot"))?
-                .register(&scope)?;
-            self.invoke_scoped_inner(scope, &registration, ClosureEntityInvocationBody(invoke))
-                .await
+                .register(&scope, cancellation.clone())?;
+            tokio::select! {
+                result = self.invoke_scoped_inner(
+                    scope,
+                    &registration,
+                    ClosureEntityInvocationBody(invoke),
+                ) => result,
+                _ = cancellation.cancelled() => {
+                    Err(WorkerExecutorError::runtime("Entity body was cancelled"))
+                }
+            }
         })
         .await
         .map_err(|error| {

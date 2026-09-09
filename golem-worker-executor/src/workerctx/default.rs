@@ -953,6 +953,7 @@ impl WorkerCtx for Context {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -1004,6 +1005,7 @@ impl WorkerCtx for Context {
             card_service,
             card_interest_index,
             component_service,
+            native_tool_catalog,
             account_resource_limits.clone(),
             config.clone(),
             filesystem,
@@ -1077,6 +1079,10 @@ impl WorkerCtx for Context {
 
     fn executable_component_metadata(&self) -> Option<&Component> {
         self.durable_ctx.executable_component_metadata()
+    }
+
+    fn component_metadata(&self) -> &Component {
+        self.durable_ctx.component_metadata()
     }
 
     fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {

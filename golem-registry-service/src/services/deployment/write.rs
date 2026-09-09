@@ -35,13 +35,14 @@ use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
-use golem_common::model::account::AccountSummary;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::card::EnvironmentVerb;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::RemoteToolDeployment;
+use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
@@ -49,7 +50,7 @@ use golem_common::model::{
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +80,10 @@ pub enum DeploymentWriteError {
     ToolReleaseImmutableConflict,
     #[error("A de-published tool release must be restored explicitly before publication")]
     ToolReleaseDePublishedConflict,
+    #[error("Ambient tool deployment for '{0}' does not match the server catalog")]
+    AmbientToolConflict(String),
+    #[error("Duplicate remote tool name '{0}'")]
+    DuplicateRemoteToolName(golem_common::model::tool::ToolName),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -98,6 +103,8 @@ impl SafeDisplay for DeploymentWriteError {
             Self::NoOpDeployment => self.to_string(),
             Self::ToolReleaseImmutableConflict => self.to_string(),
             Self::ToolReleaseDePublishedConflict => self.to_string(),
+            Self::AmbientToolConflict(_) => self.to_string(),
+            Self::DuplicateRemoteToolName(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -257,6 +264,14 @@ impl DeploymentWriteService {
         );
 
         let account_id = environment.owner_account_id;
+        let mut remote_tool_names = BTreeSet::new();
+        for deployment in &data.remote_tools {
+            if !remote_tool_names.insert(deployment.name.clone()) {
+                return Err(DeploymentWriteError::DuplicateRemoteToolName(
+                    deployment.name.clone(),
+                ));
+            }
+        }
         let ambient_catalog = self
             .native_tool_catalog
             .active()
@@ -287,28 +302,31 @@ impl DeploymentWriteService {
                 .iter()
                 .find(|deployment| deployment.name == ambient.release.name);
             let release = ambient.release;
-            let canonical = golem_common::model::tool::RemoteToolDeployment {
+            let canonical = RemoteToolDeployment {
                 name: release.name.clone(),
-                release: golem_common::model::tool_release::ToolReleaseReference::ById(
-                    golem_common::model::tool_release::ToolReleaseById {
-                        release_id: release.id,
-                    },
-                ),
+                release: ToolReleaseReference::ById(ToolReleaseById {
+                    release_id: release.id,
+                }),
                 provision: ambient.provision,
                 environment_binding: Some(ambient.environment_binding),
                 agent_bindings: requested
                     .map(|deployment| deployment.agent_bindings.clone())
                     .unwrap_or_default(),
             };
+            if let Some(requested) = requested
+                && (requested.release != canonical.release
+                    || requested.provision != canonical.provision
+                    || requested.environment_binding != canonical.environment_binding)
+            {
+                return Err(DeploymentWriteError::AmbientToolConflict(
+                    canonical.name.to_string(),
+                ));
+            }
             remote_tools.push((
                 canonical,
                 Some(
                     crate::services::environment_tool_grant::ResolvedGrantedToolRelease {
-                        owner: AccountSummary {
-                            id: release.owner_account_id,
-                            name: "Golem system".to_string(),
-                            email: ambient.owner_account_email,
-                        },
+                        owner: ambient.owner,
                         release,
                     },
                 ),

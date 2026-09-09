@@ -15,6 +15,7 @@
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use test_r::{sequential_suite, test_dep};
 
+pub mod builtin_tools;
 pub mod grpc;
 pub mod repo;
 
