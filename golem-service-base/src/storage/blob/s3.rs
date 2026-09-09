@@ -1210,7 +1210,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use test_r::test;
+    use test_r::{test, timeout};
 
     #[derive(Clone)]
     struct PutServerState {
@@ -1252,21 +1252,23 @@ mod tests {
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let mut config = S3BlobStorageConfig::default();
-        config.retries = RetryConfig {
-            max_attempts: 3,
-            min_delay: Duration::ZERO,
-            max_delay: Duration::ZERO,
-            multiplier: 1.0,
-            max_jitter_factor: None,
+        let config = S3BlobStorageConfig {
+            retries: RetryConfig {
+                max_attempts: 3,
+                min_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            },
+            aws_endpoint_url: Some(endpoint.clone()),
+            aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
+                "test-access-key",
+                "test-secret-key",
+                "test",
+            )),
+            aws_path_style: Some(true),
+            ..Default::default()
         };
-        config.aws_endpoint_url = Some(endpoint.clone());
-        config.aws_credentials = Some(S3BlobStorageCredentialsConfig::new(
-            "test-access-key",
-            "test-secret-key",
-            "test",
-        ));
-        config.aws_path_style = Some(true);
 
         let client_config = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
@@ -1295,6 +1297,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("10s")]
     async fn put_raw_golem_retries_preserve_nonempty_payload() {
         let (storage, bodies, server) = test_storage(vec![
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1329,6 +1332,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("10s")]
     async fn put_raw_golem_retries_preserve_empty_payload_and_final_error() {
         let (storage, bodies, server) = test_storage(vec![
             StatusCode::INTERNAL_SERVER_ERROR,
