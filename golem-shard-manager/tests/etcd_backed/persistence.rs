@@ -21,8 +21,8 @@ use golem_service_base::repo::{Blob, SqlDateTime};
 use golem_shard_manager::config::EtcdConfig;
 use golem_shard_manager::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId,
-    ExternalRevision, NO_REVISION, RoutingTablePersistence, STATE_KEY, ShardAssignmentEntry,
-    ShardEpoch, ShardLeaseRevision, ShardLeaseState, ShardManagerError,
+    ExternalRevision, LeaderFence, NO_REVISION, RoutingTablePersistence, STATE_KEY,
+    ShardAssignmentEntry, ShardEpoch, ShardLeaseRevision, ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
@@ -30,9 +30,11 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{define_matrix_dimension, test, test_dep};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use url::Url;
 use uuid::Uuid;
+
+inherit_test_dep!(Arc<DockerEtcd>);
 
 /// One `executor_leases` row, as a person reading the table would see it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -370,7 +372,7 @@ impl GetRoutingTablePersistence for SqliteRoutingTablePersistence {
 // -- etcd: isolated by one server per test worker, plus a wipe per store -----------------------
 
 struct EtcdRoutingTablePersistenceFactory {
-    etcd: DockerEtcd,
+    etcd: Arc<DockerEtcd>,
 }
 
 impl std::fmt::Debug for EtcdRoutingTablePersistenceFactory {
@@ -391,16 +393,43 @@ impl EtcdStore {
             .expect("Cannot connect to etcd")
             .kv_client()
     }
+
+    /// A stand-in for a won campaign's leader key, returned with the fence over it.
+    ///
+    /// The key is real and the fence carries its real creation revision: `for_test(key, 0)` would
+    /// compare `create_revision == 0` - "this key must not exist" - inverting the fence.
+    async fn mint_leader_key(&self) -> (String, LeaderFence) {
+        let key = format!("/golem/test/leader/{}", Uuid::new_v4());
+        let mut kv = self.kv().await;
+        kv.put(key.clone(), "test-leader", None)
+            .await
+            .expect("Cannot put the sentinel leader key");
+        let created = kv
+            .get(key.clone(), None)
+            .await
+            .expect("Cannot read the sentinel leader key back")
+            .kvs()
+            .first()
+            .expect("The sentinel leader key should exist immediately after being written")
+            .create_revision();
+
+        (key.clone(), LeaderFence::for_test(key, created))
+    }
+
+    async fn persistence_with(&self, fence: LeaderFence) -> Arc<dyn RoutingTablePersistence> {
+        Arc::new(
+            EtcdRoutingTablePersistence::new(&self.config, NUMBER_OF_SHARDS, fence)
+                .await
+                .expect("Cannot connect to etcd"),
+        )
+    }
 }
 
 #[async_trait]
 impl PersistenceStore for EtcdStore {
     async fn connect(&self) -> Arc<dyn RoutingTablePersistence> {
-        Arc::new(
-            EtcdRoutingTablePersistence::new(&self.config, NUMBER_OF_SHARDS)
-                .await
-                .expect("Cannot connect to etcd"),
-        )
+        let (_, fence) = self.mint_leader_key().await;
+        self.persistence_with(fence).await
     }
 
     async fn unrelated_write(&self) {
@@ -423,9 +452,9 @@ impl PersistenceStore for EtcdStore {
     }
 }
 
-#[async_trait]
-impl GetRoutingTablePersistence for EtcdRoutingTablePersistenceFactory {
-    async fn new_store(&self) -> Arc<dyn PersistenceStore> {
+impl EtcdRoutingTablePersistenceFactory {
+    /// The concrete store, for the etcd-only tests that tamper with the leader key.
+    async fn new_etcd_store(&self) -> EtcdStore {
         // The state key is fixed, so stores on one etcd server cannot be isolated from each other
         // the way postgres stores are by database. Instead the server is per test worker - tests
         // on a worker run one at a time - and every new store starts by wiping the key.
@@ -441,8 +470,27 @@ impl GetRoutingTablePersistence for EtcdRoutingTablePersistenceFactory {
             .delete(STATE_KEY, None)
             .await
             .expect("Cannot wipe the etcd state key");
-        Arc::new(store)
+        store
     }
+}
+
+#[async_trait]
+impl GetRoutingTablePersistence for EtcdRoutingTablePersistenceFactory {
+    async fn new_store(&self) -> Arc<dyn PersistenceStore> {
+        Arc::new(self.new_etcd_store().await)
+    }
+}
+
+/// A wiped etcd store, the sentinel leader key its persistence is fenced on, and that persistence.
+async fn fenced_etcd_persistence(
+    etcd: &Arc<DockerEtcd>,
+) -> (EtcdStore, String, Arc<dyn RoutingTablePersistence>) {
+    let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
+        .new_etcd_store()
+        .await;
+    let (leader_key, fence) = store.mint_leader_key().await;
+    let persistence = store.persistence_with(fence).await;
+    (store, leader_key, persistence)
 }
 
 #[test_dep(scope = Shared, tagged_as = "sqlite")]
@@ -459,10 +507,8 @@ async fn postgres_persistence() -> Arc<dyn GetRoutingTablePersistence> {
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "etcd")]
-async fn etcd_persistence() -> Arc<dyn GetRoutingTablePersistence> {
-    Arc::new(EtcdRoutingTablePersistenceFactory {
-        etcd: DockerEtcd::new().await,
-    })
+async fn etcd_persistence(etcd: &Arc<DockerEtcd>) -> Arc<dyn GetRoutingTablePersistence> {
+    Arc::new(EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() })
 }
 
 define_matrix_dimension!(persistence: Arc<dyn GetRoutingTablePersistence> -> "sqlite", "postgres", "etcd");
@@ -938,6 +984,101 @@ async fn an_unrelated_write_on_the_backend_does_not_move_our_revision(
         .await
         .expect("Reading our routing table should succeed");
     assert_eq!(our_revision, revision);
+}
+
+// -- etcd only: the leadership fence ------------------------------------------------------------
+//
+// Outside the three-backend matrix because the SQL backends have no leader key to fence on.
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_write_after_the_leader_key_is_deleted_is_rejected_as_leadership_lost(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let (store, leader_key, persistence) = fenced_etcd_persistence(etcd).await;
+
+    let stored = sample_shard_state(NUMBER_OF_SHARDS);
+    let revision = persistence
+        .write(&stored, NO_REVISION)
+        .await
+        .expect("Writing the initial routing table should succeed");
+
+    // Deleting the key is what losing leadership looks like: the lease expires and it goes away.
+    store
+        .kv()
+        .await
+        .delete(leader_key, None)
+        .await
+        .expect("Cannot delete the sentinel leader key");
+
+    // A different payload, so the read-back below distinguishes refusal from a same-bytes write.
+    let result = persistence
+        .write(&replacement_shard_state(NUMBER_OF_SHARDS), revision)
+        .await;
+    assert!(
+        matches!(result, Err(ShardManagerError::LeadershipLost { .. })),
+        "A demoted leader's write must be refused as LeadershipLost - without the fence compare it \
+         would pass on the state revision alone and overwrite the new leader's work. Got {result:?}"
+    );
+
+    let (actual, actual_revision) = persistence
+        .read()
+        .await
+        .expect("Reading persisted routing table should succeed");
+    assert_eq!(
+        actual, stored,
+        "The refused write must not have replaced the stored state"
+    );
+    assert_eq!(
+        actual_revision, revision,
+        "The refused write must not have advanced the stored revision"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_write_after_the_leader_key_is_recreated_is_rejected_as_leadership_lost(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let (store, leader_key, persistence) = fenced_etcd_persistence(etcd).await;
+
+    let stored = sample_shard_state(NUMBER_OF_SHARDS);
+    let revision = persistence
+        .write(&stored, NO_REVISION)
+        .await
+        .expect("Writing the initial routing table should succeed");
+
+    // Models the failover: this replica's key goes away and another campaign puts one back at the
+    // same path, so only the creation revision tells the two leaders apart.
+    let mut kv = store.kv().await;
+    kv.delete(leader_key.clone(), None)
+        .await
+        .expect("Cannot delete the sentinel leader key");
+    kv.put(leader_key, "a-later-leader", None)
+        .await
+        .expect("Cannot recreate the sentinel leader key");
+
+    let result = persistence
+        .write(&replacement_shard_state(NUMBER_OF_SHARDS), revision)
+        .await;
+    assert!(
+        matches!(result, Err(ShardManagerError::LeadershipLost { .. })),
+        "The fence must compare the creation revision the campaign won, not merely that some key \
+         exists at that path. Got {result:?}"
+    );
+
+    let (actual, actual_revision) = persistence
+        .read()
+        .await
+        .expect("Reading persisted routing table should succeed");
+    assert_eq!(
+        actual, stored,
+        "The refused write must not have replaced the stored state"
+    );
+    assert_eq!(
+        actual_revision, revision,
+        "The refused write must not have advanced the stored revision"
+    );
 }
 
 fn granted_at() -> DateTime<Utc> {
