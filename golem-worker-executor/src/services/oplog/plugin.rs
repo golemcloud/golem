@@ -892,6 +892,18 @@ enum ForwardingJob {
     },
     /// Periodic tick from the timer task: runs locality recovery and a time-based flush.
     Tick,
+    #[cfg(test)]
+    Inspect {
+        done: tokio::sync::oneshot::Sender<ForwardingStateSnapshot>,
+    },
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct ForwardingStateSnapshot {
+    buffer_len: Option<usize>,
+    buffer_start_idx: OplogIndex,
+    last_oplog_idx: OplogIndex,
 }
 
 impl ForwardingOplog {
@@ -942,7 +954,7 @@ impl ForwardingOplog {
         let agent_id = initial_worker_metadata.agent_id.clone();
 
         let mut state = ForwardingOplogState {
-            buffer: VecDeque::new(),
+            buffer: None,
             buffer_start_idx: last_oplog_idx.next(),
             commit_count: 0,
             last_send: Instant::now(),
@@ -962,21 +974,27 @@ impl ForwardingOplog {
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<ForwardingJob>();
         let actor = tokio::spawn(async move {
             while let Some(job) = job_rx.recv().await {
+                state.debug_assert_invariants();
                 match job {
                     ForwardingJob::Add { entry, done } => {
-                        state.buffer.push_back(entry.clone());
-                        state.last_oplog_idx = state.last_oplog_idx.next();
+                        let cache_entries = state.cache_is_required();
+                        let cached_entry = cache_entries.then(|| entry.clone());
                         let idx = state.inner.add(entry).await;
+                        if let Some(entry) = cached_entry {
+                            state.record_cached([(idx, entry)]);
+                        } else {
+                            state.record_uncached([idx]);
+                        }
                         let _ = done.send(idx);
                     }
                     ForwardingJob::AddDurableStreamBatch { make_batch, done } => {
+                        let cache_entries = state.cache_is_required();
                         let result = state.inner.add_durable_stream_batch(make_batch).await;
                         if let Ok(entries) = &result {
-                            state
-                                .buffer
-                                .extend(entries.iter().map(|(_, entry)| entry.clone()));
-                            if let Some((last_index, _)) = entries.last() {
-                                state.last_oplog_idx = *last_index;
+                            if cache_entries {
+                                state.record_cached(entries.iter().cloned());
+                            } else {
+                                state.record_uncached(entries.iter().map(|(idx, _)| *idx));
                             }
                         }
                         let _ = done.send(result);
@@ -991,11 +1009,14 @@ impl ForwardingOplog {
                         // index matches the one the inner oplog assigns.
                         let first_idx = state.last_oplog_idx.next();
                         let second = make_second(first_idx);
-                        state.buffer.push_back(start.clone());
-                        state.last_oplog_idx = state.last_oplog_idx.next();
-                        state.buffer.push_back(second.clone());
-                        state.last_oplog_idx = state.last_oplog_idx.next();
+                        let cache_entries = state.cache_is_required();
+                        let cached_entries = cache_entries.then(|| (start.clone(), second.clone()));
                         let result = state.inner.add_pair(start, Box::new(move |_| second)).await;
+                        if let Some((start, second)) = cached_entries {
+                            state.record_cached([(result.0, start), (result.1, second)]);
+                        } else {
+                            state.record_uncached([result.0, result.1]);
+                        }
                         let _ = done.send(result);
                     }
                     ForwardingJob::AddStart {
@@ -1003,6 +1024,7 @@ impl ForwardingOplog {
                         build_start,
                         done,
                     } => {
+                        let cache_entries = state.cache_is_required();
                         // The `Start` entry is built deep in the leaf from the reserved payload
                         // reference, so — unlike `Add`/`AddPair` — it is mirrored into the
                         // buffer only after the delegation returns it.
@@ -1011,8 +1033,11 @@ impl ForwardingOplog {
                             .add_start_with_reserved_raw_payload(serialized_request, build_start)
                             .await;
                         if let Ok(ordered) = &result {
-                            state.buffer.push_back(ordered.entry.clone());
-                            state.last_oplog_idx = state.last_oplog_idx.next();
+                            if cache_entries {
+                                state.record_cached([(ordered.index, ordered.entry.clone())]);
+                            } else {
+                                state.record_uncached([ordered.index]);
+                            }
                         }
                         let _ = done.send(result);
                     }
@@ -1020,13 +1045,17 @@ impl ForwardingOplog {
                         build_request,
                         done,
                     } => {
+                        let cache_entries = state.cache_is_required();
                         let result = state
                             .inner
                             .add_start_with_indexed_reserved_raw_payload(build_request)
                             .await;
                         if let Ok(ordered) = &result {
-                            state.buffer.push_back(ordered.entry.clone());
-                            state.last_oplog_idx = ordered.index;
+                            if cache_entries {
+                                state.record_cached([(ordered.index, ordered.entry.clone())]);
+                            } else {
+                                state.record_uncached([ordered.index]);
+                            }
                         }
                         let _ = done.send(result);
                     }
@@ -1083,7 +1112,16 @@ impl ForwardingOplog {
                         ))
                         .await;
                     }
+                    #[cfg(test)]
+                    ForwardingJob::Inspect { done } => {
+                        let _ = done.send(ForwardingStateSnapshot {
+                            buffer_len: state.buffer.as_ref().map(VecDeque::len),
+                            buffer_start_idx: state.buffer_start_idx,
+                            last_oplog_idx: state.last_oplog_idx,
+                        });
+                    }
                 }
+                state.debug_assert_invariants();
             }
         });
 
@@ -1116,6 +1154,19 @@ impl ForwardingOplog {
             done,
         })
         .await
+    }
+
+    #[cfg(test)]
+    async fn inspect_state(&self) -> ForwardingStateSnapshot {
+        self.run_job(|done| ForwardingJob::Inspect { done }).await
+    }
+
+    #[cfg(test)]
+    async fn tick(&self) {
+        if self.jobs.send(ForwardingJob::Tick).is_err() {
+            panic!("Forwarding oplog actor terminated unexpectedly");
+        }
+        self.inspect_state().await;
     }
 
     /// Enqueues a job for the actor task and awaits its reply.
@@ -1292,7 +1343,7 @@ impl Oplog for ForwardingOplog {
 }
 
 struct ForwardingOplogState {
-    buffer: VecDeque<OplogEntry>,
+    buffer: Option<VecDeque<OplogEntry>>,
     /// Oplog index corresponding to the first entry in `buffer`.
     buffer_start_idx: OplogIndex,
     commit_count: usize,
@@ -1316,12 +1367,67 @@ struct ForwardingOplogState {
 }
 
 impl ForwardingOplogState {
+    fn debug_assert_invariants(&self) {
+        match &self.buffer {
+            Some(buffer) => {
+                debug_assert!(!buffer.is_empty());
+                debug_assert_eq!(
+                    self.buffer_start_idx.range_end(buffer.len() as u64),
+                    self.last_oplog_idx
+                );
+            }
+            None => debug_assert_eq!(self.buffer_start_idx, self.last_oplog_idx.next()),
+        }
+    }
+
+    fn cache_is_required(&self) -> bool {
+        !self.last_known_status.get().active_plugins.is_empty()
+            || self
+                .plugin_state
+                .values()
+                .any(|state| state.sending_up_to > state.confirmed_up_to)
+    }
+
+    fn record_cached(&mut self, entries: impl IntoIterator<Item = (OplogIndex, OplogEntry)>) {
+        let mut entries = entries.into_iter();
+        let Some((first_idx, first_entry)) = entries.next() else {
+            return;
+        };
+
+        debug_assert_eq!(first_idx, self.last_oplog_idx.next());
+        if self.buffer.is_none() {
+            self.buffer_start_idx = first_idx;
+            self.buffer = Some(VecDeque::new());
+        }
+        self.buffer.as_mut().unwrap().push_back(first_entry);
+        self.last_oplog_idx = first_idx;
+
+        for (idx, entry) in entries {
+            debug_assert_eq!(idx, self.last_oplog_idx.next());
+            self.buffer.as_mut().unwrap().push_back(entry);
+            self.last_oplog_idx = idx;
+        }
+    }
+
+    fn record_uncached(&mut self, indices: impl IntoIterator<Item = OplogIndex>) {
+        let mut appended = false;
+        for idx in indices {
+            debug_assert_eq!(idx, self.last_oplog_idx.next());
+            self.last_oplog_idx = idx;
+            appended = true;
+        }
+        if appended {
+            self.buffer = None;
+            self.buffer_start_idx = self.last_oplog_idx.next();
+        }
+    }
+
     /// Cursor-driven flush: for each plugin with unsent entries, send a batch.
     /// Handles retries of in-flight batches, first-send target resolution,
     /// pre-send and confirmation checkpoint writes.
     ///
-    /// Entries are always read from the persisted oplog (canonical source) to avoid
-    /// buffer/index drift caused by checkpoint entries injected during flush.
+    /// Complete ranges are read from the in-memory suffix when available; all other
+    /// ranges are read whole from the persisted oplog without splicing sources.
     pub async fn try_flush(&mut self) {
         let status = self.last_known_status.get();
         let flush_set = self.reconcile_plugin_state(&status);
@@ -1707,19 +1813,15 @@ impl ForwardingOplogState {
             return Vec::new();
         }
 
-        if !self.buffer.is_empty() && start >= self.buffer_start_idx {
-            let buffer_end_idx = self.buffer_start_idx.range_end(self.buffer.len() as u64);
+        if let Some(buffer) = &self.buffer
+            && start >= self.buffer_start_idx
+        {
+            let buffer_end_idx = self.buffer_start_idx.range_end(buffer.len() as u64);
             let request_end_idx = start.range_end(count as u64);
 
             if request_end_idx <= buffer_end_idx {
                 let offset = (start.as_u64() - self.buffer_start_idx.as_u64()) as usize;
-                return self
-                    .buffer
-                    .iter()
-                    .skip(offset)
-                    .take(count)
-                    .cloned()
-                    .collect();
+                return buffer.iter().skip(offset).take(count).cloned().collect();
             }
         }
 
@@ -1747,9 +1849,14 @@ impl ForwardingOplogState {
             sending_up_to,
             last_batch_start,
         };
-        self.buffer.push_back(checkpoint.clone());
+        let cache_entries = self.cache_is_required();
+        let cached_checkpoint = cache_entries.then(|| checkpoint.clone());
         let idx = self.inner.add(checkpoint).await;
-        self.last_oplog_idx = idx;
+        if let Some(checkpoint) = cached_checkpoint {
+            self.record_cached([(idx, checkpoint)]);
+        } else {
+            self.record_uncached([idx]);
+        }
         let committed = self.inner.commit(CommitLevel::Always).await;
         if let Some(max_idx) = committed.keys().max().copied() {
             self.last_committed_idx = self.last_committed_idx.max(max_idx);
@@ -1761,7 +1868,7 @@ impl ForwardingOplogState {
 
     /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
     fn prune_buffer(&mut self) {
-        if self.plugin_state.is_empty() || self.buffer.is_empty() {
+        if self.plugin_state.is_empty() || self.buffer.is_none() {
             return;
         }
 
@@ -1774,15 +1881,20 @@ impl ForwardingOplogState {
 
         if min_confirmed >= self.buffer_start_idx {
             let drain_up_to = min_confirmed.as_u64() - self.buffer_start_idx.as_u64() + 1;
-            let drain_count = (drain_up_to as usize).min(self.buffer.len());
-            self.buffer.drain(..drain_count);
+            let buffer = self.buffer.as_mut().unwrap();
+            let drain_count = (drain_up_to as usize).min(buffer.len());
+            buffer.drain(..drain_count);
             self.buffer_start_idx =
                 OplogIndex::from_u64(self.buffer_start_idx.as_u64() + drain_count as u64);
+            if buffer.is_empty() {
+                self.buffer = None;
+                self.buffer_start_idx = self.last_oplog_idx.next();
+            }
         }
     }
 
     fn finish_empty_flush(&mut self) {
-        self.buffer.clear();
+        self.buffer = None;
         self.buffer_start_idx = self.last_oplog_idx.next();
         self.last_send = Instant::now();
         self.commit_count = 0;
@@ -2009,6 +2121,7 @@ fn oplog_processor_idempotency_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::oplog::DurableStreamOplogRecord;
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
@@ -2020,7 +2133,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::plugin_registration::PluginRegistrationId;
-    use golem_common::model::{AgentFingerprint, Timestamp};
+    use golem_common::model::{AgentFingerprint, OplogProcessorCheckpointState, Timestamp};
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
     use test_r::test;
@@ -2121,11 +2234,16 @@ mod tests {
     struct RecordingOplogProcessorPlugin {
         sends: async_lock::Mutex<Vec<RecordedSend>>,
         lookups: async_lock::Mutex<Vec<RecordedLookup>>,
+        target_agent_id: AgentId,
+        resolve_count: std::sync::atomic::AtomicUsize,
+        failed_sends_remaining: std::sync::atomic::AtomicUsize,
+        target_is_local: std::sync::atomic::AtomicBool,
     }
 
     #[derive(Debug, Clone)]
     #[allow(dead_code)]
     struct RecordedSend {
+        target_agent_id: AgentId,
         initial_oplog_index: OplogIndex,
         entry_count: usize,
         entries: Vec<OplogEntry>,
@@ -2141,7 +2259,21 @@ mod tests {
             Self {
                 sends: async_lock::Mutex::new(Vec::new()),
                 lookups: async_lock::Mutex::new(Vec::new()),
+                target_agent_id: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "mock-target".to_string(),
+                },
+                resolve_count: std::sync::atomic::AtomicUsize::new(0),
+                failed_sends_remaining: std::sync::atomic::AtomicUsize::new(0),
+                target_is_local: std::sync::atomic::AtomicBool::new(true),
             }
+        }
+
+        fn fail_next_send_from_remote_target(&self) {
+            self.failed_sends_remaining
+                .store(1, std::sync::atomic::Ordering::Relaxed);
+            self.target_is_local
+                .store(false, std::sync::atomic::Ordering::Relaxed);
         }
 
         async fn send_count(&self) -> usize {
@@ -2164,25 +2296,36 @@ mod tests {
             _environment_id: EnvironmentId,
             _plugin: &InstalledPlugin,
         ) -> Result<AgentId, WorkerExecutorError> {
-            Ok(AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "mock-target".to_string(),
-            })
+            self.resolve_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(self.target_agent_id.clone())
         }
 
         async fn send(
             &self,
             _worker_metadata: AgentMetadata,
             _plugin: &InstalledPlugin,
-            _target_agent_id: &AgentId,
+            target_agent_id: &AgentId,
             initial_oplog_index: OplogIndex,
             entries: Vec<OplogEntry>,
         ) -> Result<(), WorkerExecutorError> {
             self.sends.lock().await.push(RecordedSend {
+                target_agent_id: target_agent_id.clone(),
                 initial_oplog_index,
                 entry_count: entries.len(),
                 entries,
             });
+            if self
+                .failed_sends_remaining
+                .fetch_update(
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |remaining| remaining.checked_sub(1),
+                )
+                .is_ok()
+            {
+                return Err(WorkerExecutorError::unknown("injected send failure"));
+            }
             Ok(())
         }
 
@@ -2195,7 +2338,9 @@ mod tests {
         }
 
         async fn is_local(&self, _agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
-            Ok(true)
+            Ok(self
+                .target_is_local
+                .load(std::sync::atomic::Ordering::Relaxed))
         }
 
         async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
@@ -2349,6 +2494,8 @@ mod tests {
         entries: std::sync::Mutex<Vec<OplogEntry>>,
         current_idx: std::sync::Mutex<OplogIndex>,
         committed_idx: std::sync::Mutex<OplogIndex>,
+        read_exact_count: std::sync::atomic::AtomicUsize,
+        read_exact_requests: std::sync::Mutex<Vec<(OplogIndex, u64)>>,
     }
 
     #[allow(dead_code)]
@@ -2358,7 +2505,18 @@ mod tests {
                 entries: std::sync::Mutex::new(Vec::new()),
                 current_idx: std::sync::Mutex::new(OplogIndex::NONE),
                 committed_idx: std::sync::Mutex::new(OplogIndex::NONE),
+                read_exact_count: std::sync::atomic::AtomicUsize::new(0),
+                read_exact_requests: std::sync::Mutex::new(Vec::new()),
             }
+        }
+
+        fn read_exact_count(&self) -> usize {
+            self.read_exact_count
+                .load(std::sync::atomic::Ordering::Relaxed)
+        }
+
+        fn read_exact_requests(&self) -> Vec<(OplogIndex, u64)> {
+            self.read_exact_requests.lock().unwrap().clone()
         }
     }
 
@@ -2393,6 +2551,23 @@ mod tests {
             let second_idx = *idx;
             entries.push(make_second(first_idx));
             (first_idx, second_idx)
+        }
+
+        async fn add_durable_stream_batch(
+            &self,
+            make_batch: DurableStreamBatchBuilder,
+        ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+            let mut entries = self.entries.lock().unwrap();
+            let mut idx = self.current_idx.lock().unwrap();
+            let records = make_batch(idx.next());
+            let mut result = Vec::with_capacity(records.len());
+            for record in records {
+                *idx = idx.next();
+                let entry = record.into_inline_entry();
+                entries.push(entry.clone());
+                result.push((*idx, entry));
+            }
+            Ok(result)
         }
 
         async fn add_start_with_reserved_raw_payload(
@@ -2462,6 +2637,12 @@ mod tests {
             oplog_index: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.read_exact_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.read_exact_requests
+                .lock()
+                .unwrap()
+                .push((oplog_index, n));
             let entries = self.entries.lock().unwrap();
             let start: u64 = oplog_index.into();
             let mut result = BTreeMap::new();
@@ -2533,6 +2714,21 @@ mod tests {
         (metadata, status_lock)
     }
 
+    fn test_worker_metadata_with_status_writer(
+        active_plugins: HashSet<EnvironmentPluginGrantId>,
+    ) -> (
+        AgentMetadata,
+        read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+        Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    ) {
+        let (metadata, _) = test_worker_metadata(active_plugins);
+        let status_writer = Arc::new(arc_swap::ArcSwap::from_pointee(
+            metadata.last_known_status.clone(),
+        ));
+        let status_lock = read_only_lock::arc_swap::ReadOnlyView::new(status_writer.clone());
+        (metadata, status_lock, status_writer)
+    }
+
     // --------------------------------------------------------------------------
     // U6: Empty buffer → no checkpoint written, no invoke called
     // --------------------------------------------------------------------------
@@ -2548,7 +2744,7 @@ mod tests {
         let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
 
         let mut state = ForwardingOplogState {
-            buffer: VecDeque::new(),
+            buffer: None,
             buffer_start_idx: OplogIndex::INITIAL,
             commit_count: 0,
             last_send: Instant::now(),
@@ -2596,10 +2792,10 @@ mod tests {
         let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
 
         let mut state = ForwardingOplogState {
-            buffer: VecDeque::from([OplogEntry::GrowMemory {
+            buffer: Some(VecDeque::from([OplogEntry::GrowMemory {
                 timestamp: Timestamp::now_utc(),
                 delta: 100,
-            }]),
+            }])),
             buffer_start_idx: OplogIndex::INITIAL,
             commit_count: 0,
             last_send: Instant::now(),
@@ -2652,7 +2848,7 @@ mod tests {
         inner.add(entry2.clone()).await;
 
         let mut state = ForwardingOplogState {
-            buffer: VecDeque::from([entry1, entry2]),
+            buffer: Some(VecDeque::from([entry1, entry2])),
             buffer_start_idx: OplogIndex::INITIAL,
             commit_count: 0,
             last_send: Instant::now(),
@@ -2703,7 +2899,7 @@ mod tests {
         inner.add(entry.clone()).await;
 
         let mut state = ForwardingOplogState {
-            buffer: VecDeque::from([entry]),
+            buffer: Some(VecDeque::from([entry])),
             buffer_start_idx: OplogIndex::INITIAL,
             commit_count: 0,
             last_send: Instant::now(),
@@ -2867,5 +3063,301 @@ mod tests {
             function_names,
             vec!["first".to_string(), "second".to_string()]
         );
+    }
+
+    fn grow_memory(delta: u64) -> OplogEntry {
+        OplogEntry::GrowMemory {
+            timestamp: Timestamp::now_utc(),
+            delta,
+        }
+    }
+
+    fn memory_deltas(entries: &[OplogEntry]) -> Vec<u64> {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                OplogEntry::GrowMemory { delta, .. } => *delta,
+                other => panic!("unexpected entry: {other:?}"),
+            })
+            .collect()
+    }
+
+    fn publish_status(
+        status_writer: &arc_swap::ArcSwap<AgentStatusRecord>,
+        active_plugins: HashSet<EnvironmentPluginGrantId>,
+        checkpoint: Option<(EnvironmentPluginGrantId, OplogProcessorCheckpointState)>,
+    ) {
+        let mut status = status_writer.load_full().as_ref().clone();
+        status.active_plugins = active_plugins;
+        status.oplog_processor_checkpoints = checkpoint.into_iter().collect();
+        status_writer.store(Arc::new(status));
+    }
+
+    async fn test_forwarding_oplog(
+        active_plugins: HashSet<EnvironmentPluginGrantId>,
+        grant_id: EnvironmentPluginGrantId,
+        max_commit_count: usize,
+    ) -> (
+        ForwardingOplog,
+        Arc<InMemoryOplog>,
+        Arc<RecordingOplogProcessorPlugin>,
+        Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    ) {
+        let (metadata, status_lock, status_writer) =
+            test_worker_metadata_with_status_writer(active_plugins);
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let inner = Arc::new(InMemoryOplog::new());
+        let oplog = ForwardingOplog::new(
+            inner.clone(),
+            recording_plugin.clone(),
+            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+                grant_id,
+            )),
+            metadata,
+            status_lock,
+            OplogIndex::NONE,
+            Box::new(|| {}),
+            max_commit_count,
+            Duration::from_secs(3600),
+        )
+        .await;
+        (oplog, inner, recording_plugin, status_writer)
+    }
+
+    #[test]
+    async fn no_plugin_mixed_appends_allocate_cache_only_after_activation() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, inner, recording_plugin, status_writer) =
+            test_forwarding_oplog(HashSet::new(), grant_id, 1).await;
+
+        oplog.add(grow_memory(1)).await;
+        oplog
+            .add_pair(grow_memory(2), Box::new(|_| grow_memory(3)))
+            .await;
+        oplog
+            .add_start_with_reserved_raw_payload(Vec::new(), Box::new(|_| Ok(grow_memory(4))))
+            .await
+            .unwrap();
+        oplog
+            .add_start_with_indexed_reserved_raw_payload(Box::new(|_| {
+                Ok((Vec::new(), Box::new(|_| Ok(grow_memory(5)))))
+            }))
+            .await
+            .unwrap();
+        oplog
+            .add_durable_stream_batch(Box::new(|_| {
+                vec![
+                    DurableStreamOplogRecord::InlineEntry(grow_memory(6)),
+                    DurableStreamOplogRecord::InlineEntry(grow_memory(7)),
+                ]
+            }))
+            .await
+            .unwrap();
+
+        let uncached = oplog.inspect_state().await;
+        assert_eq!(uncached.buffer_len, None);
+        assert_eq!(uncached.last_oplog_idx, OplogIndex::from_u64(7));
+        assert_eq!(uncached.buffer_start_idx, uncached.last_oplog_idx.next());
+
+        publish_status(&status_writer, HashSet::from([grant_id]), None);
+        oplog.add(grow_memory(8)).await;
+        let cached = oplog.inspect_state().await;
+        assert_eq!(cached.buffer_len, Some(1));
+        assert_eq!(cached.buffer_start_idx, OplogIndex::from_u64(8));
+        assert_eq!(cached.last_oplog_idx, OplogIndex::from_u64(8));
+
+        oplog.commit(CommitLevel::Always).await;
+        let sends = recording_plugin.sends().await;
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].initial_oplog_index, OplogIndex::INITIAL);
+        assert_eq!(sends[0].entry_count, 8);
+        assert_eq!(
+            memory_deltas(&sends[0].entries),
+            (1..=8).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            inner.read_exact_requests(),
+            vec![(OplogIndex::INITIAL, 8)],
+            "the whole range must fall back without splicing"
+        );
+    }
+
+    #[test]
+    async fn measure_no_plugin_append_against_active_cache_control() {
+        const APPENDS: u64 = 10_000;
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (uncached, _inner, _plugin, _status) =
+            test_forwarding_oplog(HashSet::new(), grant_id, usize::MAX).await;
+        let started = std::time::Instant::now();
+        for delta in 0..APPENDS {
+            uncached.add(grow_memory(delta)).await;
+        }
+        let uncached_elapsed = started.elapsed();
+        assert_eq!(uncached.inspect_state().await.buffer_len, None);
+
+        let (cached, _inner, _plugin, _status) =
+            test_forwarding_oplog(HashSet::from([grant_id]), grant_id, usize::MAX).await;
+        let started = std::time::Instant::now();
+        for delta in 0..APPENDS {
+            cached.add(grow_memory(delta)).await;
+        }
+        let cached_elapsed = started.elapsed();
+        assert_eq!(
+            cached.inspect_state().await.buffer_len,
+            Some(APPENDS as usize)
+        );
+
+        eprintln!(
+            "forwarding oplog append ({APPENDS} entries): no plugin {uncached_elapsed:?} ({:.0} ns/op), active plugin {cached_elapsed:?} ({:.0} ns/op)",
+            uncached_elapsed.as_nanos() as f64 / APPENDS as f64,
+            cached_elapsed.as_nanos() as f64 / APPENDS as f64,
+        );
+    }
+
+    #[test]
+    async fn reactivation_checkpoint_resumes_with_cached_suffix() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, inner, recording_plugin, status_writer) =
+            test_forwarding_oplog(HashSet::new(), grant_id, 1).await;
+        oplog.add(grow_memory(1)).await;
+        oplog.add(grow_memory(2)).await;
+
+        let target = recording_plugin.target_agent_id.clone();
+        publish_status(
+            &status_writer,
+            HashSet::from([grant_id]),
+            Some((
+                grant_id,
+                OplogProcessorCheckpointState {
+                    target_agent_id: Some(target),
+                    confirmed_up_to: OplogIndex::from_u64(2),
+                    sending_up_to: OplogIndex::from_u64(2),
+                    last_batch_start: OplogIndex::INITIAL,
+                },
+            )),
+        );
+        oplog.add(grow_memory(3)).await;
+        oplog.commit(CommitLevel::Always).await;
+
+        let sends = recording_plugin.sends().await;
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].initial_oplog_index, OplogIndex::from_u64(3));
+        assert_eq!(sends[0].entry_count, 1);
+        assert_eq!(inner.read_exact_count(), 0, "suffix should be a cache hit");
+    }
+
+    #[test]
+    async fn cached_skipped_cached_range_uses_whole_range_fallback() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, inner, recording_plugin, status_writer) =
+            test_forwarding_oplog(HashSet::from([grant_id]), grant_id, 1).await;
+        oplog.add(grow_memory(1)).await;
+        publish_status(&status_writer, HashSet::new(), None);
+        oplog.add(grow_memory(2)).await;
+        let skipped = oplog.inspect_state().await;
+        assert_eq!(skipped.buffer_len, None);
+        assert_eq!(skipped.buffer_start_idx, skipped.last_oplog_idx.next());
+
+        publish_status(&status_writer, HashSet::from([grant_id]), None);
+        oplog.add(grow_memory(3)).await;
+        let resumed = oplog.inspect_state().await;
+        assert_eq!(resumed.buffer_len, Some(1));
+        assert_eq!(resumed.buffer_start_idx, OplogIndex::from_u64(3));
+        oplog.commit(CommitLevel::Always).await;
+
+        let sends = recording_plugin.sends().await;
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].initial_oplog_index, OplogIndex::INITIAL);
+        assert_eq!(sends[0].entry_count, 3);
+        assert_eq!(memory_deltas(&sends[0].entries), vec![1, 2, 3]);
+        assert_eq!(inner.read_exact_requests(), vec![(OplogIndex::INITIAL, 3)]);
+    }
+
+    #[test]
+    async fn failed_reserved_starts_do_not_advance_index_or_cache() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, _inner, _recording_plugin, _status_writer) =
+            test_forwarding_oplog(HashSet::from([grant_id]), grant_id, usize::MAX).await;
+
+        assert!(
+            oplog
+                .add_start_with_reserved_raw_payload(
+                    Vec::new(),
+                    Box::new(|_| Err("raw start failed".to_string())),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            oplog
+                .add_start_with_indexed_reserved_raw_payload(Box::new(|_| {
+                    Err("indexed start failed".to_string())
+                }))
+                .await
+                .is_err()
+        );
+
+        let state = oplog.inspect_state().await;
+        assert_eq!(state.last_oplog_idx, OplogIndex::NONE);
+        assert_eq!(state.buffer_len, None);
+        assert_eq!(state.buffer_start_idx, OplogIndex::INITIAL);
+    }
+
+    #[test]
+    async fn deactivated_outstanding_batch_retries_exact_range_and_target() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, _inner, recording_plugin, status_writer) =
+            test_forwarding_oplog(HashSet::from([grant_id]), grant_id, 1).await;
+        recording_plugin.fail_next_send_from_remote_target();
+        oplog.add(grow_memory(1)).await;
+        oplog.commit(CommitLevel::Always).await;
+
+        publish_status(&status_writer, HashSet::new(), None);
+        oplog.add(grow_memory(2)).await;
+        assert!(oplog.inspect_state().await.buffer_len.is_some());
+        oplog.commit(CommitLevel::Always).await;
+
+        let sends = recording_plugin.sends().await;
+        assert_eq!(sends.len(), 2);
+        assert_eq!(sends[0].initial_oplog_index, OplogIndex::INITIAL);
+        assert_eq!(sends[0].entry_count, 1);
+        assert_eq!(sends[1].initial_oplog_index, OplogIndex::INITIAL);
+        assert_eq!(sends[1].entry_count, 1);
+        assert_eq!(sends[0].target_agent_id, sends[1].target_agent_id);
+        assert_eq!(memory_deltas(&sends[0].entries), vec![1]);
+        assert_eq!(memory_deltas(&sends[1].entries), vec![1]);
+        assert_eq!(
+            recording_plugin
+                .resolve_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the recorded remote target must be reused"
+        );
+    }
+
+    #[test]
+    async fn direct_checkpoint_commits_are_returned_even_after_cache_pruning() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (oplog, _inner, _recording_plugin, _status_writer) =
+            test_forwarding_oplog(HashSet::from([grant_id]), grant_id, usize::MAX).await;
+        oplog.add(grow_memory(1)).await;
+        let initial_commit = oplog.commit(CommitLevel::Always).await;
+        assert_eq!(initial_commit.len(), 1);
+
+        oplog.tick().await;
+        oplog.tick().await;
+        let pruned = oplog.inspect_state().await;
+        assert_eq!(pruned.buffer_len, None);
+        assert_eq!(pruned.buffer_start_idx, pruned.last_oplog_idx.next());
+
+        let checkpoint_commit = oplog.commit(CommitLevel::Always).await;
+        assert_eq!(
+            checkpoint_commit
+                .values()
+                .filter(|entry| matches!(entry, OplogEntry::OplogProcessorCheckpoint { .. }))
+                .count(),
+            3
+        );
+        assert!(oplog.commit(CommitLevel::Always).await.is_empty());
     }
 }
