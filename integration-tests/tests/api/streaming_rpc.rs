@@ -363,6 +363,7 @@ async fn invoke_agent_session(
 }
 
 struct TrustedInvocationSession {
+    method_name: String,
     requests: mpsc::Sender<InvocationRequest>,
     responses: mpsc::Receiver<Result<InvocationResponse, String>>,
     response_task: Option<tokio::task::JoinHandle<()>>,
@@ -464,6 +465,7 @@ impl TrustedInvocationSession {
             }
         });
         let mut session = Self {
+            method_name: method_name.to_string(),
             requests,
             responses,
             response_task: Some(response_task),
@@ -489,7 +491,10 @@ impl TrustedInvocationSession {
             tokio::time::timeout(std::time::Duration::from_secs(30), self.responses.recv())
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!("trusted invocation session made no progress for 30 seconds")
+                    anyhow::anyhow!(
+                        "trusted invocation session for {} made no progress for 30 seconds",
+                        self.method_name
+                    )
                 })?
                 .ok_or_else(|| {
                     anyhow::anyhow!("trusted invocation response ended before protocol completion")
@@ -616,6 +621,12 @@ impl TrustedInvocationSession {
     ) -> anyhow::Result<TrustedInvocationReport> {
         while !self.state.is_complete() {
             let response = self.receive().await.map_err(|error| {
+                let error = error.context(format!(
+                    "received result={}, output streams={}, stream cancellations={}",
+                    report.result.is_some(),
+                    report.outputs.len(),
+                    report.stream_cancels.len()
+                ));
                 if self.unsent_requests.is_empty() {
                     error
                 } else {
@@ -1691,7 +1702,10 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     let mut cancellable = cancellable;
     let mut cancellable_report = TrustedInvocationReport::default();
     let (cancellable_stream_id, cancel_sequence) = loop {
-        let response = cancellable.receive().await?;
+        let response = cancellable
+            .receive()
+            .await
+            .map_err(|error| anyhow::anyhow!("waiting for first cancellable item: {error}"))?;
         let observed = match response.response.as_ref() {
             Some(invocation_response::Response::OutputItem(item)) => {
                 Some((item.transport_stream_id, item.producer_sequence + 1))
@@ -1714,7 +1728,10 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
             StreamCancelRole::OutputConsumer,
         )
         .await?;
-    let cancellable = cancellable.finish(cancellable_report).await?;
+    let cancellable = cancellable
+        .finish(cancellable_report)
+        .await
+        .map_err(|error| anyhow::anyhow!("finishing cancelled stream: {error:#}"))?;
     let result_stream_id = proto_stream_id(cancellable.successful_result()?)?;
     assert_eq!(result_stream_id, cancellable_stream_id);
     assert!(!cancellable.output_ends.contains(&cancellable_stream_id));
@@ -1760,6 +1777,49 @@ async fn moonbit_direct_guest_abi_streaming_lifecycle(
     );
     assert_moonbit_target_ping(deps, &component, &target_agent_id, &name).await?;
 
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn binary_transform_large_chunks(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, environment) = user.app_and_env().await?;
+    let component = user
+        .component(&environment.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .unique()
+        .store()
+        .await?;
+    let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+    let mut session = TrustedInvocationSession::start_with(
+        deps,
+        &component,
+        &agent,
+        "transform_binary",
+        proto_record_values(vec![proto_stream(101)]),
+        false,
+    )
+    .await?;
+    let values = [65536, 17]
+        .into_iter()
+        .map(|size| {
+            SchemaValue::Binary(golem_common::schema::BinaryValuePayload {
+                bytes: (0..size).map(|i| (i % 251) as u8).collect(),
+                mime_type: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    for (sequence, value) in values.iter().enumerate() {
+        session
+            .send_input_value(101, sequence as u64, value.clone())
+            .await?;
+    }
+    session.end_input(101, 2).await?;
+    let report = session.finish(TrustedInvocationReport::default()).await?;
+    let output_id = proto_stream_id(report.successful_result()?)?;
+    assert_eq!(report.decoded_output(output_id)?, values);
+    assert!(report.output_ends.contains(&output_id));
     Ok(())
 }
 

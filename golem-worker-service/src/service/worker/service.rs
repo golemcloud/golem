@@ -186,7 +186,16 @@ fn validate_one_shot_invocation_is_stream_free(
                 "Invalid input for agent method '{method_name}': {error}"
             ))
         })?;
-    if method.uses_streams(&agent_type.schema) {
+    let uses_streams = component
+        .metadata
+        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+        .ok_or_else(|| {
+            WorkerServiceError::TypeChecker(format!(
+                "Streaming classification for agent method '{method_name}' is missing"
+            ))
+        })?
+        .uses_streams();
+    if uses_streams {
         Err(WorkerServiceError::TypeChecker(
             "Streaming agent methods require an attached invocation session".to_string(),
         ))
@@ -221,7 +230,15 @@ fn invocation_method_uses_streams(
                 agent_type.type_name
             ))
         })?;
-    Ok(method.uses_streams(&agent_type.schema))
+    component
+        .metadata
+        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+        .map(|metadata| metadata.uses_streams())
+        .ok_or_else(|| {
+            WorkerServiceError::TypeChecker(format!(
+                "Streaming classification for agent method '{method_name}' is missing"
+            ))
+        })
 }
 
 pub(crate) fn decode_public_session_schema_value(
@@ -1894,7 +1911,16 @@ impl WorkerService {
                 account_id: auth.account_id(),
             })
             .into();
-        let expected_callee_fingerprint = if method.uses_streams(&invocation_agent_type.schema) {
+        let method_uses_streams = invocation_component
+            .metadata
+            .agent_method_stream_metadata(&invocation_agent_type.type_name, &method.name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Streaming classification for agent method {method_name} is missing"
+                ))
+            })?
+            .uses_streams();
+        let expected_callee_fingerprint = if method_uses_streams {
             let fingerprint = self
                 .resolve_streaming_callee_fingerprint(
                     &invocation_component,

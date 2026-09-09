@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod metadata;
+
 use crate::durable_host::stream_bus::{
     DurableLiveStreamBus, DurableLiveStreamBusError, DurableLiveStreamEvent,
     DurableLiveStreamSubscription,
@@ -53,6 +55,7 @@ use golem_schema::schema::{
     SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
 use golem_service_base::model::auth::AuthCtx;
+use metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
@@ -75,6 +78,27 @@ pub(crate) struct ProducerRegistrationRequestV1 {
 pub(crate) enum NestedStreamWriteV1 {
     Register(ProducerRegistrationRequestV1),
     Forward(DurableStreamHandleV1),
+}
+
+pub(crate) enum ProducerOutputSourceV1 {
+    New(ProducerRegistrationRequestV1),
+    Existing(DurableStreamHandleV1),
+}
+
+pub(crate) struct ProducerOutputRegistrationV1 {
+    pub(crate) transport_stream_id: u64,
+    pub(crate) source: ProducerOutputSourceV1,
+}
+
+pub(crate) struct PendingCommittedCancellation {
+    stream_id: StreamId,
+    sequence: u64,
+    role: StreamCancelRoleV1,
+    reason: StreamCancelReasonV1,
+    bus: Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>,
+    event: CommittedProducerStreamEventV1,
+    outcome: Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError>,
+    newly_committed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
@@ -191,6 +215,7 @@ impl From<DurableLiveStreamBusError> for DurableStreamProducerError {
 
 #[derive(Clone, Default)]
 struct ProducerStreamIndex {
+    loaded_metadata: HashSet<metadata::ProducerMetadataKey>,
     registrations: HashMap<StreamId, StreamRegisteredRecordV1>,
     referenced_handles: HashMap<StreamId, (DurableStreamHandleV1, HashSet<StreamSessionKeyV1>)>,
     coordinates: HashMap<StreamRegistrationCoordinateV1, StreamId>,
@@ -200,22 +225,46 @@ struct ProducerStreamIndex {
     session_stream_mappings:
         HashMap<StreamSessionKeyV1, HashSet<(DurableStreamHandleV1, SessionStreamRoleV1)>>,
     session_stream_counts: HashMap<StreamSessionKeyV1, usize>,
+    open_session_streams: HashMap<StreamSessionKeyV1, HashSet<StreamId>>,
+    invocation_results: HashMap<StreamSessionKeyV1, OplogIndex>,
     finished_sessions: HashSet<StreamSessionKeyV1>,
     attachments: HashMap<(AttachmentId, StreamId), IndexedStreamAttachment>,
+    active_attachment_count: u64,
+    attachment_pages: HashMap<u64, Vec<(AttachmentId, StreamId)>>,
+    attachment_positions: HashMap<(AttachmentId, StreamId), Option<u64>>,
+    batch_positions: HashMap<(StreamId, OplogIndex), (u64, u64)>,
+    complete_for_deletion: bool,
     cascade_outbox: HashMap<StreamAttachmentKeyV1, StreamCascadeDependentResultV1>,
     consumer_journals: HashMap<(StreamSessionKeyV1, StreamId), IndexedConsumerJournal>,
+    open_streams: usize,
     deleting: bool,
     consumer_deleting: bool,
 }
 
-#[derive(Clone, Default)]
-struct IndexedConsumerJournal {
+#[derive(Clone, Default, desert_rust::BinaryCodec)]
+pub struct IndexedConsumerJournal {
     next_read_ordinal: u64,
     terminal: bool,
+    last_source_offset: Option<StreamOffsetV1>,
     source_unavailable: Option<(StreamAttachmentKeyV1, StreamOffsetV1)>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProducerJournalSummary {
+    event_count: u64,
+    last_offset: Option<StreamOffsetV1>,
+    terminal: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ConsumerJournalSummary {
+    event_count: u64,
+    last_offset: Option<StreamOffsetV1>,
+    terminal: bool,
+    source_unavailable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
 enum IndexedStreamAttachmentState {
     Prepared {
         prepared_at_millis: u64,
@@ -231,8 +280,8 @@ enum IndexedStreamAttachmentState {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct IndexedStreamAttachment {
+#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+pub struct IndexedStreamAttachment {
     key: StreamAttachmentKeyV1,
     state: IndexedStreamAttachmentState,
 }
@@ -266,10 +315,32 @@ enum AttachmentApplyOutcome {
 
 #[derive(Clone, Default)]
 struct IndexedProducerStream {
-    events: BTreeMap<u64, CommittedProducerStreamEventV1>,
-    batches: BTreeMap<u64, (StreamItemsPayloadV1, Vec<StreamOffsetV1>, Vec<StreamId>)>,
+    terminal_event: Option<CommittedProducerStreamEventV1>,
+    batches: BTreeMap<u64, OplogIndex>,
+    first_sequence: Option<u64>,
     next_sequence: u64,
+    last_offset: Option<StreamOffsetV1>,
     terminal: bool,
+}
+
+impl IndexedProducerStream {
+    fn offsets(&self) -> Vec<StreamOffsetV1> {
+        let mut offsets = Vec::new();
+        let mut batches = self.batches.iter().peekable();
+        while let Some((&first_sequence, &index)) = batches.next() {
+            let end = batches
+                .peek()
+                .map_or(self.next_sequence, |(sequence, _)| **sequence);
+            offsets.extend(
+                (0..end - first_sequence)
+                    .map(|sub_index| StreamOffsetV1::new(index, sub_index as u32)),
+            );
+        }
+        if self.terminal {
+            offsets.extend(self.last_offset);
+        }
+        offsets
+    }
 }
 
 impl ProducerStreamIndex {
@@ -336,6 +407,14 @@ impl ProducerStreamIndex {
             _ => {}
         }
         Ok(())
+    }
+
+    fn apply_result_offset(&mut self, index: OplogIndex, record: &StreamSessionRecordV1) {
+        if let StreamSessionRecordV1::InvocationResult(record) = record {
+            self.invocation_results
+                .entry(record.session_key.clone())
+                .or_insert(index);
+        }
     }
 
     fn apply_session_references(
@@ -435,6 +514,17 @@ impl ProducerStreamIndex {
         &mut self,
         record: &StreamSessionRecordV1,
     ) -> Result<(), DurableStreamProducerError> {
+        if matches!(
+            record,
+            StreamSessionRecordV1::ConsumerItemValue(_)
+                | StreamSessionRecordV1::ConsumerTerminal(_)
+                | StreamSessionRecordV1::SourceUnavailable(_)
+        ) && !record.has_supported_format()
+        {
+            return Err(DurableStreamProducerError::CorruptHistory(
+                "unsupported or malformed durable consumer journal record".to_string(),
+            ));
+        }
         let (session_key, stream_id, ordinal, item_count, terminal) = match record {
             StreamSessionRecordV1::ConsumerItemValue(record) => (
                 &record.session_key,
@@ -453,42 +543,63 @@ impl ProducerStreamIndex {
             StreamSessionRecordV1::SourceUnavailable(record) => {
                 let journal = self
                     .consumer_journals
-                    .entry((record.key.session_key.clone(), record.key.stream_id))
-                    .or_default();
-                if let Some((existing_key, existing_offset)) = &journal.source_unavailable {
+                    .get(&(record.key.session_key.clone(), record.key.stream_id));
+                if let Some(journal) = journal
+                    && let Some((existing_key, existing_offset)) = &journal.source_unavailable
+                {
                     return if existing_key == &record.key
                         && existing_offset == &record.source_offset
+                        && record.consumer_read_ordinal == journal.next_read_ordinal
                     {
                         Ok(())
                     } else {
                         Err(DurableStreamProducerError::AttachmentConflict)
                     };
                 }
-                if journal.terminal || record.consumer_read_ordinal != journal.next_read_ordinal {
+                if journal.is_some_and(|journal| journal.terminal)
+                    || record.consumer_read_ordinal
+                        != journal.map_or(0, |journal| journal.next_read_ordinal)
+                {
                     return Err(DurableStreamProducerError::ConsumerJournalAdvanced);
                 }
+                let journal = self
+                    .consumer_journals
+                    .entry((record.key.session_key.clone(), record.key.stream_id))
+                    .or_default();
                 journal.source_unavailable = Some((record.key.clone(), record.source_offset));
                 return Ok(());
             }
             _ => return Ok(()),
         };
-        let journal = self
-            .consumer_journals
-            .entry((session_key.clone(), stream_id))
-            .or_default();
-        if journal.terminal
-            || journal.source_unavailable.is_some()
-            || ordinal != journal.next_read_ordinal
+        let key = (session_key.clone(), stream_id);
+        let journal = self.consumer_journals.get(&key);
+        if journal.is_some_and(|journal| journal.terminal || journal.source_unavailable.is_some())
+            || ordinal != journal.map_or(0, |journal| journal.next_read_ordinal)
         {
             return Err(DurableStreamProducerError::ConsumerJournalAdvanced);
         }
-        journal.next_read_ordinal = journal
-            .next_read_ordinal
+        let next_read_ordinal = ordinal
             .checked_add(
                 u64::try_from(item_count)
                     .map_err(|_| DurableStreamProducerError::CounterOverflow)?,
             )
             .ok_or(DurableStreamProducerError::CounterOverflow)?;
+        let last_source_offset = match record {
+            StreamSessionRecordV1::ConsumerItemValue(record) => record
+                .logical_item_count()
+                .checked_sub(1)
+                .and_then(|index| record.source_offset_at(index))
+                .ok_or_else(|| {
+                    DurableStreamProducerError::CorruptHistory(
+                        "consumer journal source offset range is empty or invalid".to_string(),
+                    )
+                })?,
+            StreamSessionRecordV1::ConsumerTerminal(record) => record.source_offset,
+            _ => unreachable!(),
+        };
+        let journal = self.consumer_journals.entry(key).or_default();
+        journal.next_read_ordinal = next_read_ordinal;
+        journal.last_source_offset = Some(last_source_offset);
         journal.terminal = terminal;
         Ok(())
     }
@@ -616,6 +727,10 @@ impl ProducerStreamIndex {
         self.stream_sessions
             .insert(record.handle.stream_id, session_key.clone());
         self.stream_roles.insert(record.handle.stream_id, role);
+        self.open_session_streams
+            .entry(session_key.clone())
+            .or_default()
+            .insert(record.handle.stream_id);
         if new_session_mapping {
             self.session_stream_mappings
                 .entry(session_key.clone())
@@ -624,6 +739,7 @@ impl ProducerStreamIndex {
             *self.session_stream_counts.entry(session_key).or_default() += 1;
         }
         self.registrations.insert(record.handle.stream_id, record);
+        self.open_streams += 1;
         Ok(())
     }
 
@@ -640,6 +756,9 @@ impl ProducerStreamIndex {
             return Err(DurableStreamProducerError::CorruptHistory(
                 "nested registrations are not claimed by their enclosing item batch".to_string(),
             ));
+        }
+        if pending_registrations.is_empty() {
+            return self.apply_items(oplog_index, record, producer_fingerprint);
         }
         let registration_start = oplog_index
             .as_u64()
@@ -839,16 +958,18 @@ impl ProducerStreamIndex {
                 nested_handles: nested_handles.clone(),
                 payload,
             };
-            stream.events.insert(sequence, event.clone());
             events.push(event);
         }
+        stream.first_sequence.get_or_insert(record.first_sequence);
         stream.next_sequence = stream
             .next_sequence
             .checked_add(events.len() as u64)
             .ok_or(DurableStreamProducerError::CounterOverflow)?;
-        stream.batches.insert(
-            record.first_sequence,
-            (record.payload, record.offsets, record.nested_stream_ids),
+        stream.last_offset = record.offsets.last().copied();
+        stream.batches.insert(record.first_sequence, oplog_index);
+        self.batch_positions.insert(
+            (record.stream_id, oplog_index),
+            (record.first_sequence, events.len() as u64),
         );
         Ok(events)
     }
@@ -879,8 +1000,16 @@ impl ProducerStreamIndex {
             nested_handles: Vec::new(),
             payload: CommittedProducerStreamEventPayloadV1::End(record.result),
         };
-        stream.events.insert(record.sequence, event.clone());
+        stream.first_sequence.get_or_insert(record.sequence);
+        stream.terminal_event = Some(event.clone());
+        stream.last_offset = Some(record.offset);
         stream.terminal = true;
+        self.open_streams -= 1;
+        if let Some(session) = self.stream_sessions.get(&record.stream_id)
+            && let Some(streams) = self.open_session_streams.get_mut(session)
+        {
+            streams.remove(&record.stream_id);
+        }
         Ok(event)
     }
 
@@ -892,13 +1021,11 @@ impl ProducerStreamIndex {
         if self.finished_sessions.contains(&record.session_key) {
             return Ok(());
         }
-        if self.stream_sessions.iter().any(|(stream_id, session_key)| {
-            session_key == &record.session_key
-                && self
-                    .streams
-                    .get(stream_id)
-                    .is_some_and(|stream| !stream.terminal)
-        }) {
+        if self
+            .open_session_streams
+            .get(&record.session_key)
+            .is_some_and(|streams| !streams.is_empty())
+        {
             return Err(DurableStreamProducerError::CorruptHistory(
                 "session Finished record precedes a materialized stream terminal".to_string(),
             ));
@@ -937,8 +1064,16 @@ impl ProducerStreamIndex {
                 details: record.details,
             },
         };
-        stream.events.insert(record.sequence, event.clone());
+        stream.first_sequence.get_or_insert(record.sequence);
+        stream.terminal_event = Some(event.clone());
+        stream.last_offset = Some(record.offset);
         stream.terminal = true;
+        self.open_streams -= 1;
+        if let Some(session) = self.stream_sessions.get(&record.stream_id)
+            && let Some(streams) = self.open_session_streams.get_mut(session)
+        {
+            streams.remove(&record.stream_id);
+        }
         Ok(event)
     }
 
@@ -1283,19 +1418,17 @@ fn validate_items_payload(
     }
 }
 
-fn logical_payloads(payload: &StreamItemsPayloadV1) -> Vec<CommittedProducerStreamEventPayloadV1> {
-    match payload {
-        StreamItemsPayloadV1::Values(values) => values
-            .iter()
-            .cloned()
-            .map(CommittedProducerStreamEventPayloadV1::Value)
-            .collect(),
-        StreamItemsPayloadV1::PackedU8(bytes) => bytes
-            .iter()
-            .copied()
-            .map(CommittedProducerStreamEventPayloadV1::PackedU8)
-            .collect(),
-    }
+fn logical_payloads(
+    payload: &StreamItemsPayloadV1,
+) -> impl ExactSizeIterator<Item = CommittedProducerStreamEventPayloadV1> + '_ {
+    (0..payload.logical_item_count()).map(|index| match payload {
+        StreamItemsPayloadV1::Values(values) => {
+            CommittedProducerStreamEventPayloadV1::Value(values[index].clone())
+        }
+        StreamItemsPayloadV1::PackedU8(bytes) => {
+            CommittedProducerStreamEventPayloadV1::PackedU8(bytes[index])
+        }
+    })
 }
 
 fn registration_coordinate_depth(coordinate: &StreamRegistrationCoordinateV1) -> usize {
@@ -1343,23 +1476,187 @@ pub(crate) type DurableStreamCommit = Arc<
 >;
 
 pub(crate) struct DurableStreamProducer {
+    self_weak: std::sync::Weak<Self>,
     oplog: Arc<dyn Oplog>,
     commit: DurableStreamCommit,
+    control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
     environment_id: EnvironmentId,
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,
     index: Mutex<ProducerStreamIndex>,
     buses: RwLock<HashMap<StreamId, Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>>>,
+    committed_retention: std::sync::Mutex<CommittedEventRetention>,
     source_cancellations: RwLock<HashMap<StreamId, (u64, CancellationToken)>>,
     next_source_cancellation_id: AtomicU64,
     reconciliation_cursor: AtomicUsize,
     open_stream_count: AtomicUsize,
     live_join_capacity: usize,
     session_records_changed: Notify,
-    session_locks: std::sync::Mutex<HashMap<StreamSessionKeyV1, Arc<tokio::sync::Mutex<()>>>>,
+    session_locks:
+        std::sync::Mutex<HashMap<StreamSessionKeyV1, std::sync::Weak<tokio::sync::Mutex<()>>>>,
+}
+
+// This is a producer-wide budget rather than a per-stream budget. In particular, creating many
+// streams cannot multiply the amount of payload retained by a worker.
+const COMMITTED_RETENTION_MAX_ENTRIES: usize = 4096;
+const COMMITTED_RETENTION_MAX_BYTES: usize = 32 * 1024 * 1024;
+const STREAM_SEGMENT_MAX_EVENTS: usize = 256;
+const STREAM_SEGMENT_TARGET_BYTES: usize = 24 * 1024 * 1024;
+
+#[derive(Default)]
+struct CommittedEventRetention {
+    batches: VecDeque<RetainedCommittedBatch>,
+    entries: usize,
+    bytes: usize,
+}
+
+struct RetainedCommittedBatch {
+    events: RetainedCommittedEvents,
+    encoded_event_bytes: Option<usize>,
+    retained_bytes: usize,
+}
+
+enum RetainedCommittedEvents {
+    Shared(Arc<CommittedProducerStreamEventV1>),
+    Packed {
+        stream_id: StreamId,
+        first_sequence: u64,
+        first_offset: StreamOffsetV1,
+        bytes: Arc<Vec<u8>>,
+        batch_end: StreamOffsetV1,
+        nested_handles: Arc<Vec<DurableStreamHandleV1>>,
+    },
+}
+
+impl RetainedCommittedBatch {
+    fn stream_id(&self) -> StreamId {
+        match &self.events {
+            RetainedCommittedEvents::Shared(event) => event.stream_id,
+            RetainedCommittedEvents::Packed { stream_id, .. } => *stream_id,
+        }
+    }
+
+    fn first_sequence(&self) -> u64 {
+        match &self.events {
+            RetainedCommittedEvents::Shared(event) => event.producer_sequence,
+            RetainedCommittedEvents::Packed { first_sequence, .. } => *first_sequence,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match &self.events {
+            RetainedCommittedEvents::Shared(_) => 1,
+            RetainedCommittedEvents::Packed { bytes, .. } => bytes.len(),
+        }
+    }
+
+    fn offset_at(&self, index: usize) -> Option<StreamOffsetV1> {
+        match &self.events {
+            RetainedCommittedEvents::Shared(event) => (index == 0).then_some(event.offset),
+            RetainedCommittedEvents::Packed {
+                first_offset,
+                bytes,
+                ..
+            } => {
+                if index >= bytes.len() {
+                    return None;
+                }
+                let sub_index = first_offset
+                    .sub_index()
+                    .checked_add(u32::try_from(index).ok()?)?;
+                Some(StreamOffsetV1::new(
+                    first_offset.producer_oplog_index(),
+                    sub_index,
+                ))
+            }
+        }
+    }
+
+    fn index_of(&self, stream_id: StreamId, offset: StreamOffsetV1) -> Option<usize> {
+        if self.stream_id() != stream_id {
+            return None;
+        }
+        match &self.events {
+            RetainedCommittedEvents::Shared(event) => (event.offset == offset).then_some(0),
+            RetainedCommittedEvents::Packed {
+                first_offset,
+                bytes,
+                ..
+            } => {
+                if offset.producer_oplog_index() != first_offset.producer_oplog_index() {
+                    return None;
+                }
+                let index = offset.sub_index().checked_sub(first_offset.sub_index())? as usize;
+                (index < bytes.len()).then_some(index)
+            }
+        }
+    }
+}
+
+fn encoded_event_bytes(event: &CommittedProducerStreamEventV1) -> usize {
+    golem_common::serialization::serialize(event)
+        .expect("committed stream event serialization cannot fail")
+        .len()
 }
 
 impl DurableStreamProducer {
+    pub(crate) fn set_control_metadata_provider(
+        &self,
+        service: Arc<dyn WorkerService>,
+        mode: AgentMode,
+    ) {
+        assert!(self.control_metadata_provider.set((service, mode)).is_ok());
+    }
+
+    pub(crate) async fn persisted_control_metadata(
+        &self,
+        key: &StreamSessionKeyV1,
+    ) -> Result<Option<super::durable_session::SessionControlMetadata>, String> {
+        let Some((service, mode)) = self.control_metadata_provider.get() else {
+            return Ok(None);
+        };
+        service
+            .lookup_durable_stream_control_metadata(
+                &OwnedAgentId::new(self.environment_id, &self.producer),
+                *mode,
+                key,
+            )
+            .await
+            .map(Some)
+    }
+
+    pub(crate) async fn persisted_consumer_positions(
+        &self,
+        key: &StreamSessionKeyV1,
+        stream: StreamId,
+    ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, String> {
+        let Some((service, mode)) = self.control_metadata_provider.get() else {
+            return Ok(None);
+        };
+        let owner = OwnedAgentId::new(self.environment_id, &self.producer);
+        let metadata = service
+            .lookup_durable_stream_control_metadata(&owner, *mode, key)
+            .await?;
+        let count = metadata
+            .consumer_record_counts
+            .get(&stream)
+            .copied()
+            .unwrap_or_default();
+        let page_size = crate::services::stream_session_index::CONSUMER_JOURNAL_INDEX_PAGE_SIZE;
+        let mut positions = Vec::new();
+        for page in 0..count.div_ceil(page_size) {
+            let records = service
+                .read_durable_stream_consumer_page(&owner, key, stream, page)
+                .await?;
+            let needed = (count - page * page_size).min(page_size) as usize;
+            if records.len() < needed {
+                return Err("consumer journal index page is shorter than its coverage".into());
+            }
+            positions.extend_from_slice(&records[..needed]);
+        }
+        Ok(Some((metadata.covered_through, positions)))
+    }
+
     #[cfg(test)]
     pub(crate) async fn load(
         oplog: Arc<dyn Oplog>,
@@ -1389,6 +1686,7 @@ impl DurableStreamProducer {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn load_with_commit(
         oplog: Arc<dyn Oplog>,
         environment_id: EnvironmentId,
@@ -1399,14 +1697,39 @@ impl DurableStreamProducer {
     ) -> Result<Arc<Self>, DurableStreamProducerError> {
         let live_join_capacity = live_join_capacity.unwrap_or(DEFAULT_LIVE_JOIN_BUFFER_SIZE);
         DurableLiveStreamBus::<CommittedProducerStreamEventV1>::new(live_join_capacity)?;
+        let index = Self::read_complete_index(
+            oplog.as_ref(),
+            environment_id,
+            &producer,
+            producer_fingerprint,
+        )
+        .await?;
+        Self::from_index(
+            oplog,
+            environment_id,
+            producer,
+            producer_fingerprint,
+            live_join_capacity,
+            commit,
+            index,
+        )
+    }
+
+    async fn read_complete_index(
+        oplog: &dyn Oplog,
+        environment_id: EnvironmentId,
+        producer: &AgentId,
+        producer_fingerprint: AgentFingerprint,
+    ) -> Result<ProducerStreamIndex, DurableStreamProducerError> {
         let mut index = ProducerStreamIndex::default();
         let mut pending_nested_registrations = Vec::new();
         let current_index = oplog.current_oplog_index().await;
-        if current_index.is_defined() {
-            let entries = oplog
-                .read_exact(OplogIndex::INITIAL, current_index.as_u64())
-                .await;
+        let mut covered = OplogIndex::NONE;
+        while covered < current_index {
+            let count = (current_index.as_u64() - covered.as_u64()).min(1024);
+            let entries = oplog.read_exact(covered.next(), count).await;
             for (oplog_index, entry) in entries {
+                covered = oplog_index;
                 match entry {
                     OplogEntry::StreamRegistered { record, .. } => {
                         let record = oplog
@@ -1429,7 +1752,7 @@ impl DurableStreamProducer {
                                 oplog_index,
                                 record,
                                 environment_id,
-                                &producer,
+                                producer,
                                 producer_fingerprint,
                             )?;
                         }
@@ -1444,7 +1767,7 @@ impl DurableStreamProducer {
                             std::mem::take(&mut pending_nested_registrations),
                             record,
                             environment_id,
-                            &producer,
+                            producer,
                             producer_fingerprint,
                         )?;
                     }
@@ -1486,16 +1809,17 @@ impl DurableStreamProducer {
                             .await
                             .map_err(DurableStreamProducerError::Oplog)?;
                         index.apply_session_references(&record)?;
+                        index.apply_result_offset(oplog_index, &record);
                         index.apply_deletion_record(
                             &record,
                             environment_id,
-                            &producer,
+                            producer,
                             producer_fingerprint,
                         )?;
                         index.apply_attachment_record(
                             &record,
                             environment_id,
-                            &producer,
+                            producer,
                             producer_fingerprint,
                         )?;
                         if let StreamSessionRecordV1::Finished(record) = &record {
@@ -1519,24 +1843,28 @@ impl DurableStreamProducer {
             ));
         }
 
+        Ok(index)
+    }
+
+    fn from_index(
+        oplog: Arc<dyn Oplog>,
+        environment_id: EnvironmentId,
+        producer: AgentId,
+        producer_fingerprint: AgentFingerprint,
+        live_join_capacity: usize,
+        commit: DurableStreamCommit,
+        index: ProducerStreamIndex,
+    ) -> Result<Arc<Self>, DurableStreamProducerError> {
         let mut buses = HashMap::with_capacity(index.streams.len());
         for (stream_id, stream) in &index.streams {
-            let bus = Arc::new(DurableLiveStreamBus::new(live_join_capacity)?);
-            for event in stream.events.values() {
-                bus.publish_committed(DurableLiveStreamEvent {
-                    offset: event.offset,
-                    payload: event.clone(),
-                })
-                .await?;
-            }
+            let bus = Arc::new(DurableLiveStreamBus::from_committed_high_water(
+                live_join_capacity,
+                stream.last_offset,
+            )?);
             buses.insert(*stream_id, bus);
         }
 
-        let open_stream_count = index
-            .streams
-            .values()
-            .filter(|stream| !stream.terminal)
-            .count();
+        let open_stream_count = index.open_streams;
         crate::metrics::durable_stream::add_open_streams(open_stream_count);
         if !index.streams.is_empty() {
             tracing::debug!(
@@ -1545,14 +1873,17 @@ impl DurableStreamProducer {
                 "Durable stream producer index recovered"
             );
         }
-        Ok(Arc::new(Self {
+        Ok(Arc::new_cyclic(|self_weak| Self {
+            self_weak: self_weak.clone(),
             oplog,
             commit,
+            control_metadata_provider: std::sync::OnceLock::new(),
             environment_id,
             producer,
             producer_fingerprint,
             index: Mutex::new(index),
             buses: RwLock::new(buses),
+            committed_retention: std::sync::Mutex::new(CommittedEventRetention::default()),
             source_cancellations: RwLock::new(HashMap::new()),
             next_source_cancellation_id: AtomicU64::new(1),
             reconciliation_cursor: AtomicUsize::new(0),
@@ -1569,6 +1900,234 @@ impl DurableStreamProducer {
 
     async fn commit_notifying(&self, committed: oneshot::Sender<()>) {
         (self.commit)(Some(committed)).await;
+    }
+
+    fn retain_committed_events(&self, events: &[CommittedProducerStreamEventV1]) {
+        // Only newly committed writes enter retention; replay repairs publish directly to the bus.
+        if events.is_empty() {
+            return;
+        }
+        let mut retained = self
+            .committed_retention
+            .lock()
+            .expect("durable stream committed retention lock poisoned");
+        let packed = events.iter().enumerate().all(|(index, event)| {
+            let Some(sequence) = events[0].producer_sequence.checked_add(index as u64) else {
+                return false;
+            };
+            let Some(sub_index) = u32::try_from(index)
+                .ok()
+                .and_then(|index| events[0].offset.sub_index().checked_add(index))
+            else {
+                return false;
+            };
+            matches!(
+                event.payload,
+                CommittedProducerStreamEventPayloadV1::PackedU8(_)
+            ) && event.stream_id == events[0].stream_id
+                && event.producer_sequence == sequence
+                && event.offset
+                    == StreamOffsetV1::new(events[0].offset.producer_oplog_index(), sub_index)
+                && event.packed_u8_batch_end == events[0].packed_u8_batch_end
+                && event.terminal_author.is_none()
+                && event.nested_handles == events[0].nested_handles
+        }) && events[0].packed_u8_batch_end == events.last().map(|event| event.offset);
+        let batches = if packed {
+            let bytes: Vec<_> = events
+                .iter()
+                .map(|event| match event.payload {
+                    CommittedProducerStreamEventPayloadV1::PackedU8(byte) => byte,
+                    _ => unreachable!(),
+                })
+                .collect();
+            let nested_handles = events[0].nested_handles.clone();
+            vec![RetainedCommittedBatch {
+                encoded_event_bytes: None,
+                retained_bytes: std::mem::size_of::<RetainedCommittedBatch>()
+                    .saturating_add(bytes.capacity())
+                    .saturating_add(4 * std::mem::size_of::<usize>())
+                    .saturating_add(
+                        nested_handles
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<DurableStreamHandleV1>()),
+                    ),
+                events: RetainedCommittedEvents::Packed {
+                    stream_id: events[0].stream_id,
+                    first_sequence: events[0].producer_sequence,
+                    first_offset: events[0].offset,
+                    bytes: Arc::new(bytes),
+                    batch_end: events[0]
+                        .packed_u8_batch_end
+                        .expect("materialized packed batch has an end offset"),
+                    nested_handles: Arc::new(nested_handles),
+                },
+            }]
+        } else {
+            // Ordinary values and terminals retain their payload behind a shared allocation.
+            events
+                .iter()
+                .map(|event| {
+                    let encoded_event_bytes = encoded_event_bytes(event);
+                    RetainedCommittedBatch {
+                        encoded_event_bytes: Some(encoded_event_bytes),
+                        retained_bytes: encoded_event_bytes
+                            .saturating_add(std::mem::size_of::<RetainedCommittedBatch>())
+                            .saturating_add(std::mem::size_of::<CommittedProducerStreamEventV1>()),
+                        events: RetainedCommittedEvents::Shared(Arc::new(event.clone())),
+                    }
+                })
+                .collect()
+        };
+        for batch in batches {
+            retained.entries = retained.entries.saturating_add(1);
+            retained.bytes = retained.bytes.saturating_add(batch.retained_bytes);
+            retained.batches.push_back(batch);
+        }
+        while retained.entries > COMMITTED_RETENTION_MAX_ENTRIES
+            || retained.bytes > COMMITTED_RETENTION_MAX_BYTES
+        {
+            let Some(evicted) = retained.batches.pop_front() else {
+                break;
+            };
+            retained.entries = retained.entries.saturating_sub(1);
+            retained.bytes = retained.bytes.saturating_sub(evicted.retained_bytes);
+        }
+    }
+
+    fn retained_segment(
+        &self,
+        stream_id: StreamId,
+        after: Option<StreamOffsetV1>,
+        through: Option<StreamOffsetV1>,
+    ) -> Option<Vec<CommittedProducerStreamEventV1>> {
+        let retained = self
+            .committed_retention
+            .lock()
+            .expect("durable stream committed retention lock poisoned");
+        let cursor = after.and_then(|after| {
+            retained
+                .batches
+                .iter()
+                .find_map(|batch| batch.index_of(stream_id, after).map(|index| (batch, index)))
+        });
+        if after.is_some() && cursor.is_none() {
+            return None;
+        }
+        let mut result = Vec::new();
+        let mut bytes = 0usize;
+        let mut expected_sequence = cursor
+            .and_then(|(batch, index)| batch.first_sequence().checked_add(index as u64 + 1))
+            .unwrap_or(0);
+        let mut found_start = false;
+        for batch in &retained.batches {
+            if batch.stream_id() != stream_id {
+                continue;
+            }
+            let batch_end_sequence = batch.first_sequence().saturating_add(batch.len() as u64);
+            if batch_end_sequence <= expected_sequence {
+                continue;
+            }
+            if batch.first_sequence() > expected_sequence {
+                return None;
+            }
+            found_start = true;
+            let start = usize::try_from(expected_sequence - batch.first_sequence()).ok()?;
+            match &batch.events {
+                RetainedCommittedEvents::Shared(event) => {
+                    if through.is_some_and(|through| event.offset > through) {
+                        break;
+                    }
+                    let event_bytes = batch
+                        .encoded_event_bytes
+                        .expect("ordinary retained event has an encoded size");
+                    if !result.is_empty()
+                        && bytes.saturating_add(event_bytes) > STREAM_SEGMENT_TARGET_BYTES
+                    {
+                        break;
+                    }
+                    bytes = bytes.saturating_add(event_bytes);
+                    expected_sequence = expected_sequence.saturating_add(1);
+                    result.push((**event).clone());
+                }
+                RetainedCommittedEvents::Packed {
+                    stream_id,
+                    first_sequence,
+                    bytes: packed_bytes,
+                    batch_end,
+                    nested_handles,
+                    ..
+                } => {
+                    let available = packed_bytes.len().saturating_sub(start);
+                    let mut count = available.min(STREAM_SEGMENT_MAX_EVENTS - result.len());
+                    if let Some(through) = through {
+                        let through_index = batch.index_of(*stream_id, through);
+                        if through < batch.offset_at(start)? {
+                            break;
+                        }
+                        if let Some(through_index) = through_index {
+                            count = count.min(through_index.saturating_sub(start) + 1);
+                        }
+                    }
+                    if count == 0 {
+                        break;
+                    }
+                    let representative = CommittedProducerStreamEventV1 {
+                        stream_id: *stream_id,
+                        producer_sequence: u64::MAX,
+                        offset: StreamOffsetV1::new(
+                            batch.offset_at(start)?.producer_oplog_index(),
+                            u32::MAX,
+                        ),
+                        packed_u8_batch_end: Some(*batch_end),
+                        terminal_author: None,
+                        nested_handles: (**nested_handles).clone(),
+                        payload: CommittedProducerStreamEventPayloadV1::PackedU8(u8::MAX),
+                    };
+                    let event_bound = encoded_event_bytes(&representative);
+                    if !result.is_empty() || bytes > 0 {
+                        count = count.min(
+                            STREAM_SEGMENT_TARGET_BYTES
+                                .saturating_sub(bytes)
+                                .checked_div(event_bound)
+                                .unwrap_or(0),
+                        );
+                    } else if event_bound.saturating_mul(count) > STREAM_SEGMENT_TARGET_BYTES {
+                        count = (STREAM_SEGMENT_TARGET_BYTES / event_bound)
+                            .max(1)
+                            .min(count);
+                    }
+                    for index in start..start + count {
+                        result.push(CommittedProducerStreamEventV1 {
+                            stream_id: *stream_id,
+                            producer_sequence: first_sequence + index as u64,
+                            offset: batch.offset_at(index)?,
+                            packed_u8_batch_end: Some(*batch_end),
+                            terminal_author: None,
+                            nested_handles: (**nested_handles).clone(),
+                            payload: CommittedProducerStreamEventPayloadV1::PackedU8(
+                                packed_bytes[index],
+                            ),
+                        });
+                    }
+                    bytes = bytes.saturating_add(event_bound.saturating_mul(count));
+                    expected_sequence = expected_sequence.saturating_add(count as u64);
+                }
+            }
+            if result.last().is_some_and(|event| event.is_terminal())
+                || result.len() >= STREAM_SEGMENT_MAX_EVENTS
+                || bytes >= STREAM_SEGMENT_TARGET_BYTES
+                || result
+                    .last()
+                    .is_some_and(|event| through == Some(event.offset))
+            {
+                break;
+            }
+        }
+        if !found_start || result.is_empty() && through.is_none() {
+            None
+        } else {
+            Some(result)
+        }
     }
 
     fn record_registered_streams(&self, count: usize) {
@@ -1596,7 +2155,9 @@ impl DurableStreamProducer {
                 "unsupported or malformed durable Stream Session record".to_string(),
             ));
         }
-        let mut index = self.index.lock().await;
+        let mut index = self
+            .index_for(ProducerMetadataKey::session_record(&record))
+            .await?;
         if index.deleting
             && !matches!(
                 &record,
@@ -1624,11 +2185,19 @@ impl DurableStreamProducer {
             &self.producer,
             self.producer_fingerprint,
         )?;
-        self.oplog
+        let result_key = match &record {
+            StreamSessionRecordV1::InvocationResult(record) => Some(record.session_key.clone()),
+            _ => None,
+        };
+        let oplog_index = self
+            .oplog
             .add(OplogEntry::stream_session(OplogPayload::Inline(Box::new(
                 record,
             ))))
             .await;
+        if let Some(key) = result_key {
+            index.invocation_results.entry(key).or_insert(oplog_index);
+        }
         self.commit().await;
         drop(index);
         self.notify_session_records_changed();
@@ -1647,7 +2216,12 @@ impl DurableStreamProducer {
         {
             return Err(DurableStreamProducerError::InvalidAttachmentState);
         }
-        let mut index = self.index.lock().await;
+        let mut index = self
+            .index_for([ProducerMetadataKey::ConsumerHead(
+                key.session_key.clone(),
+                key.stream_id,
+            )])
+            .await?;
         let current = self.oplog.current_oplog_index().await;
         let mut source_offsets = Vec::new();
         let mut overlay = None;
@@ -1751,6 +2325,32 @@ impl DurableStreamProducer {
         Ok(false)
     }
 
+    pub(crate) async fn consumer_source_unavailable(
+        &self,
+        key: &StreamAttachmentKeyV1,
+    ) -> Result<Option<StreamOffsetV1>, DurableStreamProducerError> {
+        if key.consumer_environment_id != self.environment_id
+            || key.consumer != self.producer
+            || key.expected_consumer_fingerprint != self.producer_fingerprint
+            || key.consumer_invocation.callee_environment_id != self.environment_id
+            || key.consumer_invocation.callee != self.producer
+            || key.consumer_invocation.callee_fingerprint != self.producer_fingerprint
+        {
+            return Err(DurableStreamProducerError::InvalidAttachmentState);
+        }
+        let index = self
+            .index_for([ProducerMetadataKey::ConsumerHead(
+                key.session_key.clone(),
+                key.stream_id,
+            )])
+            .await?;
+        Ok(index
+            .consumer_journals
+            .get(&(key.session_key.clone(), key.stream_id))
+            .and_then(|journal| journal.source_unavailable.as_ref())
+            .and_then(|(recorded_key, offset)| (recorded_key == key).then_some(*offset)))
+    }
+
     async fn persist_attachment_record(
         &self,
         record: StreamSessionRecordV1,
@@ -1760,7 +2360,9 @@ impl DurableStreamProducer {
                 "unsupported or malformed durable attachment record".to_string(),
             ));
         }
-        let mut index = self.index.lock().await;
+        let mut index = self
+            .index_for(ProducerMetadataKey::session_record(&record))
+            .await?;
         let mut updated = index.clone();
         let outcome = updated.apply_attachment_record(
             &record,
@@ -1788,12 +2390,19 @@ impl DurableStreamProducer {
         &self,
         session_key: &StreamSessionKeyV1,
     ) -> Arc<tokio::sync::Mutex<()>> {
-        self.session_locks
+        let mut locks = self
+            .session_locks
             .lock()
-            .expect("durable stream session lock map poisoned")
-            .entry(session_key.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
+            .expect("durable stream session lock map poisoned");
+        if locks.len() >= 128 {
+            locks.retain(|_, lock| lock.strong_count() > 0);
+        }
+        if let Some(lock) = locks.get(session_key).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(session_key.clone(), Arc::downgrade(&lock));
+        lock
     }
 
     pub(crate) fn environment_id(&self) -> EnvironmentId {
@@ -1813,9 +2422,8 @@ impl DurableStreamProducer {
         session_key: &StreamSessionKeyV1,
     ) -> Result<(), DurableStreamProducerError> {
         if self
-            .index
-            .lock()
-            .await
+            .index_for([ProducerMetadataKey::Session(session_key.clone())])
+            .await?
             .finished_sessions
             .contains(session_key)
         {
@@ -1844,7 +2452,9 @@ impl DurableStreamProducer {
             crate::metrics::durable_stream::record_limit_violation("traversal_depth");
             return Err(DurableStreamProducerError::TraversalDepthLimit);
         }
-        let mut index = self.index.lock().await;
+        let mut index = self
+            .index_for(ProducerMetadataKey::registration(&request))
+            .await?;
         if let Some(stream_id) = index.coordinates.get(&request.coordinate) {
             let existing = index
                 .registrations
@@ -1970,7 +2580,14 @@ impl DurableStreamProducer {
         + Send
         + 'static,
     ) -> Result<StreamSessionPreparedRecordV1, DurableStreamProducerError> {
-        let mut index = self.index.lock().await;
+        let mut index = self
+            .index_for(
+                requests
+                    .iter()
+                    .flat_map(|(_, request)| ProducerMetadataKey::registration(request))
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
         index.ensure_producer_write_allowed()?;
         if requests.len() > MAX_DURABLE_STREAMS_PER_SESSION {
             crate::metrics::durable_stream::record_limit_violation("streams_per_session");
@@ -2110,6 +2727,8 @@ impl DurableStreamProducer {
                 Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
             ));
         }
+        updated_index
+            .apply_session_references(&StreamSessionRecordV1::Prepared(prepared.clone()))?;
 
         self.commit_notifying(committed).await;
         *index = updated_index;
@@ -2131,15 +2750,76 @@ impl DurableStreamProducer {
 
     pub(crate) async fn register_result_streams(
         &self,
-        requests: Vec<ProducerRegistrationRequestV1>,
-        make_result: impl FnOnce(Vec<DurableStreamHandleV1>) -> StreamSessionRecordV1 + Send + 'static,
+        session_key: StreamSessionKeyV1,
+        result: Vec<u8>,
+        outputs: Vec<ProducerOutputRegistrationV1>,
     ) -> Result<(Vec<DurableStreamHandleV1>, StreamSessionRecordV1), DurableStreamProducerError>
     {
-        let mut index = self.index.lock().await;
+        let mut keys = vec![ProducerMetadataKey::Session(session_key.clone())];
+        for output in &outputs {
+            match &output.source {
+                ProducerOutputSourceV1::New(request) => {
+                    keys.extend(ProducerMetadataKey::registration(request))
+                }
+                ProducerOutputSourceV1::Existing(handle) => {
+                    keys.push(ProducerMetadataKey::Reference(handle.stream_id));
+                    if self.owns_handle_identity(handle) {
+                        keys.push(ProducerMetadataKey::Stream(handle.stream_id));
+                    }
+                }
+            }
+        }
+        let mut index = self.index_for(keys).await?;
+        let result_offset = index.invocation_results.get(&session_key).copied();
+        let requests = outputs
+            .iter()
+            .filter_map(|output| match &output.source {
+                ProducerOutputSourceV1::New(request) => Some(request.clone()),
+                ProducerOutputSourceV1::Existing(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let make_result = move |owned_handles: Vec<DurableStreamHandleV1>| {
+            let mut owned_handles = owned_handles.into_iter();
+            let stream_mappings = outputs
+                .into_iter()
+                .map(|output| {
+                    let handle = match output.source {
+                        ProducerOutputSourceV1::New(_) => owned_handles
+                            .next()
+                            .expect("result allocation supplies one handle per new output"),
+                        ProducerOutputSourceV1::Existing(handle) => handle,
+                    };
+                    StreamSessionMappingRecordV1 {
+                        transport_stream_id: output.transport_stream_id,
+                        handle,
+                        role: SessionStreamRoleV1::Output,
+                    }
+                })
+                .collect::<Vec<_>>();
+            StreamSessionRecordV1::InvocationResult(
+                golem_common::base_model::durable_stream::StreamSessionInvocationResultRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key,
+                    result,
+                    output_streams: stream_mappings
+                        .iter()
+                        .map(|mapping| mapping.handle.clone())
+                        .collect(),
+                    stream_mappings,
+                },
+            )
+        };
         index.ensure_producer_write_allowed()?;
         if requests.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
             crate::metrics::durable_stream::record_limit_violation("streams_per_value");
             return Err(DurableStreamProducerError::ValueStreamLimit);
+        }
+        let mut coordinates = HashSet::new();
+        if requests
+            .iter()
+            .any(|request| !coordinates.insert(&request.coordinate))
+        {
+            return Err(DurableStreamProducerError::RegistrationDivergence);
         }
         if requests.is_empty() {
             let expected = make_result(Vec::new());
@@ -2159,31 +2839,13 @@ impl DurableStreamProducer {
                 .contains(&expected_result.session_key);
             let session_key = expected_result.session_key.clone();
             drop(index);
-            let current = self.oplog.current_oplog_index().await;
-            if current.is_defined() {
-                for (_, entry) in self
-                    .oplog
-                    .read_exact(OplogIndex::INITIAL, current.as_u64())
-                    .await
-                {
-                    let OplogEntry::StreamSession { record, .. } = entry else {
-                        continue;
-                    };
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
-                    if let StreamSessionRecordV1::InvocationResult(result) = &record
-                        && result.session_key == expected_result.session_key
-                    {
-                        return if record == expected {
-                            Ok((Vec::new(), record))
-                        } else {
-                            Err(DurableStreamProducerError::RegistrationDivergence)
-                        };
-                    }
-                }
+            if let Some(offset) = result_offset {
+                let record = self.read_result_record(offset).await?;
+                return if record == expected {
+                    Ok((Vec::new(), record))
+                } else {
+                    Err(DurableStreamProducerError::RegistrationDivergence)
+                };
             }
             if session_finished {
                 return Err(DurableStreamProducerError::SessionFinished(session_key));
@@ -2199,7 +2861,7 @@ impl DurableStreamProducer {
                 .await
                 .map_err(DurableStreamProducerError::Oplog)?;
             self.commit().await;
-            let (_, entry) = entries.pop().ok_or_else(|| {
+            let (oplog_index, entry) = entries.pop().ok_or_else(|| {
                 DurableStreamProducerError::CorruptHistory(
                     "empty result registration batch returned no session record".to_string(),
                 )
@@ -2214,7 +2876,11 @@ impl DurableStreamProducer {
                 .download_payload(record)
                 .await
                 .map_err(DurableStreamProducerError::Oplog)?;
-            self.index.lock().await.apply_session_references(&record)?;
+            let mut index = self
+                .index_for(ProducerMetadataKey::session_record(&record))
+                .await?;
+            index.apply_session_references(&record)?;
+            index.apply_result_offset(oplog_index, &record);
             return Ok((Vec::new(), record));
         }
         let existing_handles = requests
@@ -2238,28 +2904,14 @@ impl DurableStreamProducer {
                 .collect::<Vec<_>>();
             let expected = make_result(handles.clone());
             drop(index);
-            let current = self.oplog.current_oplog_index().await;
-            if current.is_defined() {
-                for (_, entry) in self
-                    .oplog
-                    .read_exact(OplogIndex::INITIAL, current.as_u64())
-                    .await
-                {
-                    let OplogEntry::StreamSession { record, .. } = entry else {
-                        continue;
-                    };
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
-                    if record == expected {
-                        crate::metrics::durable_stream::record_producer_operation(
-                            "register_result",
-                            true,
-                        );
-                        return Ok((handles, record));
-                    }
+            if let Some(offset) = result_offset {
+                let record = self.read_result_record(offset).await?;
+                if record == expected {
+                    crate::metrics::durable_stream::record_producer_operation(
+                        "register_result",
+                        true,
+                    );
+                    return Ok((handles, record));
                 }
             }
             return Err(DurableStreamProducerError::RegistrationDivergence);
@@ -2367,6 +3019,7 @@ impl DurableStreamProducer {
                         .await
                         .map_err(DurableStreamProducerError::Oplog)?;
                     index.apply_session_references(&record)?;
+                    index.apply_result_offset(oplog_index, &record);
                     session_record = Some(record);
                 }
                 _ => {
@@ -2402,20 +3055,24 @@ impl DurableStreamProducer {
     pub(crate) async fn handle_for_coordinate(
         &self,
         coordinate: &StreamRegistrationCoordinateV1,
-    ) -> Option<DurableStreamHandleV1> {
-        let index = self.index.lock().await;
-        index
+    ) -> Result<Option<DurableStreamHandleV1>, DurableStreamProducerError> {
+        let index = self
+            .index_for([ProducerMetadataKey::Coordinate(coordinate.clone())])
+            .await?;
+        Ok(index
             .coordinates
             .get(coordinate)
             .and_then(|stream_id| index.registrations.get(stream_id))
-            .map(|registration| registration.handle.clone())
+            .map(|registration| registration.handle.clone()))
     }
 
     pub(crate) async fn validate_registration(
         &self,
         request: &ProducerRegistrationRequestV1,
     ) -> Result<DurableStreamHandleV1, DurableStreamProducerError> {
-        let index = self.index.lock().await;
+        let index = self
+            .index_for([ProducerMetadataKey::Coordinate(request.coordinate.clone())])
+            .await?;
         let stream_id = index
             .coordinates
             .get(&request.coordinate)
@@ -2439,7 +3096,9 @@ impl DurableStreamProducer {
         if new_stream_count > MAX_NEW_STREAM_HANDLES_PER_VALUE {
             return Err(DurableStreamProducerError::ValueStreamLimit);
         }
-        let index = self.index.lock().await;
+        let index = self
+            .index_for([ProducerMetadataKey::Session(session_key.clone())])
+            .await?;
         if new_stream_count != 0 && index.finished_sessions.contains(session_key) {
             return Err(DurableStreamProducerError::SessionFinished(
                 session_key.clone(),
@@ -2464,16 +3123,73 @@ impl DurableStreamProducer {
         stream_id: StreamId,
         first_sequence: u64,
     ) -> Result<Vec<DurableStreamHandleV1>, DurableStreamProducerError> {
-        let index = self.index.lock().await;
+        let index = self
+            .index_for([ProducerMetadataKey::Batch(stream_id, first_sequence)])
+            .await?;
         let stream = index
             .streams
             .get(&stream_id)
             .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
-        let (_, _, nested_stream_ids) = stream
+        let oplog_index = *stream
             .batches
             .get(&first_sequence)
             .ok_or(DurableStreamProducerError::EventConflict)?;
-        nested_stream_ids
+        drop(index);
+        let record = self.read_item_batch(oplog_index).await?;
+        self.resolve_nested_handles(&record.nested_stream_ids).await
+    }
+
+    async fn read_result_record(
+        &self,
+        oplog_index: OplogIndex,
+    ) -> Result<StreamSessionRecordV1, DurableStreamProducerError> {
+        let OplogEntry::StreamSession { record, .. } = self.oplog.read(oplog_index).await else {
+            return Err(DurableStreamProducerError::CorruptHistory(
+                "result metadata points at a non-session record".into(),
+            ));
+        };
+        self.oplog
+            .download_payload(record)
+            .await
+            .map_err(DurableStreamProducerError::Oplog)
+    }
+
+    async fn read_item_batch(
+        &self,
+        oplog_index: OplogIndex,
+    ) -> Result<StreamItemsRecordV1, DurableStreamProducerError> {
+        let OplogEntry::StreamItems { record, .. } = self.oplog.read(oplog_index).await else {
+            return Err(DurableStreamProducerError::CorruptHistory(
+                "stream batch index points at a non-item record".into(),
+            ));
+        };
+        self.oplog
+            .download_payload(record)
+            .await
+            .map_err(DurableStreamProducerError::Oplog)
+    }
+
+    async fn resolve_nested_handles(
+        &self,
+        stream_ids: &[StreamId],
+    ) -> Result<Vec<DurableStreamHandleV1>, DurableStreamProducerError> {
+        if stream_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let index = self
+            .index_for(
+                stream_ids
+                    .iter()
+                    .flat_map(|id| {
+                        [
+                            ProducerMetadataKey::Stream(*id),
+                            ProducerMetadataKey::Reference(*id),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+        stream_ids
             .iter()
             .map(|stream_id| {
                 index
@@ -2491,21 +3207,74 @@ impl DurableStreamProducer {
             .collect()
     }
 
+    async fn materialize_item_batch(
+        &self,
+        record: &StreamItemsRecordV1,
+    ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
+        self.materialize_item_batch_range(record, record.first_sequence, usize::MAX)
+            .await
+    }
+
+    async fn materialize_item_batch_range(
+        &self,
+        record: &StreamItemsRecordV1,
+        first_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
+        let nested_handles = self
+            .resolve_nested_handles(&record.nested_stream_ids)
+            .await?;
+        let packed_u8_batch_end = matches!(record.payload, StreamItemsPayloadV1::PackedU8(_))
+            .then(|| record.offsets.last().copied())
+            .flatten();
+        logical_payloads(&record.payload)
+            .zip(&record.offsets)
+            .enumerate()
+            .skip(
+                first_sequence
+                    .saturating_sub(record.first_sequence)
+                    .try_into()
+                    .unwrap_or(usize::MAX),
+            )
+            .take(limit)
+            .map(|(sub_index, (payload, offset))| {
+                Ok(CommittedProducerStreamEventV1 {
+                    stream_id: record.stream_id,
+                    producer_sequence: record
+                        .first_sequence
+                        .checked_add(sub_index as u64)
+                        .ok_or(DurableStreamProducerError::CounterOverflow)?,
+                    offset: *offset,
+                    packed_u8_batch_end,
+                    terminal_author: None,
+                    nested_handles: nested_handles.clone(),
+                    payload,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) async fn input_high_water(
         &self,
         stream_id: StreamId,
     ) -> Result<Option<InputStreamHighWaterV1>, DurableStreamProducerError> {
-        let index = self.index.lock().await;
+        let index = self
+            .index_for([ProducerMetadataKey::Stream(stream_id)])
+            .await?;
         let stream = index
             .streams
             .get(&stream_id)
             .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
-        let Some((highest_contiguous_sequence, event)) = stream.events.last_key_value() else {
+        let Some(resulting_offset) = stream.last_offset else {
             return Ok(None);
         };
         Ok(Some(InputStreamHighWaterV1 {
-            highest_contiguous_sequence: *highest_contiguous_sequence,
-            resulting_offset: event.offset,
+            highest_contiguous_sequence: if stream.terminal {
+                stream.next_sequence
+            } else {
+                stream.next_sequence - 1
+            },
+            resulting_offset,
             terminal: stream.terminal,
         }))
     }
@@ -2577,8 +3346,7 @@ impl DurableStreamProducer {
         traversal_depth: usize,
     ) -> Result<ProducerWriteOutcomeV1<Vec<StreamOffsetV1>>, DurableStreamProducerError> {
         validate_items_payload(&payload)?;
-        let logical_payloads = logical_payloads(&payload);
-        let item_count = logical_payloads.len() as u64;
+        let item_count = payload.logical_item_count() as u64;
         let nested = nested_sources
             .iter()
             .filter_map(|source| match source {
@@ -2587,7 +3355,20 @@ impl DurableStreamProducer {
             })
             .collect::<Vec<_>>();
 
-        let mut index = self.index.lock().await;
+        let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
+        for source in &nested_sources {
+            match source {
+                NestedStreamWriteV1::Register(request) => {
+                    keys.extend(ProducerMetadataKey::registration(request))
+                }
+                NestedStreamWriteV1::Forward(handle) => {
+                    keys.push(ProducerMetadataKey::Stream(handle.stream_id));
+                    keys.push(ProducerMetadataKey::Reference(handle.stream_id));
+                }
+            }
+        }
+        keys.push(ProducerMetadataKey::Batch(stream_id, first_sequence));
+        let mut index = self.index_for_terminal(keys, stream_id).await?;
         let session_key = index
             .stream_sessions
             .get(&stream_id)
@@ -2599,39 +3380,34 @@ impl DurableStreamProducer {
             .get(&stream_id)
             .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
         if first_sequence < stream.next_sequence {
-            if stream.batches.get(&first_sequence).is_some_and(
-                |(committed_payload, _, nested_stream_ids)| {
-                    committed_payload == &payload
-                        && nested_stream_ids.len() == nested_sources.len()
-                        && nested_stream_ids.iter().zip(&nested_sources).all(
-                            |(stream_id, source)| match source {
-                                NestedStreamWriteV1::Register(request) => index
-                                    .registrations
-                                    .get(stream_id)
-                                    .is_some_and(|record| registration_matches(record, request)),
-                                NestedStreamWriteV1::Forward(handle) => {
-                                    stream_id == &handle.stream_id
-                                }
-                            },
-                        )
-                },
-            ) {
-                let offsets = stream
-                    .batches
-                    .get(&first_sequence)
-                    .expect("validated replay batch is missing")
-                    .1
-                    .clone();
-                let events = (first_sequence..first_sequence + item_count)
-                    .map(|sequence| {
-                        stream
-                            .events
-                            .get(&sequence)
-                            .expect("validated replay batch event is missing")
-                            .clone()
-                    })
-                    .collect();
+            if let Some(oplog_index) = stream.batches.get(&first_sequence).copied() {
                 drop(index);
+                let record = self.read_item_batch(oplog_index).await?;
+                let index = self
+                    .index_for(
+                        record
+                            .nested_stream_ids
+                            .iter()
+                            .map(|id| ProducerMetadataKey::Stream(*id))
+                            .collect::<Vec<_>>(),
+                    )
+                    .await?;
+                let matches = record.payload == payload
+                    && record.nested_stream_ids.len() == nested_sources.len()
+                    && record.nested_stream_ids.iter().zip(&nested_sources).all(
+                        |(stream_id, source)| match source {
+                            NestedStreamWriteV1::Register(request) => index
+                                .registrations
+                                .get(stream_id)
+                                .is_some_and(|record| registration_matches(record, request)),
+                            NestedStreamWriteV1::Forward(handle) => stream_id == &handle.stream_id,
+                        },
+                    );
+                drop(index);
+                if !matches {
+                    return Err(DurableStreamProducerError::EventConflict);
+                }
+                let events = self.materialize_item_batch(&record).await?;
                 self.publish_repair(stream_id, events).await?;
                 crate::metrics::durable_stream::record_producer_operation("write", true);
                 tracing::debug!(
@@ -2642,12 +3418,12 @@ impl DurableStreamProducer {
                     "Durable stream item batch resolved"
                 );
                 return Ok(ProducerWriteOutcomeV1 {
-                    value: offsets,
+                    value: record.offsets,
                     replayed: true,
                 });
             }
-            if let Some(terminal) = stream.events.get(&first_sequence)
-                && terminal.is_terminal()
+            if let Some(terminal) = &stream.terminal_event
+                && terminal.producer_sequence == first_sequence
             {
                 let terminal = terminal.clone();
                 let error = fenced_by_terminal(stream);
@@ -2663,9 +3439,8 @@ impl DurableStreamProducer {
         }
         if stream.terminal {
             let terminal = stream
-                .events
-                .values()
-                .next_back()
+                .terminal_event
+                .as_ref()
                 .expect("terminal stream has no terminal event")
                 .clone();
             let error = fenced_by_terminal(stream);
@@ -2936,8 +3711,9 @@ impl DurableStreamProducer {
                 );
             }
         }
-        drop(index);
         let bus = self.bus(stream_id)?;
+        drop(index);
+        self.retain_committed_events(&item_events);
         for event in item_events {
             bus.publish_committed(DurableLiveStreamEvent {
                 offset: event.offset,
@@ -2997,13 +3773,14 @@ impl DurableStreamProducer {
             .await
             .map_err(DurableStreamProducerError::Oplog)?;
         let event = index.apply_end(oplog_index, record, self.producer_fingerprint)?;
+        let bus = self.bus(stream_id)?;
         drop(index);
-        self.bus(stream_id)?
-            .publish_committed(DurableLiveStreamEvent {
-                offset: event.offset,
-                payload: event,
-            })
-            .await?;
+        self.retain_committed_events(std::slice::from_ref(&event));
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset: event.offset,
+            payload: event,
+        })
+        .await?;
         self.record_terminal_streams(1);
         Ok(())
     }
@@ -3025,7 +3802,7 @@ impl DurableStreamProducer {
         result: StreamEndResultV1,
         authored_by: StreamTerminalAuthorV1,
     ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
-        let index = self.index.lock().await;
+        let index = self.index_for_terminal([], stream_id).await?;
         self.end_authored_locked(index, stream_id, sequence, result, authored_by)
             .await
     }
@@ -3082,9 +3859,8 @@ impl DurableStreamProducer {
             .expect("terminal replay validated the stream");
         if stream.terminal {
             let terminal = stream
-                .events
-                .values()
-                .next_back()
+                .terminal_event
+                .as_ref()
                 .expect("terminal stream has no terminal event")
                 .clone();
             let error = fenced_by_terminal(stream);
@@ -3123,13 +3899,14 @@ impl DurableStreamProducer {
             .map_err(DurableStreamProducerError::Oplog)?;
         let event = index.apply_end(oplog_index, record, self.producer_fingerprint)?;
         let offset = event.offset;
+        let bus = self.bus(stream_id)?;
         drop(index);
-        self.bus(stream_id)?
-            .publish_committed(DurableLiveStreamEvent {
-                offset,
-                payload: event,
-            })
-            .await?;
+        self.retain_committed_events(std::slice::from_ref(&event));
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset,
+            payload: event,
+        })
+        .await?;
         self.record_terminal_streams(1);
         crate::metrics::durable_stream::record_producer_operation("end", false);
         tracing::debug!(
@@ -3150,7 +3927,7 @@ impl DurableStreamProducer {
         skip_all,
         fields(stream_id = %stream_id, sequence, role = ?role, reason = ?reason)
     )]
-    async fn cancel_locked(
+    async fn commit_cancel_locked(
         &self,
         mut index: MutexGuard<'_, ProducerStreamIndex>,
         stream_id: StreamId,
@@ -3158,7 +3935,7 @@ impl DurableStreamProducer {
         role: StreamCancelRoleV1,
         reason: StreamCancelReasonV1,
         details: Option<String>,
-    ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
+    ) -> Result<PendingCommittedCancellation, DurableStreamProducerError> {
         let payload = CommittedProducerStreamEventPayloadV1::Cancel {
             role,
             reason,
@@ -3174,30 +3951,38 @@ impl DurableStreamProducer {
             TerminalReplayDecision::Append => {}
             TerminalReplayDecision::Replayed(event) => {
                 let offset = event.offset;
+                let bus = self.bus(stream_id)?;
                 drop(index);
                 self.cancel_source(stream_id);
-                self.publish_repair(stream_id, vec![event]).await?;
-                crate::metrics::durable_stream::record_producer_operation("cancel", true);
-                tracing::debug!(
-                    stream_id = %stream_id,
+                return Ok(PendingCommittedCancellation {
+                    stream_id,
                     sequence,
-                    durable_offset = %offset,
-                    role = ?role,
-                    reason = ?reason,
-                    replayed = true,
-                    "Durable stream cancellation resolved"
-                );
-                return Ok(ProducerWriteOutcomeV1 {
-                    value: offset,
-                    replayed: true,
+                    role,
+                    reason,
+                    bus,
+                    event,
+                    outcome: Ok(ProducerWriteOutcomeV1 {
+                        value: offset,
+                        replayed: true,
+                    }),
+                    newly_committed: false,
                 });
             }
             TerminalReplayDecision::Fenced(event) => {
                 let error = DurableStreamProducerError::FencedByTerminal(event.payload.clone());
+                let bus = self.bus(stream_id)?;
                 drop(index);
                 self.cancel_source(stream_id);
-                self.publish_repair(stream_id, vec![event]).await?;
-                return Err(error);
+                return Ok(PendingCommittedCancellation {
+                    stream_id,
+                    sequence,
+                    role,
+                    reason,
+                    bus,
+                    event,
+                    outcome: Err(error),
+                    newly_committed: false,
+                });
             }
         }
         index.ensure_producer_write_allowed()?;
@@ -3234,29 +4019,82 @@ impl DurableStreamProducer {
             .map_err(DurableStreamProducerError::Oplog)?;
         let event = index.apply_cancel(oplog_index, record, self.producer_fingerprint)?;
         let offset = event.offset;
+        let bus = self.bus(stream_id)?;
         drop(index);
         self.cancel_source(stream_id);
-        self.bus(stream_id)?
-            .publish_committed(DurableLiveStreamEvent {
-                offset,
-                payload: event,
-            })
-            .await?;
-        self.record_terminal_streams(1);
-        crate::metrics::durable_stream::record_producer_operation("cancel", false);
-        tracing::debug!(
-            stream_id = %stream_id,
+        Ok(PendingCommittedCancellation {
+            stream_id,
             sequence,
-            durable_offset = %offset,
-            role = ?role,
-            reason = ?reason,
-            replayed = false,
-            "Durable stream cancellation committed"
-        );
-        Ok(ProducerWriteOutcomeV1 {
-            value: offset,
-            replayed: false,
+            role,
+            reason,
+            bus,
+            event,
+            outcome: Ok(ProducerWriteOutcomeV1 {
+                value: offset,
+                replayed: false,
+            }),
+            newly_committed: true,
         })
+    }
+
+    pub(crate) async fn publish_committed_cancellation(
+        &self,
+        pending: PendingCommittedCancellation,
+    ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
+        let offset = pending.event.offset;
+        if pending.newly_committed {
+            self.retain_committed_events(std::slice::from_ref(&pending.event));
+        }
+        let live_event = DurableLiveStreamEvent {
+            offset,
+            payload: pending.event,
+        };
+        if pending.newly_committed {
+            pending.bus.publish_committed(live_event).await?;
+        } else {
+            pending.bus.republish_committed(live_event).await;
+        }
+        if pending.newly_committed {
+            self.record_terminal_streams(1);
+        }
+        if let Ok(outcome) = &pending.outcome {
+            crate::metrics::durable_stream::record_producer_operation("cancel", outcome.replayed);
+            tracing::debug!(
+                stream_id = %pending.stream_id,
+                sequence = pending.sequence,
+                durable_offset = %offset,
+                role = ?pending.role,
+                reason = ?pending.reason,
+                replayed = outcome.replayed,
+                "Durable stream cancellation committed"
+            );
+        }
+        pending.outcome
+    }
+
+    pub(crate) async fn commit_cancel_open(
+        &self,
+        stream_id: StreamId,
+        role: StreamCancelRoleV1,
+        reason: StreamCancelReasonV1,
+        details: Option<String>,
+    ) -> Result<Option<PendingCommittedCancellation>, DurableStreamProducerError> {
+        let index = self
+            .index_for([ProducerMetadataKey::Stream(stream_id)])
+            .await?;
+        let stream = index
+            .streams
+            .get(&stream_id)
+            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+        if stream.terminal {
+            drop(index);
+            self.cancel_source(stream_id);
+            return Ok(None);
+        }
+        let sequence = stream.next_sequence;
+        self.commit_cancel_locked(index, stream_id, sequence, role, reason, details)
+            .await
+            .map(Some)
     }
 
     pub(crate) async fn cancel_open(
@@ -3266,19 +4104,12 @@ impl DurableStreamProducer {
         reason: StreamCancelReasonV1,
         details: Option<String>,
     ) -> Result<(), DurableStreamProducerError> {
-        let index = self.index.lock().await;
-        let stream = index
-            .streams
-            .get(&stream_id)
-            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
-        if stream.terminal {
-            drop(index);
-            self.cancel_source(stream_id);
-            return Ok(());
+        if let Some(pending) = self
+            .commit_cancel_open(stream_id, role, reason, details)
+            .await?
+        {
+            self.publish_committed_cancellation(pending).await?;
         }
-        let sequence = stream.next_sequence;
-        self.cancel_locked(index, stream_id, sequence, role, reason, details)
-            .await?;
         Ok(())
     }
 
@@ -3333,7 +4164,9 @@ impl DurableStreamProducer {
         stream_id: StreamId,
         result: StreamEndResultV1,
     ) -> Result<(), DurableStreamProducerError> {
-        let index = self.index.lock().await;
+        let index = self
+            .index_for([ProducerMetadataKey::Stream(stream_id)])
+            .await?;
         let stream = index
             .streams
             .get(&stream_id)
@@ -3356,19 +4189,30 @@ impl DurableStreamProducer {
     pub(crate) async fn has_open_forwarded_session_input(
         &self,
         session_key: &StreamSessionKeyV1,
-    ) -> bool {
-        let index = self.index.lock().await;
+    ) -> Result<bool, DurableStreamProducerError> {
+        let index = self.index_for_session_streams(session_key).await?;
         let Some(mappings) = index.session_stream_mappings.get(session_key) else {
-            return false;
+            return Ok(false);
         };
-        mappings.iter().any(|(handle, role)| {
-            *role == SessionStreamRoleV1::Input
-                && mappings.contains(&(handle.clone(), SessionStreamRoleV1::Output))
-                && index
-                    .streams
-                    .get(&handle.stream_id)
-                    .is_some_and(|stream| !stream.terminal)
-        })
+        let candidates = mappings
+            .iter()
+            .filter_map(|(handle, role)| {
+                (*role == SessionStreamRoleV1::Input
+                    && mappings.contains(&(handle.clone(), SessionStreamRoleV1::Output))
+                    && self.owns_handle_identity(handle))
+                .then_some(handle.stream_id)
+            })
+            .collect::<Vec<_>>();
+        Ok(index.session_stream_mappings[session_key]
+            .iter()
+            .any(|(handle, role)| {
+                *role == SessionStreamRoleV1::Input
+                    && candidates.contains(&handle.stream_id)
+                    && index
+                        .streams
+                        .get(&handle.stream_id)
+                        .is_some_and(|stream| !stream.terminal)
+            }))
     }
 
     pub(crate) async fn finish_session(
@@ -3377,7 +4221,7 @@ impl DurableStreamProducer {
         result: Result<(), Vec<u8>>,
         input_cancel_reason: StreamCancelReasonV1,
     ) -> Result<(), DurableStreamProducerError> {
-        let mut index = self.index.lock().await;
+        let mut index = self.index_for_session_streams(&session_key).await?;
         if index.finished_sessions.contains(&session_key) {
             return Ok(());
         }
@@ -3512,15 +4356,19 @@ impl DurableStreamProducer {
                 }
             }
         }
-        drop(index);
         let terminal_count = terminal_events.len();
-        for event in terminal_events {
-            self.bus(event.stream_id)?
-                .publish_committed(DurableLiveStreamEvent {
-                    offset: event.offset,
-                    payload: event,
-                })
-                .await?;
+        let terminal_events = terminal_events
+            .into_iter()
+            .map(|event| Ok((self.bus(event.stream_id)?, event)))
+            .collect::<Result<Vec<_>, DurableStreamProducerError>>()?;
+        drop(index);
+        for (bus, event) in terminal_events {
+            self.retain_committed_events(std::slice::from_ref(&event));
+            bus.publish_committed(DurableLiveStreamEvent {
+                offset: event.offset,
+                payload: event,
+            })
+            .await?;
         }
         self.record_terminal_streams(terminal_count);
         crate::metrics::durable_stream::record_producer_operation("finish_session", false);
@@ -3538,13 +4386,13 @@ impl DurableStreamProducer {
         fields(stream_id = %handle.stream_id, has_cursor = after.is_some())
     )]
     pub(crate) async fn catch_up(
-        &self,
+        self: &Arc<Self>,
         handle: DurableStreamHandleV1,
         after: Option<StreamOffsetV1>,
     ) -> Result<DurableCatchUpReader, DurableStreamProducerError> {
         self.validate_handle(&handle).await?;
+        let bus = self.stream_bus(handle.stream_id).await?;
         self.validate_cursor(handle.stream_id, after).await?;
-        let bus = self.bus(handle.stream_id)?;
         let subscription = bus.subscribe().await?;
         let history = match subscription.high_water {
             Some(high_water) => match self.read_segment(&handle, after, Some(high_water)).await {
@@ -3569,6 +4417,7 @@ impl DurableStreamProducer {
         Ok(DurableCatchUpReader {
             bus,
             subscription: Some(subscription),
+            history_source: join_high_water.map(|_| (self.clone(), handle)),
             history: history.into(),
             join_high_water,
             last_delivered: after,
@@ -3581,7 +4430,9 @@ impl DurableStreamProducer {
         handle: &DurableStreamHandleV1,
     ) -> Result<(), DurableStreamProducerError> {
         validate_version(handle.format_version)?;
-        let index = self.index.lock().await;
+        let index = self
+            .index_for([ProducerMetadataKey::Stream(handle.stream_id)])
+            .await?;
         if index
             .registrations
             .get(&handle.stream_id)
@@ -3607,12 +4458,29 @@ impl DurableStreamProducer {
         let Some(after) = after else {
             return Ok(());
         };
-        let index = self.index.lock().await;
-        if index
+        let index = self
+            .index_for([
+                ProducerMetadataKey::Stream(stream_id),
+                ProducerMetadataKey::Position(stream_id, after.producer_oplog_index()),
+            ])
+            .await?;
+        let high_water = index
             .streams
             .get(&stream_id)
-            .is_some_and(|stream| stream.events.values().any(|event| event.offset == after))
+            .and_then(|stream| stream.last_offset);
+        if high_water.is_none_or(|high_water| after > high_water)
+            || !after.producer_oplog_index().is_defined()
         {
+            return Err(DurableStreamProducerError::CursorUnavailable);
+        }
+        if index.streams[&stream_id].terminal && high_water == Some(after) {
+            return Ok(());
+        }
+        let valid = index
+            .batch_positions
+            .get(&(stream_id, after.producer_oplog_index()))
+            .is_some_and(|(_, count)| u64::from(after.sub_index()) < *count);
+        if valid {
             Ok(())
         } else {
             Err(DurableStreamProducerError::CursorUnavailable)
@@ -3632,12 +4500,23 @@ impl DurableStreamProducer {
             .ok_or(DurableStreamProducerError::UnknownStream(stream_id))
     }
 
+    async fn stream_bus(
+        &self,
+        stream: StreamId,
+    ) -> Result<Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>, DurableStreamProducerError>
+    {
+        let _index = self
+            .index_for([ProducerMetadataKey::Stream(stream)])
+            .await?;
+        self.bus(stream)
+    }
+
     async fn publish_repair(
         &self,
         stream_id: StreamId,
         events: Vec<CommittedProducerStreamEventV1>,
     ) -> Result<(), DurableStreamProducerError> {
-        let bus = self.bus(stream_id)?;
+        let bus = self.stream_bus(stream_id).await?;
         for event in events {
             bus.republish_committed(DurableLiveStreamEvent {
                 offset: event.offset,
@@ -3714,7 +4593,9 @@ fn replay_terminal(
         .streams
         .get(&stream_id)
         .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
-    if let Some(event) = stream.events.get(&sequence) {
+    if let Some(event) = &stream.terminal_event
+        && event.producer_sequence == sequence
+    {
         if event.is_terminal()
             && event.terminal_author == Some(expected_author)
             && &event.payload == expected_payload
@@ -3727,6 +4608,9 @@ fn replay_terminal(
         {
             return Ok(TerminalReplayDecision::Fenced(event.clone()));
         }
+        return Err(DurableStreamProducerError::EventConflict);
+    }
+    if sequence < stream.next_sequence {
         return Err(DurableStreamProducerError::EventConflict);
     }
     Ok(TerminalReplayDecision::Append)
@@ -3747,9 +4631,8 @@ fn validate_new_terminal(
 fn fenced_by_terminal(stream: &IndexedProducerStream) -> DurableStreamProducerError {
     DurableStreamProducerError::FencedByTerminal(
         stream
-            .events
-            .values()
-            .next_back()
+            .terminal_event
+            .as_ref()
             .expect("terminal stream has no terminal event")
             .payload
             .clone(),
@@ -3768,6 +4651,12 @@ pub(crate) trait StreamSegmentSource: Send + Sync {
 
 #[async_trait]
 pub(crate) trait AttachedStreamSegmentSource: Send + Sync {
+    async fn journal_lag_events(
+        &self,
+        handle: &DurableStreamHandleV1,
+        after: Option<StreamOffsetV1>,
+    ) -> Result<usize, DurableStreamProducerError>;
+
     async fn read_attached_segment(
         &self,
         attachment: &StreamAttachmentKeyV1,
@@ -3818,6 +4707,7 @@ pub(crate) trait StreamAttachmentControl: Send + Sync {
         now_millis: u64,
     ) -> Result<ProducerWriteOutcomeV1<StreamAttachmentViewV1>, DurableStreamProducerError>;
 
+    #[cfg(test)]
     async fn inspect_attachments(&self) -> Vec<StreamAttachmentViewV1>;
 }
 
@@ -3831,6 +4721,7 @@ pub(crate) struct RoutedAttachedStreamSegmentSource {
     rpc: Arc<dyn Rpc>,
     mapping: StreamSessionMappingRecordV1,
     auth_ctx: AuthCtx,
+    metadata: Arc<DurableStreamProducer>,
 }
 
 impl RoutedAttachedStreamSegmentSource {
@@ -3838,17 +4729,30 @@ impl RoutedAttachedStreamSegmentSource {
         rpc: Arc<dyn Rpc>,
         mapping: StreamSessionMappingRecordV1,
         auth_ctx: AuthCtx,
+        metadata: Arc<DurableStreamProducer>,
     ) -> Self {
         Self {
             rpc,
             mapping,
             auth_ctx,
+            metadata,
         }
     }
 }
 
 #[async_trait]
 impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
+    async fn journal_lag_events(
+        &self,
+        handle: &DurableStreamHandleV1,
+        after: Option<StreamOffsetV1>,
+    ) -> Result<usize, DurableStreamProducerError> {
+        if self.mapping.handle != *handle {
+            return Err(DurableStreamProducerError::InvalidHandle);
+        }
+        self.metadata.journal_lag_events(handle, after).await
+    }
+
     async fn read_attached_segment(
         &self,
         attachment: &StreamAttachmentKeyV1,
@@ -4057,6 +4961,7 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
         })
     }
 
+    #[cfg(test)]
     async fn inspect_attachments(&self) -> Vec<StreamAttachmentViewV1> {
         Vec::new()
     }
@@ -4097,6 +5002,13 @@ pub(crate) trait StreamAttachmentConsumerProbe: Send + Sync {
         &self,
         _key: &StreamAttachmentKeyV1,
     ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
+        Ok(None)
+    }
+
+    async fn journal_summary(
+        &self,
+        _key: &StreamAttachmentKeyV1,
+    ) -> Result<Option<ConsumerJournalSummary>, DurableStreamProducerError> {
         Ok(None)
     }
 
@@ -4152,6 +5064,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         self.status_exact(key, None).await
     }
 
+    #[tracing::instrument(name = "durable_stream.consumer.status", level = "debug", skip_all)]
     async fn status_exact(
         &self,
         key: &StreamAttachmentKeyV1,
@@ -4161,254 +5074,126 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             key.session_key.callee_environment_id,
             &key.session_key.callee,
         );
-        let Some(session_metadata) = self.worker_service.get(&session_owner).await else {
+        let Some(session_mode) = self.worker_service.get_agent_mode(&session_owner).await else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
-        if session_metadata.initial_worker_metadata.fingerprint
-            != key.session_key.callee_fingerprint
-            || session_metadata.initial_worker_metadata.agent_mode != AgentMode::Durable
-        {
+        if session_mode != AgentMode::Durable {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        let session_mode = session_metadata.initial_worker_metadata.agent_mode;
-        let session_current = self
-            .oplog_service
-            .get_last_index(&session_owner, session_mode)
-            .await;
-        if !session_current.is_defined() {
-            return Ok(ConsumerAttachmentStatus::Missing);
+        let session_index = self.oplog_service.stream_session_index().ok_or_else(|| {
+            DurableStreamProducerError::Oplog(
+                "stream session index service is unavailable".to_string(),
+            )
+        })?;
+        let identity = session_index
+            .lookup_producer_identity(&session_owner, session_mode)
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        if identity.producer_fingerprint != key.session_key.callee_fingerprint {
+            return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        let mut prepared_attempt_id = None;
-        let mut initial_attachment = None;
-        let mut attachment_authority = None;
-        let mut pending_invocations = HashMap::new();
-        for (oplog_index, entry) in self
-            .oplog_service
-            .read_exact(
+        let Some(status) = session_index
+            .lookup_latest(
                 &session_owner,
                 session_mode,
-                OplogIndex::INITIAL,
-                session_current.as_u64(),
+                &key.session_key.idempotency_key,
             )
             .await
-        {
-            if let OplogEntry::PendingAgentInvocation {
-                idempotency_key, ..
-            } = &entry
-            {
-                pending_invocations.insert(oplog_index, idempotency_key.clone());
-            }
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self
-                .oplog_service
-                .download_payload(&session_owner, session_mode, record)
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            if !record.has_supported_format() {
-                return Err(DurableStreamProducerError::CorruptHistory(
-                    "unsupported or malformed durable Stream Session record".to_string(),
-                ));
-            }
-            match record {
-                StreamSessionRecordV1::Prepared(record)
-                    if record.attempt.session_key == key.session_key =>
-                {
-                    if record.attempt.attachment_id != key.attachment_id
-                        || record.attempt.expected_callee_fingerprint
-                            != key.session_key.callee_fingerprint
-                        || record.attempt.invocation.session_key != key.session_key
-                    {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if prepared_attempt_id
-                        .replace(record.attempt.attempt_id)
-                        .is_some()
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable Stream Session contains multiple Prepared records".to_string(),
-                        ));
-                    }
-                }
-                StreamSessionRecordV1::Attached(record)
-                    if record.session_key == key.session_key =>
-                {
-                    if record.attachment_id != key.attachment_id {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if initial_attachment.replace(record.clone()).is_some()
-                        || attachment_authority.is_some()
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable Stream Session contains multiple Attached records".to_string(),
-                        ));
-                    }
-                    attachment_authority = Some((record.epoch, record.attempt_id, true));
-                }
-                StreamSessionRecordV1::ResumeAttempt(record)
-                    if record.attempt.session_key == key.session_key =>
-                {
-                    if record.attempt.attachment_id != key.attachment_id {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    let Some((epoch, _, _)) = attachment_authority else {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable resume precedes initial attachment".to_string(),
-                        ));
-                    };
-                    if record.attempt.expected_epoch != epoch
-                        || record.accepted_epoch != epoch.checked_add(1).unwrap_or_default()
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable resume contains an invalid epoch transition".to_string(),
-                        ));
-                    }
-                    attachment_authority =
-                        Some((record.accepted_epoch, record.attempt.attempt_id, true));
-                }
-                StreamSessionRecordV1::Detached(record)
-                    if record.session_key == key.session_key =>
-                {
-                    let Some((epoch, attempt_id, attached)) = attachment_authority else {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable detach precedes initial attachment".to_string(),
-                        ));
-                    };
-                    if record.attachment_id != key.attachment_id
-                        || record.epoch != epoch
-                        || record.owner_attempt_id != attempt_id
-                    {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable detach does not match the current attachment".to_string(),
-                        ));
-                    }
-                    if attached {
-                        attachment_authority = Some((epoch, attempt_id, false));
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(prepared_attempt_id) = prepared_attempt_id else {
+            .map_err(DurableStreamProducerError::Oplog)?
+        else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
-        if let Some(attached) = &initial_attachment
-            && (attached.attempt_id != prepared_attempt_id
-                || pending_invocations.get(&attached.pending_invocation_oplog_index)
-                    != Some(&key.session_key.idempotency_key))
-        {
-            return Err(DurableStreamProducerError::CorruptHistory(
-                    "durable Attached record does not identify its Prepared attempt and pending invocation"
-                        .to_string(),
-                ));
+        if status.session_key.as_ref() != Some(&key.session_key) {
+            return Ok(ConsumerAttachmentStatus::Missing);
         }
+        if let Some(error) = status.lifecycle_error {
+            return Err(DurableStreamProducerError::CorruptHistory(error));
+        }
+        let Some(prepared_attempt_id) = status.prepared_attempt_id else {
+            return Ok(ConsumerAttachmentStatus::Missing);
+        };
+        let primary_attachment_id = AttachmentId::primary(
+            key.session_key.callee_environment_id,
+            &key.session_key.callee,
+            &key.session_key.idempotency_key,
+        )
+        .map_err(|error| DurableStreamProducerError::CorruptHistory(error.to_string()))?;
+        if key.attachment_id != primary_attachment_id {
+            return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
+        }
+        match (
+            status.initial_attachment_epoch,
+            status.initial_attachment_attempt_id,
+            status.initial_pending_invocation_oplog_index,
+        ) {
+            (None, None, None) => {}
+            (Some(_), Some(initial_attempt_id), Some(pending_index)) => {
+                if initial_attempt_id != prepared_attempt_id
+                    || status.validated_initial_pending_invocation != Some(pending_index)
+                {
+                    return Err(DurableStreamProducerError::CorruptHistory(
+                        "durable Attached record does not identify its Prepared attempt and pending invocation"
+                            .to_string(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(DurableStreamProducerError::CorruptHistory(
+                    "durable attachment lifecycle index is incomplete".to_string(),
+                ));
+            }
+        }
+        let attachment_authority = status
+            .attachment_epoch
+            .zip(status.attachment_attempt_id)
+            .zip(status.attachment_attached)
+            .map(|((epoch, attempt_id), attached)| (epoch, attempt_id, attached));
         if attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch) {
             return Ok(ConsumerAttachmentStatus::EpochMismatch);
         }
 
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
-        let Some(metadata) = self.worker_service.get(&consumer).await else {
+        let Some(agent_mode) = self.worker_service.get_agent_mode(&consumer).await else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
-        if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint
-            || key.consumer_invocation.callee_environment_id != key.consumer_environment_id
+        if key.consumer_invocation.callee_environment_id != key.consumer_environment_id
             || key.consumer_invocation.callee != key.consumer
             || key.consumer_invocation.callee_fingerprint != key.expected_consumer_fingerprint
         {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        let agent_mode = metadata.initial_worker_metadata.agent_mode;
         if agent_mode != AgentMode::Durable {
             return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
         }
-        let current = self
-            .oplog_service
-            .get_last_index(&consumer, agent_mode)
-            .await;
-        if !current.is_defined() {
+        let identity = session_index
+            .lookup_producer_identity(&consumer, agent_mode)
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        if identity.producer_fingerprint != key.expected_consumer_fingerprint {
+            return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
+        }
+        let metadata = self
+            .worker_service
+            .lookup_durable_stream_control_metadata(&consumer, agent_mode, &key.session_key)
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        if !metadata.covered_through.is_defined() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
-        let mut topology = ConsumerAttachmentStatus::Missing;
-        let mut deleting = false;
-        for (_, entry) in self
-            .oplog_service
-            .read_exact(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
-            .await
-        {
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                continue;
-            };
-            let record = self
-                .oplog_service
-                .download_payload(&consumer, agent_mode, record)
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            if !record.has_supported_format() {
-                return Err(DurableStreamProducerError::CorruptHistory(
-                    "unsupported or malformed durable Stream Session record".to_string(),
-                ));
-            }
-            match record {
-                StreamSessionRecordV1::ConsumerDeleting(record)
-                    if record.consumer_environment_id == key.consumer_environment_id
-                        && record.consumer == key.consumer
-                        && record.consumer_fingerprint == key.expected_consumer_fingerprint =>
-                {
-                    deleting = true;
-                }
-                StreamSessionRecordV1::TopologyPrepared(record)
-                    if record.session_key == key.session_key
-                        && record.attachment.attachment_id == key.attachment_id
-                        && record.attachment.stream_id == key.stream_id =>
-                {
-                    if record.attachment.epoch < key.epoch {
-                        continue;
-                    }
-                    if record.attachment.epoch > key.epoch {
-                        return Ok(ConsumerAttachmentStatus::EpochMismatch);
-                    }
-                    if record.attachment != *key {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if expected_mapping.is_some_and(|mapping| mapping != &record.mapping) {
-                        continue;
-                    }
-                    if topology == ConsumerAttachmentStatus::Missing {
-                        topology = ConsumerAttachmentStatus::Prepared;
-                    }
-                }
-                StreamSessionRecordV1::TopologyActivated(record)
-                    if record.session_key == key.session_key
-                        && record.attachment.attachment_id == key.attachment_id
-                        && record.attachment.stream_id == key.stream_id =>
-                {
-                    if record.attachment.epoch < key.epoch {
-                        continue;
-                    }
-                    if record.attachment.epoch > key.epoch {
-                        return Ok(ConsumerAttachmentStatus::EpochMismatch);
-                    }
-                    if record.attachment != *key {
-                        return Ok(ConsumerAttachmentStatus::IncarnationMismatch);
-                    }
-                    if expected_mapping.is_some_and(|mapping| mapping != &record.mapping) {
-                        continue;
-                    }
-                    if expected_mapping.is_none() && topology == ConsumerAttachmentStatus::Active {
-                        continue;
-                    }
-                    if topology != ConsumerAttachmentStatus::Prepared {
-                        return Err(DurableStreamProducerError::CorruptHistory(
-                            "durable topology activation has no matching preparation".to_string(),
-                        ));
-                    }
-                    topology = ConsumerAttachmentStatus::Active;
-                }
-                _ => {}
-            }
+        let topology = metadata
+            .topology_status(key, expected_mapping)
+            .map_err(DurableStreamProducerError::CorruptHistory)?;
+        if matches!(
+            topology,
+            ConsumerAttachmentStatus::EpochMismatch | ConsumerAttachmentStatus::IncarnationMismatch
+        ) {
+            return Ok(topology);
         }
-        if deleting {
+        if metadata.consumer_deleting.as_ref().is_some_and(|record| {
+            record.consumer_environment_id == key.consumer_environment_id
+                && record.consumer == key.consumer
+                && record.consumer_fingerprint == key.expected_consumer_fingerprint
+        }) {
             return Ok(ConsumerAttachmentStatus::Deleting);
         }
         match (attachment_authority, topology) {
@@ -4423,6 +5208,11 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         }
     }
 
+    #[tracing::instrument(
+        name = "durable_stream.consumer.journal_inspection",
+        level = "debug",
+        skip_all
+    )]
     async fn journal_inspection(
         &self,
         key: &StreamAttachmentKeyV1,
@@ -4517,6 +5307,42 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         Ok(Some(ConsumerJournalInspection {
             source_offsets: offsets,
             source_unavailable: overlay,
+        }))
+    }
+
+    async fn journal_summary(
+        &self,
+        key: &StreamAttachmentKeyV1,
+    ) -> Result<Option<ConsumerJournalSummary>, DurableStreamProducerError> {
+        let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
+        let Some(metadata) = self.worker_service.get(&consumer).await else {
+            return Ok(None);
+        };
+        if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint
+            || metadata.initial_worker_metadata.agent_mode != AgentMode::Durable
+        {
+            return Ok(None);
+        }
+        let (_, mut rows) = self
+            .worker_service
+            .lookup_durable_stream_producer_metadata(
+                &consumer,
+                AgentMode::Durable,
+                vec![ProducerMetadataKey::ConsumerHead(
+                    key.session_key.clone(),
+                    key.stream_id,
+                )],
+            )
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        let Some(ProducerMetadataRow::ConsumerHead(head)) = rows.pop().flatten() else {
+            return Ok(None);
+        };
+        Ok(Some(ConsumerJournalSummary {
+            event_count: head.next_read_ordinal,
+            last_offset: head.last_source_offset,
+            terminal: head.terminal,
+            source_unavailable: head.source_unavailable.is_some(),
         }))
     }
 
@@ -4699,30 +5525,66 @@ impl StreamAttachmentControl for DurableStreamProducer {
         })
     }
 
+    #[cfg(test)]
     async fn inspect_attachments(&self) -> Vec<StreamAttachmentViewV1> {
         self.index.lock().await.attachment_views()
     }
 }
 
 impl DurableStreamProducer {
+    pub(crate) async fn has_active_attachment(
+        &self,
+        session: &StreamSessionKeyV1,
+        handle: &DurableStreamHandleV1,
+    ) -> Result<bool, DurableStreamProducerError> {
+        let attachment = AttachmentId::primary(
+            session.callee_environment_id,
+            &session.callee,
+            &session.idempotency_key,
+        )
+        .map_err(|error| DurableStreamProducerError::InvalidOffset(error.to_string()))?;
+        let index = self
+            .index_for([ProducerMetadataKey::Attachment(
+                attachment,
+                handle.stream_id,
+            )])
+            .await?;
+        Ok(index
+            .attachments
+            .get(&(attachment, handle.stream_id))
+            .is_some_and(|attachment| {
+                attachment.key.session_key == *session
+                    && attachment.key.producer_environment_id == handle.producer_environment_id
+                    && attachment.key.producer == handle.producer
+                    && attachment.key.expected_producer_fingerprint
+                        == handle.expected_producer_fingerprint
+                    && matches!(
+                        attachment.state,
+                        IndexedStreamAttachmentState::Active { .. }
+                    )
+            }))
+    }
+
     pub(crate) async fn deletion_started(&self) -> bool {
         let index = self.index.lock().await;
         index.deleting || index.consumer_deleting
     }
 
-    pub(crate) async fn deletion_diagnostics(&self) -> StreamDeletionDiagnosticsV1 {
-        let index = self.index.lock().await;
+    pub(crate) async fn deletion_diagnostics(
+        &self,
+    ) -> Result<StreamDeletionDiagnosticsV1, DurableStreamProducerError> {
+        let index = self.index_for_cleanup().await?;
         let mut cascade_completed = index
             .cascade_outbox
             .iter()
             .map(|(key, result)| (key.clone(), result.clone()))
             .collect::<Vec<_>>();
         cascade_completed.sort_by_key(|(key, _)| (key.stream_id, key.attachment_id, key.epoch));
-        StreamDeletionDiagnosticsV1 {
+        Ok(StreamDeletionDiagnosticsV1 {
             deleting: index.deleting,
             attachments: index.attachment_views(),
             cascade_completed,
-        }
+        })
     }
 
     pub(crate) async fn cascade_deletion(
@@ -4753,10 +5615,7 @@ impl DurableStreamProducer {
                             .streams
                             .get(&key.stream_id)
                             .ok_or(DurableStreamProducerError::UnknownStream(key.stream_id))?
-                            .events
-                            .values()
-                            .map(|event| event.offset)
-                            .collect::<Vec<_>>()
+                            .offsets()
                     };
                     if inspection.source_offsets.len() > producer_offsets.len()
                         || producer_offsets[..inspection.source_offsets.len()]
@@ -4809,7 +5668,7 @@ impl DurableStreamProducer {
         now_millis: u64,
         require_no_dependents: bool,
     ) -> Result<(), DurableStreamProducerError> {
-        let mut index = self.index.lock().await;
+        let mut index = self.index_for_cleanup().await?;
         if index.deleting {
             crate::metrics::durable_stream::record_producer_operation("deletion_barrier", true);
             return Ok(());
@@ -4898,16 +5757,21 @@ impl DurableStreamProducer {
                 }
             }
         }
-        drop(index);
+        index.complete_for_deletion = true;
         let terminal_count = terminal_events.len();
-        for event in terminal_events {
+        let terminal_events = terminal_events
+            .into_iter()
+            .map(|event| Ok((self.bus(event.stream_id)?, event)))
+            .collect::<Result<Vec<_>, DurableStreamProducerError>>()?;
+        drop(index);
+        for (bus, event) in terminal_events {
             self.cancel_source(event.stream_id);
-            self.bus(event.stream_id)?
-                .publish_committed(DurableLiveStreamEvent {
-                    offset: event.offset,
-                    payload: event,
-                })
-                .await?;
+            self.retain_committed_events(std::slice::from_ref(&event));
+            bus.publish_committed(DurableLiveStreamEvent {
+                offset: event.offset,
+                payload: event,
+            })
+            .await?;
         }
         self.record_terminal_streams(terminal_count);
         crate::metrics::durable_stream::record_producer_operation("deletion_barrier", false);
@@ -4980,13 +5844,15 @@ impl DurableStreamProducer {
         &self,
         key: &StreamAttachmentKeyV1,
     ) -> Result<StreamAttachmentViewV1, DurableStreamProducerError> {
-        self.index
-            .lock()
-            .await
-            .attachment_views()
-            .into_iter()
-            .find(|view| view.key == *key)
-            .ok_or(DurableStreamProducerError::InvalidAttachmentState)
+        self.index_for([ProducerMetadataKey::Attachment(
+            key.attachment_id,
+            key.stream_id,
+        )])
+        .await?
+        .attachment_views()
+        .into_iter()
+        .find(|view| view.key == *key)
+        .ok_or(DurableStreamProducerError::InvalidAttachmentState)
     }
 
     pub(crate) async fn reconcile_attachments_configured(
@@ -4996,54 +5862,56 @@ impl DurableStreamProducer {
         batch_size: usize,
         probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
     ) -> Result<usize, DurableStreamProducerError> {
-        let (deleting, candidates) = {
-            let index = self.index.lock().await;
-            let deleting = index.deleting;
-            let mut candidates = index
-                .attachments
-                .values()
-                .filter(|attachment| {
-                    !matches!(
-                        attachment.state,
-                        IndexedStreamAttachmentState::Finalized { .. }
-                    )
-                })
-                .map(|attachment| {
-                    let stream = index
-                        .streams
-                        .get(&attachment.key.stream_id)
-                        .expect("durable attachment index points at a missing producer stream");
+        let (deleting, candidates) =
+            if let Some(candidates) = self.indexed_attachment_candidates(batch_size).await? {
+                candidates
+            } else {
+                let index = self.index.lock().await;
+                let deleting = index.deleting;
+                let mut candidates = index
+                    .attachments
+                    .values()
+                    .filter(|attachment| {
+                        !matches!(
+                            attachment.state,
+                            IndexedStreamAttachmentState::Finalized { .. }
+                        )
+                    })
+                    .map(|attachment| {
+                        let stream = index
+                            .streams
+                            .get(&attachment.key.stream_id)
+                            .expect("durable attachment index points at a missing producer stream");
+                        (
+                            attachment.clone(),
+                            ProducerJournalSummary {
+                                event_count: stream.next_sequence + u64::from(stream.terminal),
+                                last_offset: stream.last_offset,
+                                terminal: stream.terminal,
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                candidates.sort_by_key(|(attachment, _)| {
                     (
-                        attachment.clone(),
-                        stream.terminal,
-                        stream
-                            .events
-                            .values()
-                            .map(|event| event.offset)
-                            .collect::<Vec<_>>(),
+                        attachment.key.stream_id,
+                        attachment.key.attachment_id,
+                        attachment.key.epoch,
                     )
-                })
-                .collect::<Vec<_>>();
-            candidates.sort_by_key(|(attachment, _, _)| {
-                (
-                    attachment.key.stream_id,
-                    attachment.key.attachment_id,
-                    attachment.key.epoch,
-                )
-            });
-            if !candidates.is_empty() {
-                let start = self
-                    .reconciliation_cursor
-                    .fetch_add(batch_size, Ordering::Relaxed)
-                    % candidates.len();
-                candidates.rotate_left(start);
-            }
-            candidates.truncate(batch_size);
-            (deleting, candidates)
-        };
+                });
+                if !candidates.is_empty() {
+                    let start = self
+                        .reconciliation_cursor
+                        .fetch_add(batch_size, Ordering::Relaxed)
+                        % candidates.len();
+                    candidates.rotate_left(start);
+                }
+                candidates.truncate(batch_size);
+                (deleting, candidates)
+            };
         let mut changed = 0;
         let mut first_error = None;
-        for (attachment, producer_terminal, producer_offsets) in candidates {
+        for (attachment, producer_summary) in candidates {
             match &attachment.state {
                 IndexedStreamAttachmentState::Prepared {
                     lease_expires_at_millis,
@@ -5067,11 +5935,15 @@ impl DurableStreamProducer {
                     continue;
                 }
             };
-            let journal_complete = if producer_terminal {
-                match probe.journal_inspection(&attachment.key).await {
-                    Ok(Some(inspection)) => {
-                        inspection.source_unavailable.is_none()
-                            && inspection.source_offsets == producer_offsets
+            let journal_complete = if producer_summary.terminal {
+                match probe.journal_summary(&attachment.key).await {
+                    Ok(Some(consumer)) => {
+                        // Receive journals contain ordered, non-repeating producer offsets.
+                        // Equal logical counts and the same terminal therefore imply completion.
+                        !consumer.source_unavailable
+                            && consumer.terminal
+                            && consumer.event_count == producer_summary.event_count
+                            && consumer.last_offset == producer_summary.last_offset
                     }
                     Ok(None) => false,
                     Err(error) => {
@@ -5207,19 +6079,227 @@ fn attachment_lease_expiry(now_millis: u64) -> Result<u64, DurableStreamProducer
 
 #[async_trait]
 impl StreamSegmentSource for DurableStreamProducer {
+    #[tracing::instrument(name = "durable_stream.read_segment", level = "debug", skip_all)]
     async fn read_segment(
         &self,
         handle: &DurableStreamHandleV1,
         after: Option<StreamOffsetV1>,
         through: Option<StreamOffsetV1>,
     ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
-        let index = self.index.lock().await;
-        read_segment_from_index(&index, handle, after, through)
+        self.validate_handle(handle).await?;
+        for offset in [after, through].into_iter().flatten() {
+            StreamOffsetV1::from_bytes(*offset.as_bytes())
+                .map_err(|error| DurableStreamProducerError::InvalidOffset(error.to_string()))?;
+            self.validate_cursor(handle.stream_id, Some(offset)).await?;
+        }
+        if after
+            .zip(through)
+            .is_some_and(|(after, through)| after > through)
+        {
+            return Err(DurableStreamProducerError::InvalidOffset(
+                "catch-up end precedes its cursor".into(),
+            ));
+        }
+        if after.is_some() && after == through {
+            return Ok(Vec::new());
+        }
+        if let Some(events) = self.retained_segment(handle.stream_id, after, through) {
+            return Ok(events);
+        }
+        let (mut sequence, sequence_limit, terminal) = {
+            let index = self
+                .index_for([ProducerMetadataKey::Stream(handle.stream_id)])
+                .await?;
+            let stream = &index.streams[&handle.stream_id];
+            (
+                stream.first_sequence.unwrap_or(0),
+                stream.next_sequence,
+                stream.terminal,
+            )
+        };
+        let mut enclosing_batch = None;
+        if let Some(after) = after {
+            let index = self
+                .index_for([
+                    ProducerMetadataKey::Stream(handle.stream_id),
+                    ProducerMetadataKey::Position(handle.stream_id, after.producer_oplog_index()),
+                ])
+                .await?;
+            let stream = &index.streams[&handle.stream_id];
+            if stream.terminal && stream.last_offset == Some(after) {
+                return Ok(Vec::new());
+            }
+            let (first, count) = index
+                .batch_positions
+                .get(&(handle.stream_id, after.producer_oplog_index()))
+                .copied()
+                .ok_or(DurableStreamProducerError::CursorUnavailable)?;
+            let cursor_sequence = first
+                .checked_add(u64::from(after.sub_index()))
+                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            if u64::from(after.sub_index()) >= count {
+                return Err(DurableStreamProducerError::CursorUnavailable);
+            }
+            let batch_end = first
+                .checked_add(count)
+                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            sequence = cursor_sequence
+                .checked_add(1)
+                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+            enclosing_batch =
+                (sequence < batch_end).then_some((after.producer_oplog_index(), first));
+        }
+        let mut result = Vec::new();
+        let mut result_bytes = 0usize;
+        let mut locators = BTreeMap::new();
+        loop {
+            if result.len() >= STREAM_SEGMENT_MAX_EVENTS {
+                return Ok(result);
+            }
+            if sequence >= sequence_limit && !terminal {
+                return Ok(result);
+            }
+            if sequence >= sequence_limit {
+                let index = self.index_for_terminal([], handle.stream_id).await?;
+                if let Some(event) = index.streams[&handle.stream_id].terminal_event.clone()
+                    && after.is_none_or(|after| event.offset > after)
+                    && through.is_none_or(|through| event.offset <= through)
+                    && result.len() < STREAM_SEGMENT_MAX_EVENTS
+                    && (result.is_empty()
+                        || result_bytes.saturating_add(encoded_event_bytes(&event))
+                            <= STREAM_SEGMENT_TARGET_BYTES)
+                {
+                    result.push(event);
+                }
+                return Ok(result);
+            }
+            let (oplog_index, batch_first) = if let Some(enclosing) = enclosing_batch.take() {
+                enclosing
+            } else {
+                if !locators.contains_key(&sequence) {
+                    let locator_frontier =
+                        125usize.min(sequence_limit.saturating_sub(sequence) as usize);
+                    if self.control_metadata_provider.get().is_some() {
+                        let mut index = self
+                            .index_for([ProducerMetadataKey::Stream(handle.stream_id)])
+                            .await?;
+                        // Replace the locator window without evicting its stream/session
+                        // dependencies and loading the same window twice.
+                        if !index.complete_for_deletion {
+                            index.loaded_metadata.retain(|key| match key {
+                                ProducerMetadataKey::Batch(stream, _)
+                                | ProducerMetadataKey::Position(stream, _) => {
+                                    *stream != handle.stream_id
+                                }
+                                _ => true,
+                            });
+                            index
+                                .streams
+                                .get_mut(&handle.stream_id)
+                                .unwrap()
+                                .batches
+                                .clear();
+                            index
+                                .batch_positions
+                                .retain(|(stream, _), _| *stream != handle.stream_id);
+                        }
+                    }
+                    let mut metadata_keys = Vec::with_capacity(locator_frontier + 1);
+                    metadata_keys.push(ProducerMetadataKey::Stream(handle.stream_id));
+                    metadata_keys.extend((0..locator_frontier).filter_map(|distance| {
+                        sequence.checked_add(distance as u64).map(|candidate| {
+                            ProducerMetadataKey::Batch(handle.stream_id, candidate)
+                        })
+                    }));
+                    let index = self.index_for(metadata_keys).await?;
+                    let stream = index
+                        .streams
+                        .get(&handle.stream_id)
+                        .ok_or(DurableStreamProducerError::UnknownStream(handle.stream_id))?;
+                    locators.extend(
+                        stream
+                            .batches
+                            .range(sequence..sequence.saturating_add(locator_frontier as u64))
+                            .map(|(&first, &oplog_index)| (first, oplog_index)),
+                    );
+                }
+                let oplog_index = locators.remove(&sequence).ok_or_else(|| {
+                    DurableStreamProducerError::CorruptHistory(
+                        "stream metadata is missing a batch locator".into(),
+                    )
+                })?;
+                (oplog_index, sequence)
+            };
+            let record = self.read_item_batch(oplog_index).await?;
+            if record.stream_id != handle.stream_id || record.first_sequence != batch_first {
+                return Err(DurableStreamProducerError::CorruptHistory(
+                    "stream batch locator identifies a different batch".into(),
+                ));
+            }
+            let events = self
+                .materialize_item_batch_range(
+                    &record,
+                    sequence,
+                    STREAM_SEGMENT_MAX_EVENTS.saturating_sub(result.len()),
+                )
+                .await?;
+            if sequence < record.first_sequence
+                || sequence
+                    >= record
+                        .first_sequence
+                        .saturating_add(record.offsets.len() as u64)
+            {
+                return Err(DurableStreamProducerError::CorruptHistory(
+                    "stream batch does not contain the requested sequence".into(),
+                ));
+            }
+            let mut advanced = false;
+            for event in events {
+                if event.producer_sequence != sequence {
+                    return Err(DurableStreamProducerError::CorruptHistory(
+                        "stream batch event sequence is not contiguous".into(),
+                    ));
+                }
+                if through.is_some_and(|through| event.offset > through) {
+                    return Ok(result);
+                }
+                let bytes = encoded_event_bytes(&event);
+                if !result.is_empty()
+                    && (result.len() >= STREAM_SEGMENT_MAX_EVENTS
+                        || result_bytes.saturating_add(bytes) > STREAM_SEGMENT_TARGET_BYTES)
+                {
+                    return Ok(result);
+                }
+                sequence = event.producer_sequence + 1;
+                advanced = true;
+                result_bytes = result_bytes.saturating_add(bytes);
+                result.push(event);
+                if result
+                    .last()
+                    .is_some_and(|event| Some(event.offset) == through)
+                {
+                    return Ok(result);
+                }
+            }
+            if !advanced {
+                return Err(DurableStreamProducerError::CorruptHistory(
+                    "stream batch locator did not advance the requested sequence".into(),
+                ));
+            }
+        }
     }
 }
 
 #[async_trait]
 impl AttachedStreamSegmentSource for DurableStreamProducer {
+    async fn journal_lag_events(
+        &self,
+        handle: &DurableStreamHandleV1,
+        after: Option<StreamOffsetV1>,
+    ) -> Result<usize, DurableStreamProducerError> {
+        DurableStreamProducer::journal_lag_events(self, handle, after).await
+    }
+
     async fn read_attached_segment(
         &self,
         attachment: &StreamAttachmentKeyV1,
@@ -5231,7 +6311,12 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
         if attachment.stream_id != handle.stream_id {
             return Err(DurableStreamProducerError::InvalidHandle);
         }
-        let index = self.index.lock().await;
+        let index = self
+            .index_for([ProducerMetadataKey::Attachment(
+                attachment.attachment_id,
+                attachment.stream_id,
+            )])
+            .await?;
         index.validate_attachment_key(
             attachment,
             self.environment_id,
@@ -5256,7 +6341,8 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
             }
             _ => return Err(DurableStreamProducerError::InvalidAttachmentState),
         }
-        read_segment_from_index(&index, handle, after, through)
+        drop(index);
+        self.read_segment(handle, after, through).await
     }
 
     async fn wait_for_attached_segment(
@@ -5266,67 +6352,48 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
         now_millis: u64,
         after: Option<StreamOffsetV1>,
     ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
+        let started = std::time::Instant::now();
         let events = self
             .read_attached_segment(attachment, handle, now_millis, after, None)
             .await?;
         if !events.is_empty() {
             return Ok(events);
         }
-        let mut reader = self.catch_up(handle.clone(), after).await?;
-        match tokio::time::timeout(std::time::Duration::from_secs(1), reader.next()).await {
-            Ok(event) => Ok(event?.into_iter().collect()),
-            Err(_) => Ok(Vec::new()),
+        let bus = self.stream_bus(handle.stream_id).await?;
+        let subscription = bus.subscribe().await?;
+        let mut reader = DurableCatchUpReader {
+            bus,
+            subscription: Some(subscription),
+            history_source: None,
+            history: VecDeque::new(),
+            join_high_water: None,
+            last_delivered: after,
+            terminal_delivered: false,
+        };
+        let events = self
+            .read_attached_segment(attachment, handle, now_millis, after, None)
+            .await?;
+        if !events.is_empty() {
+            return Ok(events);
         }
+        if let Ok(event) =
+            tokio::time::timeout(std::time::Duration::from_secs(1), reader.next()).await
+        {
+            event?;
+        }
+        // The attachment may have been renewed, finalized, or replaced while the long poll was
+        // asleep. Re-read it authoritatively and drain the full available segment rather than
+        // returning only the bus event that happened to wake this waiter.
+        let now_millis = now_millis.saturating_add(started.elapsed().as_millis() as u64);
+        self.read_attached_segment(attachment, handle, now_millis, after, None)
+            .await
     }
-}
-
-fn read_segment_from_index(
-    index: &ProducerStreamIndex,
-    handle: &DurableStreamHandleV1,
-    after: Option<StreamOffsetV1>,
-    through: Option<StreamOffsetV1>,
-) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
-    validate_version(handle.format_version)?;
-    if !index
-        .registrations
-        .get(&handle.stream_id)
-        .is_some_and(|record| &record.handle == handle)
-    {
-        return Err(DurableStreamProducerError::InvalidHandle);
-    }
-    for offset in [after, through].into_iter().flatten() {
-        StreamOffsetV1::from_bytes(*offset.as_bytes())
-            .map_err(|error| DurableStreamProducerError::InvalidOffset(error.to_string()))?;
-    }
-    let stream = index
-        .streams
-        .get(&handle.stream_id)
-        .ok_or(DurableStreamProducerError::UnknownStream(handle.stream_id))?;
-    if after.is_some_and(|cursor| !stream.events.values().any(|event| event.offset == cursor))
-        || through.is_some_and(|cursor| !stream.events.values().any(|event| event.offset == cursor))
-    {
-        return Err(DurableStreamProducerError::CursorUnavailable);
-    }
-    if after
-        .zip(through)
-        .is_some_and(|(after, through)| after > through)
-    {
-        return Err(DurableStreamProducerError::InvalidOffset(
-            "catch-up end precedes its cursor".to_string(),
-        ));
-    }
-    Ok(stream
-        .events
-        .values()
-        .filter(|event| after.is_none_or(|after| event.offset > after))
-        .filter(|event| through.is_none_or(|through| event.offset <= through))
-        .cloned()
-        .collect())
 }
 
 pub(crate) struct DurableCatchUpReader {
     bus: Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>,
     subscription: Option<DurableLiveStreamSubscription<CommittedProducerStreamEventV1>>,
+    history_source: Option<(Arc<DurableStreamProducer>, DurableStreamHandleV1)>,
     history: VecDeque<CommittedProducerStreamEventV1>,
     join_high_water: Option<StreamOffsetV1>,
     last_delivered: Option<StreamOffsetV1>,
@@ -5339,6 +6406,22 @@ impl DurableCatchUpReader {
     ) -> Result<Option<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
         if self.terminal_delivered {
             return Ok(None);
+        }
+        if self.history.is_empty() {
+            if self.last_delivered >= self.join_high_water {
+                self.history_source = None;
+            }
+            if let Some((source, handle)) = &self.history_source {
+                self.history = source
+                    .read_segment(handle, self.last_delivered, self.join_high_water)
+                    .await?
+                    .into();
+                if self.history.is_empty() {
+                    return Err(DurableStreamProducerError::CorruptHistory(
+                        "stream replay ended before its captured high-water mark".into(),
+                    ));
+                }
+            }
         }
         if let Some(event) = self.history.pop_front() {
             let event = self.deliver(event)?;
@@ -5370,6 +6453,7 @@ impl DurableCatchUpReader {
 
     fn release_subscription_if_complete(&mut self) {
         if self.terminal_delivered {
+            self.history_source = None;
             self.release_subscription_in_background();
         }
     }
@@ -5423,14 +6507,17 @@ pub(crate) mod tests {
     use super::{
         AgentError, AttachedStreamSegmentSource, CommittedProducerStreamEventPayloadV1,
         CommittedProducerStreamEventV1, ConsumerAttachmentStatus, ConsumerJournalInspection,
-        DurableCatchUpReader, DurableLiveStreamBus, DurableLiveStreamBusError, DurableStreamCommit,
-        DurableStreamProducer, DurableStreamProducerError, ProducerRegistrationRequestV1,
-        ProducerStreamIndex, StreamAttachmentConsumerProbe, StreamAttachmentControl,
-        StreamAttachmentStateV1, StreamSegmentSource, registration_record,
+        ConsumerJournalSummary, DurableCatchUpReader, DurableLiveStreamBus,
+        DurableLiveStreamBusError, DurableStreamCommit, DurableStreamProducer,
+        DurableStreamProducerError, IndexedConsumerJournal, ProducerOutputRegistrationV1,
+        ProducerOutputSourceV1, ProducerRegistrationRequestV1, ProducerStreamIndex,
+        StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentStateV1,
+        StreamSegmentSource, registration_record,
     };
     use crate::services::oplog::{
         CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
-        OrderedOplogStart, PendingUpload, checked_range_end, exact_from_source, fail_stop,
+        OrderedOplogStart, PendingUpload, RawDurableStreamSessionStatus, checked_range_end,
+        exact_from_source, fail_stop,
     };
     use async_trait::async_trait;
     use futures::FutureExt;
@@ -5446,7 +6533,7 @@ pub(crate) mod tests {
         StreamCascadeDependentResultV1, StreamConsumerDeletingRecordV1,
         StreamConsumerItemValueRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1,
         StreamItemsPayloadV1, StreamItemsRecordV1, StreamOffsetV1, StreamRegistrationCoordinateV1,
-        StreamRootKindV1, StreamSessionInvocationResultRecordV1, StreamSessionMappingRecordV1,
+        StreamRootKindV1, StreamSessionKeyV1, StreamSessionMappingRecordV1,
         StreamSessionMappingUpdateRecordV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
         StreamSourceKindV1, StreamTerminalAuthorV1, StreamTopologyActivatedRecordV1,
         StreamTopologyPreparedRecordV1, StreamValuePathStepV1,
@@ -5478,6 +6565,8 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub(crate) struct TestOplog {
         state: Mutex<TestOplogState>,
+        read_ranges: Mutex<Vec<(OplogIndex, u64)>>,
+        point_reads: AtomicU64,
     }
 
     impl Debug for TestOplog {
@@ -5487,6 +6576,10 @@ pub(crate) mod tests {
     }
 
     impl TestOplog {
+        pub(crate) fn take_read_ranges(&self) -> Vec<(OplogIndex, u64)> {
+            std::mem::take(&mut *self.read_ranges.lock().unwrap())
+        }
+
         fn committed_length(&self) -> u64 {
             self.state.lock().unwrap().committed.as_u64()
         }
@@ -5560,6 +6653,48 @@ pub(crate) mod tests {
                 .map_or(OplogIndex::NONE, |(index, _)| *index)
         }
 
+        async fn raw_durable_stream_session_status(
+            &self,
+            session_key: &StreamInvocationIdV1,
+        ) -> RawDurableStreamSessionStatus {
+            let state = self.state.lock().unwrap();
+            let watermark = state
+                .entries
+                .last_key_value()
+                .map_or(OplogIndex::NONE, |(i, _)| *i);
+            let mut status = golem_common::model::DurableStreamSessionStatus {
+                session_key: Some(session_key.clone()),
+                ..Default::default()
+            };
+            for (index, entry) in &state.entries {
+                if let OplogEntry::PendingAgentInvocation {
+                    idempotency_key, ..
+                } = entry
+                {
+                    status.apply_pending_invocation(*index, idempotency_key);
+                }
+                if let OplogEntry::StreamSession { record, .. } = entry {
+                    let record = match record {
+                        OplogPayload::Inline(record) => record.as_ref(),
+                        OplogPayload::SerializedInline {
+                            cached: Some(record),
+                            ..
+                        }
+                        | OplogPayload::External {
+                            cached: Some(record),
+                            ..
+                        } => record.as_ref(),
+                        _ => continue,
+                    };
+                    status.apply_record(*index, record);
+                }
+            }
+            RawDurableStreamSessionStatus {
+                watermark,
+                status: Ok(Some(status)),
+            }
+        }
+
         async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
             self.state
                 .lock()
@@ -5575,6 +6710,7 @@ pub(crate) mod tests {
         }
 
         async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            self.point_reads.fetch_add(1, Ordering::Relaxed);
             self.state
                 .lock()
                 .unwrap()
@@ -5589,6 +6725,7 @@ pub(crate) mod tests {
             oplog_index: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.read_ranges.lock().unwrap().push((oplog_index, n));
             let state = self.state.lock().unwrap();
             let end = fail_stop(checked_range_end(oplog_index, n));
             let entries = end.map_or_else(BTreeMap::new, |end| {
@@ -5763,7 +6900,7 @@ pub(crate) mod tests {
         )
     }
 
-    fn attachment_key(
+    pub(crate) fn attachment_key(
         identity: &TestIdentity,
         stream_id: golem_common::base_model::durable_stream::StreamId,
     ) -> StreamAttachmentKeyV1 {
@@ -5799,6 +6936,164 @@ pub(crate) mod tests {
         }
     }
 
+    fn consumer_item_record(
+        session_key: StreamSessionKeyV1,
+        stream_id: StreamId,
+        source_offset: StreamOffsetV1,
+        consumer_read_ordinal: u64,
+        value: Vec<u8>,
+        packed_u8: bool,
+    ) -> StreamSessionRecordV1 {
+        StreamSessionRecordV1::ConsumerItemValue(StreamConsumerItemValueRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key,
+            stream_id,
+            source_offset,
+            consumer_read_ordinal,
+            value,
+            packed_u8,
+            recursive_handles: Vec::new(),
+            recursive_mappings: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
+        let identity = identity();
+        let stream_id = StreamId(Uuid::from_u128(90));
+        let key = (identity.invocation.clone(), stream_id);
+        let mut index = ProducerStreamIndex::default();
+        let empty_packed = consumer_item_record(
+            identity.invocation.clone(),
+            stream_id,
+            StreamOffsetV1::new(OplogIndex::INITIAL, 0),
+            0,
+            Vec::new(),
+            true,
+        );
+        assert!(matches!(
+            index.apply_consumer_journal_record(&empty_packed),
+            Err(DurableStreamProducerError::CorruptHistory(_))
+        ));
+        assert!(!index.consumer_journals.contains_key(&key));
+
+        let overflowing_range = consumer_item_record(
+            identity.invocation,
+            stream_id,
+            StreamOffsetV1::new(OplogIndex::INITIAL, u32::MAX),
+            0,
+            vec![1, 2],
+            true,
+        );
+        assert!(matches!(
+            index.apply_consumer_journal_record(&overflowing_range),
+            Err(DurableStreamProducerError::CorruptHistory(_))
+        ));
+        assert!(!index.consumer_journals.contains_key(&key));
+
+        index.consumer_journals.insert(
+            key.clone(),
+            IndexedConsumerJournal {
+                next_read_ordinal: u64::MAX,
+                ..Default::default()
+            },
+        );
+        let ordinal_overflow = consumer_item_record(
+            key.0.clone(),
+            stream_id,
+            StreamOffsetV1::new(OplogIndex::INITIAL, 0),
+            u64::MAX,
+            vec![1],
+            false,
+        );
+        assert_eq!(
+            index.apply_consumer_journal_record(&ordinal_overflow),
+            Err(DurableStreamProducerError::CounterOverflow)
+        );
+        assert_eq!(index.consumer_journals[&key].next_read_ordinal, u64::MAX);
+        assert_eq!(index.consumer_journals[&key].last_source_offset, None);
+    }
+
+    #[test]
+    fn consumer_journal_validates_terminal_order_and_duplicate_overlay_ordinal() {
+        let identity = identity();
+        let stream_id = StreamId(Uuid::from_u128(91));
+        let attachment = attachment_key(&identity, stream_id);
+        let offset = StreamOffsetV1::new(OplogIndex::INITIAL, 0);
+        let overlay = StreamSessionRecordV1::SourceUnavailable(
+            golem_common::model::durable_stream::StreamSourceUnavailableRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                key: attachment.clone(),
+                source_offset: offset,
+                consumer_read_ordinal: 0,
+            },
+        );
+        let mut index = ProducerStreamIndex::default();
+        index.apply_consumer_journal_record(&overlay).unwrap();
+        index.apply_consumer_journal_record(&overlay).unwrap();
+        let mut wrong_ordinal = overlay.clone();
+        let StreamSessionRecordV1::SourceUnavailable(record) = &mut wrong_ordinal else {
+            unreachable!()
+        };
+        record.consumer_read_ordinal = 1;
+        assert!(matches!(
+            index.apply_consumer_journal_record(&wrong_ordinal),
+            Err(DurableStreamProducerError::AttachmentConflict)
+        ));
+
+        let item =
+            consumer_item_record(attachment.session_key, stream_id, offset, 0, vec![1], false);
+        assert_eq!(
+            index.apply_consumer_journal_record(&item),
+            Err(DurableStreamProducerError::ConsumerJournalAdvanced)
+        );
+    }
+
+    #[test]
+    async fn consumer_source_unavailable_uses_the_warm_consumer_head_only() {
+        let source_identity = identity();
+        let stream_id = StreamId(Uuid::from_u128(92));
+        let key = attachment_key(&source_identity, stream_id);
+        let oplog = Arc::new(TestOplog::default());
+        let consumer = DurableStreamProducer::load(
+            oplog.clone(),
+            key.consumer_environment_id,
+            key.consumer.clone(),
+            key.expected_consumer_fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let offset = StreamOffsetV1::new(OplogIndex::from_u64(7), 3);
+        consumer
+            .append_session_record(StreamSessionRecordV1::SourceUnavailable(
+                golem_common::model::durable_stream::StreamSourceUnavailableRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    key: key.clone(),
+                    source_offset: offset,
+                    consumer_read_ordinal: 0,
+                },
+            ))
+            .await
+            .unwrap();
+        oplog.take_read_ranges();
+
+        for _ in 0..3 {
+            assert_eq!(
+                consumer.consumer_source_unavailable(&key).await.unwrap(),
+                Some(offset)
+            );
+        }
+        assert!(oplog.take_read_ranges().is_empty());
+
+        let mut wrong_identity = key;
+        wrong_identity.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(999));
+        assert!(matches!(
+            consumer.consumer_source_unavailable(&wrong_identity).await,
+            Err(DurableStreamProducerError::InvalidAttachmentState)
+        ));
+    }
+
     struct FixedConsumerProbe(ConsumerAttachmentStatus);
 
     #[async_trait]
@@ -5831,6 +7126,19 @@ pub(crate) mod tests {
             _key: &StreamAttachmentKeyV1,
         ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
             Ok(Some(self.inspection.lock().unwrap().clone()))
+        }
+
+        async fn journal_summary(
+            &self,
+            _key: &StreamAttachmentKeyV1,
+        ) -> Result<Option<ConsumerJournalSummary>, DurableStreamProducerError> {
+            let inspection = self.inspection.lock().unwrap();
+            Ok(Some(ConsumerJournalSummary {
+                event_count: inspection.source_offsets.len() as u64,
+                last_offset: inspection.source_offsets.last().copied(),
+                terminal: true,
+                source_unavailable: inspection.source_unavailable.is_some(),
+            }))
         }
 
         async fn commit_source_unavailable(
@@ -5989,6 +7297,299 @@ pub(crate) mod tests {
                 probe,
             )
             .await
+    }
+
+    #[test]
+    async fn item_payloads_are_loaded_only_for_the_requested_batch() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let payload = StreamItemsPayloadV1::PackedU8(vec![7; 64]);
+        let first = producer
+            .write_items(handle.stream_id, 0, payload.clone())
+            .await
+            .unwrap()
+            .value;
+        for sequence in (64..4096).step_by(64) {
+            producer
+                .write_items(handle.stream_id, sequence, payload.clone())
+                .await
+                .unwrap();
+        }
+        for _ in 0..2050 {
+            oplog.add(OplogEntry::interrupted()).await;
+        }
+        assert!(
+            producer.index.lock().await.streams[&handle.stream_id]
+                .terminal_event
+                .is_none()
+        );
+        oplog.take_read_ranges();
+        let before = oplog.point_reads.load(Ordering::Relaxed);
+        let events = producer
+            .read_segment(&handle, Some(first[2]), Some(first[4]))
+            .await
+            .unwrap();
+        assert_eq!(
+            events.iter().map(|event| event.offset).collect::<Vec<_>>(),
+            first[3..5]
+        );
+        assert_eq!(oplog.point_reads.load(Ordering::Relaxed) - before, 0);
+        assert!(oplog.take_read_ranges().is_empty());
+        assert!(
+            producer
+                .write_items(handle.stream_id, 0, payload)
+                .await
+                .unwrap()
+                .replayed
+        );
+        assert!(matches!(
+            producer
+                .write_items(
+                    handle.stream_id,
+                    0,
+                    StreamItemsPayloadV1::PackedU8(vec![8; 64])
+                )
+                .await,
+            Err(DurableStreamProducerError::EventConflict)
+        ));
+    }
+
+    #[test]
+    async fn packed_retention_is_compact_and_materializes_only_a_bounded_partial_window() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let offsets = producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8((0..5000).map(|index| index as u8).collect()),
+            )
+            .await
+            .unwrap()
+            .value;
+
+        {
+            let retained = producer.committed_retention.lock().unwrap();
+            assert_eq!(retained.batches.len(), 1);
+            assert_eq!(retained.entries, 1);
+            let super::RetainedCommittedEvents::Packed {
+                first_offset,
+                bytes,
+                ..
+            } = &retained.batches.front().unwrap().events
+            else {
+                panic!("packed write was expanded in retention")
+            };
+            assert_eq!(*first_offset, offsets[0]);
+            assert_eq!(bytes.len(), offsets.len());
+            assert!(retained.bytes < offsets.len() * 2);
+        }
+        let before = oplog.point_reads.load(Ordering::Relaxed);
+        let events = producer
+            .read_segment(&handle, Some(offsets[9]), None)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), super::STREAM_SEGMENT_MAX_EVENTS);
+        assert_eq!(events[0].offset, offsets[10]);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.packed_u8_batch_end == offsets.last().copied())
+        );
+        assert!(events.capacity() <= super::STREAM_SEGMENT_MAX_EVENTS);
+        assert_eq!(oplog.point_reads.load(Ordering::Relaxed), before);
+    }
+
+    #[test]
+    async fn retention_entry_budget_evicts_batches_instead_of_packed_items() {
+        let identity = identity();
+        let producer = producer(Arc::new(TestOplog::default()), &identity, None).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        for sequence in 0..=super::COMMITTED_RETENTION_MAX_ENTRIES as u64 {
+            let event = CommittedProducerStreamEventV1 {
+                stream_id: handle.stream_id,
+                producer_sequence: sequence,
+                offset: StreamOffsetV1::new(OplogIndex::from_u64(sequence + 1), 0),
+                packed_u8_batch_end: None,
+                terminal_author: None,
+                nested_handles: Vec::new(),
+                payload: CommittedProducerStreamEventPayloadV1::Value(vec![1]),
+            };
+            producer.retain_committed_events(&[event]);
+        }
+        let retained = producer.committed_retention.lock().unwrap();
+        assert_eq!(retained.entries, super::COMMITTED_RETENTION_MAX_ENTRIES);
+        assert_eq!(
+            retained.batches.len(),
+            super::COMMITTED_RETENTION_MAX_ENTRIES
+        );
+        assert!(
+            retained
+                .batches
+                .iter()
+                .all(|batch| batch.first_sequence() != 0)
+        );
+        assert!(
+            retained.batches.iter().any(
+                |batch| batch.first_sequence() == super::COMMITTED_RETENTION_MAX_ENTRIES as u64
+            )
+        );
+    }
+
+    #[test]
+    async fn retained_segment_returns_prefix_at_encoded_byte_bound() {
+        let identity = identity();
+        let producer = producer(Arc::new(TestOplog::default()), &identity, None).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        for sequence in 0..2 {
+            let event = CommittedProducerStreamEventV1 {
+                stream_id: handle.stream_id,
+                producer_sequence: sequence,
+                offset: StreamOffsetV1::new(OplogIndex::from_u64(sequence + 1), 0),
+                packed_u8_batch_end: None,
+                terminal_author: None,
+                nested_handles: Vec::new(),
+                payload: CommittedProducerStreamEventPayloadV1::Value(vec![
+                    0;
+                    super::STREAM_SEGMENT_TARGET_BYTES
+                        / 2
+                        + 1
+                ]),
+            };
+            producer.retain_committed_events(&[event]);
+        }
+        let events = producer
+            .retained_segment(handle.stream_id, None, None)
+            .expect("contiguous retained prefix");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].producer_sequence, 0);
+    }
+
+    #[test]
+    async fn retention_gap_falls_back_to_authoritative_history() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let mut offsets = Vec::new();
+        for sequence in 0..3 {
+            offsets.extend(
+                producer
+                    .write_items(
+                        handle.stream_id,
+                        sequence,
+                        StreamItemsPayloadV1::Values(vec![vec![sequence as u8]]),
+                    )
+                    .await
+                    .unwrap()
+                    .value,
+            );
+        }
+        {
+            let mut retained = producer.committed_retention.lock().unwrap();
+            let missing = retained.batches.remove(1).unwrap();
+            retained.entries -= 1;
+            retained.bytes -= missing.retained_bytes;
+        }
+        let before = oplog.point_reads.load(Ordering::Relaxed);
+        let events = producer
+            .read_segment(&handle, Some(offsets[0]), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            events.iter().map(|event| event.offset).collect::<Vec<_>>(),
+            offsets[1..]
+        );
+        assert!(oplog.point_reads.load(Ordering::Relaxed) > before);
+    }
+
+    #[test]
+    async fn cursor_validation_point_reads_without_historical_event_cache() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let handle = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let offsets = producer
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![1, 2, 3]),
+            )
+            .await
+            .unwrap()
+            .value;
+        for _ in 0..2050 {
+            oplog.add(OplogEntry::interrupted()).await;
+        }
+        producer
+            .end(handle.stream_id, 3, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        let high_water = producer.input_high_water(handle.stream_id).await.unwrap();
+        {
+            let mut index = producer.index.lock().await;
+            let stream = index.streams.get_mut(&handle.stream_id).unwrap();
+            stream.terminal_event = None;
+            stream.batches.clear();
+        }
+        assert_eq!(
+            producer.input_high_water(handle.stream_id).await.unwrap(),
+            high_water
+        );
+        oplog.take_read_ranges();
+        let before = oplog.point_reads.load(Ordering::Relaxed);
+        producer
+            .validate_cursor(handle.stream_id, Some(offsets[1]))
+            .await
+            .unwrap();
+        assert_eq!(oplog.point_reads.load(Ordering::Relaxed) - before, 0);
+        assert!(oplog.take_read_ranges().is_empty());
+        assert!(
+            producer
+                .validate_cursor(
+                    handle.stream_id,
+                    Some(StreamOffsetV1::new(offsets[0].producer_oplog_index(), 3)),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            producer
+                .validate_cursor(
+                    handle.stream_id,
+                    Some(StreamOffsetV1::new(OplogIndex::NONE, 0)),
+                )
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -6339,7 +7940,11 @@ pub(crate) mod tests {
         restarted.cascade_deletion(1_001, &probe).await.unwrap();
         assert_eq!(probe.overlay_commits.load(Ordering::Relaxed), 1);
         assert_eq!(
-            restarted.deletion_diagnostics().await.cascade_completed,
+            restarted
+                .deletion_diagnostics()
+                .await
+                .unwrap()
+                .cascade_completed,
             vec![(
                 key,
                 StreamCascadeDependentResultV1::SourceUnavailable {
@@ -6392,7 +7997,7 @@ pub(crate) mod tests {
             Err(DurableStreamProducerError::ProducerDeleting)
         );
 
-        let diagnostics = live.deletion_diagnostics().await;
+        let diagnostics = live.deletion_diagnostics().await.unwrap();
         assert!(diagnostics.deleting);
         assert_eq!(diagnostics.attachments.len(), 1);
         assert_eq!(
@@ -6406,7 +8011,7 @@ pub(crate) mod tests {
         );
         drop(live);
         let restarted = producer(oplog, &identity, None).await;
-        assert_eq!(restarted.deletion_diagnostics().await, diagnostics);
+        assert_eq!(restarted.deletion_diagnostics().await.unwrap(), diagnostics);
     }
 
     #[test]
@@ -6446,6 +8051,7 @@ pub(crate) mod tests {
         assert!(
             live.deletion_diagnostics()
                 .await
+                .unwrap()
                 .cascade_completed
                 .is_empty()
         );
@@ -6456,7 +8062,7 @@ pub(crate) mod tests {
             Some(offsets[1])
         );
         assert_eq!(
-            live.deletion_diagnostics().await.cascade_completed,
+            live.deletion_diagnostics().await.unwrap().cascade_completed,
             vec![(
                 key,
                 StreamCascadeDependentResultV1::SourceUnavailable {
@@ -6502,13 +8108,14 @@ pub(crate) mod tests {
         assert!(
             live.deletion_diagnostics()
                 .await
+                .unwrap()
                 .cascade_completed
                 .is_empty()
         );
         live.cascade_deletion(201, &probe).await.unwrap();
         assert_eq!(probe.commits.load(Ordering::Relaxed), 1);
         assert_eq!(
-            live.deletion_diagnostics().await.cascade_completed,
+            live.deletion_diagnostics().await.unwrap().cascade_completed,
             vec![(
                 key,
                 StreamCascadeDependentResultV1::SourceUnavailable {
@@ -7372,45 +8979,115 @@ pub(crate) mod tests {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
         let producer = producer(oplog.clone(), &identity, None).await;
-        let result = |payload: Vec<u8>| {
-            StreamSessionRecordV1::InvocationResult(StreamSessionInvocationResultRecordV1 {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.clone(),
-                result: payload,
-                output_streams: Vec::new(),
-                stream_mappings: Vec::new(),
-            })
-        };
 
         producer
-            .register_result_streams(Vec::new(), {
-                let record = result(vec![1]);
-                move |_| record
-            })
+            .register_result_streams(identity.invocation.clone(), vec![1], Vec::new())
             .await
             .unwrap();
         let committed = oplog.committed_length();
 
         producer
-            .register_result_streams(Vec::new(), {
-                let record = result(vec![1]);
-                move |_| record
-            })
+            .register_result_streams(identity.invocation.clone(), vec![1], Vec::new())
             .await
             .unwrap();
         assert_eq!(oplog.committed_length(), committed);
 
         assert_eq!(
             producer
-                .register_result_streams(Vec::new(), {
-                    let record = result(vec![2]);
-                    move |_| record
-                })
+                .register_result_streams(identity.invocation.clone(), vec![2], Vec::new())
                 .await
                 .unwrap_err(),
             DurableStreamProducerError::RegistrationDivergence
         );
         assert_eq!(oplog.committed_length(), committed);
+    }
+
+    #[test]
+    async fn result_plan_preserves_mixed_output_order_and_replays() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let existing = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let mut request = root_registration(&identity);
+        let StreamRegistrationCoordinateV1::Root {
+            recursive_value_path,
+            ..
+        } = &mut request.coordinate
+        else {
+            unreachable!();
+        };
+        recursive_value_path.push(StreamValuePathStepV1::RecordField(1));
+        let outputs = || {
+            vec![
+                ProducerOutputRegistrationV1 {
+                    transport_stream_id: 31,
+                    source: ProducerOutputSourceV1::New(request.clone()),
+                },
+                ProducerOutputRegistrationV1 {
+                    transport_stream_id: 12,
+                    source: ProducerOutputSourceV1::Existing(existing.clone()),
+                },
+            ]
+        };
+        let (owned, record) = producer
+            .register_result_streams(identity.invocation.clone(), vec![4, 5], outputs())
+            .await
+            .unwrap();
+        assert_eq!(owned.len(), 1);
+        let StreamSessionRecordV1::InvocationResult(result) = &record else {
+            unreachable!();
+        };
+        assert_eq!(result.session_key, identity.invocation);
+        assert_eq!(result.result, vec![4, 5]);
+        assert_eq!(
+            result.output_streams,
+            vec![owned[0].clone(), existing.clone()]
+        );
+        assert_eq!(
+            result
+                .stream_mappings
+                .iter()
+                .map(|mapping| mapping.transport_stream_id)
+                .collect::<Vec<_>>(),
+            vec![31, 12]
+        );
+        let committed = oplog.committed_length();
+        let replay = producer
+            .register_result_streams(identity.invocation.clone(), vec![4, 5], outputs())
+            .await
+            .unwrap();
+        assert_eq!(replay, (owned, record));
+        assert_eq!(oplog.committed_length(), committed);
+    }
+
+    #[test]
+    async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let request = root_registration(&identity);
+        let outputs = vec![
+            ProducerOutputRegistrationV1 {
+                transport_stream_id: 1,
+                source: ProducerOutputSourceV1::New(request.clone()),
+            },
+            ProducerOutputRegistrationV1 {
+                transport_stream_id: 2,
+                source: ProducerOutputSourceV1::New(request),
+            },
+        ];
+
+        assert_eq!(
+            producer
+                .register_result_streams(identity.invocation.clone(), vec![1], outputs)
+                .await,
+            Err(DurableStreamProducerError::RegistrationDivergence)
+        );
+        assert_eq!(oplog.committed_length(), 0);
     }
 
     #[test]
@@ -8504,6 +10181,7 @@ pub(crate) mod tests {
         let mut reader = DurableCatchUpReader {
             bus: bus.clone(),
             subscription: Some(subscription),
+            history_source: None,
             history: VecDeque::from([
                 CommittedProducerStreamEventV1 {
                     stream_id,

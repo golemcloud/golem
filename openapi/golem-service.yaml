@@ -19354,6 +19354,17 @@ components:
       - description
       - input_schema
       - output_schema
+    AgentMethodStreamMetadata:
+      title: AgentMethodStreamMetadata
+      type: object
+      properties:
+        input:
+          type: boolean
+        output:
+          type: boolean
+      required:
+      - input
+      - output
     AgentSecretCreation:
       title: AgentSecretCreation
       type: object
@@ -19898,6 +19909,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentTypeSchema'
+        agentMethodStreams:
+          description: Server-derived streaming classification for each declared agent method.
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/AgentMethodStreamMetadata'
         agentTypeProvisionConfigs:
           description: |-
             Per-agent-type provisioning configuration: env, config, plugins, files.
@@ -19916,6 +19934,7 @@ components:
       - knownExports
       - producers
       - memories
+      - agentMethodStreams
     ComponentUpdate:
       title: ComponentUpdate
       type: object

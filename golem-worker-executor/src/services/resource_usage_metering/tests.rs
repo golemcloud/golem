@@ -454,6 +454,7 @@ async fn timeout_keeps_single_flight_skips_ticks_and_accepts_late_success() {
     wait_for_calls(&reader, 1).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(10)).await;
     blocked.wait_started().await;
 
@@ -501,6 +502,7 @@ async fn timeout_keeps_single_flight_skips_ticks_and_accepts_late_success() {
     blocked.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(600)).await;
     clock.set(Duration::from_millis(599)).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     clock.set(Duration::from_millis(600)).await;
@@ -717,6 +719,7 @@ async fn active_error_completed_during_close_suspends_from_attempt_start() {
     wait_for_calls(&reader, 1).await;
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(10)).await;
     crossing_error.wait_started().await;
 

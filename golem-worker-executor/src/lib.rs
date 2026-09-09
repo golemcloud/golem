@@ -131,10 +131,10 @@ use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
+use tonic::transport::server::TcpIncoming;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{Instrument, info};
@@ -185,6 +185,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
         Ok(Arc::new(ActiveAgents::<Ctx>::new(
+            &golem_config.active_agents,
             &golem_config.memory,
             &golem_config.filesystem_storage,
             &golem_config.agent_status_flush,
@@ -1204,7 +1205,9 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
             .add_service(reflection_service)
             .add_service(service)
             .add_service(health_service)
-            .serve_with_incoming(TcpListenerStream::new(listener))
+            // Custom incoming streams bypass Server's TCP_NODELAY default. Streaming replies
+            // must not wait for a delayed ACK between the acceptance and the invocation result.
+            .serve_with_incoming(TcpIncoming::from(listener).with_nodelay(Some(true)))
             .map_err(anyhow::Error::from)
             .in_current_span()
     });
