@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod error;
-pub mod etcd_connection;
-pub mod etcd_retry;
-pub mod healthcheck;
-pub mod healthcheck_loop;
-pub mod leader_election;
-mod model;
-pub mod persistence;
-pub mod rebalancing;
-pub mod shard_management;
-pub mod worker_executor;
+//! Modules sharing the per-worker etcd server and the fixed `STATE_KEY`. `lib.rs` runs them as
+//! one sequential suite.
 
-pub use model::{
-    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, ShardAssignmentEntry,
-    ShardEpoch, ShardLeaseRevision, ShardLeaseState,
-};
+mod distributed_startup;
+mod leader_election;
+mod persistence;
+mod proxy;
+
+use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
+use std::sync::Arc;
+use test_r::inherit_test_dep;
+
+inherit_test_dep!(Arc<DockerEtcd>);
