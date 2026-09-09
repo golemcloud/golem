@@ -28,7 +28,7 @@ use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
 use crate::model::help::EnvironmentNameHelp;
-use crate::model::plugin::PluginNameAndVersion;
+use crate::model::plugin::PluginGrantKey;
 use crate::model::text_format::log_text_view;
 use anyhow::{anyhow, bail};
 use golem_client::api::{EnvironmentClient, MeClient};
@@ -144,6 +144,28 @@ impl EnvironmentCommandHandler {
         match self.ctx.manifest_environment() {
             Some(env) => match &env.environment.account {
                 Some(account) => {
+                    let visible_environment = self
+                        .ctx
+                        .golem_clients()
+                        .await?
+                        .me
+                        .list_visible_environments(
+                            Some(account),
+                            Some(&env.application_name.0),
+                            Some(&env.environment_name.0),
+                        )
+                        .await
+                        .map_service_error()?
+                        .values
+                        .pop();
+
+                    if let Some(visible_environment) = visible_environment {
+                        return Ok(ResolvedEnvironmentIdentity::from_summary(
+                            None,
+                            visible_environment,
+                        ));
+                    }
+
                     let account = self
                         .ctx
                         .account_handler()
@@ -490,7 +512,7 @@ impl EnvironmentCommandHandler {
     pub async fn plugin_grants(
         &self,
         environment: &ResolvedEnvironmentIdentity,
-    ) -> anyhow::Result<HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>> {
+    ) -> anyhow::Result<HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>> {
         self.ctx
             .caches()
             .plugin_grants
@@ -508,7 +530,8 @@ impl EnvironmentCommandHandler {
                             {
                                 result.values.into_iter().map(|p| {
                                     (
-                                        PluginNameAndVersion {
+                                        PluginGrantKey {
+                                            account: p.plugin_account.email.to_string(),
                                             name: p.plugin.name.clone(),
                                             version: p.plugin.version.clone(),
                                         },

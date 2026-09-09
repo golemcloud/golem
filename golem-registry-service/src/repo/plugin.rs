@@ -24,7 +24,7 @@ pub trait PluginRepo: Send + Sync {
         account_id: Uuid,
         name: &str,
         version: &str,
-    ) -> RepoResult<Option<PluginRecord>>;
+    ) -> RepoResult<Option<PluginAuthRecord>>;
 
     async fn list_by_account(&self, account_id: Uuid) -> RepoResult<Vec<PluginRecord>>;
 }
@@ -79,7 +79,7 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
         account_id: Uuid,
         name: &str,
         version: &str,
-    ) -> RepoResult<Option<PluginRecord>> {
+    ) -> RepoResult<Option<PluginAuthRecord>> {
         self.repo
             .get_by_name_and_version(account_id, name, version)
             .instrument(Self::span_name_and_version(name, version))
@@ -222,7 +222,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
         account_id: Uuid,
         name: &str,
         version: &str,
-    ) -> RepoResult<Option<PluginRecord>> {
+    ) -> RepoResult<Option<PluginAuthRecord>> {
         self.with_ro("get_by_name_and_version")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
@@ -233,12 +233,16 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         p.provided_wit_package,
                         p.json_schema, p.validate_url, p.transform_url,
                         p.component_id, p.component_revision_id,
-                        p.wasm_content_hash
-                    FROM plugins p
+                        p.wasm_content_hash,
+                        a.email AS account_email
+                    FROM accounts a
+                    JOIN plugins p
+                        ON p.account_id = a.account_id
                     WHERE
                         p.account_id = $1
                         AND p.name = $2
                         AND p.version = $3
+                        AND a.deleted_at IS NULL
                         AND p.deleted_at IS NULL
                 "#})
                 .bind(account_id)

@@ -215,41 +215,28 @@ impl PluginRegistrationService {
         version: &str,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
-        let account =
-            self.account_service
-                .get(account_id, auth)
-                .await
-                .map_err(|err| match err {
-                    AccountError::AccountNotFound(id) => {
-                        PluginRegistrationError::ParentAccountNotFound(id)
-                    }
-                    other => other.into(),
-                })?;
+        let not_found = || PluginRegistrationError::PluginRegistrationByNameNotFound {
+            account_id,
+            name: name.to_string(),
+            version: version.to_string(),
+        };
+        let record = self
+            .plugin_repo
+            .get_by_name_and_version(account_id.0, name, version)
+            .await?
+            .ok_or_else(&not_found)?;
+        let account_email = record.account_email();
+        let plugin: PluginRegistration = record.plugin.try_into()?;
+
         authorize_account_plugin_permission(
             auth,
-            &account.email,
+            &account_email,
             AccountPluginVerb::View,
             AccountPluginResourcePattern::Name(AccountPluginName(name.to_string())),
         )
-        .map_err(
-            |_| PluginRegistrationError::PluginRegistrationByNameNotFound {
-                account_id,
-                name: name.to_string(),
-                version: version.to_string(),
-            },
-        )?;
-        self.plugin_repo
-            .get_by_name_and_version(account_id.0, name, version)
-            .await?
-            .ok_or_else(
-                || PluginRegistrationError::PluginRegistrationByNameNotFound {
-                    account_id,
-                    name: name.to_string(),
-                    version: version.to_string(),
-                },
-            )?
-            .try_into()
-            .map_err(Into::into)
+        .map_err(|_| not_found())?;
+
+        Ok(plugin)
     }
 
     async fn get_plugin_record(

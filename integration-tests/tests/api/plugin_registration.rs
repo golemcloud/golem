@@ -94,6 +94,35 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
                 RegistryServiceGetAccountPluginError::Error404(_)
             ))
         ));
+
+        client
+            .create_permission_share(
+                &user.account_id.0,
+                &PermissionShareCreation {
+                    target_account_email: user_2.account_email.clone(),
+                    name: PermissionShareName("plugin-view".to_string()),
+                    data: PermissionShareData {
+                        lower_positive: vec![format!(
+                            "account.plugin({}) @ {} : view : {}",
+                            user.account_email.as_str(),
+                            user_2.account_email.as_str(),
+                            plugin.name,
+                        )],
+                        lower_negative: Vec::new(),
+                        upper_positive: Vec::new(),
+                        upper_negative: Vec::new(),
+                    },
+                },
+            )
+            .await?;
+
+        let fetched_plugin = client_2.get_plugin_by_id(&plugin.id.0).await?;
+        assert_eq!(fetched_plugin, plugin);
+
+        let fetched_plugin = client_2
+            .get_account_plugin(&user.account_id.0, &plugin.name, &plugin.version)
+            .await?;
+        assert_eq!(fetched_plugin, plugin);
     }
 
     // delete plugin

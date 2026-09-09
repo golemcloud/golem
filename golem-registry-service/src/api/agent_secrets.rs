@@ -149,7 +149,7 @@ impl AgentSecretsApi {
         let response = self
             .get_environment_agent_secret_internal(
                 environment_id.0,
-                CanonicalAgentSecretPath(path.0),
+                CanonicalAgentSecretPath::from_path_in_unknown_casing(&path.0),
                 auth,
             )
             .instrument(record.span.clone())
