@@ -1767,8 +1767,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn get_last_known_status(&self) -> AgentStatusRecord {
-        self.last_known_status.load_full().as_ref().clone()
+    /// Returns the published status as an `Arc` rather than a copy: the record is large and its
+    /// `invocation_results` grows with the invocations the agent has served, and every caller
+    /// here only reads a field or two out of it.
+    pub async fn get_last_known_status(&self) -> Arc<AgentStatusRecord> {
+        self.last_known_status.load_full()
     }
 
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
@@ -1783,8 +1786,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Returns the authoritative status, reattaching it to the oplog first when necessary.
     /// Unlike [`Self::get_non_detached_last_known_status`], this is safe for independent store
     /// tasks that can overlap an invocation-loop jump or replay completion.
-    pub async fn get_attached_last_known_status(&self) -> AgentStatusRecord {
-        self.state_actor.attached_status().await.as_ref().clone()
+    pub async fn get_attached_last_known_status(&self) -> Arc<AgentStatusRecord> {
+        self.state_actor.attached_status().await
     }
 
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
@@ -3517,8 +3520,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_last_known_status()
             .await
             .pending_card_events
-            .into_iter()
-            .filter_map(|pending_event| match pending_event.event {
+            .iter()
+            .filter_map(|pending_event| match &pending_event.event {
                 QueuedCardEvent::Revoke(event) => Some(event.card_id),
                 QueuedCardEvent::Install(_)
                 | QueuedCardEvent::TransferStarted(_)

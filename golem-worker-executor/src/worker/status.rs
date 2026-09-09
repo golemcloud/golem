@@ -1856,6 +1856,39 @@ mod test {
         );
     }
 
+    /// The commit path relies on both halves of this: it skips the fold entirely when the commit
+    /// produced no entries, and it installs the folded record without comparing it against the
+    /// previous one. That is only equivalent to the old comparison because folding nothing is the
+    /// identity and folding anything moves `oplog_idx`.
+    #[test]
+    fn folding_no_entries_is_the_identity_and_any_entry_moves_the_oplog_index() {
+        let retry = RetryConfig::default();
+        let baseline = AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(10),
+            ..AgentStatusRecord::default()
+        };
+
+        assert_eq!(
+            update_status_with_new_entries(
+                AgentMode::Durable,
+                baseline.clone(),
+                BTreeMap::new(),
+                &retry,
+            ),
+            Some(baseline.clone())
+        );
+
+        let folded = update_status_with_new_entries(
+            AgentMode::Durable,
+            baseline.clone(),
+            BTreeMap::from([(OplogIndex::from_u64(11), OplogEntry::grow_memory(8))]),
+            &retry,
+        )
+        .unwrap();
+        assert_eq!(folded.oplog_idx, OplogIndex::from_u64(11));
+        assert_ne!(folded, baseline);
+    }
+
     #[test]
     async fn empty() {
         let test_case = TestCase::builder(0).build();

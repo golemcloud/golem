@@ -595,7 +595,14 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             .filter(|entry| is_authority_state_entry(entry))
             .count() as u64;
 
-        let changed = if !self.detached.load(Ordering::Acquire) {
+        let changed = if self.detached.load(Ordering::Acquire) {
+            false
+        } else if new_entries.is_empty() {
+            // Folding no entries onto the record is the identity, so there is nothing to install
+            // and nothing to notify about. Deciding it here skips the copy of the record the fold
+            // would otherwise need on every commit that turned out to be empty.
+            false
+        } else {
             let old_status = self.last_known_status.load_full();
 
             let updated_status = update_status_with_new_entries(
@@ -606,15 +613,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             );
 
             match updated_status {
-                Ok(Some(updated_status)) if updated_status != *old_status => {
-                    self.update_last_known_status(updated_status.clone()).await;
+                // No `!=` against the old record: the fold takes `oplog_idx` from the highest new
+                // entry, so a non-empty fold always produces a different record, and comparing
+                // them would walk the whole record on every commit.
+                Ok(Some(updated_status)) => {
+                    let updated_status = self.update_last_known_status(updated_status).await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                         .await;
 
                     true
                 }
-                Ok(Some(_)) => false,
                 Ok(None) => {
                     // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
                     // This can happen during a revert or a snapshot update for example.
@@ -637,8 +646,6 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     true
                 }
             }
-        } else {
-            false
         };
 
         // This release-publish is deliberately owned by the cancellation-proof
@@ -691,7 +698,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
 
             // Install the recomputed status while still detached, so a concurrent background sweep
             // keeps skipping (the in-memory status is not authoritative until it is installed).
-            self.update_last_known_status(worker_status.clone()).await;
+            self.update_last_known_status(worker_status).await;
 
             // Now the in-memory status is authoritative again; clear the flag and force a flush.
             // Release ordering pairs with the Acquire loads in the checkpoint/flusher paths: with
@@ -718,14 +725,23 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// Publishes a new status and hands the (previous, new) pair to the flusher, which updates
     /// the `RunningWorkers` recovery index synchronously and either marks the worker dirty for
     /// the background sweeper or writes the blob inline (when background flushing is disabled).
-    async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
+    ///
+    /// Returns the published record. The `Arc` is built before the swap and shared with the
+    /// follow-up work, so the record itself is never copied here: it is large, and this runs on
+    /// every commit that changed the status.
+    async fn update_last_known_status(
+        &self,
+        new_status: AgentStatusRecord,
+    ) -> Arc<AgentStatusRecord> {
         let previous_metrics_status = self.metrics_status.status();
-        let previous_status = self.last_known_status.swap(Arc::new(new_status.clone()));
+        let new_status = Arc::new(new_status);
+        let previous_status = self.last_known_status.swap(new_status.clone());
         self.metrics_status
             .update(previous_metrics_status, new_status.status);
         self.status_flusher
             .on_status_changed(&previous_status, &new_status)
             .await;
+        new_status
     }
 
     async fn schedule_oplog_archive_if_needed(
