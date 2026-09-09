@@ -563,6 +563,7 @@ mod tests {
         let shard_manager = golem_shard_manager::RunDetails {
             http_port: 0,
             grpc_port: 0,
+            leadership: None,
         };
         let registry = golem_registry_service::SingleExecutableRunDetails {
             grpc_port: 0,
