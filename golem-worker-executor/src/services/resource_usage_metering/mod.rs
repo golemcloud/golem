@@ -130,12 +130,6 @@ impl ResourceUsageAccount {
         self.linear_memory.current_bytes()
     }
 
-    fn record_usage(&self, memory_units: i64, storage_units: i64) {
-        if let Some(entry) = self.entry.upgrade() {
-            entry.record_resource_usage(self.mode, memory_units, storage_units);
-        }
-    }
-
     fn record_settlement(&self, settlement: ResourceUsageSettlement) {
         if let Some(entry) = self.entry.upgrade() {
             entry.record_resource_settlement(self.mode, settlement.memory, settlement.storage);
@@ -618,30 +612,34 @@ impl MeterShared {
         let _transition = self
             .memory_enabled
             .then(|| self.account.transition.lock().unwrap());
-        let (memory_units, storage_units) = window.map_or((0, 0), |window| {
+        let settlement = window.map_or_else(ResourceUsageSettlement::default, |window| {
             let mut state = window.state.lock().unwrap();
             if state.status == WindowStatus::Closed {
-                return (0, 0);
+                return ResourceUsageSettlement::default();
             }
-            let memory_units = if self.memory_enabled {
+            let memory = if self.memory_enabled {
                 self.account
                     .linear_memory
                     .meter_if_enabled()
                     .expect("memory metering is enabled")
-                    .take_units(now)
+                    .take_settlement_at(now)
             } else {
-                0
+                ByteTimeSettlement::default()
             };
             let pending_attempt = state
                 .active_observation
                 .map(|observation| observation.started_at);
-            let storage_units = state.storage.as_mut().map_or(0, |storage| {
-                storage.accrue_until(now, pending_attempt);
-                storage.accumulator.take_units()
-            });
-            (memory_units, storage_units)
+            let storage =
+                state
+                    .storage
+                    .as_mut()
+                    .map_or_else(ByteTimeSettlement::default, |storage| {
+                        storage.accrue_until(now, pending_attempt);
+                        storage.accumulator.take_settlement()
+                    });
+            ResourceUsageSettlement { memory, storage }
         });
-        self.account.record_usage(memory_units, storage_units);
+        self.account.record_settlement(settlement);
     }
 }
 

@@ -17,12 +17,12 @@ use crate::repo::model::plan::PlanRecord;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension, MonthlyPlanAmountError,
-    MonthlyPlanAmounts, MonthlyUsageMode, MonthlyUsageModeTransition,
-    MonthlyUsageModeTransitionSource, StorageLimit,
+    AccountUsagePeriod, AdminResourceGrant, AdminResourceGrantDimension,
+    BYTE_NANOSECONDS_PER_GB_SECOND, MonthlyPlanAmountError, MonthlyPlanAmounts, MonthlyUsageMode,
+    MonthlyUsageModeTransition, MonthlyUsageModeTransitionSource, StorageLimit,
 };
 use golem_service_base::clients::registry::ResourceUsageMetering;
-use golem_service_base::model::{MonthlyComputePolicy, ResourceLimits};
+use golem_service_base::model::{MonthlyResourcePolicy, ResourceLimits};
 use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::{RepoError, RepoResult, SqlDateTime};
 use sqlx::FromRow;
@@ -123,6 +123,7 @@ pub struct AccountUsage {
     pub metering: Option<ResourceUsageMetering>,
     pub monthly_usage_mode: MonthlyUsageMode,
     pub monthly_usage_mode_revision: u64,
+    pub monthly_memory_byte_nanoseconds_remainder: u128,
     pub monthly_usage_attribution: Option<MonthlyUsageAttribution>,
     pub changes: BTreeMap<UsageType, i64>,
 }
@@ -547,9 +548,22 @@ impl AccountUsage {
     }
 
     pub fn resource_limits(&self) -> Result<ResourceLimits, MonthlyPlanAmountError> {
-        let fuel_limit = self.monthly_plan_amounts().resolve()?.compute_fuel;
-        let available_fuel =
-            fuel_limit.saturating_sub(self.final_value(UsageType::MonthlyGasLimit));
+        let monthly_amounts = self.monthly_plan_amounts().resolve()?;
+        let available_fuel = monthly_amounts
+            .compute_fuel
+            .saturating_sub(self.final_value(UsageType::MonthlyGasLimit));
+        let available_memory_byte_nanoseconds = (monthly_amounts.memory_gb_seconds as u128)
+            .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+            .saturating_sub(
+                (self.final_value(UsageType::MonthlyMemoryGbSeconds) as u128)
+                    .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+                    .saturating_add(self.monthly_memory_byte_nanoseconds_remainder),
+            );
+        let available_memory_gb_seconds = (available_memory_byte_nanoseconds
+            / BYTE_NANOSECONDS_PER_GB_SECOND)
+            .min(u64::MAX as u128) as u64;
+        let available_memory_byte_nanoseconds_remainder =
+            (available_memory_byte_nanoseconds % BYTE_NANOSECONDS_PER_GB_SECOND) as u64;
 
         let http_limit = self.plan.limit(UsageType::MonthlyHttpCalls);
         let available_http_calls =
@@ -561,13 +575,15 @@ impl AccountUsage {
 
         Ok(ResourceLimits {
             monthly_usage_mode_revision: self.monthly_usage_mode_revision,
-            monthly_compute: MonthlyComputePolicy {
+            monthly_policy: MonthlyResourcePolicy {
                 period: AccountUsagePeriod {
                     year: self.year,
                     month: self.month,
                 },
                 mode: self.monthly_usage_mode,
                 available_fuel,
+                available_memory_gb_seconds,
+                available_memory_byte_nanoseconds_remainder,
             },
             max_memory_per_worker: self.max_memory_per_worker.effective_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),

@@ -19,6 +19,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 pub const BYTE_SECONDS_PER_GB_MONTH: u64 = 1024 * 1024 * 1024 * 730 * 3600;
+pub const BYTE_NANOSECONDS_PER_GB_SECOND: u128 = (1024_u128 * 1024 * 1024) * 1_000_000_000;
 pub const FUEL_PER_GCU: u64 = 1_000_000;
 pub const DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS: usize = 6;
 pub const EFFECTIVELY_UNLIMITED_STORAGE_LIMIT: u64 = 10_000_000_000_000_000;

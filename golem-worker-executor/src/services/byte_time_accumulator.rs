@@ -62,6 +62,7 @@ impl ByteTimeAccumulator {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn take_units(&mut self) -> i64 {
         let units = self.pending_units.min(i64::MAX as u128) as i64;
         self.pending_units -= units as u128;

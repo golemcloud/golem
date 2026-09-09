@@ -679,6 +679,43 @@ async fn account_batch_flushes_active_memory_and_storage_without_close_duplicati
 
 #[test]
 #[timeout("5s")]
+async fn account_batch_combines_fractional_memory_from_active_agents() {
+    let now = Instant::now();
+    let clock = TestClock::new(now);
+    let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 2));
+    let config = ResourceUsageMeteringConfig {
+        compute: false,
+        memory: true,
+        filesystem: false,
+    };
+    let (first_account, _) = configured_account(&entry, GIB, true, now);
+    let (second_account, _) = configured_account(&entry, GIB, true, now);
+    let first = create_configured_meter_with_clock(
+        config,
+        || unreachable!("filesystem metering is disabled"),
+        first_account,
+        clock.clone(),
+    );
+    let second = create_configured_meter_with_clock(
+        config,
+        || unreachable!("filesystem metering is disabled"),
+        second_account,
+        clock.clone(),
+    );
+    let (_, _, first_permit) = permit(&entry).await;
+    let (_, _, second_permit) = permit(&entry).await;
+    let first_window = open_window(&first, first_permit).await.unwrap();
+    let second_window = open_window(&second, second_permit).await.unwrap();
+
+    clock.set(Duration::from_millis(600)).await;
+    assert_eq!(entry.capture_byte_time_usage_for_test(), (1, 0));
+
+    drop(first_window);
+    drop(second_window);
+}
+
+#[test]
+#[timeout("5s")]
 async fn active_error_completed_during_close_suspends_from_attempt_start() {
     let now = Instant::now();
     let clock = TestClock::new(now);

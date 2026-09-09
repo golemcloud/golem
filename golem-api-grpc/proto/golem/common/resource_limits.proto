@@ -14,14 +14,16 @@ message AccountUsagePeriod {
   uint32 month = 2;
 }
 
-message MonthlyComputePolicy {
+message MonthlyResourcePolicy {
   AccountUsagePeriod period = 1;
   MonthlyUsageMode mode = 2;
   uint64 available_fuel = 3;
+  uint64 available_memory_gb_seconds = 4;
+  uint64 available_memory_byte_nanoseconds_remainder = 5;
 }
 
 message ResourceLimits {
-  MonthlyComputePolicy monthly_compute = 1;
+  MonthlyResourcePolicy monthly_policy = 1;
   uint64 max_memory_per_worker = 2;
   uint64 max_table_elements_per_worker = 3;
   uint64 max_disk_space_per_worker = 4;

@@ -14,11 +14,10 @@
 
 use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
 use crate::services::resource_limits::AtomicResourceEntry;
+use golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND;
 use golem_common::model::agent::AgentMode;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
-
-pub(crate) const BYTE_NANOSECONDS_PER_GB_SECOND: u128 = (1024_u128 * 1024 * 1024) * 1_000_000_000;
 
 #[derive(Clone, Debug)]
 /// Leaf meter for linear-memory byte-time and memory-limit state.
@@ -122,18 +121,18 @@ impl AgentMemoryMeter {
     }
 
     pub fn flush(&self, now: Instant) {
-        let units = self.take_units(now);
-        self.inner.record(units);
-    }
-
-    pub(crate) fn take_units(&self, now: Instant) -> i64 {
-        let mut state = self.inner.state.lock().unwrap();
-        state.accrue(now);
-        state.usage.take_units()
+        let settlement = self.take_settlement_at(now);
+        self.inner.record_settlement(settlement);
     }
 
     pub(crate) fn take_settlement(&self) -> ByteTimeSettlement {
         self.inner.state.lock().unwrap().take_settlement()
+    }
+
+    pub(crate) fn take_settlement_at(&self, now: Instant) -> ByteTimeSettlement {
+        let mut state = self.inner.state.lock().unwrap();
+        state.accrue(now);
+        state.take_settlement()
     }
 }
 
@@ -142,14 +141,6 @@ impl Inner {
         let mut state = self.state.lock().unwrap();
         state.accrue(now);
         update(&mut state)
-    }
-
-    fn record(&self, units: i64) {
-        if units != 0
-            && let Some(entry) = self.entry.upgrade()
-        {
-            entry.record_memory_gb_seconds(self.mode, units);
-        }
     }
 
     fn record_settlement(&self, settlement: ByteTimeSettlement) {

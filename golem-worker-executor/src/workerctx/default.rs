@@ -431,6 +431,26 @@ fn configured_fuel_tracker(config: &GolemConfig) -> Option<FuelTracker> {
     })
 }
 
+fn ensure_monthly_resource_capacity(
+    resource_limit_entry: &AtomicResourceEntry,
+    fuel_tracker: Option<&mut FuelTracker>,
+    agent_mode: AgentMode,
+    current_level: u64,
+) -> Result<(), AgentError> {
+    if let Some(fuel_tracker) = fuel_tracker {
+        fuel_tracker.ensure_fuel(resource_limit_entry, agent_mode, current_level)?;
+    }
+    if resource_limit_entry.has_monthly_memory_capacity() {
+        Ok(())
+    } else {
+        Err(AgentError::EphemeralCannotSuspend(
+            EphemeralCannotSuspendError {
+                reason: "monthly memory exhausted".to_string(),
+            },
+        ))
+    }
+}
+
 impl DurableWorkerCtxView<Context> for Context {
     fn durable_ctx(&self) -> &DurableWorkerCtx<Context> {
         &self.durable_ctx
@@ -461,10 +481,12 @@ impl FuelManagement for Context {
 
     fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
         let agent_mode = self.agent_mode();
-        let Some(fuel_tracker) = &mut self.fuel_tracker else {
-            return Ok(());
-        };
-        fuel_tracker.ensure_fuel(&self.resource_limit_entry, agent_mode, current_level)
+        ensure_monthly_resource_capacity(
+            &self.resource_limit_entry,
+            self.fuel_tracker.as_mut(),
+            agent_mode,
+            current_level,
+        )
     }
 
     fn return_fuel(&mut self, current_level: u64) -> u64 {
@@ -1202,7 +1224,7 @@ impl EntityInvocationManagement for Context {
 
 #[cfg(test)]
 mod tests {
-    use super::{FuelTracker, configured_fuel_tracker};
+    use super::{FuelTracker, configured_fuel_tracker, ensure_monthly_resource_capacity};
     use crate::services::golem_config::{GolemConfig, ResourceUsageMeteringConfig};
     use crate::services::resource_limits::AtomicResourceEntry;
     use crate::worker::invocation::rearm_fuel_check;
@@ -1210,35 +1232,41 @@ mod tests {
     use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
     use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
-    use golem_service_base::model::MonthlyComputePolicy;
+    use golem_service_base::model::MonthlyResourcePolicy;
     use std::sync::Arc;
     use test_r::test;
     use wasmtime::{AsContextMut, Config, Engine, Module, Store, UpdateDeadline};
 
     struct FuelTestContext {
-        tracker: FuelTracker,
+        tracker: Option<FuelTracker>,
         resource_limit_entry: Arc<AtomicResourceEntry>,
         agent_mode: AgentMode,
     }
 
     impl FuelManagement for FuelTestContext {
         fn fuel_metering_enabled(&self) -> bool {
-            true
+            self.tracker.is_some()
         }
 
         fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
-            self.tracker
-                .ensure_fuel(&self.resource_limit_entry, self.agent_mode, current_level)
+            ensure_monthly_resource_capacity(
+                &self.resource_limit_entry,
+                self.tracker.as_mut(),
+                self.agent_mode,
+                current_level,
+            )
         }
 
         fn return_fuel(&mut self, current_level: u64) -> u64 {
-            self.tracker
-                .return_fuel(&self.resource_limit_entry, current_level)
+            self.tracker.as_mut().map_or(0, |tracker| {
+                tracker.return_fuel(&self.resource_limit_entry, current_level)
+            })
         }
 
         fn settle_fuel(&mut self, current_level: u64) {
-            self.tracker
-                .settle_fuel(&self.resource_limit_entry, current_level)
+            if let Some(tracker) = &mut self.tracker {
+                tracker.settle_fuel(&self.resource_limit_entry, current_level);
+            }
         }
     }
 
@@ -1275,6 +1303,88 @@ mod tests {
             ..GolemConfig::default()
         };
         assert!(configured_fuel_tracker(&enabled).is_some());
+    }
+
+    #[test]
+    fn memory_exhaustion_is_checked_without_a_fuel_tracker() {
+        let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX, u64::MAX);
+        assert!(entry.apply_monthly_snapshot_for_test(
+            1,
+            MonthlyResourcePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            0,
+        ));
+
+        assert!(matches!(
+            ensure_monthly_resource_capacity(&entry, None, AgentMode::Durable, u64::MAX),
+            Err(AgentError::EphemeralCannotSuspend(error))
+                if error.reason == "monthly memory exhausted"
+        ));
+
+        assert!(entry.apply_monthly_snapshot_for_test(
+            2,
+            MonthlyResourcePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            1,
+        ));
+        assert!(
+            ensure_monthly_resource_capacity(&entry, None, AgentMode::Durable, u64::MAX).is_ok()
+        );
+    }
+
+    #[test]
+    fn memory_exhaustion_accounts_for_compute_consumed_since_the_last_epoch() {
+        let entry = AtomicResourceEntry::new(1_000, usize::MAX, usize::MAX, u64::MAX, u64::MAX);
+        assert!(entry.apply_monthly_snapshot_for_test(
+            1,
+            MonthlyResourcePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: 1_000,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            0,
+        ));
+        let mut tracker = FuelTracker::new(100, 1_000);
+
+        assert!(matches!(
+            ensure_monthly_resource_capacity(
+                &entry,
+                Some(&mut tracker),
+                AgentMode::Durable,
+                INITIAL,
+            ),
+            Err(AgentError::EphemeralCannotSuspend(error))
+                if error.reason == "monthly memory exhausted"
+        ));
+        assert_eq!(entry.fuel_delta(), 100);
+
+        let current_level = INITIAL - 150;
+        assert!(matches!(
+            ensure_monthly_resource_capacity(
+                &entry,
+                Some(&mut tracker),
+                AgentMode::Durable,
+                current_level,
+            ),
+            Err(AgentError::EphemeralCannotSuspend(error))
+                if error.reason == "monthly memory exhausted"
+        ));
+        assert_eq!(entry.fuel_delta(), 250);
+
+        tracker.settle_fuel(&entry, current_level);
+        assert_eq!(entry.fuel_delta(), 150);
     }
 
     #[test]
@@ -1465,12 +1575,14 @@ mod tests {
             .unwrap();
         assert!(!tracker.needs_borrow(INITIAL - 1));
 
-        assert!(entry.apply_compute_snapshot_for_test(
+        assert!(entry.apply_monthly_snapshot_for_test(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: AccountUsagePeriod::current(),
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 0,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             0,
         ));
@@ -1490,12 +1602,14 @@ mod tests {
             .ensure_fuel(&entry, AgentMode::Durable, INITIAL)
             .unwrap();
 
-        assert!(entry.apply_compute_snapshot_for_test(
+        assert!(entry.apply_monthly_snapshot_for_test(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: AccountUsagePeriod::current(),
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 0,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             0,
         ));
@@ -1602,7 +1716,7 @@ mod tests {
         let mut store = Store::new(
             &engine,
             FuelTestContext {
-                tracker: fuel_tracker(),
+                tracker: Some(fuel_tracker()),
                 resource_limit_entry: resource_limit_entry.clone(),
                 agent_mode: AgentMode::Durable,
             },
@@ -1674,7 +1788,7 @@ mod tests {
             let mut store = Store::new(
                 &engine,
                 FuelTestContext {
-                    tracker: fuel_tracker(),
+                    tracker: Some(fuel_tracker()),
                     resource_limit_entry: Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
                     agent_mode,
                 },
@@ -1694,6 +1808,55 @@ mod tests {
 
             assert!(run.call_async(&mut store, ()).await.is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    async fn memory_hard_limit_epoch_callback_runs_without_fuel_tracker() -> anyhow::Result<()> {
+        let mut config = Config::new();
+        config.consume_fuel(true).epoch_interruption(true);
+        let engine = Engine::new(&config)?;
+        let module = Module::new(&engine, r#"(module (func (export "run")))"#)?;
+        let resource_limit_entry = Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+        ));
+        assert!(resource_limit_entry.apply_monthly_snapshot_for_test(
+            1,
+            MonthlyResourcePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            0,
+        ));
+        let mut store = Store::new(
+            &engine,
+            FuelTestContext {
+                tracker: None,
+                resource_limit_entry,
+                agent_mode: AgentMode::Durable,
+            },
+        );
+        store.set_fuel(INITIAL)?;
+        store.epoch_deadline_callback(|mut store| {
+            let current_level = store.get_fuel().unwrap_or(0);
+            store
+                .data_mut()
+                .ensure_fuel(current_level)
+                .map_err(|error| wasmtime::Error::msg(format!("{error:?}")))?;
+            Ok(UpdateDeadline::Continue(1))
+        });
+        store.set_epoch_deadline(0);
+        let instance = wasmtime::Instance::new_async(&mut store, &module, &[]).await?;
+        let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
+
+        assert!(run.call_async(&mut store, ()).await.is_err());
         Ok(())
     }
 

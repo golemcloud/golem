@@ -26,8 +26,8 @@ use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, MemoryLimit, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
-    StorageLimit,
+    AccountUsagePeriod, BYTE_NANOSECONDS_PER_GB_SECOND, MemoryLimit, MonthlyUsageMode,
+    MonthlyUsageModeTransitionSource, StorageLimit,
 };
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -299,6 +299,26 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbAccountUsageRepo<PostgresPool> {
+    async fn monthly_memory_remainder_byte_nanoseconds(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+    ) -> RepoResult<u128> {
+        let value: Option<(NumericU64,)> = self
+            .with_ro("get_monthly_memory_remainders")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT byte_nanoseconds
+                    FROM account_monthly_memory_remainders
+                    WHERE account_id = $1 AND usage_key = $2
+                "#})
+                .bind(account_id)
+                .bind(date_to_usage_key(date)),
+            )
+            .await?;
+        Ok(value.map_or(0, |(value,)| value.get() as u128))
+    }
+
     async fn usage_baseline_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         account_id: Uuid,
@@ -502,16 +522,21 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     )
                     SELECT
                         usage_type,
-                        value
+                        value,
+                        CAST(NULL AS NUMERIC) AS memory_byte_nanoseconds_remainder
                     FROM
                         account_usage_stats
                     WHERE
                         account_id = $1
                         AND usage_key IN ($2, $3)
-                    UNION ALL SELECT $4 AS usage_type, total_apps AS value FROM counts
-                    UNION ALL SELECT $5 AS usage_type, total_envs AS value FROM counts
-                    UNION ALL SELECT $6 AS usage_type, total_components AS value FROM counts
-                    UNION ALL SELECT $7 AS usage_type, total_component_size AS value FROM counts;
+                    UNION ALL SELECT $4 AS usage_type, total_apps AS value, CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL SELECT $5 AS usage_type, total_envs AS value, CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL SELECT $6 AS usage_type, total_components AS value, CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL SELECT $7 AS usage_type, total_component_size AS value, CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL
+                    SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), byte_nanoseconds
+                    FROM account_monthly_memory_remainders
+                    WHERE account_id = $1 AND usage_key = $2;
                 "#})
                 .bind(account_id)
                 .bind(date_to_usage_key(date))
@@ -524,11 +549,20 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             .await?;
 
         let mut usage = BTreeMap::new();
+        let mut monthly_memory_byte_nanoseconds_remainder = 0u128;
         for row in usage_rows {
-            usage.insert(
-                row.try_get("usage_type")?,
-                row.try_get::<NumericU64, _>("value")?.get(),
-            );
+            let usage_type = row.try_get::<Option<UsageType>, _>("usage_type")?;
+            let value = row.try_get::<Option<NumericU64>, _>("value")?;
+            if let (Some(usage_type), Some(value)) = (usage_type, value) {
+                usage.insert(usage_type, value.get());
+            }
+            if let Some(remainder) =
+                row.try_get::<Option<NumericU64>, _>("memory_byte_nanoseconds_remainder")?
+            {
+                monthly_memory_byte_nanoseconds_remainder =
+                    monthly_memory_byte_nanoseconds_remainder
+                        .saturating_add(remainder.get() as u128);
+            }
         }
 
         let admin_grant_values = account_plan.admin_grant_values();
@@ -546,6 +580,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             metering: None,
             monthly_usage_mode,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
+            monthly_memory_byte_nanoseconds_remainder,
             monthly_usage_attribution: None,
             plan: account_plan.plan,
             changes: Default::default(),
@@ -675,6 +710,9 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         let admin_grant_values = account_plan.admin_grant_values();
         let admin_grants = account_plan.admin_grants()?;
         let monthly_usage_mode = account_plan.monthly_usage_mode()?;
+        let monthly_memory_byte_nanoseconds_remainder = self
+            .monthly_memory_remainder_byte_nanoseconds(account_id, date)
+            .await?;
         Ok(Some(AccountUsage {
             account_id,
             year: date.as_utc().year(),
@@ -687,6 +725,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             metering: None,
             monthly_usage_mode,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
+            monthly_memory_byte_nanoseconds_remainder,
             monthly_usage_attribution: None,
             plan: account_plan.plan,
             changes: Default::default(),
@@ -1013,6 +1052,55 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     )));
                 }
                 let updated_at = SqlDateTime::now();
+                let mut changes = changes;
+                if attributed_remainders.0 != 0 {
+                    let previous: Option<(NumericU64,)> = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(indoc! { r#"
+                                SELECT byte_nanoseconds
+                                FROM account_monthly_memory_remainders
+                                WHERE account_id = $1 AND usage_key = $2
+                            "#})
+                            .bind(account_id)
+                            .bind(&date_usage_key),
+                        )
+                        .await?;
+                    let total = previous.map_or(0, |(value,)| value.get() as u128)
+                        + attributed_remainders.0 as u128;
+                    let carry = total / BYTE_NANOSECONDS_PER_GB_SECOND;
+                    let remainder = total % BYTE_NANOSECONDS_PER_GB_SECOND;
+
+                    tx.execute(
+                        sqlx::query(indoc! { r#"
+                            INSERT INTO account_monthly_memory_remainders (
+                                account_id, usage_key, byte_nanoseconds, updated_at
+                            ) VALUES ($1, $2, $3, $4)
+                            ON CONFLICT (account_id, usage_key) DO UPDATE SET
+                                byte_nanoseconds = excluded.byte_nanoseconds,
+                                updated_at = excluded.updated_at
+                        "#})
+                        .bind(account_id)
+                        .bind(&date_usage_key)
+                        .bind(NumericU64::new(remainder as u64))
+                        .bind(&updated_at),
+                    )
+                    .await?;
+
+                    if carry != 0 {
+                        let carry = i64::try_from(carry).unwrap_or(i64::MAX);
+                        if let Some((_, _, change)) = changes.iter_mut().find(
+                            |(usage_type, _, _)| *usage_type == UsageType::MonthlyMemoryGbSeconds,
+                        ) {
+                            *change = change.saturating_add(carry);
+                        } else {
+                            changes.push((
+                                UsageType::MonthlyMemoryGbSeconds,
+                                date_usage_key.clone(),
+                                carry,
+                            ));
+                        }
+                    }
+                }
                 if !changes.is_empty() {
                     let mut query = QueryBuilder::<<PostgresPool as Pool>::Db>::new(indoc! { r#"
                         WITH changes (account_id, usage_type, usage_key, delta, updated_at) AS (

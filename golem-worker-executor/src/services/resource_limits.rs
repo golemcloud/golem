@@ -17,7 +17,6 @@ use crate::metrics::resources::{
     record_memory_gb_seconds, record_resource_usage_batch_update_failure,
     record_storage_byte_seconds,
 };
-use crate::services::agent_memory_meter::BYTE_NANOSECONDS_PER_GB_SECOND;
 use crate::services::byte_time_accumulator::ByteTimeSettlement;
 use crate::services::golem_config::{ResourceLimitsConfig, ResourceUsageMeteringConfig};
 use async_trait::async_trait;
@@ -26,12 +25,13 @@ use golem_common::SafeDisplay;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    AccountUsagePeriod, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, MonthlyUsageMode,
+    AccountUsagePeriod, BYTE_NANOSECONDS_PER_GB_SECOND, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+    MonthlyUsageMode,
 };
 use golem_common::model::agent::AgentMode;
 use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::MonthlyComputePolicy;
+use golem_service_base::model::MonthlyResourcePolicy;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
@@ -152,33 +152,91 @@ struct UsageRevisionState {
     current_revision: u64,
     current_period: AccountUsagePeriod,
     pending: VecDeque<CapturedUsageUpdate>,
-    monthly_compute: Option<MonthlyComputeGate>,
+    monthly_policy: Option<MonthlyPolicyGate>,
 }
 
 #[derive(Debug)]
-struct MonthlyComputeGate {
+struct MonthlyPolicyGate {
     period: AccountUsagePeriod,
     mode: MonthlyUsageMode,
-    available_fuel: u64,
-    failed_delivery_fuel: BTreeMap<AccountUsagePeriod, i128>,
-    unassigned_in_flight_fuel: BTreeMap<AccountUsagePeriod, i128>,
-    in_flight_fuel: HashMap<u64, InFlightFuel>,
-    stale_delivered_fuel: Vec<StaleDeliveredFuel>,
+    available_fuel: Option<u64>,
+    available_memory_byte_nanoseconds: Option<u128>,
+    failed_delivery_usage: BTreeMap<AccountUsagePeriod, LocalMonthlyUsage>,
+    unassigned_in_flight_usage: BTreeMap<AccountUsagePeriod, LocalMonthlyUsage>,
+    in_flight_usage: HashMap<u64, InFlightMonthlyUsage>,
+    stale_delivered_usage: Vec<StaleDeliveredUsage>,
+    hard_limit_memory_overshoot_byte_nanoseconds: BTreeMap<(AccountUsagePeriod, u64), u128>,
     refresh_generation: u64,
     settled_generation: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct InFlightFuel {
-    period: AccountUsagePeriod,
-    delta: i64,
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LocalMonthlyUsage {
+    fuel: i128,
+    memory_byte_nanoseconds: u128,
+}
+
+impl LocalMonthlyUsage {
+    fn from_update(update: &ResourceUsageUpdate) -> Self {
+        Self {
+            fuel: update.fuel_delta as i128,
+            memory_byte_nanoseconds: (update.memory_gb_seconds_delta.max(0) as u128)
+                .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+                .saturating_add(update.memory_byte_nanoseconds_remainder as u128),
+        }
+    }
+
+    fn is_zero(self) -> bool {
+        self.fuel == 0 && self.memory_byte_nanoseconds == 0
+    }
+
+    fn positive(self) -> Self {
+        Self {
+            fuel: self.fuel.max(0),
+            memory_byte_nanoseconds: self.memory_byte_nanoseconds,
+        }
+    }
+
+    fn saturating_add_assign(&mut self, other: Self) {
+        self.fuel = self.fuel.saturating_add(other.fuel);
+        self.memory_byte_nanoseconds = self
+            .memory_byte_nanoseconds
+            .saturating_add(other.memory_byte_nanoseconds);
+    }
+
+    fn saturating_sub_assign(&mut self, other: Self) {
+        self.fuel = self.fuel.saturating_sub(other.fuel);
+        self.memory_byte_nanoseconds = self
+            .memory_byte_nanoseconds
+            .saturating_sub(other.memory_byte_nanoseconds);
+    }
+
+    fn saturating_add_nonnegative_assign(&mut self, other: Self) {
+        self.saturating_add_assign(other);
+        self.fuel = self.fuel.max(0);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct StaleDeliveredFuel {
+struct InFlightMonthlyUsage {
     period: AccountUsagePeriod,
-    delta: i64,
+    usage: LocalMonthlyUsage,
+    memory_gb_seconds: i64,
+    durable_memory_gb_seconds: i64,
+    ephemeral_memory_gb_seconds: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StaleDeliveredUsage {
+    period: AccountUsagePeriod,
+    usage: LocalMonthlyUsage,
     observed_refresh_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MonthlyResourceExhaustion {
+    Compute,
+    Memory,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -255,17 +313,6 @@ impl AccountUsageAccumulator {
         }
     }
 
-    fn add_memory(&mut self, mode: AgentMode, units: u128) {
-        let Some(memory) = &mut self.memory else {
-            return;
-        };
-        let pending = match mode {
-            AgentMode::Durable => &mut memory.durable_memory_gb_seconds,
-            AgentMode::Ephemeral => &mut memory.ephemeral_memory_gb_seconds,
-        };
-        *pending = pending.saturating_add(units);
-    }
-
     fn add_storage(&mut self, mode: AgentMode, units: u128) {
         let Some(storage) = &mut self.storage else {
             return;
@@ -277,14 +324,34 @@ impl AccountUsageAccumulator {
         *pending = pending.saturating_add(units);
     }
 
-    fn add_memory_settlement(&mut self, mode: AgentMode, settlement: ByteTimeSettlement) {
+    fn add_memory_settlement(
+        &mut self,
+        mode: AgentMode,
+        settlement: ByteTimeSettlement,
+        maximum_byte_nanoseconds: Option<u128>,
+    ) -> u128 {
         let Some(memory) = &mut self.memory else {
-            return;
+            return 0;
         };
-        memory.remainder = memory.remainder.saturating_add(settlement.remainder);
+        let requested_byte_nanoseconds = settlement
+            .units
+            .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+            .saturating_add(settlement.remainder);
+        let billable_byte_nanoseconds = maximum_byte_nanoseconds
+            .map_or(requested_byte_nanoseconds, |maximum| {
+                requested_byte_nanoseconds.min(maximum)
+            });
+        let billable_units = billable_byte_nanoseconds / BYTE_NANOSECONDS_PER_GB_SECOND;
+        let billable_remainder = billable_byte_nanoseconds % BYTE_NANOSECONDS_PER_GB_SECOND;
+        memory.remainder = memory.remainder.saturating_add(billable_remainder);
         let remainder_units = memory.remainder / BYTE_NANOSECONDS_PER_GB_SECOND;
         memory.remainder %= BYTE_NANOSECONDS_PER_GB_SECOND;
-        self.add_memory(mode, settlement.units.saturating_add(remainder_units));
+        let pending = match mode {
+            AgentMode::Durable => &mut memory.durable_memory_gb_seconds,
+            AgentMode::Ephemeral => &mut memory.ephemeral_memory_gb_seconds,
+        };
+        *pending = pending.saturating_add(billable_units.saturating_add(remainder_units));
+        requested_byte_nanoseconds.saturating_sub(billable_byte_nanoseconds)
     }
 
     fn add_storage_settlement(&mut self, mode: AgentMode, settlement: ByteTimeSettlement) {
@@ -315,6 +382,18 @@ impl AccountUsageAccumulator {
             AgentMode::Durable => memory.durable_memory_gb_seconds,
             AgentMode::Ephemeral => memory.ephemeral_memory_gb_seconds,
         })
+    }
+
+    fn total_memory(&self) -> u128 {
+        self.memory.as_ref().map_or(0, |memory| {
+            memory
+                .durable_memory_gb_seconds
+                .saturating_add(memory.ephemeral_memory_gb_seconds)
+        })
+    }
+
+    fn memory_remainder(&self) -> u128 {
+        self.memory.as_ref().map_or(0, |memory| memory.remainder)
     }
 
     fn storage(&self, mode: AgentMode) -> u128 {
@@ -388,6 +467,12 @@ fn capture_remainder(remainder: &mut u128, capture: bool) -> u64 {
     }
 }
 
+fn monthly_policy_available_memory_byte_nanoseconds(policy: &MonthlyResourcePolicy) -> u128 {
+    (policy.available_memory_gb_seconds as u128)
+        .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+        .saturating_add(policy.available_memory_byte_nanoseconds_remainder as u128)
+}
+
 impl AtomicResourceEntry {
     /// Sentinel value used in the database and service config to represent
     /// "unlimited" for the concurrent agents per executor limit.
@@ -421,6 +506,30 @@ impl AtomicResourceEntry {
             u64::MAX,
             max_concurrent_agents_per_executor,
             Self::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+        )
+    }
+
+    pub fn new_with_monthly_policy(
+        monthly_policy: MonthlyResourcePolicy,
+        max_memory: usize,
+        max_table_elements: usize,
+        max_disk_space: u64,
+        max_concurrent_agents_per_executor: u64,
+    ) -> Self {
+        Self::new_with_all_limits_metering_policy_and_revision(
+            monthly_policy,
+            max_memory,
+            max_table_elements,
+            max_disk_space,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            max_concurrent_agents_per_executor,
+            Self::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig::all_enabled(),
+            0,
+            0,
         )
     }
 
@@ -521,10 +630,12 @@ impl AtomicResourceEntry {
         monthly_usage_mode_revision: u64,
     ) -> Self {
         Self::new_with_all_limits_metering_policy_and_revision(
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: AccountUsagePeriod::current(),
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: fuel,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             max_memory,
             max_table_elements,
@@ -543,7 +654,7 @@ impl AtomicResourceEntry {
 
     #[allow(clippy::too_many_arguments)]
     fn new_with_all_limits_metering_policy_and_revision(
-        monthly_compute: MonthlyComputePolicy,
+        monthly_policy: MonthlyResourcePolicy,
         max_memory: usize,
         max_table_elements: usize,
         max_disk_space: u64,
@@ -561,19 +672,25 @@ impl AtomicResourceEntry {
             metering,
             usage_revision_state: Mutex::new(UsageRevisionState {
                 current_revision: monthly_usage_mode_revision,
-                current_period: monthly_compute.period,
+                current_period: monthly_policy.period,
                 pending: VecDeque::new(),
-                monthly_compute: metering.compute.then_some(MonthlyComputeGate {
-                    period: monthly_compute.period,
-                    mode: monthly_compute.mode,
-                    available_fuel: monthly_compute.available_fuel,
-                    failed_delivery_fuel: BTreeMap::new(),
-                    unassigned_in_flight_fuel: BTreeMap::new(),
-                    in_flight_fuel: HashMap::new(),
-                    stale_delivered_fuel: Vec::new(),
-                    refresh_generation,
-                    settled_generation: refresh_generation,
-                }),
+                monthly_policy: (metering.compute || metering.memory).then_some(
+                    MonthlyPolicyGate {
+                        period: monthly_policy.period,
+                        mode: monthly_policy.mode,
+                        available_fuel: metering.compute.then_some(monthly_policy.available_fuel),
+                        available_memory_byte_nanoseconds: metering.memory.then(|| {
+                            monthly_policy_available_memory_byte_nanoseconds(&monthly_policy)
+                        }),
+                        failed_delivery_usage: BTreeMap::new(),
+                        unassigned_in_flight_usage: BTreeMap::new(),
+                        in_flight_usage: HashMap::new(),
+                        stale_delivered_usage: Vec::new(),
+                        hard_limit_memory_overshoot_byte_nanoseconds: BTreeMap::new(),
+                        refresh_generation,
+                        settled_generation: refresh_generation,
+                    },
+                ),
             }),
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
@@ -634,60 +751,143 @@ impl AtomicResourceEntry {
     }
 
     fn effective_fuel_with_revision_state(&self, revision_state: &UsageRevisionState) -> u64 {
-        let Some(gate) = &revision_state.monthly_compute else {
+        let Some(gate) = &revision_state.monthly_policy else {
             return u64::MAX;
         };
-        let delta = self.delta.load(Ordering::Acquire);
-        let assigned_in_flight = gate
-            .in_flight_fuel
+        let Some(available_fuel) = gate.available_fuel else {
+            return u64::MAX;
+        };
+        (available_fuel as i128)
+            .saturating_sub(self.local_monthly_usage(revision_state).fuel)
+            .clamp(0, u64::MAX as i128) as u64
+    }
+
+    #[cfg(test)]
+    fn effective_memory_gb_seconds(&self) -> u64 {
+        self.flush_active_resource_usage();
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        self.effective_memory_with_revision_state(&revision_state)
+    }
+
+    #[cfg(test)]
+    fn effective_memory_with_revision_state(&self, revision_state: &UsageRevisionState) -> u64 {
+        (self.effective_memory_byte_nanoseconds_with_revision_state(revision_state)
+            / BYTE_NANOSECONDS_PER_GB_SECOND)
+            .min(u64::MAX as u128) as u64
+    }
+
+    fn effective_memory_byte_nanoseconds_with_revision_state(
+        &self,
+        revision_state: &UsageRevisionState,
+    ) -> u128 {
+        let Some(gate) = &revision_state.monthly_policy else {
+            return (u64::MAX as u128).saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND);
+        };
+        let Some(available_memory) = gate.available_memory_byte_nanoseconds else {
+            return (u64::MAX as u128).saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND);
+        };
+        available_memory.saturating_sub(
+            self.local_monthly_usage(revision_state)
+                .memory_byte_nanoseconds,
+        )
+    }
+
+    fn memory_settlement_limit(&self, revision_state: &UsageRevisionState) -> Option<u128> {
+        let gate = revision_state.monthly_policy.as_ref()?;
+        (gate.mode == MonthlyUsageMode::HardLimit
+            && gate.available_memory_byte_nanoseconds.is_some())
+        .then(|| self.effective_memory_byte_nanoseconds_with_revision_state(revision_state))
+    }
+
+    fn record_hard_limit_memory_overshoot(revision_state: &mut UsageRevisionState, amount: u128) {
+        if amount == 0 {
+            return;
+        }
+        let key = (
+            revision_state.current_period,
+            revision_state.current_revision,
+        );
+        let gate = revision_state
+            .monthly_policy
+            .as_mut()
+            .expect("memory usage was clipped without an active monthly policy");
+        let overshoot = gate
+            .hard_limit_memory_overshoot_byte_nanoseconds
+            .entry(key)
+            .or_default();
+        *overshoot = overshoot.saturating_add(amount);
+    }
+
+    fn local_monthly_usage(&self, revision_state: &UsageRevisionState) -> LocalMonthlyUsage {
+        let gate = revision_state
+            .monthly_policy
+            .as_ref()
+            .expect("monthly policy gate is active");
+        let period_matches = |period: AccountUsagePeriod| {
+            period == gate.period || period == revision_state.current_period
+        };
+        let mut usage = LocalMonthlyUsage {
+            fuel: self.delta.load(Ordering::Acquire) as i128,
+            memory_byte_nanoseconds: self.account_usage_accumulator.as_ref().map_or(
+                0,
+                |accumulator| {
+                    let accumulator = accumulator.lock().unwrap();
+                    accumulator
+                        .total_memory()
+                        .saturating_mul(BYTE_NANOSECONDS_PER_GB_SECOND)
+                        .saturating_add(accumulator.memory_remainder())
+                },
+            ),
+        };
+        for in_flight in gate
+            .in_flight_usage
             .values()
-            .filter(|in_flight| {
-                in_flight.period == gate.period || in_flight.period == revision_state.current_period
-            })
-            .map(|in_flight| in_flight.delta as i128)
-            .fold(0i128, i128::saturating_add);
-        let unassigned_in_flight = gate
-            .unassigned_in_flight_fuel
+            .filter(|in_flight| period_matches(in_flight.period))
+        {
+            usage.saturating_add_assign(in_flight.usage);
+        }
+        for local in gate
+            .unassigned_in_flight_usage
             .iter()
-            .filter(|(period, _)| {
-                **period == gate.period || **period == revision_state.current_period
-            })
-            .map(|(_, delta)| *delta)
-            .fold(0i128, i128::saturating_add);
-        let pending = revision_state
+            .filter(|(period, _)| period_matches(**period))
+            .map(|(_, usage)| *usage)
+        {
+            usage.saturating_add_assign(local);
+        }
+        for local in revision_state
             .pending
             .iter()
-            .filter(|captured| {
-                captured.update.period == gate.period
-                    || captured.update.period == revision_state.current_period
-            })
-            .map(|captured| captured.update.fuel_delta as i128)
-            .fold(0i128, i128::saturating_add);
-        let stale_delivered = gate
-            .stale_delivered_fuel
+            .filter(|captured| period_matches(captured.update.period))
+            .map(|captured| LocalMonthlyUsage::from_update(&captured.update))
+        {
+            usage.saturating_add_assign(local);
+        }
+        for local in gate
+            .stale_delivered_usage
             .iter()
-            .filter(|delivered| {
-                delivered.period == gate.period || delivered.period == revision_state.current_period
-            })
-            .map(|delivered| i128::from(delivered.delta.max(0)))
-            .fold(0i128, i128::saturating_add);
-        let failed_delivery = gate
-            .failed_delivery_fuel
+            .filter(|delivered| period_matches(delivered.period))
+            .map(|delivered| delivered.usage.positive())
+        {
+            usage.saturating_add_assign(local);
+        }
+        for local in gate
+            .failed_delivery_usage
             .iter()
-            .filter(|(period, _)| {
-                **period == gate.period || **period == revision_state.current_period
-            })
-            .map(|(_, delta)| *delta)
-            .fold(0i128, i128::saturating_add);
-        let local_usage = (delta as i128)
-            .saturating_add(assigned_in_flight)
-            .saturating_add(unassigned_in_flight)
-            .saturating_add(pending)
-            .saturating_add(stale_delivered)
-            .saturating_add(failed_delivery);
-        (gate.available_fuel as i128)
-            .saturating_sub(local_usage)
-            .clamp(0, u64::MAX as i128) as u64
+            .filter(|(period, _)| period_matches(**period))
+            .map(|(_, usage)| *usage)
+        {
+            usage.saturating_add_assign(local);
+        }
+        let memory_overshoot = gate
+            .hard_limit_memory_overshoot_byte_nanoseconds
+            .iter()
+            .filter(|((period, _), _)| period_matches(*period))
+            .map(|(_, amount)| *amount)
+            .fold(0u128, u128::saturating_add);
+        usage.memory_byte_nanoseconds = usage
+            .memory_byte_nanoseconds
+            .saturating_add(memory_overshoot);
+        usage
     }
 
     #[cfg(test)]
@@ -710,7 +910,7 @@ impl AtomicResourceEntry {
         let revision = revision_state.current_revision;
         let period = revision_state.current_period;
         let generation = revision_state
-            .monthly_compute
+            .monthly_policy
             .as_ref()
             .map_or(0, |gate| gate.settled_generation);
         if amount == 0 {
@@ -721,7 +921,15 @@ impl AtomicResourceEntry {
                 period,
             };
         }
-        let Some(gate) = &revision_state.monthly_compute else {
+        if !self.metering.compute {
+            return FuelBorrow::Borrowed {
+                amount,
+                revision,
+                generation,
+                period,
+            };
+        }
+        let Some(gate) = &revision_state.monthly_policy else {
             return FuelBorrow::Borrowed {
                 amount,
                 revision,
@@ -759,11 +967,40 @@ impl AtomicResourceEntry {
         }
     }
 
-    pub(crate) fn has_compute_capacity(&self) -> bool {
+    pub(crate) fn monthly_resource_capacity(&self) -> Result<(), MonthlyResourceExhaustion> {
+        self.flush_active_resource_usage();
         let revision_state = self.usage_revision_state.lock().unwrap();
-        revision_state.monthly_compute.as_ref().is_none_or(|gate| {
+        let Some(gate) = revision_state.monthly_policy.as_ref() else {
+            return Ok(());
+        };
+        if gate.mode == MonthlyUsageMode::AllowOverage {
+            return Ok(());
+        }
+        if gate.available_fuel.is_some()
+            && self.effective_fuel_with_revision_state(&revision_state) == 0
+        {
+            return Err(MonthlyResourceExhaustion::Compute);
+        }
+        if !self.has_monthly_memory_capacity_with_revision_state(&revision_state) {
+            return Err(MonthlyResourceExhaustion::Memory);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn has_monthly_memory_capacity(&self) -> bool {
+        self.flush_active_resource_usage();
+        let revision_state = self.usage_revision_state.lock().unwrap();
+        self.has_monthly_memory_capacity_with_revision_state(&revision_state)
+    }
+
+    fn has_monthly_memory_capacity_with_revision_state(
+        &self,
+        revision_state: &UsageRevisionState,
+    ) -> bool {
+        revision_state.monthly_policy.as_ref().is_none_or(|gate| {
             gate.mode == MonthlyUsageMode::AllowOverage
-                || self.effective_fuel_with_revision_state(&revision_state) > 0
+                || gate.available_memory_byte_nanoseconds.is_none()
+                || self.effective_memory_byte_nanoseconds_with_revision_state(revision_state) > 0
         })
     }
 
@@ -772,8 +1009,9 @@ impl AtomicResourceEntry {
         generation: Option<u64>,
     ) -> Option<(u64, AccountUsagePeriod)> {
         let revision_state = self.usage_revision_state.lock().unwrap();
-        revision_state.monthly_compute.as_ref().and_then(|gate| {
+        revision_state.monthly_policy.as_ref().and_then(|gate| {
             (gate.mode == MonthlyUsageMode::HardLimit
+                && gate.available_fuel.is_some()
                 && self.effective_fuel_with_revision_state(&revision_state) == 0
                 && generation.is_none_or(|generation| gate.settled_generation > generation))
             .then_some((revision_state.current_revision, gate.period))
@@ -981,25 +1219,6 @@ impl AtomicResourceEntry {
         }
     }
 
-    pub(crate) fn record_resource_usage(
-        &self,
-        mode: AgentMode,
-        memory_gb_seconds: i64,
-        storage_byte_seconds: i64,
-    ) {
-        let Some(accumulator) = &self.account_usage_accumulator else {
-            return;
-        };
-        let _revision_state = self.usage_revision_state.lock().unwrap();
-        let mut accumulator = accumulator.lock().unwrap();
-        if self.metering.memory && memory_gb_seconds > 0 {
-            accumulator.add_memory(mode, memory_gb_seconds as u128);
-        }
-        if self.metering.filesystem && storage_byte_seconds > 0 {
-            accumulator.add_storage(mode, storage_byte_seconds as u128);
-        }
-    }
-
     pub(crate) fn record_resource_settlement(
         &self,
         mode: AgentMode,
@@ -1009,14 +1228,37 @@ impl AtomicResourceEntry {
         let Some(accumulator) = &self.account_usage_accumulator else {
             return;
         };
-        let _revision_state = self.usage_revision_state.lock().unwrap();
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        self.update_usage_period_locked(&mut revision_state, AccountUsagePeriod::current());
+        let memory_limit = self.memory_settlement_limit(&revision_state);
         let mut accumulator = accumulator.lock().unwrap();
         if self.metering.memory {
-            accumulator.add_memory_settlement(mode, memory);
+            let overshoot = accumulator.add_memory_settlement(mode, memory, memory_limit);
+            Self::record_hard_limit_memory_overshoot(&mut revision_state, overshoot);
         }
         if self.metering.filesystem {
             accumulator.add_storage_settlement(mode, storage);
         }
+    }
+
+    #[cfg(test)]
+    fn record_resource_usage(
+        &self,
+        mode: AgentMode,
+        memory_gb_seconds: i64,
+        storage_byte_seconds: i64,
+    ) {
+        self.record_resource_settlement(
+            mode,
+            ByteTimeSettlement {
+                units: memory_gb_seconds.max(0) as u128,
+                remainder: 0,
+            },
+            ByteTimeSettlement {
+                units: storage_byte_seconds.max(0) as u128,
+                remainder: 0,
+            },
+        );
     }
 
     pub(crate) fn register_resource_usage_flusher(&self, flusher: Weak<dyn ResourceUsageFlusher>) {
@@ -1181,13 +1423,6 @@ impl AtomicResourceEntry {
                     Some(delta.saturating_add(captured.update.fuel_delta))
                 })
                 .ok();
-            if let Some(gate) = &mut revision_state.monthly_compute {
-                let unassigned = gate
-                    .unassigned_in_flight_fuel
-                    .entry(captured.update.period)
-                    .or_default();
-                *unassigned = unassigned.saturating_add(captured.update.fuel_delta as i128);
-            }
         }
         if captured.update.memory_gb_seconds_delta != 0 {
             self.in_flight_memory_gb_seconds_delta
@@ -1209,6 +1444,15 @@ impl AtomicResourceEntry {
                     Some(delta.saturating_add(captured.ephemeral_memory_gb_seconds_delta))
                 })
                 .ok();
+        }
+        let usage = LocalMonthlyUsage::from_update(&captured.update);
+        if !usage.is_zero()
+            && let Some(gate) = &mut revision_state.monthly_policy
+        {
+            gate.unassigned_in_flight_usage
+                .entry(captured.update.period)
+                .or_default()
+                .saturating_add_assign(usage);
         }
     }
 
@@ -1301,28 +1545,39 @@ impl AtomicResourceEntry {
         revision_state.current_period = new_period;
     }
 
-    fn begin_compute_refresh(&self, generation: u64, update: &ResourceUsageUpdate) {
+    fn begin_monthly_refresh(
+        &self,
+        generation: u64,
+        update: &ResourceUsageUpdate,
+        durable_memory_gb_seconds: i64,
+        ephemeral_memory_gb_seconds: i64,
+    ) {
         let mut revision_state = self.usage_revision_state.lock().unwrap();
-        if let Some(gate) = &mut revision_state.monthly_compute {
+        if let Some(gate) = &mut revision_state.monthly_policy {
             gate.refresh_generation = gate.refresh_generation.max(generation);
-            if update.fuel_delta != 0 {
+            let usage = LocalMonthlyUsage::from_update(update);
+            if !usage.is_zero() {
                 let remaining_unassigned = gate
-                    .unassigned_in_flight_fuel
+                    .unassigned_in_flight_usage
                     .get(&update.period)
                     .copied()
-                    .unwrap_or_default()
-                    .saturating_sub(update.fuel_delta as i128);
-                if remaining_unassigned == 0 {
-                    gate.unassigned_in_flight_fuel.remove(&update.period);
+                    .unwrap_or_default();
+                let mut remaining_unassigned = remaining_unassigned;
+                remaining_unassigned.saturating_sub_assign(usage);
+                if remaining_unassigned.is_zero() {
+                    gate.unassigned_in_flight_usage.remove(&update.period);
                 } else {
-                    gate.unassigned_in_flight_fuel
+                    gate.unassigned_in_flight_usage
                         .insert(update.period, remaining_unassigned);
                 }
-                let previous = gate.in_flight_fuel.insert(
+                let previous = gate.in_flight_usage.insert(
                     generation,
-                    InFlightFuel {
+                    InFlightMonthlyUsage {
                         period: update.period,
-                        delta: update.fuel_delta,
+                        usage,
+                        memory_gb_seconds: update.memory_gb_seconds_delta,
+                        durable_memory_gb_seconds,
+                        ephemeral_memory_gb_seconds,
                     },
                 );
                 assert!(previous.is_none(), "refresh generation must be unique");
@@ -1330,30 +1585,45 @@ impl AtomicResourceEntry {
         }
     }
 
-    fn apply_compute_snapshot(
+    fn apply_monthly_snapshot(
         &self,
         generation: u64,
-        monthly_compute: MonthlyComputePolicy,
+        monthly_policy: MonthlyResourcePolicy,
         monthly_usage_mode_revision: u64,
         usage_update_applied: bool,
     ) -> bool {
         self.flush_active_resource_usage();
         let mut revision_state = self.usage_revision_state.lock().unwrap();
         let current_period = revision_state.current_period;
-        if revision_state.monthly_compute.is_none() {
+        if revision_state.monthly_policy.is_none() {
             self.update_usage_revision_locked(&mut revision_state, monthly_usage_mode_revision);
-            self.update_usage_period_locked(&mut revision_state, monthly_compute.period);
+            self.update_usage_period_locked(&mut revision_state, monthly_policy.period);
             return true;
         }
         let gate = revision_state
-            .monthly_compute
+            .monthly_policy
             .as_mut()
-            .expect("compute gate was checked above");
-        let delivered = gate.in_flight_fuel.remove(&generation);
+            .expect("monthly policy gate was checked above");
+        let delivered = gate.in_flight_usage.remove(&generation);
         if let Some(delivered) = delivered {
             self.in_flight_delta
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
-                    Some(in_flight.saturating_sub(delivered.delta))
+                    Some(in_flight.saturating_sub(delivered.usage.fuel as i64))
+                })
+                .ok();
+            self.in_flight_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.memory_gb_seconds))
+                })
+                .ok();
+            self.in_flight_durable_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.durable_memory_gb_seconds))
+                })
+                .ok();
+            self.in_flight_ephemeral_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.ephemeral_memory_gb_seconds))
                 })
                 .ok();
         }
@@ -1362,90 +1632,108 @@ impl AtomicResourceEntry {
                 && (delivered.period == gate.period || delivered.period == current_period)
             {
                 if usage_update_applied {
-                    if delivered.delta > 0 {
-                        gate.stale_delivered_fuel.push(StaleDeliveredFuel {
+                    let usage = delivered.usage.positive();
+                    if !usage.is_zero() {
+                        gate.stale_delivered_usage.push(StaleDeliveredUsage {
                             period: delivered.period,
-                            delta: delivered.delta,
+                            usage,
                             observed_refresh_generation: gate.refresh_generation,
                         });
                     }
                 } else {
-                    let failed_delivery = gate
-                        .failed_delivery_fuel
+                    gate.failed_delivery_usage
                         .entry(delivered.period)
-                        .or_default();
-                    *failed_delivery = failed_delivery
-                        .saturating_add(delivered.delta as i128)
-                        .max(0);
+                        .or_default()
+                        .saturating_add_nonnegative_assign(delivered.usage);
                 }
             }
             return false;
         }
 
         self.update_usage_revision_locked(&mut revision_state, monthly_usage_mode_revision);
-        self.update_usage_period_locked(&mut revision_state, monthly_compute.period);
+        self.update_usage_period_locked(&mut revision_state, monthly_policy.period);
         let gate = revision_state
-            .monthly_compute
+            .monthly_policy
             .as_mut()
-            .expect("compute gate was checked above");
+            .expect("monthly policy gate was checked above");
         if usage_update_applied
             && let Some(delivered) = delivered
-            && delivered.period > monthly_compute.period
-            && delivered.delta > 0
+            && delivered.period > monthly_policy.period
         {
-            gate.stale_delivered_fuel.push(StaleDeliveredFuel {
-                period: delivered.period,
-                delta: delivered.delta,
-                observed_refresh_generation: generation,
-            });
+            let usage = delivered.usage.positive();
+            if !usage.is_zero() {
+                gate.stale_delivered_usage.push(StaleDeliveredUsage {
+                    period: delivered.period,
+                    usage,
+                    observed_refresh_generation: generation,
+                });
+            }
         }
-        gate.failed_delivery_fuel
-            .retain(|period, _| *period >= monthly_compute.period);
-        gate.stale_delivered_fuel.retain(|retained| {
-            retained.period > monthly_compute.period
-                || (retained.period == monthly_compute.period
+        gate.failed_delivery_usage
+            .retain(|period, _| *period >= monthly_policy.period);
+        gate.hard_limit_memory_overshoot_byte_nanoseconds
+            .retain(|(period, _), _| *period >= monthly_policy.period);
+        gate.stale_delivered_usage.retain(|retained| {
+            retained.period > monthly_policy.period
+                || (retained.period == monthly_policy.period
                     && generation <= retained.observed_refresh_generation)
         });
         if !usage_update_applied
             && let Some(delivered) = delivered
-            && delivered.period >= monthly_compute.period
+            && delivered.period >= monthly_policy.period
         {
-            let failed_delivery = gate
-                .failed_delivery_fuel
+            gate.failed_delivery_usage
                 .entry(delivered.period)
-                .or_default();
-            *failed_delivery = failed_delivery
-                .saturating_add(delivered.delta as i128)
-                .max(0);
+                .or_default()
+                .saturating_add_nonnegative_assign(delivered.usage);
         }
-        gate.period = monthly_compute.period;
-        gate.mode = monthly_compute.mode;
-        gate.available_fuel = monthly_compute.available_fuel;
+        gate.period = monthly_policy.period;
+        gate.mode = monthly_policy.mode;
+        gate.available_fuel = self
+            .metering
+            .compute
+            .then_some(monthly_policy.available_fuel);
+        gate.available_memory_byte_nanoseconds = self
+            .metering
+            .memory
+            .then(|| monthly_policy_available_memory_byte_nanoseconds(&monthly_policy));
         gate.settled_generation = generation;
         true
     }
 
-    fn fail_compute_delivery(&self, generation: u64) -> bool {
+    fn fail_monthly_delivery(&self, generation: u64) -> bool {
         let mut revision_state = self.usage_revision_state.lock().unwrap();
         let current_period = revision_state.current_period;
-        let Some(gate) = &mut revision_state.monthly_compute else {
+        let Some(gate) = &mut revision_state.monthly_policy else {
             return true;
         };
-        let delivered = gate.in_flight_fuel.remove(&generation);
+        let delivered = gate.in_flight_usage.remove(&generation);
         if let Some(delivered) = delivered {
             self.in_flight_delta
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
-                    Some(in_flight.saturating_sub(delivered.delta))
+                    Some(in_flight.saturating_sub(delivered.usage.fuel as i64))
+                })
+                .ok();
+            self.in_flight_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.memory_gb_seconds))
+                })
+                .ok();
+            self.in_flight_durable_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.durable_memory_gb_seconds))
+                })
+                .ok();
+            self.in_flight_ephemeral_memory_gb_seconds_delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                    Some(in_flight.saturating_sub(delivered.ephemeral_memory_gb_seconds))
                 })
                 .ok();
             if delivered.period == gate.period || delivered.period == current_period {
-                let failed_delivery = gate
-                    .failed_delivery_fuel
+                gate.failed_delivery_usage
                     .entry(delivered.period)
-                    .or_default();
-                *failed_delivery = failed_delivery
-                    .saturating_add(delivered.delta as i128)
-                    .max(0);
+                    .or_default()
+                    .saturating_add_nonnegative_assign(delivered.usage);
             }
         }
         if generation != gate.refresh_generation || generation <= gate.settled_generation {
@@ -1461,23 +1749,33 @@ impl AtomicResourceEntry {
     }
 
     #[cfg(test)]
-    pub(crate) fn apply_compute_snapshot_for_test(
+    pub(crate) fn apply_monthly_snapshot_for_test(
         &self,
         generation: u64,
-        monthly_compute: MonthlyComputePolicy,
+        monthly_policy: MonthlyResourcePolicy,
         monthly_usage_mode_revision: u64,
     ) -> bool {
-        self.begin_compute_refresh_for_test(generation, 0);
-        self.apply_compute_snapshot(
+        self.begin_monthly_refresh_for_test(generation, 0);
+        self.apply_monthly_snapshot(
             generation,
-            monthly_compute,
+            monthly_policy,
             monthly_usage_mode_revision,
             true,
         )
     }
 
     #[cfg(test)]
-    fn begin_compute_refresh_for_test(&self, generation: u64, fuel_delta: i64) {
+    fn begin_monthly_refresh_for_test(&self, generation: u64, fuel_delta: i64) {
+        self.begin_monthly_refresh_with_memory_for_test(generation, fuel_delta, 0);
+    }
+
+    #[cfg(test)]
+    fn begin_monthly_refresh_with_memory_for_test(
+        &self,
+        generation: u64,
+        fuel_delta: i64,
+        memory_gb_seconds_delta: i64,
+    ) {
         let period = self.usage_revision_state.lock().unwrap().current_period;
         let update = ResourceUsageUpdate {
             period,
@@ -1490,14 +1788,14 @@ impl AtomicResourceEntry {
             rpc_call_count_delta: 0,
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
-            memory_gb_seconds_delta: 0,
+            memory_gb_seconds_delta,
             metering: golem_service_base::clients::registry::ResourceUsageMetering {
                 compute: self.metering.compute,
                 memory: self.metering.memory,
                 filesystem: self.metering.filesystem,
             },
         };
-        self.begin_compute_refresh(generation, &update);
+        self.begin_monthly_refresh(generation, &update, memory_gb_seconds_delta, 0);
     }
 
     #[cfg(test)]
@@ -1519,12 +1817,14 @@ impl AtomicResourceEntry {
     }
 
     pub fn record_memory_gb_seconds(&self, mode: AgentMode, amount: i64) {
-        if self.metering.memory
-            && amount > 0
-            && let Some(accumulator) = &self.account_usage_accumulator
-        {
-            let _revision_state = self.usage_revision_state.lock().unwrap();
-            accumulator.lock().unwrap().add_memory(mode, amount as u128);
+        if amount > 0 {
+            self.record_memory_settlement(
+                mode,
+                ByteTimeSettlement {
+                    units: amount as u128,
+                    remainder: 0,
+                },
+            );
         }
     }
 
@@ -1532,11 +1832,15 @@ impl AtomicResourceEntry {
         if self.metering.memory
             && let Some(accumulator) = &self.account_usage_accumulator
         {
-            let _revision_state = self.usage_revision_state.lock().unwrap();
-            accumulator
-                .lock()
-                .unwrap()
-                .add_memory_settlement(mode, settlement);
+            let mut revision_state = self.usage_revision_state.lock().unwrap();
+            self.update_usage_period_locked(&mut revision_state, AccountUsagePeriod::current());
+            let maximum_byte_nanoseconds = self.memory_settlement_limit(&revision_state);
+            let overshoot = accumulator.lock().unwrap().add_memory_settlement(
+                mode,
+                settlement,
+                maximum_byte_nanoseconds,
+            );
+            Self::record_hard_limit_memory_overshoot(&mut revision_state, overshoot);
         }
     }
 
@@ -1782,11 +2086,12 @@ impl ResourceLimitsGrpc {
         self.refresh_generation.fetch_add(1, Ordering::AcqRel)
     }
 
-    async fn begin_compute_refresh(
+    async fn begin_monthly_refresh(
         &self,
         account_id: AccountId,
         generation: u64,
         update: &ResourceUsageUpdate,
+        memory_by_mode: (i64, i64),
     ) {
         if let Some(cell) = self
             .entries
@@ -1794,7 +2099,7 @@ impl ResourceLimitsGrpc {
             .await
             && let Some(entry) = cell.get()
         {
-            entry.begin_compute_refresh(generation, update);
+            entry.begin_monthly_refresh(generation, update, memory_by_mode.0, memory_by_mode.1);
         }
     }
 
@@ -1843,8 +2148,16 @@ impl ResourceLimitsGrpc {
                 }
                 let refresh_generation = self.next_refresh_generation();
                 for (account_id, update) in &updates {
-                    self.begin_compute_refresh(*account_id, refresh_generation, update)
-                        .await;
+                    self.begin_monthly_refresh(
+                        *account_id,
+                        refresh_generation,
+                        update,
+                        memory_mode_updates
+                            .get(account_id)
+                            .copied()
+                            .unwrap_or_default(),
+                    )
+                    .await;
                 }
 
                 tracing::debug!(
@@ -1967,17 +2280,23 @@ impl ResourceLimitsGrpc {
                         for (account_id, update) in &updates {
                             if update.fuel_delta != 0
                                 || update.memory_gb_seconds_delta != 0
+                                || update.memory_byte_nanoseconds_remainder != 0
                                 || update.durable_storage_byte_seconds_delta != 0
+                                || update.durable_storage_byte_nanoseconds_remainder != 0
                                 || update.ephemeral_storage_byte_seconds_delta != 0
+                                || update.ephemeral_storage_byte_nanoseconds_remainder != 0
                                 || update.http_call_count_delta > 0
                                 || update.rpc_call_count_delta > 0
                             {
                                 error!(
-                                    "Lost resource usage updates for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                                    "Lost resource usage updates for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, memory_byte_nanoseconds_remainder={}, durable_storage_byte_seconds_delta={}, durable_storage_byte_nanoseconds_remainder={}, ephemeral_storage_byte_seconds_delta={}, ephemeral_storage_byte_nanoseconds_remainder={}, http_call_count_delta={}, rpc_call_count_delta={}",
                                     update.fuel_delta,
                                     update.memory_gb_seconds_delta,
+                                    update.memory_byte_nanoseconds_remainder,
                                     update.durable_storage_byte_seconds_delta,
+                                    update.durable_storage_byte_nanoseconds_remainder,
                                     update.ephemeral_storage_byte_seconds_delta,
+                                    update.ephemeral_storage_byte_nanoseconds_remainder,
                                     update.http_call_count_delta,
                                     update.rpc_call_count_delta,
                                 );
@@ -2005,24 +2324,13 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
-            if !entry.apply_compute_snapshot(
+            if !entry.apply_monthly_snapshot(
                 refresh_generation,
-                updated_limits.monthly_compute.clone(),
+                updated_limits.monthly_policy.clone(),
                 updated_limits.monthly_usage_mode_revision,
                 updated_limits.usage_update_applied,
             ) {
                 return;
-            }
-            if self.metering.memory {
-                entry
-                    .in_flight_memory_gb_seconds_delta
-                    .store(0, Ordering::Release);
-                entry
-                    .in_flight_durable_memory_gb_seconds_delta
-                    .store(0, Ordering::Release);
-                entry
-                    .in_flight_ephemeral_memory_gb_seconds_delta
-                    .store(0, Ordering::Release);
             }
             entry.update_memory_limit(updated_limits.max_memory_per_worker);
             entry.max_table_elements.store(
@@ -2080,19 +2388,8 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
         {
-            if !entry.fail_compute_delivery(refresh_generation) {
+            if !entry.fail_monthly_delivery(refresh_generation) {
                 return;
-            }
-            if self.metering.memory {
-                entry
-                    .in_flight_memory_gb_seconds_delta
-                    .swap(0, Ordering::AcqRel);
-                entry
-                    .in_flight_durable_memory_gb_seconds_delta
-                    .swap(0, Ordering::AcqRel);
-                entry
-                    .in_flight_ephemeral_memory_gb_seconds_delta
-                    .swap(0, Ordering::AcqRel);
             }
             entry.syncing_http_calls.store(0, Ordering::Release);
             entry.syncing_rpc_calls.store(0, Ordering::Release);
@@ -2118,7 +2415,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                 let fetched = self.fetch_resource_limits(account_id).await?;
                 Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
                     AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
-                        fetched.monthly_compute,
+                        fetched.monthly_policy,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
                         fetched.max_disk_space_per_worker,
@@ -2234,11 +2531,13 @@ mod tests {
         )
     }
 
-    fn monthly_compute(available_fuel: u64) -> MonthlyComputePolicy {
-        MonthlyComputePolicy {
+    fn monthly_policy(available_fuel: u64) -> MonthlyResourcePolicy {
+        MonthlyResourcePolicy {
             period: AccountUsagePeriod::current(),
             mode: MonthlyUsageMode::HardLimit,
             available_fuel,
+            available_memory_gb_seconds: u64::MAX,
+            available_memory_byte_nanoseconds_remainder: 0,
         }
     }
 
@@ -2248,10 +2547,12 @@ mod tests {
         available_fuel: u64,
     ) -> AtomicResourceEntry {
         AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode,
                 available_fuel,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             usize::MAX,
             usize::MAX,
@@ -2270,6 +2571,55 @@ mod tests {
             7,
             0,
         )
+    }
+
+    fn memory_entry(
+        period: AccountUsagePeriod,
+        mode: MonthlyUsageMode,
+        available_memory_gb_seconds: u64,
+    ) -> AtomicResourceEntry {
+        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+            MonthlyResourcePolicy {
+                period,
+                mode,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig {
+                compute: false,
+                memory: true,
+                filesystem: false,
+            },
+            7,
+            0,
+        )
+    }
+
+    #[derive(Debug)]
+    struct MemoryUsageFlusher {
+        entry: Weak<AtomicResourceEntry>,
+        amount: Mutex<Option<i64>>,
+    }
+
+    impl ResourceUsageFlusher for MemoryUsageFlusher {
+        fn flush_usage(&self) {
+            let Some(amount) = self.amount.lock().unwrap().take() else {
+                return;
+            };
+            if let Some(entry) = self.entry.upgrade() {
+                entry.record_memory_gb_seconds(AgentMode::Durable, amount);
+            }
+        }
     }
 
     #[test]
@@ -2351,6 +2701,7 @@ mod tests {
                 units: oversized,
                 remainder: 0,
             },
+            None,
         );
         accumulator.add_storage_settlement(
             AgentMode::Durable,
@@ -2820,7 +3171,7 @@ mod tests {
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(1, 50);
+        entry.begin_monthly_refresh_for_test(1, 50);
         assert!(entry.borrow_fuel(200));
         assert_eq!(entry.effective_fuel(), 750);
     }
@@ -2925,14 +3276,14 @@ mod tests {
     fn hard_limit_zero_blocks_while_allow_overage_zero_borrows() {
         let period = AccountUsagePeriod::current();
         let hard = compute_entry(period, MonthlyUsageMode::HardLimit, 0);
-        assert!(!hard.has_compute_capacity());
+        assert!(hard.monthly_resource_capacity().is_err());
         assert!(matches!(
             hard.borrow_fuel_with_revision(1),
             FuelBorrow::Exhausted { .. }
         ));
 
         let overage = compute_entry(period, MonthlyUsageMode::AllowOverage, 0);
-        assert!(overage.has_compute_capacity());
+        assert!(overage.monthly_resource_capacity().is_ok());
         assert_eq!(
             overage.borrow_fuel_with_revision(10),
             FuelBorrow::Borrowed {
@@ -3016,8 +3367,8 @@ mod tests {
         failed
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        failed.begin_compute_refresh_for_test(1, 10);
-        assert!(failed.fail_compute_delivery(1));
+        failed.begin_monthly_refresh_for_test(1, 10);
+        assert!(failed.fail_monthly_delivery(1));
         assert_eq!(failed.effective_fuel(), 90);
         assert_eq!(failed.in_flight_delta.load(Ordering::Acquire), 0);
         assert!(
@@ -3026,6 +3377,520 @@ mod tests {
                 .is_none(),
             "failed compute usage is retained only for enforcement"
         );
+    }
+
+    #[test]
+    fn memory_hard_limit_clips_billable_usage_while_allow_overage_does_not() {
+        let period = AccountUsagePeriod::current();
+        let hard = memory_entry(period, MonthlyUsageMode::HardLimit, 10);
+        hard.record_memory_gb_seconds(AgentMode::Durable, 14);
+
+        assert_eq!(hard.effective_memory_gb_seconds(), 0);
+        assert_eq!(
+            hard.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        assert_eq!(
+            hard.capture_usage_update_for_test().memory_gb_seconds_delta,
+            10
+        );
+        assert_eq!(
+            hard.usage_revision_state
+                .lock()
+                .unwrap()
+                .monthly_policy
+                .as_ref()
+                .unwrap()
+                .hard_limit_memory_overshoot_byte_nanoseconds
+                .get(&(period, 7)),
+            Some(&(4 * BYTE_NANOSECONDS_PER_GB_SECOND))
+        );
+        hard.begin_monthly_refresh_with_memory_for_test(1, 0, 10);
+        assert!(hard.apply_monthly_snapshot(
+            1,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 2,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(
+            hard.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        hard.begin_monthly_refresh_with_memory_for_test(2, 0, 0);
+        assert!(hard.apply_monthly_snapshot(
+            2,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 5,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(hard.effective_memory_gb_seconds(), 1);
+
+        let overage = memory_entry(period, MonthlyUsageMode::AllowOverage, 10);
+        overage.record_memory_gb_seconds(AgentMode::Ephemeral, 14);
+
+        assert!(overage.has_monthly_memory_capacity());
+        assert!(overage.monthly_resource_capacity().is_ok());
+        assert_eq!(
+            overage
+                .capture_usage_update_for_test()
+                .memory_gb_seconds_delta,
+            14
+        );
+    }
+
+    #[test]
+    fn hard_limit_clips_memory_settlement_units_and_remainder() {
+        let entry = memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            1,
+        );
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 2,
+                remainder: BYTE_NANOSECONDS_PER_GB_SECOND / 2,
+            },
+        );
+
+        let captured = entry.capture_usage_update_for_test();
+        assert_eq!(captured.memory_gb_seconds_delta, 1);
+        assert_eq!(captured.memory_byte_nanoseconds_remainder, 0);
+    }
+
+    #[test]
+    fn fractional_memory_settlements_combine_before_hard_limit_enforcement() {
+        let entry = memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            1,
+        );
+        let three_fifths = BYTE_NANOSECONDS_PER_GB_SECOND * 3 / 5;
+
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: three_fifths,
+            },
+        );
+        assert!(entry.monthly_resource_capacity().is_ok());
+        entry.record_memory_settlement(
+            AgentMode::Ephemeral,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: three_fifths,
+            },
+        );
+
+        assert_eq!(
+            entry.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        let captured = entry.capture_usage_update_for_test();
+        assert_eq!(captured.memory_gb_seconds_delta, 1);
+        assert_eq!(captured.memory_byte_nanoseconds_remainder, 0);
+    }
+
+    #[test]
+    fn revisioned_fractional_memory_remains_visible_to_hard_limit_enforcement() {
+        let entry = memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            1,
+        );
+        let three_quarters = BYTE_NANOSECONDS_PER_GB_SECOND * 3 / 4;
+        let one_quarter = BYTE_NANOSECONDS_PER_GB_SECOND / 4;
+
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: three_quarters,
+            },
+        );
+        entry.update_usage_revision(8);
+        entry.record_memory_settlement(
+            AgentMode::Ephemeral,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: three_quarters,
+            },
+        );
+
+        assert_eq!(
+            entry.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        entry.update_usage_revision(9);
+        let revision_7 = entry.capture_usage_update_for_test();
+        let revision_8 = entry.capture_usage_update_for_test();
+        assert_eq!(revision_7.monthly_usage_mode_revision, 7);
+        assert_eq!(
+            revision_7.memory_byte_nanoseconds_remainder,
+            three_quarters as u64
+        );
+        assert_eq!(revision_8.monthly_usage_mode_revision, 8);
+        assert_eq!(
+            revision_8.memory_byte_nanoseconds_remainder,
+            one_quarter as u64
+        );
+    }
+
+    #[test]
+    fn confirmed_fractional_memory_preserves_exact_remaining_capacity() {
+        let period = AccountUsagePeriod::current();
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 1);
+        let three_quarters = BYTE_NANOSECONDS_PER_GB_SECOND * 3 / 4;
+        let one_quarter = BYTE_NANOSECONDS_PER_GB_SECOND / 4;
+
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: three_quarters,
+            },
+        );
+        entry.update_usage_revision(8);
+        let captured = entry.capture_usage_update_for_test();
+        entry.begin_monthly_refresh(1, &captured, 0, 0);
+
+        assert!(entry.apply_monthly_snapshot(
+            1,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: one_quarter as u64,
+            },
+            8,
+            true,
+        ));
+        assert!(entry.monthly_resource_capacity().is_ok());
+
+        entry.record_memory_settlement(
+            AgentMode::Ephemeral,
+            ByteTimeSettlement {
+                units: 0,
+                remainder: one_quarter,
+            },
+        );
+        assert_eq!(
+            entry.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+    }
+
+    #[test]
+    fn concurrent_memory_settlements_cannot_bill_beyond_hard_limit() {
+        let entry = Arc::new(memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            100,
+        ));
+        let recorders = (0..16)
+            .map(|_| {
+                let entry = entry.clone();
+                std::thread::spawn(move || entry.record_memory_gb_seconds(AgentMode::Durable, 10))
+            })
+            .collect::<Vec<_>>();
+        for recorder in recorders {
+            recorder.join().unwrap();
+        }
+
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 100);
+        assert_eq!(
+            entry.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        assert_eq!(
+            entry
+                .capture_usage_update_for_test()
+                .memory_gb_seconds_delta,
+            100
+        );
+    }
+
+    #[test]
+    fn every_local_delivery_state_reduces_memory_hard_limit_capacity() {
+        let period = AccountUsagePeriod::current();
+        let unsent = memory_entry(period, MonthlyUsageMode::HardLimit, 100);
+        unsent.record_memory_gb_seconds(AgentMode::Durable, 10);
+        assert_eq!(unsent.effective_memory_gb_seconds(), 90);
+
+        let in_flight = memory_entry(period, MonthlyUsageMode::HardLimit, 100);
+        in_flight.record_memory_gb_seconds(AgentMode::Durable, 10);
+        in_flight.capture_usage_update_for_test();
+        assert_eq!(in_flight.effective_memory_gb_seconds(), 90);
+
+        let pending = memory_entry(period, MonthlyUsageMode::HardLimit, 100);
+        pending.record_memory_gb_seconds(AgentMode::Durable, 10);
+        pending.update_usage_revision(8);
+        assert_eq!(pending.effective_memory_gb_seconds(), 90);
+
+        let failed = memory_entry(period, MonthlyUsageMode::HardLimit, 100);
+        failed.record_memory_gb_seconds(AgentMode::Durable, 10);
+        failed.capture_usage_update_for_test();
+        failed.begin_monthly_refresh_with_memory_for_test(1, 0, 10);
+        assert!(failed.fail_monthly_delivery(1));
+        assert_eq!(failed.effective_memory_gb_seconds(), 90);
+
+        let stale = memory_entry(period, MonthlyUsageMode::HardLimit, 100);
+        stale.record_memory_gb_seconds(AgentMode::Durable, 10);
+        stale.capture_usage_update_for_test();
+        stale.begin_monthly_refresh_with_memory_for_test(1, 0, 10);
+        stale.begin_monthly_refresh_with_memory_for_test(2, 0, 0);
+        assert!(!stale.apply_monthly_snapshot(
+            1,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 100,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(stale.effective_memory_gb_seconds(), 90);
+    }
+
+    #[test]
+    fn memory_refresh_acknowledges_only_its_own_in_flight_usage() {
+        let period = AccountUsagePeriod::current();
+        let entry = memory_entry(period, MonthlyUsageMode::AllowOverage, 100);
+
+        entry.record_memory_gb_seconds(AgentMode::Durable, 10);
+        entry.capture_usage_update_for_test();
+        entry.begin_monthly_refresh_with_memory_for_test(1, 0, 10);
+
+        entry.record_memory_gb_seconds(AgentMode::Durable, 20);
+        entry.capture_usage_update_for_test();
+        entry.begin_monthly_refresh_with_memory_for_test(2, 0, 20);
+
+        assert!(entry.apply_monthly_snapshot(
+            2,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 70,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(
+            entry
+                .in_flight_memory_gb_seconds_delta
+                .load(Ordering::Acquire),
+            10
+        );
+        assert_eq!(entry.effective_memory_gb_seconds(), 60);
+
+        assert!(!entry.apply_monthly_snapshot(
+            1,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(
+            entry
+                .in_flight_memory_gb_seconds_delta
+                .load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(entry.effective_memory_gb_seconds(), 60);
+
+        entry.begin_monthly_refresh_with_memory_for_test(3, 0, 0);
+        assert!(entry.apply_monthly_snapshot(
+            3,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 70,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            7,
+            true,
+        ));
+        assert_eq!(entry.effective_memory_gb_seconds(), 70);
+    }
+
+    #[test]
+    fn monthly_admission_flushes_resident_memory_before_deciding() {
+        let entry = Arc::new(memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            10,
+        ));
+        let flusher: Arc<dyn ResourceUsageFlusher> = Arc::new(MemoryUsageFlusher {
+            entry: Arc::downgrade(&entry),
+            amount: Mutex::new(Some(10)),
+        });
+        entry.register_resource_usage_flusher(Arc::downgrade(&flusher));
+
+        assert_eq!(
+            entry.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 10);
+    }
+
+    #[test]
+    fn amount_mode_and_period_changes_restore_memory_admission() {
+        let period = AccountUsagePeriod::current();
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 10);
+        entry.record_memory_gb_seconds(AgentMode::Durable, 10);
+        assert_eq!(
+            entry.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+
+        entry.begin_monthly_refresh_with_memory_for_test(1, 0, 0);
+        assert!(entry.apply_monthly_snapshot(
+            1,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 20,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            7,
+            true,
+        ));
+        assert!(entry.monthly_resource_capacity().is_ok());
+
+        entry.begin_monthly_refresh_with_memory_for_test(2, 0, 0);
+        assert!(entry.apply_monthly_snapshot(
+            2,
+            MonthlyResourcePolicy {
+                period,
+                mode: MonthlyUsageMode::AllowOverage,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            8,
+            true,
+        ));
+        assert!(entry.monthly_resource_capacity().is_ok());
+
+        let failed = memory_entry(period, MonthlyUsageMode::HardLimit, 10);
+        failed.record_memory_gb_seconds(AgentMode::Durable, 10);
+        failed.capture_usage_update_for_test();
+        failed.begin_monthly_refresh_with_memory_for_test(1, 0, 10);
+        assert!(failed.fail_monthly_delivery(1));
+        assert_eq!(
+            failed.monthly_resource_capacity(),
+            Err(MonthlyResourceExhaustion::Memory)
+        );
+        let next_period = if period.month == 12 {
+            AccountUsagePeriod {
+                year: period.year + 1,
+                month: 1,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: period.year,
+                month: period.month + 1,
+            }
+        };
+        failed.begin_monthly_refresh_with_memory_for_test(2, 0, 0);
+        assert!(failed.apply_monthly_snapshot(
+            2,
+            MonthlyResourcePolicy {
+                period: next_period,
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: 10,
+                available_memory_byte_nanoseconds_remainder: 0,
+            },
+            8,
+            true,
+        ));
+        assert!(failed.monthly_resource_capacity().is_ok());
+    }
+
+    #[test]
+    fn memory_usage_advances_period_before_registry_refresh() {
+        let current_period = AccountUsagePeriod::current();
+        let previous_period = if current_period.month == 1 {
+            AccountUsagePeriod {
+                year: current_period.year - 1,
+                month: 12,
+            }
+        } else {
+            AccountUsagePeriod {
+                year: current_period.year,
+                month: current_period.month - 1,
+            }
+        };
+        let entry = memory_entry(previous_period, MonthlyUsageMode::HardLimit, 100);
+
+        entry.record_memory_gb_seconds(AgentMode::Durable, 10);
+        let captured = entry.capture_usage_update_for_test();
+
+        assert_eq!(captured.period, current_period);
+        assert_eq!(captured.memory_gb_seconds_delta, 10);
+    }
+
+    #[test]
+    fn memory_disabled_entry_has_no_memory_gate_or_accounting() {
+        let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ResourceUsageMeteringConfig {
+                compute: true,
+                memory: false,
+                filesystem: false,
+            },
+        );
+
+        assert!(
+            entry
+                .usage_revision_state
+                .lock()
+                .unwrap()
+                .monthly_policy
+                .as_ref()
+                .unwrap()
+                .available_memory_byte_nanoseconds
+                .is_none()
+        );
+        assert!(entry.account_usage_accumulator.is_none());
+        entry.record_memory_gb_seconds(AgentMode::Durable, 10);
+        assert_eq!(entry.effective_memory_gb_seconds(), u64::MAX);
+        assert!(entry.monthly_resource_capacity().is_ok());
     }
 
     #[test]
@@ -3042,16 +3907,16 @@ mod tests {
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(1, 40);
-        assert!(entry.fail_compute_delivery(1));
+        entry.begin_monthly_refresh_for_test(1, 40);
+        assert!(entry.fail_monthly_delivery(1));
         assert_eq!(entry.effective_fuel(), 60);
 
         entry.return_fuel(20);
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(2, -20);
-        assert!(entry.fail_compute_delivery(2));
+        entry.begin_monthly_refresh_for_test(2, -20);
+        assert!(entry.fail_monthly_delivery(2));
         assert_eq!(entry.effective_fuel(), 80);
     }
 
@@ -3078,30 +3943,34 @@ mod tests {
 
         assert_eq!(borrowed, 100);
         assert_eq!(entry.fuel_delta(), 100);
-        assert!(!entry.has_compute_capacity());
+        assert!(entry.monthly_resource_capacity().is_err());
     }
 
     #[test]
     fn stale_refresh_cannot_change_policy_or_revision() {
         let period = AccountUsagePeriod::current();
         let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 100);
-        entry.begin_compute_refresh_for_test(1, 0);
-        assert!(entry.apply_compute_snapshot(
+        entry.begin_monthly_refresh_for_test(1, 0);
+        assert!(entry.apply_monthly_snapshot(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::AllowOverage,
                 available_fuel: 0,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             8,
             true,
         ));
-        assert!(!entry.apply_compute_snapshot(
+        assert!(!entry.apply_monthly_snapshot(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 1_000,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             1,
             true,
@@ -3110,14 +3979,16 @@ mod tests {
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(2, 20);
+        entry.begin_monthly_refresh_for_test(2, 20);
 
-        assert!(!entry.apply_compute_snapshot(
+        assert!(!entry.apply_monthly_snapshot(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 1_000,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             1,
             true,
@@ -3125,34 +3996,38 @@ mod tests {
         let revision_state = entry.usage_revision_state.lock().unwrap();
         assert_eq!(revision_state.current_revision, 8);
         assert_eq!(
-            revision_state.monthly_compute.as_ref().unwrap().mode,
+            revision_state.monthly_policy.as_ref().unwrap().mode,
             MonthlyUsageMode::AllowOverage
         );
         drop(revision_state);
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 20);
 
-        assert!(entry.apply_compute_snapshot(
+        assert!(entry.apply_monthly_snapshot(
             2,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 0,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             9,
             true,
         ));
-        entry.begin_compute_refresh_for_test(3, 0);
-        assert!(!entry.apply_compute_snapshot(
+        entry.begin_monthly_refresh_for_test(3, 0);
+        assert!(!entry.apply_monthly_snapshot(
             2,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::AllowOverage,
                 available_fuel: u64::MAX,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             10,
             true,
         ));
-        assert!(!entry.has_compute_capacity());
+        assert!(entry.monthly_resource_capacity().is_err());
     }
 
     #[test]
@@ -3164,20 +4039,22 @@ mod tests {
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(1, 10);
+        entry.begin_monthly_refresh_for_test(1, 10);
 
         assert!(entry.borrow_fuel(20));
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(2, 20);
+        entry.begin_monthly_refresh_for_test(2, 20);
 
-        assert!(entry.apply_compute_snapshot(
+        assert!(entry.apply_monthly_snapshot(
             2,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 70,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             1,
             true,
@@ -3185,12 +4062,14 @@ mod tests {
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 10);
         assert_eq!(entry.effective_fuel(), 60);
 
-        assert!(!entry.apply_compute_snapshot(
+        assert!(!entry.apply_monthly_snapshot(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::AllowOverage,
                 available_fuel: u64::MAX,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             1,
             true,
@@ -3198,13 +4077,15 @@ mod tests {
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
         assert_eq!(entry.effective_fuel(), 60);
 
-        entry.begin_compute_refresh_for_test(3, 0);
-        assert!(entry.apply_compute_snapshot(
+        entry.begin_monthly_refresh_for_test(3, 0);
+        assert!(entry.apply_monthly_snapshot(
             3,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 70,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             1,
             true,
@@ -3220,14 +4101,16 @@ mod tests {
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(1, 10);
+        entry.begin_monthly_refresh_for_test(1, 10);
 
-        assert!(entry.apply_compute_snapshot(
+        assert!(entry.apply_monthly_snapshot(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 100,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             7,
             false,
@@ -3247,42 +4130,46 @@ mod tests {
         let period = AccountUsagePeriod::current();
         let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 10);
         assert!(entry.borrow_fuel(10));
-        assert!(!entry.has_compute_capacity());
+        assert!(entry.monthly_resource_capacity().is_err());
 
-        entry.begin_compute_refresh_for_test(1, 0);
-        assert!(entry.apply_compute_snapshot(
+        entry.begin_monthly_refresh_for_test(1, 0);
+        assert!(entry.apply_monthly_snapshot(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 20,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             7,
             true,
         ));
-        assert!(entry.has_compute_capacity());
+        assert!(entry.monthly_resource_capacity().is_ok());
 
-        entry.begin_compute_refresh_for_test(2, 0);
-        assert!(entry.apply_compute_snapshot(
+        entry.begin_monthly_refresh_for_test(2, 0);
+        assert!(entry.apply_monthly_snapshot(
             2,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period,
                 mode: MonthlyUsageMode::AllowOverage,
                 available_fuel: 0,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             8,
             true,
         ));
-        assert!(entry.has_compute_capacity());
+        assert!(entry.monthly_resource_capacity().is_ok());
 
         let failed = compute_entry(period, MonthlyUsageMode::HardLimit, 10);
         assert!(failed.borrow_fuel(10));
         failed
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        failed.begin_compute_refresh_for_test(1, 10);
-        assert!(failed.fail_compute_delivery(1));
-        assert!(!failed.has_compute_capacity());
+        failed.begin_monthly_refresh_for_test(1, 10);
+        assert!(failed.fail_monthly_delivery(1));
+        assert!(failed.monthly_resource_capacity().is_err());
         let next_period = if period.month == 12 {
             AccountUsagePeriod {
                 year: period.year + 1,
@@ -3294,18 +4181,20 @@ mod tests {
                 month: period.month + 1,
             }
         };
-        failed.begin_compute_refresh_for_test(2, 0);
-        assert!(failed.apply_compute_snapshot(
+        failed.begin_monthly_refresh_for_test(2, 0);
+        assert!(failed.apply_monthly_snapshot(
             2,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: next_period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 10,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             7,
             true,
         ));
-        assert!(failed.has_compute_capacity());
+        assert!(failed.monthly_resource_capacity().is_ok());
     }
 
     #[test]
@@ -3325,12 +4214,14 @@ mod tests {
         let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 100);
         assert!(entry.borrow_fuel(10));
 
-        assert!(entry.apply_compute_snapshot_for_test(
+        assert!(entry.apply_monthly_snapshot_for_test(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: next_period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 100,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             7,
         ));
@@ -3403,7 +4294,7 @@ mod tests {
                 period: current_period,
             }
         );
-        assert!(!entry.has_compute_capacity());
+        assert!(entry.monthly_resource_capacity().is_err());
     }
 
     #[test]
@@ -3427,10 +4318,10 @@ mod tests {
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
         assert_eq!(entry.effective_fuel(), 40);
-        entry.begin_compute_refresh_for_test(1, 60);
+        entry.begin_monthly_refresh_for_test(1, 60);
         assert_eq!(entry.effective_fuel(), 40);
 
-        assert!(entry.fail_compute_delivery(1));
+        assert!(entry.fail_monthly_delivery(1));
         assert_eq!(entry.effective_fuel(), 40);
         assert_eq!(
             entry.borrow_fuel_with_revision(60),
@@ -3468,26 +4359,30 @@ mod tests {
         entry
             .capture_usage_update(NO_IDLE_REFRESH_THRESHOLD_SECS)
             .unwrap();
-        entry.begin_compute_refresh_for_test(1, 60);
-        assert!(entry.apply_compute_snapshot(
+        entry.begin_monthly_refresh_for_test(1, 60);
+        assert!(entry.apply_monthly_snapshot(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: previous_period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 100,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             7,
             true,
         ));
         assert_eq!(entry.effective_fuel(), 40);
 
-        entry.begin_compute_refresh_for_test(2, 0);
-        assert!(entry.apply_compute_snapshot(
+        entry.begin_monthly_refresh_for_test(2, 0);
+        assert!(entry.apply_monthly_snapshot(
             2,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: current_period,
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 40,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             7,
             true,
@@ -3496,7 +4391,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_disabled_entry_has_no_gate_or_compute_accounting() {
+    fn compute_disabled_entry_has_no_compute_gate_or_accounting() {
         let entry = AtomicResourceEntry::new_with_all_limits_and_metering(
             0,
             20,
@@ -3519,7 +4414,10 @@ mod tests {
                 .usage_revision_state
                 .lock()
                 .unwrap()
-                .monthly_compute
+                .monthly_policy
+                .as_ref()
+                .unwrap()
+                .available_fuel
                 .is_none()
         );
         assert_eq!(
@@ -3562,12 +4460,14 @@ mod tests {
             },
         );
 
-        assert!(entry.apply_compute_snapshot_for_test(
+        assert!(entry.apply_monthly_snapshot_for_test(
             1,
-            MonthlyComputePolicy {
+            MonthlyResourcePolicy {
                 period: next_period,
                 mode: MonthlyUsageMode::AllowOverage,
                 available_fuel: 0,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             7,
         ));
@@ -3918,7 +4818,7 @@ mod tests {
 
         // Prime the entry with 5 available HTTP and 3 available RPC.
         mock.set_get_limits_response(ServiceResourceLimits {
-            monthly_compute: monthly_compute(1000),
+            monthly_policy: monthly_policy(1000),
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
@@ -3945,7 +4845,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(1000),
+                monthly_policy: monthly_policy(1000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -3980,7 +4880,7 @@ mod tests {
         let id = account_id();
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         mock.set_get_limits_response(ServiceResourceLimits {
-            monthly_compute: monthly_compute(1000),
+            monthly_policy: monthly_policy(1000),
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
@@ -3997,7 +4897,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(1000),
+                monthly_policy: monthly_policy(1000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4097,7 +4997,7 @@ mod tests {
         fn new(available_fuel: u64, max_memory: u64) -> Self {
             Self {
                 get_limits_result: Mutex::new(Ok(ServiceResourceLimits {
-                    monthly_compute: monthly_compute(available_fuel),
+                    monthly_policy: monthly_policy(available_fuel),
                     max_memory_per_worker: max_memory,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
@@ -4496,7 +5396,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(1000),
+                monthly_policy: monthly_policy(1000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4540,7 +5440,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(700),
+                monthly_policy: monthly_policy(700),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4625,7 +5525,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(600),
+                monthly_policy: monthly_policy(600),
                 max_memory_per_worker: 1024,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4661,7 +5561,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(700),
+                monthly_policy: monthly_policy(700),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4721,6 +5621,29 @@ mod tests {
     }
 
     #[test]
+    async fn send_batch_failure_retires_remainder_only_memory_delivery() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        mock.set_batch_update_error();
+        let svc = make_grpc(mock);
+        let id = account_id();
+        let entry = svc.initialize_account(id).await.unwrap();
+        let remainder = BYTE_NANOSECONDS_PER_GB_SECOND / 2;
+
+        entry.record_memory_settlement(
+            AgentMode::Durable,
+            ByteTimeSettlement {
+                units: 0,
+                remainder,
+            },
+        );
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        let revision_state = entry.usage_revision_state.lock().unwrap();
+        let gate = revision_state.monthly_policy.as_ref().unwrap();
+        assert!(gate.in_flight_usage.is_empty());
+    }
+
+    #[test]
     async fn send_batch_failure_does_not_double_count_on_next_cycle() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         mock.set_batch_update_error();
@@ -4764,7 +5687,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(700),
+                monthly_policy: monthly_policy(700),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4798,7 +5721,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(800),
+                monthly_policy: monthly_policy(800),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4859,7 +5782,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(900),
+                monthly_policy: monthly_policy(900),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4900,7 +5823,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(5000),
+                monthly_policy: monthly_policy(5000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -4975,7 +5898,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(5000),
+                monthly_policy: monthly_policy(5000),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -5009,7 +5932,7 @@ mod tests {
     fn mock_with_concurrent_agent_limit(limit: u64) -> Arc<MockRegistryService> {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         *mock.get_limits_result.lock().unwrap() = Ok(ServiceResourceLimits {
-            monthly_compute: monthly_compute(1000),
+            monthly_policy: monthly_policy(1000),
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
@@ -5061,7 +5984,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(900),
+                monthly_policy: monthly_policy(900),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
@@ -5097,7 +6020,7 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                monthly_compute: monthly_compute(900),
+                monthly_policy: monthly_policy(900),
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,

@@ -529,6 +529,13 @@ async fn test_monthly_usage_attribution_uses_accrual_revision(
 }
 
 #[test]
+async fn test_fractional_memory_attribution_reduces_available_capacity(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_fractional_memory_attribution_reduces_available_capacity(deps).await;
+}
+
+#[test]
 async fn test_monthly_usage_mode_consent_invariants(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_monthly_usage_mode_consent_invariants(deps).await;
 }

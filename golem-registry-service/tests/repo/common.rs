@@ -22,8 +22,8 @@ use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
     AccountUsagePeriod, AdminResourceGrantDimension, AdminResourceGrantEventType,
-    AdminResourceGrantReason, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT, MonthlyUsageMode,
-    MonthlyUsageModeTransitionSource,
+    AdminResourceGrantReason, BYTE_NANOSECONDS_PER_GB_SECOND, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
+    MonthlyUsageMode, MonthlyUsageModeTransitionSource,
 };
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -6855,6 +6855,75 @@ pub async fn test_monthly_usage_attribution_uses_accrual_revision(deps: &Deps) {
     assert!(deps.account_usage_repo.add(&future_usage).await.is_err());
 }
 
+pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps: &Deps) {
+    let account_id = deps.create_account().await.revision.account_id;
+    let date = SqlDateTime::now();
+    let before = deps
+        .account_usage_repo
+        .get(account_id, &date)
+        .await
+        .unwrap()
+        .unwrap();
+    let initial_available = before
+        .resource_limits()
+        .unwrap()
+        .monthly_policy
+        .available_memory_gb_seconds;
+
+    assert!(initial_available > 0);
+    for (index, remainder) in [
+        BYTE_NANOSECONDS_PER_GB_SECOND / 2,
+        BYTE_NANOSECONDS_PER_GB_SECOND / 2,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut usage = deps
+            .account_usage_repo
+            .get(account_id, &date)
+            .await
+            .unwrap()
+            .unwrap();
+        usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+            revision: 0,
+            memory_byte_nanoseconds_remainder: remainder as u64,
+            durable_storage_byte_nanoseconds_remainder: 0,
+            ephemeral_storage_byte_nanoseconds_remainder: 0,
+        });
+        deps.account_usage_repo.add(&usage).await.unwrap();
+        if index == 0 {
+            let partial = deps
+                .account_usage_repo
+                .get(account_id, &date)
+                .await
+                .unwrap()
+                .unwrap()
+                .resource_limits()
+                .unwrap()
+                .monthly_policy;
+            assert_eq!(partial.available_memory_gb_seconds, initial_available - 1);
+            assert_eq!(
+                partial.available_memory_byte_nanoseconds_remainder,
+                (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64
+            );
+        }
+    }
+
+    let after = deps
+        .account_usage_repo
+        .get(account_id, &date)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.monthly_memory_byte_nanoseconds_remainder, 0);
+    let after_policy = after.resource_limits().unwrap().monthly_policy;
+    assert_eq!(
+        after_policy.available_memory_gb_seconds,
+        initial_available - 1
+    );
+    assert_eq!(after_policy.available_memory_byte_nanoseconds_remainder, 0);
+}
+
 pub async fn test_monthly_usage_mode_baseline_serializes_with_usage_updates(deps: &Deps) {
     let TestDb::Postgres(pool) = &deps.test_db else {
         panic!("this race depends on PostgreSQL row-lock semantics");
@@ -7027,7 +7096,7 @@ pub async fn test_resource_usage_response_uses_fresh_post_write_policy(deps: &De
             .0
             .get(&AccountId(account_id))
             .unwrap()
-            .monthly_compute
+            .monthly_policy
             .mode,
         MonthlyUsageMode::AllowOverage
     );
@@ -7088,7 +7157,7 @@ pub async fn test_resource_usage_update_uses_declared_period(deps: &Deps) {
 
     let limits = response.0.get(&account_id).unwrap();
     assert!(limits.usage_update_applied);
-    assert_eq!(limits.monthly_compute.period, current);
+    assert_eq!(limits.monthly_policy.period, current);
     assert_eq!(
         deps.account_usage_repo
             .get_usage_report(account_id.0, previous)
@@ -8369,9 +8438,19 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
-    svc.update_resource_usage(updates, &AuthCtx::System)
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
+    assert_eq!(
+        result
+            .0
+            .get(&account_id)
+            .unwrap()
+            .monthly_policy
+            .available_memory_gb_seconds,
+        5988
+    );
 
     let mut updates = HashMap::new();
     updates.insert(
@@ -8391,9 +8470,19 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
-    svc.update_resource_usage(updates, &AuthCtx::System)
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
+    assert_eq!(
+        result
+            .0
+            .get(&account_id)
+            .unwrap()
+            .monthly_policy
+            .available_memory_gb_seconds,
+        5985
+    );
 
     let usage = deps
         .account_usage_repo

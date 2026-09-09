@@ -39,7 +39,7 @@ use golem_common::model::card::{
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
-use golem_service_base::model::{AccountResourceLimits, MonthlyComputePolicy, ResourceLimits};
+use golem_service_base::model::{AccountResourceLimits, MonthlyResourcePolicy, ResourceLimits};
 use golem_service_base::repo::SqlDateTime;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -211,12 +211,7 @@ impl AccountUsageService {
         for (account_id, update) in updates {
             let now = SqlDateTime::now();
             match self
-                .get_account_usage_at(
-                    account_id,
-                    Some(UsageType::MonthlyGasLimit),
-                    update.period,
-                    &now,
-                )
+                .get_account_usage_at(account_id, None, update.period, &now)
                 .await
             {
                 Ok(mut account_usage) => {
@@ -260,13 +255,10 @@ impl AccountUsageService {
 
                     let monthly_usage_mode_revision = account_usage.monthly_usage_mode_revision;
                     let fallback_limits = account_usage.resource_limits().ok().map(|limits| {
-                        Self::fence_monthly_compute(limits, monthly_usage_mode_revision, true)
+                        Self::fence_monthly_policy(limits, monthly_usage_mode_revision, true)
                     });
                     match self.account_usage_repo.add(&account_usage).await {
-                        Ok(_) => match self
-                            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
-                            .await
-                        {
+                        Ok(_) => match self.get_account_usage(account_id, None).await {
                             Ok(account_usage) => match account_usage.resource_limits() {
                                 Ok(limits) => {
                                     limits_of_updated_accounts.insert(account_id, limits);
@@ -352,9 +344,7 @@ impl AccountUsageService {
 
         authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::View)?;
 
-        let account_usage = self
-            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
-            .await?;
+        let account_usage = self.get_account_usage(account_id, None).await?;
 
         account_usage
             .resource_limits()
@@ -604,10 +594,12 @@ impl AccountUsageService {
     ) -> ResourceLimits {
         ResourceLimits {
             monthly_usage_mode_revision,
-            monthly_compute: MonthlyComputePolicy {
+            monthly_policy: MonthlyResourcePolicy {
                 period: AccountUsagePeriod::current(),
                 mode: MonthlyUsageMode::HardLimit,
                 available_fuel: 0,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
             },
             max_memory_per_worker: 0,
             max_table_elements_per_worker: 0,
@@ -622,16 +614,18 @@ impl AccountUsageService {
         }
     }
 
-    fn fence_monthly_compute(
+    fn fence_monthly_policy(
         mut limits: ResourceLimits,
         monthly_usage_mode_revision: u64,
         usage_update_applied: bool,
     ) -> ResourceLimits {
         limits.monthly_usage_mode_revision = monthly_usage_mode_revision;
-        limits.monthly_compute = MonthlyComputePolicy {
+        limits.monthly_policy = MonthlyResourcePolicy {
             period: AccountUsagePeriod::current(),
             mode: MonthlyUsageMode::HardLimit,
             available_fuel: 0,
+            available_memory_gb_seconds: 0,
+            available_memory_byte_nanoseconds_remainder: 0,
         };
         limits.available_http_calls = 0;
         limits.available_rpc_calls = 0;
@@ -857,7 +851,8 @@ mod tests {
     use crate::repo::model::account_usage::{AccountUsage, AdminResourceGrantValues, UsageType};
     use crate::repo::model::plan::PlanRecord;
     use golem_common::model::account_usage::{
-        AdminResourceGrant, BYTE_SECONDS_PER_GB_MONTH, FUEL_PER_GCU, MemoryLimit, StorageLimit,
+        AdminResourceGrant, BYTE_NANOSECONDS_PER_GB_SECOND, BYTE_SECONDS_PER_GB_MONTH,
+        FUEL_PER_GCU, MemoryLimit, StorageLimit,
     };
     use golem_service_base::repo::NumericU64;
     use std::collections::BTreeMap;
@@ -927,6 +922,7 @@ mod tests {
             metering: None,
             monthly_usage_mode: MonthlyUsageMode::HardLimit,
             monthly_usage_mode_revision: 0,
+            monthly_memory_byte_nanoseconds_remainder: 0,
             monthly_usage_attribution: None,
             changes: BTreeMap::new(),
         }
@@ -1064,38 +1060,59 @@ mod tests {
     }
 
     #[test]
-    fn resource_limits_resolve_monthly_compute_from_grant_and_current_usage() {
+    fn resource_limits_resolve_monthly_resources_from_grants_and_current_usage() {
         let mut usage = make_policy_usage();
         usage.year = 2026;
         usage.month = 9;
         usage.monthly_usage_mode = MonthlyUsageMode::AllowOverage;
         usage.monthly_usage_mode_revision = 7;
         usage.admin_grant_values.monthly_compute_gcu = Some(3);
+        usage.admin_grant_values.monthly_memory_gb_seconds = Some(70);
         usage
             .usage
             .insert(UsageType::MonthlyGasLimit, FUEL_PER_GCU + FUEL_PER_GCU / 2);
+        usage.usage.insert(UsageType::MonthlyMemoryGbSeconds, 17);
+        usage.monthly_memory_byte_nanoseconds_remainder = BYTE_NANOSECONDS_PER_GB_SECOND / 2;
 
         let limits = usage.resource_limits().unwrap();
 
         assert_eq!(
-            limits.monthly_compute.period,
+            limits.monthly_policy.period,
             AccountUsagePeriod {
                 year: 2026,
                 month: 9
             }
         );
-        assert_eq!(limits.monthly_compute.mode, MonthlyUsageMode::AllowOverage);
-        assert_eq!(limits.monthly_compute.available_fuel, 1_500_000);
+        assert_eq!(limits.monthly_policy.mode, MonthlyUsageMode::AllowOverage);
+        assert_eq!(limits.monthly_policy.available_fuel, 1_500_000);
+        assert_eq!(limits.monthly_policy.available_memory_gb_seconds, 52);
+        assert_eq!(
+            limits
+                .monthly_policy
+                .available_memory_byte_nanoseconds_remainder,
+            (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64
+        );
         assert_eq!(limits.monthly_usage_mode_revision, 7);
+
+        usage.usage.insert(UsageType::MonthlyMemoryGbSeconds, 71);
+        assert_eq!(
+            usage
+                .resource_limits()
+                .unwrap()
+                .monthly_policy
+                .available_memory_gb_seconds,
+            0
+        );
     }
 
     #[test]
-    fn deleted_account_limits_fence_compute_for_current_period() {
+    fn deleted_account_limits_fence_monthly_policy_for_current_period() {
         let limits = AccountUsageService::fenced_resource_limits(0, false);
 
-        assert_eq!(limits.monthly_compute.period, AccountUsagePeriod::current());
-        assert_eq!(limits.monthly_compute.mode, MonthlyUsageMode::HardLimit);
-        assert_eq!(limits.monthly_compute.available_fuel, 0);
+        assert_eq!(limits.monthly_policy.period, AccountUsagePeriod::current());
+        assert_eq!(limits.monthly_policy.mode, MonthlyUsageMode::HardLimit);
+        assert_eq!(limits.monthly_policy.available_fuel, 0);
+        assert_eq!(limits.monthly_policy.available_memory_gb_seconds, 0);
         assert!(!limits.usage_update_applied);
     }
 
@@ -1103,9 +1120,10 @@ mod tests {
     fn post_write_failure_fence_acknowledges_the_committed_update() {
         let limits = AccountUsageService::fenced_resource_limits(7, true);
 
-        assert_eq!(limits.monthly_compute.period, AccountUsagePeriod::current());
-        assert_eq!(limits.monthly_compute.mode, MonthlyUsageMode::HardLimit);
-        assert_eq!(limits.monthly_compute.available_fuel, 0);
+        assert_eq!(limits.monthly_policy.period, AccountUsagePeriod::current());
+        assert_eq!(limits.monthly_policy.mode, MonthlyUsageMode::HardLimit);
+        assert_eq!(limits.monthly_policy.available_fuel, 0);
+        assert_eq!(limits.monthly_policy.available_memory_gb_seconds, 0);
         assert_eq!(limits.available_http_calls, 0);
         assert_eq!(limits.available_rpc_calls, 0);
         assert_eq!(limits.monthly_usage_mode_revision, 7);
@@ -1123,9 +1141,10 @@ mod tests {
         let expected_concurrency = limits.max_concurrent_agents_per_executor;
         let expected_oplog_rate = limits.oplog_writes_per_second;
 
-        limits = AccountUsageService::fence_monthly_compute(limits, 7, true);
+        limits = AccountUsageService::fence_monthly_policy(limits, 7, true);
 
-        assert_eq!(limits.monthly_compute.available_fuel, 0);
+        assert_eq!(limits.monthly_policy.available_fuel, 0);
+        assert_eq!(limits.monthly_policy.available_memory_gb_seconds, 0);
         assert_eq!(limits.monthly_usage_mode_revision, 7);
         assert!(limits.usage_update_applied);
         assert_eq!(limits.max_memory_per_worker, expected_memory);

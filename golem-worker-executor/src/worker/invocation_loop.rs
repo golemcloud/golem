@@ -20,6 +20,7 @@ use crate::services::agent_filesystem::{
 };
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
+use crate::services::resource_limits::MonthlyResourceExhaustion;
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
 use crate::services::{HasActiveAgents, HasConfig, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
@@ -40,7 +41,9 @@ use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
-use golem_common::model::oplog::{AgentError, EphemeralFuelExhaustedError, OplogEntry};
+use golem_common::model::oplog::{
+    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, OplogEntry,
+};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
     IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
@@ -139,30 +142,45 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ComputeAdmission {
+enum MonthlyResourceAdmission {
     Admit,
     Suspend,
-    FailInvocation,
+    FailInvocation(MonthlyResourceExhaustion),
 }
 
-fn compute_admission(has_capacity: bool, agent_mode: AgentMode) -> ComputeAdmission {
-    match (has_capacity, agent_mode) {
-        (true, _) => ComputeAdmission::Admit,
-        (false, AgentMode::Durable) => ComputeAdmission::Suspend,
-        (false, AgentMode::Ephemeral) => ComputeAdmission::FailInvocation,
+fn monthly_resource_admission(
+    capacity: Result<(), MonthlyResourceExhaustion>,
+    agent_mode: AgentMode,
+) -> MonthlyResourceAdmission {
+    match (capacity, agent_mode) {
+        (Ok(()), _) => MonthlyResourceAdmission::Admit,
+        (Err(_), AgentMode::Durable) => MonthlyResourceAdmission::Suspend,
+        (Err(exhaustion), AgentMode::Ephemeral) => {
+            MonthlyResourceAdmission::FailInvocation(exhaustion)
+        }
     }
 }
 
-fn compute_exhausted_invocation_error(
+fn monthly_resource_exhausted_invocation_error(
     config: &crate::services::golem_config::GolemConfig,
+    exhaustion: MonthlyResourceExhaustion,
 ) -> WorkerExecutorError {
     WorkerExecutorError::InvocationFailed {
-        error: AgentError::EphemeralFuelExhausted(EphemeralFuelExhaustedError {
-            overdraft_limit: config
-                .limits
-                .fuel_to_borrow
-                .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
-        }),
+        error: match exhaustion {
+            MonthlyResourceExhaustion::Compute => {
+                AgentError::EphemeralFuelExhausted(EphemeralFuelExhaustedError {
+                    overdraft_limit: config
+                        .limits
+                        .fuel_to_borrow
+                        .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
+                })
+            }
+            MonthlyResourceExhaustion::Memory => {
+                AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                    reason: "monthly memory exhausted".to_string(),
+                })
+            }
+        },
         stderr: String::new(),
     }
 }
@@ -926,14 +944,24 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     ) -> CreateInstanceResult<Ctx> {
         async {
             debug!("Creating the worker instance");
-            if compute_admission(
-                self.parent.resource_entry.has_compute_capacity(),
+            match monthly_resource_admission(
+                self.parent.resource_entry.monthly_resource_capacity(),
                 self.parent.agent_mode(),
-            ) == ComputeAdmission::Suspend
-            {
-                return CreateInstanceResult::Interrupted(InterruptKind::Suspend(
-                    Timestamp::now_utc(),
-                ));
+            ) {
+                MonthlyResourceAdmission::Admit => {}
+                MonthlyResourceAdmission::Suspend => {
+                    return CreateInstanceResult::Interrupted(InterruptKind::Suspend(
+                        Timestamp::now_utc(),
+                    ));
+                }
+                MonthlyResourceAdmission::FailInvocation(exhaustion) => {
+                    let error = monthly_resource_exhausted_invocation_error(
+                        &self.parent.config(),
+                        exhaustion,
+                    );
+                    self.stop_unloaded(Some(error)).await;
+                    return CreateInstanceResult::Failed;
+                }
             }
             match RunningWorker::create_instance(self.parent.clone(), permit).await {
                 Ok((agent, window, recovery_decision)) => CreateInstanceResult::Created {
@@ -1735,22 +1763,23 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         sender: Sender<Result<(), WorkerExecutorError>>,
     ) -> CommandOutcome {
         async {
-            match compute_admission(
-                self.parent.resource_entry.has_compute_capacity(),
+            match monthly_resource_admission(
+                self.parent.resource_entry.monthly_resource_capacity(),
                 self.parent.agent_mode(),
             ) {
-                ComputeAdmission::Admit => {}
-                ComputeAdmission::Suspend => {
+                MonthlyResourceAdmission::Admit => {}
+                MonthlyResourceAdmission::Suspend => {
                     self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
                     let _ = sender.send(Err(WorkerExecutorError::Interrupted {
                         kind: InterruptKind::Suspend(Timestamp::now_utc()),
                     }));
                     return CommandOutcome::Continue;
                 }
-                ComputeAdmission::FailInvocation => {
+                MonthlyResourceAdmission::FailInvocation(exhaustion) => {
                     self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
-                    let _ = sender.send(Err(compute_exhausted_invocation_error(
+                    let _ = sender.send(Err(monthly_resource_exhausted_invocation_error(
                         &self.parent.config(),
+                        exhaustion,
                     )));
                     return CommandOutcome::Continue;
                 }
@@ -2114,12 +2143,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let kind = invocation.kind();
         let display_name = invocation.display_name();
         let invocation_idempotency_key = idempotency_key.clone();
-        match compute_admission(
-            self.parent.resource_entry.has_compute_capacity(),
+        match monthly_resource_admission(
+            self.parent.resource_entry.monthly_resource_capacity(),
             self.parent.agent_mode(),
         ) {
-            ComputeAdmission::Admit => {}
-            ComputeAdmission::Suspend => {
+            MonthlyResourceAdmission::Admit => {}
+            MonthlyResourceAdmission::Suspend => {
                 return self
                     .agent_invocation_failed(
                         &display_name,
@@ -2131,12 +2160,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     )
                     .await;
             }
-            ComputeAdmission::FailInvocation => {
+            MonthlyResourceAdmission::FailInvocation(exhaustion) => {
                 return self
                     .agent_invocation_failed(
                         &display_name,
                         &invocation_idempotency_key,
-                        Err(compute_exhausted_invocation_error(&self.parent.config())),
+                        Err(monthly_resource_exhausted_invocation_error(
+                            &self.parent.config(),
+                            exhaustion,
+                        )),
                     )
                     .await;
             }
@@ -3013,14 +3045,14 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, ComputeAdmission, ConcurrentAgentPermitState, InvocationLoop,
+        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, MonthlyResourceAdmission,
         PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
         catch_invocation_loop_panic, close_usage_before_delete, coalesce_filesystem_limit_update,
-        compute_admission, failed_agent_invocation_outcome, finish_filesystem_limit_unload,
-        periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
-        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
-        successful_agent_invocation_outcome, unload_resident_agent_ownership,
-        wait_for_resident_wakeup,
+        failed_agent_invocation_outcome, finish_filesystem_limit_unload,
+        monthly_resource_admission, periodic_snapshot_failure_outcome, publish_unload_outcome,
+        run_invocation_loop_task, snapshot_action_at, snapshot_baseline_timestamp,
+        spawn_module_owned_unload, successful_agent_invocation_outcome,
+        unload_resident_agent_ownership, wait_for_resident_wakeup,
     };
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
@@ -3030,6 +3062,7 @@ mod tests {
         filesystem_activity, flush, metered_resident_with_open_node_for_unload_test,
         resident_for_unload_test, seal,
     };
+    use crate::services::resource_limits::MonthlyResourceExhaustion;
     use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
     use crate::worker::{
@@ -3062,18 +3095,32 @@ mod tests {
     }
 
     #[test]
-    fn compute_admission_blocks_guest_work_by_agent_mode() {
+    fn monthly_resource_admission_blocks_guest_work_by_agent_mode() {
         assert_eq!(
-            compute_admission(true, AgentMode::Durable),
-            ComputeAdmission::Admit
+            monthly_resource_admission(Ok(()), AgentMode::Durable),
+            MonthlyResourceAdmission::Admit
         );
         assert_eq!(
-            compute_admission(false, AgentMode::Durable),
-            ComputeAdmission::Suspend
+            monthly_resource_admission(Err(MonthlyResourceExhaustion::Compute), AgentMode::Durable),
+            MonthlyResourceAdmission::Suspend
         );
         assert_eq!(
-            compute_admission(false, AgentMode::Ephemeral),
-            ComputeAdmission::FailInvocation
+            monthly_resource_admission(
+                Err(MonthlyResourceExhaustion::Compute),
+                AgentMode::Ephemeral
+            ),
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Compute)
+        );
+        assert_eq!(
+            monthly_resource_admission(Err(MonthlyResourceExhaustion::Memory), AgentMode::Durable),
+            MonthlyResourceAdmission::Suspend
+        );
+        assert_eq!(
+            monthly_resource_admission(
+                Err(MonthlyResourceExhaustion::Memory),
+                AgentMode::Ephemeral
+            ),
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Memory)
         );
     }
 
