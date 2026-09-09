@@ -263,6 +263,18 @@ impl Output {
         })
     }
 
+    fn exit_code(&self) -> Option<i32> {
+        self.status.code()
+    }
+
+    fn stdout_text(&self) -> String {
+        self.stdout().join("\n")
+    }
+
+    fn stderr_text(&self) -> String {
+        self.stderr().join("\n")
+    }
+
     #[must_use]
     fn success(&self) -> bool {
         self.status.success()

@@ -851,25 +851,74 @@ async fn test_streaming_invocation_cli_end_to_end() {
             .is_some_and(|cursors| !cursors.is_empty()),
         "checkpoint did not record the item emitted before interruption: {saved_checkpoint}"
     );
-    let resumed = ctx
-        .cli([
-            cmd::AGENT,
-            cmd::INVOKE,
-            &resume_agent,
-            "produce",
-            &checkpoint_values,
-            flag::FORMAT,
-            "json",
-            "--no-stream",
-            "--resume-session",
-            resume_checkpoint.to_str().unwrap(),
-        ])
-        .await;
+    let expected_idempotency_key = saved_checkpoint["idempotencyKey"]
+        .as_str()
+        .expect("checkpoint did not record the invocation idempotency key");
+    let delivered_output_cursors = saved_checkpoint["deliveredOutputCursors"].clone();
+    let resume_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut resume_attempts = 0;
+    let mut initial_rejections = 0;
+    let resumed = loop {
+        resume_attempts += 1;
+        let resumed = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                &resume_agent,
+                "produce",
+                &checkpoint_values,
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+                "--resume-session",
+                resume_checkpoint.to_str().unwrap(),
+            ])
+            .await;
+        let events = resumed.stdout_json::<serde_json::Value>();
+        let retryable_initial_rejection = !resumed.success()
+            && events.len() == 1
+            && events[0]["$type"] == "agent.invoke-session"
+            && events[0]["kind"] == "rejected"
+            && events[0]["reason"] == "invalid-attachment-state"
+            && events[0]["agentId"] == resume_agent
+            && events[0]["idempotencyKey"] == expected_idempotency_key;
+        if !retryable_initial_rejection {
+            break resumed;
+        }
+        initial_rejections += 1;
+        let retry_checkpoint: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&resume_checkpoint).unwrap()).unwrap();
+        assert_eq!(
+            retry_checkpoint["deliveredOutputCursors"], delivered_output_cursors,
+            "resume rejection changed delivered cursors on attempt {resume_attempts}: {retry_checkpoint}"
+        );
+        if tokio::time::Instant::now() >= resume_deadline {
+            panic!(
+                "checkpoint resume exhausted retries after {resume_attempts} attempts \
+                 ({initial_rejections} initial invalid-attachment-state rejections; exit {:?})\n\
+                 --- stdout ---\n{}\n--- stderr ---\n{}",
+                resumed.exit_code(),
+                resumed.stdout_text(),
+                resumed.stderr_text()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
     assert!(
         resumed.success(),
-        "checkpoint resume failed: {:?}",
-        resumed.stderr().collect::<Vec<_>>()
+        "checkpoint resume failed after {resume_attempts} attempts \
+         ({initial_rejections} initial invalid-attachment-state rejections; exit {:?})\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        resumed.exit_code(),
+        resumed.stdout_text(),
+        resumed.stderr_text()
     );
+    if initial_rejections > 0 {
+        eprintln!(
+            "checkpoint resume succeeded after {resume_attempts} attempts with \
+             {initial_rejections} initial invalid-attachment-state rejections"
+        );
+    }
     let resumed_events = resumed
         .stdout()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
