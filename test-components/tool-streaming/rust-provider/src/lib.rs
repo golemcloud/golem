@@ -47,6 +47,13 @@ pub trait Streaming {
         stdin: Option<InputStream>,
         stdout: Option<OutputStream>,
     ) -> Result<StreamSummary, StreamingError>;
+
+    async fn produce(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+        stdout: OutputStream,
+    ) -> Result<StreamSummary, StreamingError>;
 }
 
 #[tool_definition(version = "1.0.0")]
@@ -739,6 +746,28 @@ impl Streaming for StreamingImpl {
             let _ = stdout.finish().await;
         }
         Ok(summary)
+    }
+
+    async fn produce(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+        mut stdout: OutputStream,
+    ) -> Result<StreamSummary, StreamingError> {
+        let mut output_closed = false;
+        for index in 0..chunk_count {
+            let chunk = vec![(index % 251) as u8; chunk_size as usize];
+            if !write_chunk(&mut stdout, chunk).await {
+                output_closed = true;
+                break;
+            }
+        }
+        let _ = stdout.finish().await;
+        Ok(StreamSummary {
+            chunks_read: chunk_count,
+            bytes_read: u64::from(chunk_count) * u64::from(chunk_size),
+            output_closed,
+        })
     }
 }
 

@@ -660,6 +660,193 @@ async fn set_if_not_exists(
     assert_eq!(result3, Some(value1.into()));
 }
 
+fn cas_namespace() -> KeyValueStorageNamespace {
+    KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: Uuid::new_v4().to_string(),
+        },
+    }
+}
+
+#[test]
+async fn compare_and_set_many_contract(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let ns = cas_namespace();
+
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "coverage",
+            None,
+            &[("coverage", b"one"), ("row", b"first")]
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "coverage",
+            Some(b"wrong"),
+            &[
+                ("coverage", b"bad"),
+                ("row", b"bad"),
+                ("loser-only", b"bad")
+            ]
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "row")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(b"first".as_slice())
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "loser-only")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "coverage",
+            Some(b"one"),
+            &[("coverage", b"two"), ("row", b"second")]
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "row")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(b"second".as_slice())
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "absent-guard",
+            None,
+            &[("other-row", b"value")],
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "absent-guard")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "empty-guard",
+            None,
+            &[("empty-guard", b"")],
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "empty-guard",
+            None,
+            &[("other-row", b"bad")],
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns,
+            "empty-guard",
+            Some(b""),
+            &[("other-row", b"updated")],
+        )
+        .await
+        .unwrap()
+    );
+}
+
+#[test]
+async fn concurrent_compare_and_set_many_has_one_winner(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let ns = cas_namespace();
+    let barrier = Arc::new(tokio::sync::Barrier::new(16));
+    let tasks = (0..16).map(|writer| {
+        let kvs = kvs.clone();
+        let ns = ns.clone();
+        let barrier = barrier.clone();
+        tokio::spawn(async move {
+            let value = [writer];
+            barrier.wait().await;
+            kvs.compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                ns,
+                "coverage",
+                None,
+                &[("coverage", &value), ("winner", &value)],
+            )
+            .await
+            .unwrap()
+        })
+    });
+    let results = futures::future::join_all(tasks).await;
+    assert_eq!(
+        results
+            .into_iter()
+            .map(Result::unwrap)
+            .filter(|won| *won)
+            .count(),
+        1
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "coverage")
+            .await
+            .unwrap(),
+        kvs.get("test", "api", "entity", ns, "winner")
+            .await
+            .unwrap()
+    );
+}
+
 #[test]
 #[tracing::instrument]
 async fn del(

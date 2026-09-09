@@ -38,6 +38,8 @@ type = "Disabled"
 
 [component_file_upload]
 max_concurrent_files = 16
+max_uncompressed_file_size = 536870912
+max_uncompressed_archive_size = 1073741824
 
 [db]
 type = "Sqlite"
@@ -186,4 +188,3 @@ pretty = false
 span_events_active = false
 span_events_full = false
 without_time = false
-

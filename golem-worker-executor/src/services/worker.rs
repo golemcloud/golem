@@ -15,22 +15,27 @@
 use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasComponentService, HasConfig, HasOplogService};
+use crate::durable_host::durable_session::SessionControlMetadata;
+use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
+use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
+use golem_common::base_model::durable_stream::{StreamId, StreamSessionKeyV1};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, InvocationResultMembership, OwnedAgentId, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, ShardId, SuccessfulUpdateRecord,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
+    DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
+    OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
+    SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -88,9 +93,16 @@ pub enum InvocationResultIndexLookup {
 /// The result of computing a status cache write: `(fields_to_set, field_names_to_delete)`.
 type StatusFieldWrites = (Vec<(String, Vec<u8>)>, Vec<String>);
 
-/// The potentially large parts of an [`AgentStatusRecord`] that are stored separately from `core`.
-/// They are taken out of the record (`mem::take`) before serializing `core`, so this never clones
-/// the large fields.
+pub struct DurableStreamRecoveryMetadata {
+    pub(crate) covered_through: OplogIndex,
+    pub(crate) sessions: Vec<(StreamSessionKeyV1, SessionControlMetadata)>,
+    pub(crate) consumer_deleting:
+        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
+}
+
+/// The potentially large parts of an [`AgentStatusRecord`] that are stored separately from `core`. They are
+/// taken out of the record (`mem::take`) before serializing `core`, so this never clones the large
+/// fields.
 struct SplitStatusParts {
     invocation_results: InvocationResultMembership,
     received_card_transfers: ReceivedCardTransferIndex,
@@ -278,9 +290,65 @@ pub trait WorkerService: Send + Sync {
 
     async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId);
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError>;
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
+
+    async fn lookup_durable_stream_session(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        key: &IdempotencyKey,
+    ) -> Result<Option<DurableStreamSessionStatus>, String>;
+
+    /// Reads per-session metadata through a captured persisted horizon, independently of status
+    /// publication. Payloads remain in the oplog and are addressed by index.
+    async fn lookup_durable_stream_control_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _key: &StreamSessionKeyV1,
+    ) -> Result<SessionControlMetadata, String> {
+        Err("durable stream control metadata is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_producer_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _keys: Vec<ProducerMetadataKey>,
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+        Err("durable stream producer metadata is unavailable".into())
+    }
+
+    async fn read_durable_stream_consumer_page(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _key: &StreamSessionKeyV1,
+        _stream: StreamId,
+        _page: u64,
+    ) -> Result<Vec<OplogIndex>, String> {
+        Err("durable stream consumer index is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_resume_offset(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _key: &StreamSessionKeyV1,
+        _attempt: golem_common::model::durable_stream::AttemptId,
+    ) -> Result<Option<OplogIndex>, String> {
+        Err("durable stream resume index is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_recovery_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<DurableStreamRecoveryMetadata, String> {
+        Err("durable stream recovery index is unavailable".into())
+    }
 
     async fn catch_up_invocation_result_index(
         &self,
@@ -405,6 +473,7 @@ pub struct DefaultWorkerService {
     component_service: Arc<dyn ComponentService>,
     config: Arc<GolemConfig>,
     lifecycle_gates: Arc<AgentLifecycleGates>,
+    stream_session_index: Arc<StreamSessionIndexService>,
     invocation_result_index_locks: Arc<StdMutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>>,
 }
 
@@ -479,6 +548,14 @@ impl DefaultWorkerService {
         component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
     ) -> Self {
+        let stream_session_index = oplog_service.stream_session_index().unwrap_or_else(|| {
+            let index = Arc::new(StreamSessionIndexService::new(
+                key_value_storage.clone(),
+                Arc::downgrade(&oplog_service),
+            ));
+            oplog_service.set_stream_session_index(index.clone());
+            index
+        });
         Self {
             key_value_storage,
             shard_service,
@@ -486,6 +563,7 @@ impl DefaultWorkerService {
             component_service,
             config,
             lifecycle_gates: Arc::new(AgentLifecycleGates::default()),
+            stream_session_index,
             invocation_result_index_locks: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
@@ -836,6 +914,63 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
+    async fn lookup_durable_stream_producer_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        keys: Vec<ProducerMetadataKey>,
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+        self.stream_session_index
+            .lookup_producer_metadata(owned_agent_id, agent_mode, keys)
+            .await
+    }
+
+    async fn lookup_durable_stream_recovery_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<DurableStreamRecoveryMetadata, String> {
+        self.stream_session_index
+            .lookup_recovery_metadata(owned_agent_id, agent_mode)
+            .await
+    }
+
+    async fn lookup_durable_stream_resume_offset(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        key: &StreamSessionKeyV1,
+        attempt: golem_common::model::durable_stream::AttemptId,
+    ) -> Result<Option<OplogIndex>, String> {
+        self.stream_session_index
+            .lookup_resume_offset(owned_agent_id, agent_mode, key, attempt)
+            .await
+    }
+
+    async fn lookup_durable_stream_control_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        key: &StreamSessionKeyV1,
+    ) -> Result<SessionControlMetadata, String> {
+        self.stream_session_index
+            .lookup_control_metadata(owned_agent_id, agent_mode, key)
+            .await
+    }
+
+    async fn read_durable_stream_consumer_page(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        key: &StreamSessionKeyV1,
+        stream: StreamId,
+        page: u64,
+    ) -> Result<Vec<OplogIndex>, String> {
+        self.stream_session_index
+            .read_consumer_page(owned_agent_id, key, stream, page)
+            .await
+    }
+
+    #[tracing::instrument(name = "worker_metadata.get", level = "debug", skip_all)]
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.read().await;
@@ -945,8 +1080,26 @@ impl WorkerService for DefaultWorkerService {
                             None,
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
-                        .await
-                        .expect("Failed to recompute worker status for existing worker");
+                        .await;
+
+                        let last_known_status = match last_known_status {
+                            Ok(Some(status)) => status,
+                            Ok(None) => return None,
+                            Err(error) => {
+                                tracing::error!(
+                                    agent_id = %owned_agent_id,
+                                    %error,
+                                    "Failed to recompute cold worker status"
+                                );
+                                // The Create entry still proves the worker exists. Leave status
+                                // unresolved so typed reconstruction callers report the failure,
+                                // rather than treating a corrupt status payload as a missing worker.
+                                return Some(GetWorkerMetadataResult {
+                                    initial_worker_metadata,
+                                    last_known_status: None,
+                                });
+                            }
+                        };
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
@@ -978,7 +1131,7 @@ impl WorkerService for DefaultWorkerService {
         result
     }
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
         let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.write().await;
         record_worker_call("remove");
@@ -987,6 +1140,10 @@ impl WorkerService for DefaultWorkerService {
             self.oplog_service.delete(owned_agent_id, agent_mode).await;
         }
         self.remove_cached_status(owned_agent_id).await;
+        self.stream_session_index
+            .clear(owned_agent_id)
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
 
         let shard_assignment = self
             .shard_service
@@ -1005,6 +1162,7 @@ impl WorkerService for DefaultWorkerService {
                     "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
                 )
             });
+        Ok(())
     }
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId) {
@@ -1036,6 +1194,24 @@ impl WorkerService for DefaultWorkerService {
             .unwrap_or_else(|err| {
                 panic!("failed to remove worker agent mode in the KV storage: {err}")
             });
+    }
+
+    async fn lookup_durable_stream_session(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        key: &IdempotencyKey,
+    ) -> Result<Option<DurableStreamSessionStatus>, String> {
+        if let Some(value) = status.durable_stream_sessions.get(key) {
+            return Ok(Some(value.clone()));
+        }
+        if !status.durable_stream_sessions.has_history() {
+            return Ok(None);
+        }
+        self.stream_session_index
+            .lookup_persisted_offsets(owned_agent_id, agent_mode, status.oplog_idx, key)
+            .await
     }
 
     async fn catch_up_invocation_result_index(
@@ -1255,13 +1431,22 @@ impl WorkerService for DefaultWorkerService {
 
         debug!("Writing cached agent status for {owned_agent_id} to {status_value:?}");
 
+        if status_value.has_durable_stream_history {
+            self.stream_session_index
+                .catch_up(
+                    owned_agent_id,
+                    status_value.agent_mode,
+                    status_value.oplog_idx,
+                )
+                .await?;
+        }
+
         self.catch_up_invocation_result_index(
             owned_agent_id,
             status_value.agent_mode,
             &status_value,
         )
         .await?;
-
         self.write_split_status(
             owned_agent_id,
             Self::status_namespace(&owned_agent_id.agent_id),
@@ -1302,6 +1487,11 @@ impl WorkerService for DefaultWorkerService {
             checkpoint.oplog_idx
         );
 
+        if checkpoint.has_durable_stream_history {
+            self.stream_session_index
+                .catch_up(owned_agent_id, checkpoint.agent_mode, checkpoint.oplog_idx)
+                .await?;
+        }
         self.write_split_status(
             owned_agent_id,
             Self::checkpoint_namespace(&owned_agent_id.agent_id),
@@ -1380,6 +1570,9 @@ impl HasComponentService for DefaultWorkerService {
 }
 
 #[cfg(test)]
+pub(crate) mod session_index_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::ExecutionStatus;
@@ -1404,13 +1597,13 @@ mod tests {
     use golem_service_base::model::component::Component;
     use std::collections::{BTreeMap, VecDeque};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
     use test_r::test;
-    use tokio::sync::{Notify, oneshot};
+    use tokio::sync::Notify;
 
     #[derive(Debug)]
     struct IndexTestOplogService {
         entries: BTreeMap<OplogIndex, OplogEntry>,
+        stream_index: std::sync::OnceLock<Arc<StreamSessionIndexService>>,
         reads: StdMutex<Vec<(OplogIndex, u64)>>,
         pause_next_read: AtomicBool,
         read_started: Notify,
@@ -1421,6 +1614,7 @@ mod tests {
         fn new(entries: BTreeMap<OplogIndex, OplogEntry>) -> Self {
             Self {
                 entries,
+                stream_index: std::sync::OnceLock::new(),
                 reads: StdMutex::new(Vec::new()),
                 pause_next_read: AtomicBool::new(false),
                 read_started: Notify::new(),
@@ -1448,6 +1642,14 @@ mod tests {
 
     #[async_trait]
     impl OplogService for IndexTestOplogService {
+        fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
+            self.stream_index.set(index).unwrap();
+        }
+
+        fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
+            self.stream_index.get().cloned()
+        }
+
         async fn create(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1700,71 +1902,6 @@ mod tests {
         uuid::Uuid::from_u128(value)
     }
 
-    fn lifecycle_agent(name: &str) -> OwnedAgentId {
-        let agent_id = AgentId {
-            component_id: ComponentId(uuid::Uuid::new_v4()),
-            agent_id: name.to_string(),
-        };
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id)
-    }
-
-    #[test]
-    async fn lifecycle_gate_linearizes_metadata_reads_and_deletion() {
-        let gates = Arc::new(AgentLifecycleGates::default());
-        let owned_agent_id = lifecycle_agent("linearized");
-
-        let reader = gates.acquire(&owned_agent_id);
-        let reader_guard = reader.gate.read().await;
-
-        // Other metadata readers remain concurrent.
-        let second_reader = gates.acquire(&owned_agent_id);
-        let second_reader_guard =
-            tokio::time::timeout(Duration::from_millis(100), second_reader.gate.read())
-                .await
-                .expect("a metadata read should not block another metadata read");
-
-        let deletion = gates.acquire(&owned_agent_id);
-        assert!(
-            deletion.gate.try_write().is_err(),
-            "deletion passed an in-flight metadata read"
-        );
-
-        let (writer_acquired_tx, writer_acquired_rx) = oneshot::channel();
-        let writer = {
-            tokio::spawn(async move {
-                let _deletion_guard = deletion.gate.write().await;
-                let _ = writer_acquired_tx.send(());
-            })
-        };
-
-        drop(second_reader_guard);
-        drop(second_reader);
-        drop(reader_guard);
-        drop(reader);
-
-        tokio::time::timeout(Duration::from_secs(1), writer_acquired_rx)
-            .await
-            .expect("deletion did not proceed after metadata reads completed")
-            .expect("deletion task dropped its completion signal");
-        writer.await.unwrap();
-
-        assert!(gates.gates.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    async fn lifecycle_gate_does_not_serialize_unrelated_agents() {
-        let gates = Arc::new(AgentLifecycleGates::default());
-        let first_id = lifecycle_agent("first");
-        let second_id = lifecycle_agent("second");
-
-        let first = gates.acquire(&first_id);
-        let _first_guard = first.gate.write().await;
-        let second = gates.acquire(&second_id);
-        let _second_guard = tokio::time::timeout(Duration::from_millis(100), second.gate.write())
-            .await
-            .expect("deletion of one agent blocked an unrelated agent");
-    }
-
     fn stored_card(card_id: CardId) -> StoredCard {
         StoredCard::Concrete(Card {
             card_id,
@@ -1798,6 +1935,16 @@ mod tests {
             ReceivedCardTransferState::Received {
                 source_card_id: Some(CardId::new()),
                 card: stored_card(CardId::new()),
+            },
+        );
+        status.durable_stream_sessions.insert(
+            idempotency_key("stream-1"),
+            DurableStreamSessionStatus {
+                first_prepared: Some(OplogIndex::from_u64(30)),
+                prepared: Some(OplogIndex::from_u64(35)),
+                invocation_result: Some(OplogIndex::from_u64(40)),
+                finished: None,
+                ..Default::default()
             },
         );
         status.skipped_regions = DeletedRegions::from_regions([OplogRegion::from_index_range(

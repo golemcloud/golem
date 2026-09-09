@@ -54,7 +54,6 @@ use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
-use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -140,12 +139,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         }
     }
 
-    pub async fn handle_args<I, T>(args_iterator: I, hooks: Arc<Hooks>) -> ExitCode
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<OsString> + Clone,
-    {
-        let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
+    pub async fn handle(
+        command_parse_result: GolemCliCommandParseResult,
+        hooks: Arc<Hooks>,
+    ) -> ExitCode {
+        let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(command) => {
                 #[cfg(feature = "server-commands")]
                 let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
@@ -524,6 +522,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     }
 }
 
+#[cfg(feature = "server-commands")]
+pub fn requires_executor_runtime(command_parse_result: &GolemCliCommandParseResult) -> bool {
+    matches!(
+        command_parse_result,
+        GolemCliCommandParseResult::FullMatch(GolemCliCommand {
+            subcommand: GolemCliSubcommand::Server {
+                subcommand: ServerSubcommand::Run { .. }
+            },
+            ..
+        })
+    )
+}
+
 fn render_raw_schema_document(format: Format, value: &serde_json::Value) -> anyhow::Result<String> {
     match format {
         Format::Text => Ok(serde_json::to_string(value)?),
@@ -723,5 +734,40 @@ fn debug_log_parse_error(error: &clap::Error, fallback_command: &GolemCliFallbac
         for (kind, value) in error.context() {
             debug!(kind = %kind, value = %value, "Clap error context");
         }
+    }
+}
+
+#[cfg(all(test, feature = "server-commands"))]
+mod tests {
+    use super::requires_executor_runtime;
+    use crate::command::GolemCliCommand;
+    use test_r::test;
+
+    fn requires_executor_runtime_for(args: &[&str]) -> bool {
+        let result = GolemCliCommand::try_parse_from_lenient(args, true);
+        requires_executor_runtime(&result)
+    }
+
+    #[test]
+    fn server_runtime_is_selected_only_for_parsed_server_run() {
+        assert!(requires_executor_runtime_for(&["golem", "server", "run"]));
+        assert!(requires_executor_runtime_for(&[
+            "golem",
+            "--verbose",
+            "server",
+            "run"
+        ]));
+
+        assert!(!requires_executor_runtime_for(&[
+            "golem", "server", "clean"
+        ]));
+        assert!(!requires_executor_runtime_for(&[
+            "golem", "server", "run", "--help"
+        ]));
+        assert!(!requires_executor_runtime_for(&[
+            "golem", "server", "invalid"
+        ]));
+        assert!(!requires_executor_runtime_for(&["golem", "templates"]));
+        assert!(!requires_executor_runtime_for(&["golem"]));
     }
 }

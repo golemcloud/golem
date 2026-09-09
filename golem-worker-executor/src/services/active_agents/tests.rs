@@ -1,17 +1,74 @@
 use super::concurrent_agents_scheduler::ConcurrentAgentsScheduler;
 use super::concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
-use super::is_loaded_idle_filesystem_pressure_candidate;
+use super::{AgentDeletionLocks, is_loaded_idle_filesystem_pressure_candidate};
 use crate::services::resource_limits::AtomicResourceEntry;
-use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentId, OwnedAgentId};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{non_flaky, test, timeout};
 use tokio::sync::Barrier;
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 test_r::enable!();
+
+#[test]
+async fn overlapping_deletions_cannot_create_another_worker_generation() {
+    let locks = Arc::new(AgentDeletionLocks::default());
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "concurrent-delete".to_string(),
+        },
+    );
+    let metadata_exists = Arc::new(AtomicBool::new(true));
+    let worker_generations = Arc::new(AtomicUsize::new(1));
+    let (cleanup_started_tx, cleanup_started_rx) = oneshot::channel();
+    let (release_cleanup_tx, release_cleanup_rx) = oneshot::channel();
+
+    let first = {
+        let locks = locks.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        let metadata_exists = metadata_exists.clone();
+        tokio::spawn(async move {
+            let lock = locks.acquire(&owned_agent_id);
+            let _guard = lock.lock().await;
+            cleanup_started_tx.send(()).unwrap();
+            release_cleanup_rx.await.unwrap();
+            metadata_exists.store(false, Ordering::SeqCst);
+        })
+    };
+    cleanup_started_rx.await.unwrap();
+
+    let (second_attempted_tx, second_attempted_rx) = oneshot::channel();
+    let second = {
+        let locks = locks.clone();
+        let metadata_exists = metadata_exists.clone();
+        let worker_generations = worker_generations.clone();
+        tokio::spawn(async move {
+            let lock = locks.acquire(&owned_agent_id);
+            second_attempted_tx.send(()).unwrap();
+            let _guard = lock.lock().await;
+            if metadata_exists.load(Ordering::SeqCst) {
+                worker_generations.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+    };
+    second_attempted_rx.await.unwrap();
+    assert!(!second.is_finished());
+
+    release_cleanup_tx.send(()).unwrap();
+    first.await.unwrap();
+    second.await.unwrap();
+
+    assert_eq!(worker_generations.load(Ordering::SeqCst), 1);
+    assert!(locks.locks.lock().unwrap().is_empty());
+}
 
 #[test]
 fn filesystem_pressure_eligibility_accepts_only_loaded_idle_agents() {

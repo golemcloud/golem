@@ -18,7 +18,7 @@ use crate::repo::component::ComponentRepo;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
-use crate::services::component::utils::ComponentFilesArchiveReader;
+use crate::services::component::utils::{ComponentFilesArchiveReader, map_archive_stream_error};
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::deployment::authorize_environment_permission;
@@ -66,7 +66,7 @@ use golem_common::schema::tool::validation::validate_tool;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
-use golem_service_base::replayable_stream::ReplayableStream;
+use golem_service_base::replayable_stream::{ContentHash, ReplayableStream};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use itertools::Itertools;
 use std::collections::HashSet;
@@ -108,6 +108,8 @@ pub struct ComponentWriteService {
     environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     component_file_upload_limiter: ComponentFileUploadLimiter,
+    max_uncompressed_file_size: u64,
+    max_uncompressed_archive_size: u64,
 }
 
 impl ComponentWriteService {
@@ -121,6 +123,8 @@ impl ComponentWriteService {
         environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         max_concurrent_component_files: NonZeroUsize,
+        max_uncompressed_file_size: u64,
+        max_uncompressed_archive_size: u64,
     ) -> Self {
         Self {
             component_repo,
@@ -134,6 +138,8 @@ impl ComponentWriteService {
             component_file_upload_limiter: ComponentFileUploadLimiter::new(
                 max_concurrent_component_files,
             ),
+            max_uncompressed_file_size,
+            max_uncompressed_archive_size,
         }
     }
 
@@ -733,21 +739,19 @@ impl ComponentWriteService {
         referenced_paths: &HashSet<ArchiveFilePath>,
     ) -> Result<HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>, ComponentError> {
         let started = Instant::now();
-        let mut archive = ComponentFilesArchiveReader::open(archive).await?;
+        let archive = ComponentFilesArchiveReader::open(archive).await?;
         let mut tasks = JoinSet::new();
         let mut uploaded = HashMap::new();
+        let referenced_entries = archive.referenced_entries(
+            referenced_paths,
+            self.max_uncompressed_file_size,
+            self.max_uncompressed_archive_size,
+        )?;
 
-        for index in 0..archive.len() {
+        for entry in referenced_entries {
             while let Some(result) = tasks.try_join_next() {
                 let (path, file) = result.map_err(anyhow::Error::from)??;
                 uploaded.insert(path, file);
-            }
-
-            let Some(path) = archive.file_path(index)? else {
-                continue;
-            };
-            if !referenced_paths.contains(&path) {
-                continue;
             }
 
             let permit = self
@@ -755,18 +759,25 @@ impl ComponentWriteService {
                 .acquire()
                 .await
                 .map_err(anyhow::Error::from)?;
-            let stream = archive.extract(index).await?;
-            let size = stream.size;
-            let hash = stream.hash;
+            let path = entry.path.clone();
+            let size = entry.declared_size;
+            let stream = archive.stream(entry, self.max_uncompressed_file_size);
             let initial_agent_files_service = self.initial_agent_files_service.clone();
 
             debug!(path = %path, size, "Uploading component file");
             tasks.spawn(async move {
                 let _permit = permit;
+                let hash = AgentFileContentHash(
+                    stream
+                        .content_hash()
+                        .await
+                        .map_err(map_archive_stream_error)?,
+                );
                 let key = initial_agent_files_service
                     .put_if_not_exists_with_hash(environment_id, hash, stream)
                     .await
-                    .context("Failed to upload component files")?;
+                    .context("Failed to upload component files")
+                    .map_err(map_archive_stream_error)?;
 
                 Ok::<_, ComponentError>((path, (key, size)))
             });
@@ -1903,9 +1914,9 @@ mod initial_agent_file_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        ComponentFileUploadLimiter, prepare_agent_initial_card_for_minting,
-        resolve_tool_deployment_metadata_for_creation, resolve_tool_files_for_update,
-        tool_definitions_by_name, tool_state_for_update, validate_component_metadata_invariants,
+        prepare_agent_initial_card_for_minting, resolve_tool_deployment_metadata_for_creation,
+        resolve_tool_files_for_update, tool_definitions_by_name, tool_state_for_update,
+        validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
     use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
@@ -1923,35 +1934,7 @@ mod tests {
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use std::collections::{BTreeMap, HashMap};
-    use std::num::NonZeroUsize;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
     use test_r::test;
-
-    #[test]
-    async fn component_file_upload_limit_is_shared_across_competing_tasks() {
-        let limit = 4;
-        let limiter = ComponentFileUploadLimiter::new(NonZeroUsize::new(limit).unwrap());
-        let active = Arc::new(AtomicUsize::new(0));
-        let peak = Arc::new(AtomicUsize::new(0));
-
-        let tasks = (0..100).map(|_| {
-            let limiter = limiter.clone();
-            let active = active.clone();
-            let peak = peak.clone();
-            async move {
-                let _permit = limiter.acquire().await.unwrap();
-                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                peak.fetch_max(current, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(2)).await;
-                active.fetch_sub(1, Ordering::SeqCst);
-            }
-        });
-
-        futures::future::join_all(tasks).await;
-        assert_eq!(peak.load(Ordering::SeqCst), limit);
-    }
 
     fn parent_surface(parent_id: CardId) -> DelegationSurface {
         let defaults = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any)

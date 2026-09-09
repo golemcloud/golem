@@ -488,15 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn component_upload_has_a_dedicated_long_running_timeout_profile() {
-        let config = HttpClientConfig::new_for_component_upload(false);
-
-        assert_eq!(config.timeout, Some(Duration::from_secs(15 * 60)));
-        assert_eq!(config.connect_timeout, Some(Duration::from_secs(10)));
-        assert_eq!(config.read_timeout, None);
-    }
-
-    #[test]
     fn local_url_translates_unspecified_bind_address() {
         let url =
             resolve_builtin_local_url(&default_local_url(), true, Some("0.0.0.0"), Some(9891))

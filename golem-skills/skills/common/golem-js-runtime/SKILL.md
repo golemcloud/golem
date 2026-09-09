@@ -82,13 +82,14 @@ The runtime's `node:child_process` adapter can run JavaScript targets, supported
 and npm's simple `node <script>` command form. It cannot create host processes, run a general shell,
 or execute native binaries. Unsupported commands fail explicitly.
 
-## Fresh JavaScript and TypeScript Execution
+## Fresh JavaScript Execution
 
-`wasm-rquickjs:execution` runs asynchronous jobs in fresh QuickJS runtimes. Use
-`startJavaScript` for live output and cancellation, or `runJavaScript` for collected output. Entry
-files ending in `.ts`, `.mts`, or `.cts` are transformed at runtime; inline source selects
-TypeScript with `language: 'typescript'`. This transpiles syntax but does not type-check or read
-`tsconfig.json`.
+`wasm-rquickjs:execution` runs asynchronous JavaScript jobs in fresh QuickJS runtimes for both
+TypeScript and Scala agents. Use `startJavaScript` for live output and cancellation, or
+`runJavaScript` for collected output. TypeScript agent templates additionally transform entry files
+ending in `.ts`, `.mts`, or `.cts` at runtime, and accept inline TypeScript with
+`language: 'typescript'`. The Scala runtime does not include this TypeScript transformation. The
+transformation transpiles syntax but does not type-check or read `tsconfig.json`.
 
 Each job receives an explicit environment allowlist and fresh globals, process state, timers, and
 module caches. Jobs still share the component filesystem and host capabilities, so this is not a

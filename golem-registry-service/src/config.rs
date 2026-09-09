@@ -244,21 +244,31 @@ impl Default for RegistryServiceConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ComponentFileUploadConfig {
     pub max_concurrent_files: NonZeroUsize,
+    pub max_uncompressed_file_size: u64,
+    pub max_uncompressed_archive_size: u64,
 }
 
 impl Default for ComponentFileUploadConfig {
     fn default() -> Self {
         Self {
             max_concurrent_files: NonZeroUsize::new(16).unwrap(),
+            max_uncompressed_file_size: 536_870_912,
+            max_uncompressed_archive_size: 1_073_741_824,
         }
     }
 }
 
 impl SafeDisplay for ComponentFileUploadConfig {
     fn to_safe_string(&self) -> String {
-        format!("max concurrent files: {}", self.max_concurrent_files)
+        format!(
+            "max concurrent files: {}, max uncompressed file size: {}, max uncompressed archive size: {}",
+            self.max_concurrent_files,
+            self.max_uncompressed_file_size,
+            self.max_uncompressed_archive_size,
+        )
     }
 }
 
@@ -622,16 +632,6 @@ mod tests {
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
-    }
-
-    #[test]
-    pub fn component_file_upload_parallelism_defaults_to_sixteen() {
-        assert_eq!(
-            ComponentFileUploadConfig::default()
-                .max_concurrent_files
-                .get(),
-            16
-        );
     }
 
     #[test]

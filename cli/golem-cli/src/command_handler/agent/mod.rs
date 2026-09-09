@@ -1567,17 +1567,9 @@ impl AgentCommandHandler {
         let stream_to_stdout = output.as_deref() == Some("-");
         // Keep progress and errors separate from the raw byte stream so this
         // mode is safe to pipe into another process or redirect to a file.
-        let stderr_logs = stream_to_stdout.then(|| LogOutput::new(LogOutputTarget::Stderr));
-        let result = self
-            .cmd_file_contents_inner(agent_id, path, output, stream_to_stdout)
-            .await;
-        // The top-level error renderer runs after this handler returns. Keep its
-        // output on stderr too; the process is about to exit, so restoration is
-        // neither needed nor desirable in raw stdout mode.
-        if let Some(stderr_logs) = stderr_logs {
-            std::mem::forget(stderr_logs);
-        }
-        result
+        let _stderr_logs = stream_to_stdout.then(|| LogOutput::new(LogOutputTarget::Stderr));
+        self.cmd_file_contents_inner(agent_id, path, output, stream_to_stdout)
+            .await
     }
 
     async fn cmd_file_contents_inner(

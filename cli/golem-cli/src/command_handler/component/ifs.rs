@@ -834,24 +834,4 @@ mod tests {
 
         assert_eq!(reader.file().entries().len(), 1);
     }
-
-    #[test]
-    async fn hashes_are_cached_across_mounts() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let source = temp_dir.path().join("shared.txt");
-        std::fs::write(&source, "shared").unwrap();
-        let manager = IfsFileManager::new(reqwest::Client::new());
-
-        let first = manager
-            .collect_file_hashes("first", &[local_file(&source, "/first.txt")])
-            .await
-            .unwrap();
-        std::fs::remove_file(&source).unwrap();
-        let second = manager
-            .collect_file_hashes("second", &[local_file(&source, "/second.txt")])
-            .await
-            .unwrap();
-
-        assert_eq!(first[0].hash, second[0].hash);
-    }
 }

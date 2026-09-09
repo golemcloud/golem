@@ -605,27 +605,37 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 &self.deps.config().retry,
             );
 
-            if let Some(updated_status) = updated_status {
-                if updated_status != *old_status {
+            match updated_status {
+                Ok(Some(updated_status)) if updated_status != *old_status => {
                     self.update_last_known_status(updated_status.clone()).await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                         .await;
 
                     true
-                } else {
-                    false
                 }
-            } else {
-                // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
-                // This can happen during a revert or a snapshot update for example.
-                debug!(agent_id = %self.owned_agent_id.agent_id, "Detaching worker_status from oplog");
-                self.detached.store(true, Ordering::Release);
-                // The in-memory status is no longer authoritative, and after reattach it will be
-                // recomputed from scratch, so the persisted baseline can no longer be trusted: the
-                // next flush must be a full reconcile write.
-                self.status_flusher.invalidate_baseline().await;
-                true
+                Ok(Some(_)) => false,
+                Ok(None) => {
+                    // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
+                    // This can happen during a revert or a snapshot update for example.
+                    debug!(agent_id = %self.owned_agent_id.agent_id, "Detaching worker_status from oplog");
+                    self.detached.store(true, Ordering::Release);
+                    // The in-memory status is no longer authoritative, and after reattach it will be
+                    // recomputed from scratch, so the persisted baseline can no longer be trusted: the
+                    // next flush must be a full reconcile write.
+                    self.status_flusher.invalidate_baseline().await;
+                    true
+                }
+                Err(error) => {
+                    tracing::error!(
+                        agent_id = %self.owned_agent_id,
+                        %error,
+                        "Failed to update worker status from newly committed oplog entries; detaching status"
+                    );
+                    self.detached.store(true, Ordering::Release);
+                    self.status_flusher.invalidate_baseline().await;
+                    true
+                }
             }
         } else {
             false
@@ -665,7 +675,19 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 None,
             )
             .await
-            .expect("Failed to recompute worker status for existing worker");
+            .and_then(|status| {
+                status
+                    .ok_or_else(|| "worker oplog disappeared while reattaching status".to_string())
+            });
+
+            let Ok(worker_status) = worker_status else {
+                tracing::error!(
+                    agent_id = %self.owned_agent_id,
+                    error = %worker_status.unwrap_err(),
+                    "Failed to recompute detached worker status"
+                );
+                return false;
+            };
 
             // Install the recomputed status while still detached, so a concurrent background sweep
             // keeps skipping (the in-memory status is not authoritative until it is installed).

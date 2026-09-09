@@ -32,8 +32,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -531,6 +532,57 @@ pub struct ActiveAgents<Ctx: WorkerCtx> {
     component_size_coefficient: f64,
     status_flush_queue: Arc<AgentStatusFlushQueue>,
     invocation_loops: InvocationLoops,
+    deletion_locks: Arc<AgentDeletionLocks>,
+}
+
+#[derive(Default)]
+struct AgentDeletionLocks {
+    locks: Mutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>,
+}
+
+pub(crate) struct AgentDeletionLock {
+    registry: Arc<AgentDeletionLocks>,
+    owned_agent_id: OwnedAgentId,
+    inner: Arc<AsyncMutex<()>>,
+}
+
+impl AgentDeletionLock {
+    pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.inner.lock().await
+    }
+}
+
+impl Drop for AgentDeletionLock {
+    fn drop(&mut self) {
+        let mut locks = self.registry.locks.lock().unwrap();
+        if Arc::strong_count(&self.inner) == 1
+            && locks
+                .get(&self.owned_agent_id)
+                .is_some_and(|registered| registered.ptr_eq(&Arc::downgrade(&self.inner)))
+        {
+            locks.remove(&self.owned_agent_id);
+        }
+    }
+}
+
+impl AgentDeletionLocks {
+    fn acquire(self: &Arc<Self>, owned_agent_id: &OwnedAgentId) -> AgentDeletionLock {
+        let mut locks = self.locks.lock().unwrap();
+        let inner = locks
+            .get(owned_agent_id)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                let inner = Arc::new(AsyncMutex::new(()));
+                locks.insert(owned_agent_id.clone(), Arc::downgrade(&inner));
+                inner
+            });
+
+        AgentDeletionLock {
+            registry: self.clone(),
+            owned_agent_id: owned_agent_id.clone(),
+            inner,
+        }
+    }
 }
 
 struct UnloadedWorkerEvictionTask(JoinHandle<()>);
@@ -646,6 +698,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 shutdown_token.clone(),
             ),
             invocation_loops: InvocationLoops::new(shutdown_token),
+            deletion_locks: Arc::new(AgentDeletionLocks::default()),
         };
         active_agents.initialize_metrics();
         Ok(active_agents)
@@ -663,6 +716,10 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
     pub(crate) fn agent_filesystems(&self) -> Arc<AgentFilesystems> {
         Arc::clone(&self.agent_filesystems)
+    }
+
+    pub(crate) fn deletion_lock(&self, owned_agent_id: &OwnedAgentId) -> AgentDeletionLock {
+        self.deletion_locks.acquire(owned_agent_id)
     }
 
     /// Acquire (or share) the per-component module charge for a worker of the
