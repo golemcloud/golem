@@ -454,10 +454,24 @@ mod tests {
         async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
             unimplemented!()
         }
+        async fn lookup_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _status: &AgentStatusRecord,
+            _key: &golem_common::model::IdempotencyKey,
+        ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
+            unimplemented!()
+        }
         async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
             unimplemented!()
         }
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
+            Ok(())
+        }
         async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
         async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
             None

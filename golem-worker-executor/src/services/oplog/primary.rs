@@ -39,7 +39,9 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
+use golem_common::model::{
+    AgentId, AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus, OwnedAgentId, ScanCursor,
+};
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
 use golem_common::serialization::{deserialize, serialize};
@@ -292,6 +294,7 @@ pub struct PrimaryOplogService {
     max_payload_size: usize,
     retry_config: RetryConfig,
     oplogs: OpenOplogs,
+    stream_session_index: Arc<std::sync::OnceLock<Arc<super::StreamSessionIndexService>>>,
 }
 
 impl PrimaryOplogService {
@@ -317,6 +320,7 @@ impl PrimaryOplogService {
             max_payload_size,
             retry_config,
             oplogs: OpenOplogs::new("primary oplog"),
+            stream_session_index: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -459,6 +463,17 @@ impl PrimaryOplogService {
 
 #[async_trait]
 impl OplogService for PrimaryOplogService {
+    fn set_stream_session_index(&self, index: Arc<super::StreamSessionIndexService>) {
+        assert!(
+            self.stream_session_index.set(index).is_ok(),
+            "stream session index is already installed"
+        );
+    }
+
+    fn stream_session_index(&self) -> Option<Arc<super::StreamSessionIndexService>> {
+        self.stream_session_index.get().cloned()
+    }
+
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -577,6 +592,7 @@ impl OplogService for PrimaryOplogService {
                     owned_agent_id.clone(),
                     agent_mode,
                     initial_worker_metadata.created_by,
+                    self.stream_session_index(),
                 ),
             )
             .await
@@ -779,6 +795,7 @@ struct CreateOplogConstructor {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     account_id: AccountId,
+    stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
 }
 
 impl CreateOplogConstructor {
@@ -795,6 +812,7 @@ impl CreateOplogConstructor {
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         account_id: AccountId,
+        stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     ) -> Self {
         Self {
             indexed_storage,
@@ -808,6 +826,7 @@ impl CreateOplogConstructor {
             owned_agent_id,
             agent_mode,
             account_id,
+            stream_session_index,
         }
     }
 }
@@ -839,6 +858,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.owned_agent_id,
             self.agent_mode,
             self.account_id,
+            self.stream_session_index,
             close,
         ))
     }
@@ -879,6 +899,9 @@ struct PrimaryOplog {
     jobs: tokio::sync::mpsc::UnboundedSender<OplogJob>,
     actor: tokio::task::JoinHandle<()>,
     key: String,
+    owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
+    stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     close: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
@@ -920,6 +943,17 @@ enum OplogJob {
     CurrentIndex {
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
+    RawDurableStreamSessionStatus {
+        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        done: tokio::sync::oneshot::Sender<RawSessionLookup>,
+    },
+    CompleteRawDurableStreamSessionStatus {
+        session_key: golem_common::model::durable_stream::StreamSessionKeyV1,
+        expected_watermark: OplogIndex,
+        expected_committed: OplogIndex,
+        status: Result<Option<DurableStreamSessionStatus>, String>,
+        done: tokio::sync::oneshot::Sender<Option<super::RawDurableStreamSessionStatus>>,
+    },
     LastAddedNonHintEntry {
         done: tokio::sync::oneshot::Sender<Option<OplogIndex>>,
     },
@@ -932,6 +966,13 @@ enum OplogJob {
     BlobContext {
         done: tokio::sync::oneshot::Sender<OplogBlobContext>,
     },
+}
+
+struct RawSessionLookup {
+    watermark: OplogIndex,
+    committed: OplogIndex,
+    buffer: VecDeque<OplogEntry>,
+    cached: Option<Result<Option<DurableStreamSessionStatus>, String>>,
 }
 
 /// Snapshot of the state needed to upload/download oplog payload blobs outside the actor.
@@ -968,6 +1009,7 @@ impl PrimaryOplog {
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         account_id: AccountId,
+        stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let mut state = PrimaryOplogState {
@@ -986,7 +1028,10 @@ impl PrimaryOplog {
             account_id,
             last_added_non_hint_entry: None,
             pending_uploads: Vec::new(),
+            durable_stream_sessions: super::raw_session::RawSessionCache::default(),
         };
+        let owned_agent_id = state.owned_agent_id.clone();
+        let agent_mode = state.agent_mode;
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<OplogJob>();
         let actor = tokio::spawn(async move {
@@ -1145,6 +1190,46 @@ impl PrimaryOplog {
                     OplogJob::CurrentIndex { done } => {
                         let _ = done.send(state.last_oplog_idx);
                     }
+                    OplogJob::RawDurableStreamSessionStatus { session_key, done } => {
+                        let cached = state
+                            .durable_stream_sessions
+                            .cached(&session_key)
+                            .transpose();
+                        let _ = done.send(RawSessionLookup {
+                            watermark: state.last_oplog_idx,
+                            committed: state.last_committed_idx,
+                            buffer: if cached.is_none() {
+                                state.buffer.clone()
+                            } else {
+                                VecDeque::new()
+                            },
+                            cached,
+                        });
+                    }
+                    OplogJob::CompleteRawDurableStreamSessionStatus {
+                        session_key,
+                        expected_watermark,
+                        expected_committed,
+                        status,
+                        done,
+                    } => {
+                        let result = if state.last_oplog_idx == expected_watermark
+                            && state.last_committed_idx == expected_committed
+                        {
+                            if let Ok(value) = &status {
+                                state
+                                    .durable_stream_sessions
+                                    .insert(session_key, value.clone());
+                            }
+                            Some(super::RawDurableStreamSessionStatus {
+                                watermark: expected_watermark,
+                                status,
+                            })
+                        } else {
+                            None
+                        };
+                        let _ = done.send(result);
+                    }
                     OplogJob::LastAddedNonHintEntry { done } => {
                         let _ = done.send(state.last_added_non_hint_entry);
                     }
@@ -1168,6 +1253,9 @@ impl PrimaryOplog {
             jobs,
             actor,
             key,
+            owned_agent_id,
+            agent_mode,
+            stream_session_index,
             close: Some(close),
         }
     }
@@ -1357,6 +1445,7 @@ struct PrimaryOplogState {
     /// not yet known to be durable. The commit barrier in `append` waits on these before persisting
     /// any buffered entries, so no committed entry can reference a not-yet-written blob.
     pending_uploads: Vec<PendingUpload>,
+    durable_stream_sessions: super::raw_session::RawSessionCache,
 }
 
 impl PrimaryOplogState {
@@ -1516,8 +1605,10 @@ impl PrimaryOplogState {
     /// single commit-threshold check, so the pair is never split by a commit.
     fn push(&mut self, entry: OplogEntry) -> OplogIndex {
         let is_hint = entry.is_hint();
+        let next_index = self.last_oplog_idx.next();
+        self.durable_stream_sessions.apply_entry(next_index, &entry);
         self.buffer.push_back(entry);
-        self.last_oplog_idx = self.last_oplog_idx.next();
+        self.last_oplog_idx = next_index;
         if !is_hint {
             self.last_added_non_hint_entry = Some(self.last_oplog_idx);
         }
@@ -1657,6 +1748,47 @@ impl Oplog for PrimaryOplog {
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.run_job(|done| OplogJob::CurrentIndex { done }).await
+    }
+
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> super::RawDurableStreamSessionStatus {
+        loop {
+            let snapshot = self
+                .run_job(|done| OplogJob::RawDurableStreamSessionStatus {
+                    session_key: session_key.clone(),
+                    done,
+                })
+                .await;
+            if let Some(status) = snapshot.cached {
+                return super::RawDurableStreamSessionStatus {
+                    watermark: snapshot.watermark,
+                    status,
+                };
+            }
+            let status = super::raw_session::RawSessionCache::reconstruct(
+                self.stream_session_index.as_ref(),
+                &self.owned_agent_id,
+                self.agent_mode,
+                snapshot.committed,
+                &snapshot.buffer,
+                session_key,
+            )
+            .await;
+            if let Some(result) = self
+                .run_job(|done| OplogJob::CompleteRawDurableStreamSessionStatus {
+                    session_key: session_key.clone(),
+                    expected_watermark: snapshot.watermark,
+                    expected_committed: snapshot.committed,
+                    status,
+                    done,
+                })
+                .await
+            {
+                return result;
+            }
+        }
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {

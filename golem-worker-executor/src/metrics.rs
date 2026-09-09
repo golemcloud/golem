@@ -1419,7 +1419,7 @@ pub mod durable_stream {
         .unwrap();
         static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
             "golem_durable_stream_journal_lag_events",
-            "Committed source events not yet recorded in the value-only consumer journal",
+            "Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption",
             EVENT_COUNT_BUCKETS.to_vec()
         )
         .unwrap();

@@ -2555,19 +2555,12 @@ mod tests {
     const NO_IDLE_REFRESH_THRESHOLD_SECS: i64 = i64::MAX;
 
     fn make_grpc(mock: Arc<MockRegistryService>) -> Arc<ResourceLimitsGrpc> {
-        // Pass an already-cancelled token so the background batch task exits
-        // immediately in its first select! — before it can call send_batch.
-        // Tests drive the batch cycle manually via send_batch for deterministic,
-        // race-free control.
-        let token = CancellationToken::new();
-        token.cancel();
-        ResourceLimitsGrpc::new(
-            mock,
-            Duration::from_secs(3600),
-            Duration::from_secs(300),
-            ResourceUsageMeteringConfig::all_enabled(),
-            token,
-        )
+        // Tests drive send_batch manually, without a competing background updater.
+        Arc::new(ResourceLimitsGrpc {
+            client: mock,
+            entries: scc::HashMap::new(),
+            metering: ResourceUsageMeteringConfig::all_enabled(),
+        })
     }
 
     #[test]

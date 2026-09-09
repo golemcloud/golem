@@ -23,6 +23,13 @@ pub struct StreamEvidence {
     pub completion: String,
 }
 
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct StreamingBenchmarkResult {
+    pub first_chunk_nanos: u64,
+    pub total_nanos: u64,
+    pub chunks_read: u32,
+}
+
 #[derive(IntoSchema)]
 struct RawRunInput {
     mode: String,
@@ -48,6 +55,11 @@ pub trait ToolStreamingCaller {
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
+    async fn benchmark_producer(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+    ) -> StreamingBenchmarkResult;
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence;
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence;
     async fn started_invocation_contracts(
@@ -409,6 +421,43 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let result = invocation.result().await;
         output.extend(read_tool_stdout(invocation.stdout).await);
         evidence(result, output)
+    }
+
+    async fn benchmark_producer(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+    ) -> StreamingBenchmarkResult {
+        let started = std::time::Instant::now();
+        let mut invocation = StreamingClient::default()
+            .produce(chunk_count, chunk_size)
+            .expect("start benchmark producer");
+        let first = first_chunk(&mut invocation).await;
+        let first_chunk_nanos = started.elapsed().as_nanos() as u64;
+        assert_eq!(first.len(), chunk_size as usize);
+
+        let mut chunks_read = 1_u32;
+        while let Some(item) = invocation.stdout.next().await {
+            let chunk = item.expect("benchmark producer stdout failed");
+            assert_eq!(chunk.len(), chunk_size as usize);
+            chunks_read += 1;
+        }
+        let summary = invocation
+            .result()
+            .await
+            .expect("benchmark producer failed");
+        assert_eq!(chunks_read, chunk_count);
+        assert_eq!(summary.chunks_read, chunk_count);
+        assert_eq!(
+            summary.bytes_read,
+            u64::from(chunk_count) * u64::from(chunk_size)
+        );
+
+        StreamingBenchmarkResult {
+            first_chunk_nanos,
+            total_nanos: started.elapsed().as_nanos() as u64,
+            chunks_read,
+        }
     }
 
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence {

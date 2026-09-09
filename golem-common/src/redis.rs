@@ -376,6 +376,52 @@ impl RedisLabelledApi<'_> {
         )
     }
 
+    pub async fn compare_and_set_many_hash<K>(
+        &self,
+        key: K,
+        field: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> RedisResult<bool>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = r#"
+local current = redis.call('HGET', KEYS[1], ARGV[1])
+local expected_present = ARGV[2] == '1'
+if (current == false and expected_present) or (current ~= false and (not expected_present or current ~= ARGV[3])) then
+  return 0
+end
+for i = 4, #ARGV, 2 do
+  redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+end
+return 1
+"#;
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let mut args: Vec<Value> = vec![
+            SCRIPT.into(),
+            1.into(),
+            self.prefixed_key(key).into(),
+            field.into(),
+            (if expected.is_some() { "1" } else { "0" }).into(),
+            expected.unwrap_or_default().into(),
+        ];
+        for (field, value) in pairs {
+            args.push((*field).into());
+            args.push((*value).into());
+        }
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<i64>())
+            .map(|result| result == 1);
+        self.record(start, "EVAL", result)
+    }
+
     pub async fn hset<R, K, V>(&self, key: K, values: V) -> RedisResult<R>
     where
         R: FromValue,

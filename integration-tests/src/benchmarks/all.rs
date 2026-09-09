@@ -141,6 +141,22 @@ async fn main() {
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
+    benchmarks_by_name.insert(
+        "streaming-tool",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::streaming::Streaming<true>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                integration_tests::benchmarks::streaming::Streaming<false>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
 
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
