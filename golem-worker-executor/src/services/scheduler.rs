@@ -709,17 +709,17 @@ impl SchedulerService for SchedulerServiceDefault {
         let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);
         let shard_id = ShardId::from_routing_hash(routing_hash, assignment.number_of_shards);
 
-        // Observe the serialized size of the action before inserting.
-        if let Ok(serialized) = serialize(&action) {
-            crate::metrics::scheduler::record_scheduled_action_size(
-                crate::metrics::scheduler::action_kind_label(&action),
-                serialized.len(),
-            );
-        }
+        let serialized = serialize(&action).unwrap_or_else(|error| {
+            panic!("failed to serialize scheduled action {action}: {error}")
+        });
+        crate::metrics::scheduler::record_scheduled_action_size(
+            crate::metrics::scheduler::action_kind_label(&action),
+            serialized.len(),
+        );
 
         self.retry_storage_op("insert", &format!("action {action}"), || {
             self.scheduler_storage
-                .insert(schedule_id, time, shard_id, &action)
+                .insert(schedule_id, time, shard_id, &serialized)
         })
         .await;
         schedule_id
@@ -744,12 +744,15 @@ mod tests {
     use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::scheduler::memory::InMemorySchedulerStorage;
+    use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
     use crate::storage::scheduler::{
         ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
     };
     use crate::worker::INACTIVE_EPHEMERAL_AGENT_ERROR;
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
+    use futures::FutureExt;
+    use golem_common::config::DbSqliteConfig;
     use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, Principal};
@@ -768,6 +771,7 @@ mod tests {
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use proptest::prelude::*;
     use std::collections::{HashMap, HashSet};
+    use std::panic::AssertUnwindSafe;
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1129,6 +1133,7 @@ mod tests {
         inner: InMemorySchedulerStorage,
         transient_failures: AtomicU32,
         insert_attempts: Arc<AtomicUsize>,
+        inserted_actions: Arc<Mutex<Vec<Vec<u8>>>>,
     }
 
     #[async_trait]
@@ -1138,9 +1143,10 @@ mod tests {
             schedule_id: ScheduleId,
             due_at: DateTime<Utc>,
             shard_id: ShardId,
-            action: &ScheduledAction,
+            action: &[u8],
         ) -> Result<(), SchedulerStorageError> {
             self.insert_attempts.fetch_add(1, Ordering::SeqCst);
+            self.inserted_actions.lock().unwrap().push(action.to_vec());
             let remaining =
                 self.transient_failures
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
@@ -1215,7 +1221,7 @@ mod tests {
             schedule_id: ScheduleId,
             due_at: DateTime<Utc>,
             shard_id: ShardId,
-            action: &ScheduledAction,
+            action: &[u8],
         ) -> Result<(), SchedulerStorageError> {
             self.inner
                 .insert(schedule_id, due_at, shard_id, action)
@@ -1285,15 +1291,18 @@ mod tests {
     #[test]
     async fn schedule_retries_transient_storage_errors() {
         let insert_attempts = Arc::new(AtomicUsize::new(0));
+        let inserted_actions = Arc::new(Mutex::new(Vec::new()));
         let storage = Arc::new(FlakyInsertSchedulerStorage {
             inner: InMemorySchedulerStorage::new(),
             transient_failures: AtomicU32::new(2),
             insert_attempts: insert_attempts.clone(),
+            inserted_actions: inserted_actions.clone(),
         });
         let promise_service = create_promise_service_mock();
         let svc = create_scheduler(storage.clone(), promise_service).await;
 
         let action = complete_promise_action(promise(agent("inst1"), 101));
+        let expected_action = serialize(&action).unwrap();
         let schedule_id = ScheduleId::fresh();
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
 
@@ -1303,6 +1312,7 @@ mod tests {
             schedule_id
         );
         assert_eq!(insert_attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(*inserted_actions.lock().unwrap(), vec![expected_action; 3]);
 
         let assignment = ShardAssignment {
             number_of_shards: 1,
@@ -1319,6 +1329,46 @@ mod tests {
             .unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].schedule_id, schedule_id);
+    }
+
+    #[test]
+    async fn schedule_size_is_observed_once_for_duplicates_and_terminal_failures() {
+        let action = ScheduledAction::Resume {
+            agent_created_by: AccountId::new(),
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("metric")),
+        };
+        let labels = [
+            crate::metrics::storage::executor_id(),
+            crate::metrics::scheduler::action_kind_label(&action),
+        ];
+        let histogram =
+            crate::metrics::scheduler::SCHEDULED_ACTION_SIZE_BYTES.with_label_values(&labels);
+        let before = histogram.get_sample_count();
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let svc = create_scheduler(storage, create_promise_service_mock()).await;
+        let schedule_id = ScheduleId::fresh();
+        svc.schedule_with_id(schedule_id, due_at, action.clone())
+            .await;
+        svc.schedule_with_id(schedule_id, due_at, action.clone())
+            .await;
+        assert_eq!(histogram.get_sample_count(), before + 2);
+
+        let failing_storage = Arc::new(FlakyInsertSchedulerStorage {
+            inner: InMemorySchedulerStorage::new(),
+            transient_failures: AtomicU32::new(3),
+            insert_attempts: Arc::new(AtomicUsize::new(0)),
+            inserted_actions: Arc::new(Mutex::new(Vec::new())),
+        });
+        let failing_svc = create_scheduler(failing_storage, create_promise_service_mock()).await;
+        let result =
+            AssertUnwindSafe(failing_svc.schedule_with_id(ScheduleId::fresh(), due_at, action))
+                .catch_unwind()
+                .await;
+
+        assert!(result.is_err());
+        assert_eq!(histogram.get_sample_count(), before + 3);
     }
 
     fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
@@ -1343,12 +1393,113 @@ mod tests {
         }
     }
 
+    fn scheduled_action_variants() -> Vec<ScheduledAction> {
+        let environment_id = EnvironmentId::new();
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent("scheduled-action"));
+        vec![
+            complete_promise_action(promise(owned_agent_id.agent_id.clone(), 101)),
+            ScheduledAction::ArchiveOplog {
+                account_id: AccountId::new(),
+                owned_agent_id: owned_agent_id.clone(),
+                agent_mode: AgentMode::Durable,
+                last_oplog_index: OplogIndex::from_u64(42),
+                next_after: Duration::from_secs(60),
+            },
+            ScheduledAction::Invoke {
+                account_id: AccountId::new(),
+                owned_agent_id: owned_agent_id.clone(),
+                invocation: Box::new(agent_method_invocation()),
+                target_worker_fingerprint: AgentFingerprint::new(),
+            },
+            ScheduledAction::Resume {
+                agent_created_by: AccountId::new(),
+                owned_agent_id: owned_agent_id.clone(),
+            },
+            ScheduledAction::InvokeEphemeral {
+                account_id: AccountId::new(),
+                owned_agent_id,
+                invocation: Box::new(agent_method_invocation()),
+                component_revision: ComponentRevision::INITIAL,
+                env: vec![("KEY".to_string(), "value".to_string())],
+                config: vec![AgentConfigEntryDto {
+                    path: vec!["database".to_string()],
+                    value: serde_json::Value::String("test".to_string()).into(),
+                }],
+                parent: Some(agent("parent")),
+                creation_principal: Box::new(Principal::anonymous()),
+            },
+        ]
+    }
+
+    async fn assert_storage_roundtrips_all_action_variants(
+        storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    ) {
+        let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
+        let shard_id = ShardId::new(0);
+        let actions = scheduled_action_variants();
+        let mut expected = HashMap::new();
+        for action in actions {
+            let schedule_id = ScheduleId::fresh();
+            storage
+                .insert(schedule_id, due_at, shard_id, &serialize(&action).unwrap())
+                .await
+                .unwrap();
+            expected.insert(schedule_id, action);
+        }
+
+        let claimed = storage
+            .claim_due(
+                DateTime::from_str("2023-07-17T10:06:00Z").unwrap(),
+                &ShardAssignment {
+                    number_of_shards: 1,
+                    shard_ids: HashSet::from_iter([shard_id]),
+                },
+                expected.len() as u32,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(claimed.len(), expected.len());
+        for claimed_action in claimed {
+            assert_eq!(
+                claimed_action.action,
+                expected.remove(&claimed_action.schedule_id).unwrap()
+            );
+        }
+        assert!(expected.is_empty());
+    }
+
+    #[test]
+    async fn in_memory_scheduler_storage_roundtrips_all_action_variants() {
+        assert_storage_roundtrips_all_action_variants(Arc::new(InMemorySchedulerStorage::new()))
+            .await;
+    }
+
+    #[test]
+    async fn sqlite_scheduler_storage_roundtrips_all_action_variants() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = SqliteSchedulerStorage::configured(&DbSqliteConfig {
+            database: tempdir
+                .path()
+                .join("scheduler.db")
+                .to_string_lossy()
+                .into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap();
+
+        assert_storage_roundtrips_all_action_variants(Arc::new(storage)).await;
+    }
+
     fn agent_method_invocation() -> AgentInvocation {
         AgentInvocation::AgentMethod {
             idempotency_key: IdempotencyKey::fresh(),
             method_name: "run".to_string(),
             input: SchemaValue::Record { fields: vec![] },
-            invocation_context: InvocationContextStack::fresh(),
+            invocation_context: InvocationContextStack::fresh_rounded(),
             principal: Principal::anonymous(),
             scope_card: None,
         }
@@ -2019,7 +2170,12 @@ mod tests {
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         storage
-            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
+            .insert(
+                ScheduleId::fresh(),
+                due_at,
+                ShardId::new(0),
+                &serialize(&action).unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2059,7 +2215,12 @@ mod tests {
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         storage
-            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
+            .insert(
+                ScheduleId::fresh(),
+                due_at,
+                ShardId::new(0),
+                &serialize(&action).unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2110,7 +2271,12 @@ mod tests {
         let action = complete_promise_action(promise(agent("inst1"), 101));
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         storage
-            .insert(ScheduleId::fresh(), due_at, ShardId::new(0), &action)
+            .insert(
+                ScheduleId::fresh(),
+                due_at,
+                ShardId::new(0),
+                &serialize(&action).unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2177,7 +2343,12 @@ mod tests {
         let other_shard = ShardId::new((shard.value() + 1) % 2);
         let due_at = DateTime::from_str("2023-07-17T10:05:00Z").unwrap();
         storage
-            .insert(ScheduleId::fresh(), due_at, shard, &action)
+            .insert(
+                ScheduleId::fresh(),
+                due_at,
+                shard,
+                &serialize(&action).unwrap(),
+            )
             .await
             .unwrap();
 
@@ -2221,7 +2392,7 @@ mod tests {
         let now = DateTime::from_str("2023-07-17T10:06:00Z").unwrap();
         let schedule_id = ScheduleId::fresh();
         storage
-            .insert(schedule_id, due_at, shard, &action)
+            .insert(schedule_id, due_at, shard, &serialize(&action).unwrap())
             .await
             .unwrap();
 
