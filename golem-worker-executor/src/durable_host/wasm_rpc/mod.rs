@@ -79,10 +79,10 @@ use golem_schema::schema::wit::{
 };
 
 use crate::durable_host::golem::agent::schema_value_tree_to_typed_constructor_parameters;
-use crate::worker::invocation::method_uses_streams;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::{NamedFieldType, SchemaGraph, SchemaType};
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
@@ -244,6 +244,32 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let component_id: golem_common::model::component::ComponentId =
             registered_agent_type.implemented_by.component_id;
         let component_revision = registered_agent_type.implemented_by.component_revision;
+        let remote_component = self
+            .component_service()
+            .get_metadata(component_id, Some(component_revision))
+            .await?;
+        let remote_method_streams = Arc::new(
+            registered_agent_type
+                .agent_type
+                .methods
+                .iter()
+                .map(|method| {
+                    remote_component
+                        .metadata
+                        .agent_method_stream_metadata(
+                            &registered_agent_type.agent_type.type_name,
+                            &method.name,
+                        )
+                        .map(|metadata| (method.name.clone(), metadata.uses_streams()))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Streaming classification for remote agent method '{}' is missing",
+                                method.name
+                            )
+                        })
+                })
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
+        );
         let agent_mode = registered_agent_type.agent_type.mode;
         let remote_owner = AgentOwnerPattern::Agent {
             account: registered_agent_type.implemented_by.account_email.clone(),
@@ -385,6 +411,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 config,
                 span,
                 remote_agent_type,
+                remote_method_streams,
                 component_revision,
                 remote_owner,
             );
@@ -412,6 +439,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         config,
                         span,
                         remote_agent_type,
+                        remote_method_streams,
                         component_revision,
                         remote_owner,
                     )
@@ -426,6 +454,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         config,
                         span,
                         remote_agent_type,
+                        remote_method_streams,
                         component_revision,
                         remote_owner,
                     )
@@ -442,6 +471,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             config.clone(),
             span,
             remote_agent_type,
+            remote_method_streams,
             component_revision,
             remote_owner,
         )
@@ -925,6 +955,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             logical_remote_agent_id,
             connection_span_id,
             remote_agent_type,
+            remote_method_streams,
             env,
             config,
             ephemeral_logical_agent_id,
@@ -936,6 +967,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 payload.remote_agent_id.clone(),
                 payload.span_id.clone(),
                 payload.remote_agent_type.clone(),
+                payload.remote_method_streams.clone(),
                 env,
                 config,
                 payload.ephemeral_logical_agent_id.clone(),
@@ -990,7 +1022,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             };
         let method = find_agent_method(&remote_agent_type, &method_name)?;
-        let streaming = method_uses_streams(&remote_agent_type, method, &input_value);
+        let streaming = remote_method_uses_streams(&remote_method_streams, &method.name)?;
 
         if let Err(denial) = self
             .authorize_and_record_rpc_target_activation(
@@ -1696,6 +1728,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             logical_remote_agent_id,
             ephemeral_logical_agent_id,
             remote_agent_type,
+            remote_method_streams,
             remote_component_revision,
             env,
             config,
@@ -1707,6 +1740,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 payload.remote_agent_id.clone(),
                 payload.ephemeral_logical_agent_id.clone(),
                 payload.remote_agent_type.clone(),
+                payload.remote_method_streams.clone(),
                 payload.remote_component_revision,
                 env,
                 config,
@@ -1744,7 +1778,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         method
             .validate_input(&remote_agent_type.schema, &input_value)
             .map_err(|error| anyhow::anyhow!("Invalid RPC input: {error}"))?;
-        if method_uses_streams(&remote_agent_type, method, &input_value) {
+        if remote_method_uses_streams(&remote_method_streams, &method.name)? {
             return Err(anyhow::anyhow!(
                 "live streams cannot be used in scheduled invocations"
             ));
@@ -2371,6 +2405,7 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         ephemeral_logical_agent_id,
         connection_span_id,
         remote_agent_type,
+        remote_method_streams,
         env,
         config,
     ) = {
@@ -2382,6 +2417,7 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
             payload.ephemeral_logical_agent_id.clone(),
             payload.span_id.clone(),
             payload.remote_agent_type.clone(),
+            payload.remote_method_streams.clone(),
             env,
             config,
         )
@@ -2397,7 +2433,7 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         .iter()
         .find(|method| method.name == method_name)
         .expect("method existence was checked while decoding RPC input");
-    let streaming = method_uses_streams(&remote_agent_type, method, &input_value);
+    let streaming = remote_method_uses_streams(&remote_method_streams, &method.name)?;
 
     if streaming && !streaming_allowed {
         return Ok(Err(RpcError::ProtocolError(
@@ -3522,6 +3558,7 @@ fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
+    remote_method_streams: Arc<BTreeMap<String, bool>>,
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -3532,6 +3569,7 @@ fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
             span_id: span.span_id().clone(),
             target_activation: WasmRpcTargetActivation::DeferredEphemeral { env, config },
             remote_agent_type,
+            remote_method_streams,
             remote_component_revision,
             remote_owner,
         }),
@@ -3559,6 +3597,17 @@ fn invocation_target_agent_id(
     ))
 }
 
+fn remote_method_uses_streams(
+    methods: &BTreeMap<String, bool>,
+    method_name: &str,
+) -> anyhow::Result<bool> {
+    methods.get(method_name).copied().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Streaming classification for remote agent method '{method_name}' is missing"
+        )
+    })
+}
+
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
@@ -3567,6 +3616,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
+    remote_method_streams: Arc<BTreeMap<String, bool>>,
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -3593,6 +3643,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
                 config,
             },
             remote_agent_type,
+            remote_method_streams,
             remote_component_revision,
             remote_owner,
         }),
@@ -3609,6 +3660,7 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
+    remote_method_streams: Arc<BTreeMap<String, bool>>,
     remote_component_revision: ComponentRevision,
     remote_owner: AgentOwnerPattern,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -3629,6 +3681,7 @@ async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
             span_id: span.span_id().clone(),
             target_activation,
             remote_agent_type,
+            remote_method_streams,
             remote_component_revision,
             remote_owner,
         }),
@@ -4132,6 +4185,7 @@ pub struct WasmRpcEntryPayload {
     /// [`HostWasmRpc::new`], so it is consistent across live execution and
     /// replay.
     pub remote_agent_type: Arc<AgentTypeSchema>,
+    pub remote_method_streams: Arc<BTreeMap<String, bool>>,
     pub remote_component_revision: ComponentRevision,
     pub remote_owner: AgentOwnerPattern,
 }

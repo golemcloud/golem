@@ -238,7 +238,12 @@ impl DefaultWorkerEnumerationService {
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await
-                    .expect("Failed to calculate worker status for existing worker");
+                    .map_err(WorkerExecutorError::runtime)?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime(
+                            "worker oplog disappeared during precise enumeration",
+                        )
+                    })?;
 
                     AgentMetadata {
                         last_known_status,

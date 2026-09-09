@@ -1132,6 +1132,11 @@
           "type": "string",
           "description": "Directory used by `golem server run` for local server data and removed by `golem server clean`."
         },
+        "systemMemoryOverride": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Positive system memory override for local agent admission and eviction, e.g. 2GiB or 500MB. Units are case-insensitive: MB means 1000000 bytes and MiB means 1048576 bytes. Overridden by GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE, then --system-memory-override. The executor reserves 20% for host overhead; this is not a hard process RSS limit. When unset, Golem detects the memory limit from the host or cgroup."
+        },
         "agentFilesystemRoot": {
           "type": "string",
           "description": "Root directory for deterministic agent filesystem directories."

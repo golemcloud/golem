@@ -58,6 +58,7 @@ futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 heck = { workspace = true }
 http = { workspace = true }
+humanize-rs = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }

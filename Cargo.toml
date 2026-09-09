@@ -108,7 +108,7 @@ crossterm = "0.29"
 darling = "0.20.11"
 dashmap = "7.0.0-rc2"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
-desert_rust = { version = "0.1.10", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
+desert_rust = { version = "0.1.11", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address", "im"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
@@ -141,6 +141,7 @@ hmac = "0.12.1"
 http = "1.3.1"
 http-body = "1.0.1"
 http-body-util = "0.1.3"
+humanize-rs = "0.1.5"
 humansize = "2.1.3"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
