@@ -15,11 +15,13 @@ struct CountingAllocator;
 
 static COUNTING: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
         }
         unsafe { System.alloc(layout) }
     }
@@ -27,6 +29,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
         }
         unsafe { System.alloc_zeroed(layout) }
     }
@@ -34,6 +37,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            ALLOCATED_BYTES.fetch_add(new_size, Ordering::Relaxed);
         }
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -68,15 +72,19 @@ fn event(payload_size: usize) -> Event {
     }
 }
 
-fn measure<F>(operation: F) -> usize
+fn measure<F>(operation: F) -> (usize, usize)
 where
     F: FnOnce(),
 {
     ALLOCATIONS.store(0, Ordering::Relaxed);
+    ALLOCATED_BYTES.store(0, Ordering::Relaxed);
     COUNTING.store(true, Ordering::Relaxed);
     operation();
     COUNTING.store(false, Ordering::Relaxed);
-    ALLOCATIONS.load(Ordering::Relaxed)
+    (
+        ALLOCATIONS.load(Ordering::Relaxed),
+        ALLOCATED_BYTES.load(Ordering::Relaxed),
+    )
 }
 
 fn main() {
@@ -84,15 +92,33 @@ fn main() {
         .enable_all()
         .build()
         .unwrap();
+    runtime.block_on(async {});
 
     for payload_size in [64, 1_048_576] {
         for listener_count in [0, 1, 16] {
+            let (sender, _receiver) = tokio::sync::broadcast::channel::<Event>(32);
+            let mut subscriptions = (0..listener_count)
+                .map(|_| sender.subscribe())
+                .collect::<Vec<_>>();
+            let owned_event = event(payload_size);
+            let (allocations, allocated_bytes) = measure(|| {
+                sender.send(owned_event).unwrap();
+                runtime.block_on(async {
+                    for subscription in &mut subscriptions {
+                        black_box(subscription.recv().await.unwrap());
+                    }
+                });
+            });
+            println!(
+                "event_broadcast/owned/unrelated payload_bytes={payload_size} listeners={listener_count} allocations={allocations} allocated_bytes={allocated_bytes}"
+            );
+
             let events = Events::new(32);
             let mut subscriptions = (0..listener_count)
                 .map(|_| events.subscribe())
                 .collect::<Vec<_>>();
             let event = event(payload_size);
-            let allocations = measure(|| {
+            let (allocations, allocated_bytes) = measure(|| {
                 events.publish(event);
                 runtime.block_on(async {
                     for subscription in &mut subscriptions {
@@ -107,14 +133,31 @@ fn main() {
                 });
             });
             println!(
-                "event_broadcast/unrelated payload_bytes={payload_size} listeners={listener_count} allocations={allocations}"
+                "event_broadcast/shared/unrelated payload_bytes={payload_size} listeners={listener_count} allocations={allocations} allocated_bytes={allocated_bytes}"
             );
         }
+
+        let (sender, _receiver) = tokio::sync::broadcast::channel::<Event>(2);
+        let mut subscription = sender.subscribe();
+        let owned_event = event(payload_size);
+        let (allocations, allocated_bytes) = measure(|| {
+            sender.send(owned_event).unwrap();
+            runtime.block_on(async {
+                let event = subscription.recv().await.unwrap();
+                let Event::InvocationCompleted { result, .. } = &event else {
+                    unreachable!()
+                };
+                black_box(result.clone().unwrap());
+            });
+        });
+        println!(
+            "event_broadcast/owned/matching payload_bytes={payload_size} listeners=1 allocations={allocations} allocated_bytes={allocated_bytes}"
+        );
 
         let events = Events::new(2);
         let mut subscription = events.subscribe();
         let event = event(payload_size);
-        let allocations = measure(|| {
+        let (allocations, allocated_bytes) = measure(|| {
             events.publish(event);
             runtime.block_on(async {
                 let output = subscription
@@ -129,7 +172,7 @@ fn main() {
             });
         });
         println!(
-            "event_broadcast/matching payload_bytes={payload_size} listeners=1 allocations={allocations}"
+            "event_broadcast/shared/matching payload_bytes={payload_size} listeners=1 allocations={allocations} allocated_bytes={allocated_bytes}"
         );
     }
 }
