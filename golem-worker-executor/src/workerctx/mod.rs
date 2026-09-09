@@ -81,7 +81,7 @@ use wasmtime_wasi_http::p3::WasiHttpView;
 /// Native contexts deliberately carry no component metadata or Wasm executable.
 #[derive(Clone)]
 pub enum WorkerCtxExecutable {
-    Component(Component),
+    Component(Box<Component>),
     Native {
         host_tool_id: golem_common::model::tool::HostToolId,
         implementation_version: String,

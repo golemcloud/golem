@@ -223,7 +223,7 @@ fn parse_value_is(call: &syn::ExprCall) -> Result<RefIr, Error> {
         require_metadata_literal(&value.1, "value_is value")?;
         return Ok(RefIr::ValueIs {
             name: expr_str(&name.1, "value_is name")?,
-            value: value.1.clone(),
+            value: Box::new(value.1.clone()),
         });
     }
     // Positional form: value_is("name", <literal>).
@@ -231,7 +231,7 @@ fn parse_value_is(call: &syn::ExprCall) -> Result<RefIr, Error> {
         require_metadata_literal(args[1], "value_is value")?;
         return Ok(RefIr::ValueIs {
             name: expr_str(args[0], "value_is name")?,
-            value: args[1].clone(),
+            value: Box::new(args[1].clone()),
         });
     }
     Err(Error::new(

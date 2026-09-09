@@ -110,23 +110,25 @@ pub(crate) trait RetainedEntityStore: Send {
     ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>>;
 }
 
+type EntityInvocationFuture<'a, R> = Pin<
+    Box<
+        dyn Future<
+                Output = (
+                    Result<R, WorkerExecutorError>,
+                    Option<Box<dyn RetainedEntityStore>>,
+                ),
+            > + Send
+            + 'a,
+    >,
+>;
+
 pub(crate) trait EntityInvocationRunner<R>: Send + 'static {
     fn run<'a>(
         self,
         scope: EntityInvocationScope,
         registration: &'a EntitySlotRegistration,
         abort: tokio_util::sync::CancellationToken,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = (
-                        Result<R, WorkerExecutorError>,
-                        Option<Box<dyn RetainedEntityStore>>,
-                    ),
-                > + Send
-                + 'a,
-        >,
-    >;
+    ) -> EntityInvocationFuture<'a, R>;
 }
 
 struct ComponentEntityRunner<Ctx: WorkerCtx, F> {

@@ -242,7 +242,7 @@ pub enum QuantifierIr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefIr {
     Present(String),
-    ValueIs { name: String, value: Expr },
+    ValueIs { name: String, value: Box<Expr> },
 }
 
 /// A single `#[constraint(...)]` entry.

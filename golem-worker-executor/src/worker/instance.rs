@@ -784,7 +784,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     .map(EntityInvocationScope::mode)
                     .unwrap_or(InvocationExecutionMode::Live),
                 self.filesystem,
-                crate::workerctx::WorkerCtxExecutable::Component(component_metadata),
+                crate::workerctx::WorkerCtxExecutable::Component(Box::new(component_metadata)),
                 self.activation
                     .clone()
                     .expect("Entity instance host must pin its activation"),

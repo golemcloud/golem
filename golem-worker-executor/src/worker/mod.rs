@@ -7420,7 +7420,7 @@ impl RunningWorker {
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
-            WorkerCtxExecutable::Component(component_metadata_for_replay),
+            WorkerCtxExecutable::Component(Box::new(component_metadata_for_replay)),
             None,
         )
         .await

@@ -2130,7 +2130,7 @@ impl WorkerCtx for TestWorkerCtx {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
-        native_tool_catalog: Arc<NativeToolCatalog<Self>>,
+        _native_tool_catalog: Arc<NativeToolCatalog<Self>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -2192,7 +2192,6 @@ impl WorkerCtx for TestWorkerCtx {
             card_service,
             card_interest_index,
             component_service,
-            native_tool_catalog,
             account_resource_limits,
             config,
             filesystem,
@@ -2533,8 +2532,6 @@ impl InvocationContextManagement for TestWorkerCtx {
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_native_tool_catalog(&self) -> anyhow::Result<Arc<NativeToolCatalog<TestWorkerCtx>>> {
-        use golem_native_tool::NativeToolInvoker;
-
         let helper_effects = self.additional_test_deps.native_test_helper_effects.clone();
         let helper = NativeDurableHelperImpl(helper_effects.clone());
         let mut registrations = vec![NativeToolRegistration {

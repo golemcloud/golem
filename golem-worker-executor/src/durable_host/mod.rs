@@ -373,7 +373,6 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     runtime: OwnerRuntime,
     executable: crate::workerctx::WorkerCtxExecutable,
-    native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
     entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
@@ -768,7 +767,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
-        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
         filesystem: crate::workerctx::WorkerFilesystemContext,
@@ -901,7 +899,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
         let component_metadata = match &executable {
-            crate::workerctx::WorkerCtxExecutable::Component(component) => component.clone(),
+            crate::workerctx::WorkerCtxExecutable::Component(component) => {
+                component.as_ref().clone()
+            }
             crate::workerctx::WorkerCtxExecutable::Native { .. } => worker_config
                 .owner_component_metadata
                 .as_deref()
@@ -1077,7 +1077,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owned_agent_id: owned_agent_id.clone(),
             runtime,
             executable,
-            native_tool_catalog,
             filesystem: filesystem_capability,
             entity_invocation_scope: None,
             entity_tool_operation: None,
@@ -2255,10 +2254,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .as_deref()
                 .expect("Entity Store must pin owner component metadata at dispatch"),
         }
-    }
-
-    pub(crate) fn native_tool_catalog(&self) -> &crate::native_tool::NativeToolCatalog<Ctx> {
-        &self.native_tool_catalog
     }
 
     pub(crate) fn selected_tool_owner_failure(
@@ -4582,7 +4577,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
         self.state.component_metadata = new_metadata.clone();
-        self.executable = crate::workerctx::WorkerCtxExecutable::Component(new_metadata);
+        self.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(new_metadata));
 
         if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
             self.state.agent_config = updated_agent_config;
