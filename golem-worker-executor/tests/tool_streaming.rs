@@ -1652,11 +1652,29 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
         "the original guest-trap provenance must survive owner-group fencing: {error:?}"
     );
 
-    if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await {
-        assert!(active.tool_operations.operations.is_empty());
-        assert!(active.lane.holder.is_none());
-        assert_eq!(active.lane.active_invocation_count, 0);
-        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    let cleanup = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if executor
+                .active_entity_metadata(&owned_agent_id)
+                .await
+                .is_none_or(|active| {
+                    active.tool_operations.operations.is_empty()
+                        && active.lane.holder.is_none()
+                        && active.lane.active_invocation_count == 0
+                        && active.slots.iter().all(|slot| slot.invocations.is_empty())
+                })
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    if cleanup.is_err() {
+        let active = executor.active_entity_metadata(&owned_agent_id).await;
+        anyhow::bail!(
+            "timed out waiting for guest-trap owner cleanup; active metadata: {active:#?}"
+        );
     }
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let invocation_start = oplog

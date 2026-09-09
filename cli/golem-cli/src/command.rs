@@ -2800,11 +2800,18 @@ pub mod server {
     use crate::config::{
         DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_PORT, DEFAULT_LOCAL_ROUTER_PORT,
     };
+    use anyhow::Context;
     use clap::{Args, Subcommand};
     use std::path::PathBuf;
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
+        /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
+        /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
+        /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
+        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        pub system_memory_override: Option<std::num::NonZeroU64>,
+
         /// Address to serve the main API on, defaults to 0.0.0.0
         #[clap(long)]
         pub router_addr: Option<String>,
@@ -2853,6 +2860,31 @@ pub mod server {
     }
 
     impl RunArgs {
+        pub fn with_env_overrides(self) -> anyhow::Result<Self> {
+            self.with_env_overrides_from(|name| std::env::var(name))
+        }
+
+        fn with_env_overrides_from(
+            mut self,
+            get_env: impl FnOnce(&str) -> Result<String, std::env::VarError>,
+        ) -> anyhow::Result<Self> {
+            if self.system_memory_override.is_none() {
+                const NAME: &str = "GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE";
+                match get_env(NAME) {
+                    Ok(value) => {
+                        self.system_memory_override = Some(
+                            crate::model::byte_size::parse_positive(&value)
+                                .map_err(anyhow::Error::msg)
+                                .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
+                        );
+                    }
+                    Err(std::env::VarError::NotPresent) => {}
+                    Err(err) => return Err(err).with_context(|| format!("Failed to read {NAME}")),
+                }
+            }
+            Ok(self)
+        }
+
         pub fn router_addr(&self) -> &str {
             self.router_addr.as_deref().unwrap_or("0.0.0.0")
         }

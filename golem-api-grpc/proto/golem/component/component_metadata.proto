@@ -29,12 +29,22 @@ message ComponentMetadata {
   repeated golem.schema.AgentTypeSchema agent_types = 8;
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
   map<string, ToolDeploymentMetadata> tools = 11;
-  map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 12;
+  map<string, AgentMethodStreams> agent_method_streams = 12;
+  map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 13;
 }
 
 message ToolMiddlewareDeploymentMetadata {
   golem.tool.ToolMiddleware definition = 1;
   ToolProvisionConfig provision = 2;
+}
+
+message AgentMethodStreams {
+  map<string, AgentMethodStreamMetadata> methods = 1;
+}
+
+message AgentMethodStreamMetadata {
+  bool input = 1;
+  bool output = 2;
 }
 
 message ToolDeploymentMetadata {

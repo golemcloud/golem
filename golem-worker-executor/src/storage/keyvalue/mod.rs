@@ -90,6 +90,20 @@ pub trait KeyValueStorage: Debug {
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String>;
 
+    /// Atomically compares `key` with `expected` and writes every pair only on a match.
+    /// `None` requires absence, not an empty value. A mismatch changes nothing.
+    /// Redis supports this operation only for namespaces stored as a single hash.
+    async fn compare_and_set_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String>;
+
     async fn set_if_not_exists(
         &self,
         svc_name: &'static str,
@@ -434,6 +448,26 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
+    pub async fn compare_and_set_many_raw(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        self.storage
+            .compare_and_set_many(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                expected,
+                pairs,
+            )
+            .await
+    }
+
     pub async fn get<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
@@ -697,20 +731,30 @@ pub enum KeyValueStorageNamespace {
     },
     /// Per-agent cached status. Unlike `Worker` (a flat key space), this namespace is stored as
     /// one structure-per-agent (a Redis hash) so the cached `AgentStatusRecord` can be split into
-    /// independently written fields: a small fixed-size `core`, the `regions`, the `updates`, and
-    /// one field per idempotency key (`ir:{key}`). This keeps the per-commit write small and
-    /// decoupled from the unbounded parts of the status. The `agent_id` is part of the namespace so
-    /// each agent gets its own isolated key space (enabling per-agent `keys`/`del_many`).
+    /// independently written fields: a small `core`, the bounded invocation-result `membership`,
+    /// the `regions`, the `updates`, and one field per received card transfer. The `agent_id` is
+    /// part of the namespace so each agent gets its own isolated key space (enabling per-agent
+    /// `keys`/`del_many`).
     AgentStatus {
         agent_id: AgentId,
     },
+    /// Per-agent invocation result index. Uses the same hash-style layout and cache routing as
+    /// [`Self::AgentStatus`], but has an independent physical namespace.
+    AgentInvocationResultIndex {
+        agent_id: AgentId,
+    },
     /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
-    /// (one structure-per-agent split into `core` / `regions` / `updates` / `ir:{key}`), but
-    /// written only at structurally clean boundaries (snapshot save, throttled idle) where no
-    /// jumpable oplog region is open. It is never advanced by the background status flusher, so it
-    /// always holds a baseline before any later jump region and lets the status recompute fold
-    /// forward from it instead of re-reading the whole oplog from index 1.
+    /// (one structure-per-agent split into `core` / `membership` / `regions` / `updates` and
+    /// per-transfer fields), but written only at structurally clean boundaries (snapshot save,
+    /// throttled idle) where no jumpable oplog region is open. It is never advanced by the
+    /// background status flusher, so it always holds a baseline before any later jump region and
+    /// lets the status recompute fold forward from it instead of re-reading the whole oplog from
+    /// index 1.
     AgentStatusCheckpoint {
+        agent_id: AgentId,
+    },
+    /// Complete oplog-derived durable stream-session summaries and their coverage watermark.
+    AgentDurableStreamSessionIndex {
         agent_id: AgentId,
     },
     Promise {

@@ -15,57 +15,96 @@
 use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasComponentService, HasConfig, HasOplogService};
+use crate::durable_host::durable_session::SessionControlMetadata;
+use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
+use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
+use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
+use golem_common::base_model::durable_stream::{StreamId, StreamSessionKeyV1};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
+    DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
+    OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
     SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::debug;
 
-/// Hash field holding the bounded part of the cached `AgentStatusRecord` (everything except the
-/// unbounded fields that are stored separately). Always present for a cached status; its absence is
-/// treated as a cache miss.
+/// Hash field holding the small part of the cached `AgentStatusRecord`. Always present for a cached
+/// status; its absence is treated as a cache miss.
 const STATUS_CORE_FIELD: &str = "core";
+/// Hash field holding the bounded invocation-result membership. Written only when it changes.
+const STATUS_MEMBERSHIP_FIELD: &str = "membership";
 /// Hash field holding `(skipped_regions, deleted_regions)`. Written only when the regions change.
 const STATUS_REGIONS_FIELD: &str = "regions";
 /// Hash field holding `(failed_updates, successful_updates)`. Written only when they change.
 const STATUS_UPDATES_FIELD: &str = "updates";
-/// Prefix for per-idempotency-key invocation result fields (`ir:{idempotency_key}` -> `OplogIndex`).
-const STATUS_INVOCATION_RESULT_PREFIX: &str = "ir:";
 /// Prefix for per-transfer target receipt fields (`tr:{transfer_id}` -> receipt identity).
 const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
-
-fn status_invocation_result_field(key: &IdempotencyKey) -> String {
-    format!("{STATUS_INVOCATION_RESULT_PREFIX}{}", key.value)
-}
+const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
+const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 
 fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
     format!("{STATUS_RECEIVED_CARD_TRANSFER_PREFIX}{transfer_id}")
 }
 
+fn invocation_result_index_field(key: &IdempotencyKey) -> String {
+    format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{}", key.value)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
+pub struct InvocationResultIndexMetadata {
+    pub covered_through: OplogIndex,
+    pub revert_generation: u64,
+    pub current_idempotency_key: Option<IdempotencyKey>,
+    pub cancelled_idempotency_key: Option<IdempotencyKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, desert_rust::BinaryCodec)]
+struct PersistedInvocationResult {
+    // Catch-up is serialized per agent and clears the whole hash before advancing to a newer
+    // revert generation, so a complete same-generation index cannot retain older-generation
+    // fields.
+    revert_generation: u64,
+    oplog_index: OplogIndex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationResultIndexLookup {
+    Found(OplogIndex),
+    DefinitiveMiss,
+    Incomplete,
+}
+
 /// The result of computing a status cache write: `(fields_to_set, field_names_to_delete)`.
 type StatusFieldWrites = (Vec<(String, Vec<u8>)>, Vec<String>);
 
-/// The unbounded parts of an [`AgentStatusRecord`] that are stored separately from `core`. They are
+pub struct DurableStreamRecoveryMetadata {
+    pub(crate) covered_through: OplogIndex,
+    pub(crate) sessions: Vec<(StreamSessionKeyV1, SessionControlMetadata)>,
+    pub(crate) consumer_deleting:
+        Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
+}
+
+/// The potentially large parts of an [`AgentStatusRecord`] that are stored separately from `core`. They are
 /// taken out of the record (`mem::take`) before serializing `core`, so this never clones the large
 /// fields.
 struct SplitStatusParts {
-    invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    invocation_results: InvocationResultMembership,
     received_card_transfers: ReceivedCardTransferIndex,
     failed_updates: Vec<FailedUpdateRecord>,
     successful_updates: Vec<SuccessfulUpdateRecord>,
@@ -73,12 +112,15 @@ struct SplitStatusParts {
     deleted_regions: DeletedRegions,
 }
 
-/// Moves the unbounded fields out of `status`, leaving it as the small fixed-size `core` that is
+/// Moves the separately persisted fields out of `status`, leaving the small `core` that is
 /// serialized into the `core` field. Uses `mem::take`/`mem::replace`, so it does not clone the
-/// (potentially large) invocation results / updates / regions.
+/// potentially large updates, regions, or transfer index.
 fn split_status(status: &mut AgentStatusRecord) -> SplitStatusParts {
     SplitStatusParts {
-        invocation_results: std::mem::take(&mut status.invocation_results),
+        invocation_results: std::mem::replace(
+            &mut status.invocation_results,
+            InvocationResultMembership::new(0, 1, 1),
+        ),
         received_card_transfers: std::mem::take(&mut status.received_card_transfers),
         failed_updates: std::mem::take(&mut status.failed_updates),
         successful_updates: std::mem::take(&mut status.successful_updates),
@@ -91,10 +133,9 @@ fn split_status(status: &mut AgentStatusRecord) -> SplitStatusParts {
 /// date.
 ///
 /// `core` must be the already-split (emptied) record. When `previous` is `Some`, the result is a
-/// delta against it (this is the hot path; invocation results only ever grow there, so `dels` is
-/// usually empty). When `previous` is `None` (cold path: create / cache-miss recompute / detach
-/// reload), every part is written and `existing_split_fields` is used to delete stale `ir:` and
-/// `tr:` fields that are no longer present.
+/// delta against it (this is the hot path, where `dels` is usually empty). When `previous` is
+/// `None` (cold path: create / cache-miss recompute / detach reload), every part is written and
+/// `existing_split_fields` is used to delete stale `tr:` fields.
 ///
 /// `core` is always part of `sets` (it carries the `oplog_idx` marker), so the marker and every
 /// written part advance together in one atomic `set_many` by the caller.
@@ -108,6 +149,17 @@ fn compute_status_field_writes(
     let mut dels: Vec<String> = Vec::new();
 
     sets.push((STATUS_CORE_FIELD.to_string(), serialize(core)?));
+
+    let membership_changed = match previous {
+        Some(previous) => previous.invocation_results != parts.invocation_results,
+        None => true,
+    };
+    if membership_changed {
+        sets.push((
+            STATUS_MEMBERSHIP_FIELD.to_string(),
+            serialize(&parts.invocation_results)?,
+        ));
+    }
 
     let regions_changed = match previous {
         Some(previous) => {
@@ -139,17 +191,6 @@ fn compute_status_field_writes(
 
     match previous {
         Some(previous) => {
-            for (key, oplog_idx) in &parts.invocation_results {
-                if previous.invocation_results.get(key) != Some(oplog_idx) {
-                    sets.push((status_invocation_result_field(key), serialize(oplog_idx)?));
-                }
-            }
-            for key in previous.invocation_results.keys() {
-                if !parts.invocation_results.contains_key(key) {
-                    dels.push(status_invocation_result_field(key));
-                }
-            }
-
             for (transfer_id, state) in parts
                 .received_card_transfers
                 .changes_from(&previous.received_card_transfers)
@@ -162,15 +203,6 @@ fn compute_status_field_writes(
             }
         }
         None => {
-            let new_fields: HashSet<String> = parts
-                .invocation_results
-                .keys()
-                .map(status_invocation_result_field)
-                .collect();
-            for (key, oplog_idx) in &parts.invocation_results {
-                sets.push((status_invocation_result_field(key), serialize(oplog_idx)?));
-            }
-
             let new_transfer_fields: HashSet<String> = parts
                 .received_card_transfers
                 .iter()
@@ -184,10 +216,8 @@ fn compute_status_field_writes(
             }
 
             for field in existing_split_fields {
-                if (field.starts_with(STATUS_INVOCATION_RESULT_PREFIX)
-                    && !new_fields.contains(field))
-                    || (field.starts_with(STATUS_RECEIVED_CARD_TRANSFER_PREFIX)
-                        && !new_transfer_fields.contains(field))
+                if field.starts_with(STATUS_RECEIVED_CARD_TRANSFER_PREFIX)
+                    && !new_transfer_fields.contains(field)
                 {
                     dels.push(field.clone());
                 }
@@ -206,14 +236,16 @@ fn reassemble_cached_status(
     fields: impl IntoIterator<Item = (String, bytes::Bytes)>,
 ) -> Option<AgentStatusRecord> {
     let mut core: Option<AgentStatusRecord> = None;
+    let mut invocation_results: Option<InvocationResultMembership> = None;
     let mut regions: Option<(DeletedRegions, DeletedRegions)> = None;
     let mut updates: Option<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)> = None;
-    let mut invocation_results: HashMap<IdempotencyKey, OplogIndex> = HashMap::new();
     let mut received_card_transfers = ReceivedCardTransferIndex::default();
 
     for (name, bytes) in fields {
         if name == STATUS_CORE_FIELD {
             core = Some(deserialize::<AgentStatusRecord>(&bytes).ok()?);
+        } else if name == STATUS_MEMBERSHIP_FIELD {
+            invocation_results = Some(deserialize::<InvocationResultMembership>(&bytes).ok()?);
         } else if name == STATUS_REGIONS_FIELD {
             regions = Some(deserialize::<(DeletedRegions, DeletedRegions)>(&bytes).ok()?);
         } else if name == STATUS_UPDATES_FIELD {
@@ -221,9 +253,6 @@ fn reassemble_cached_status(
                 deserialize::<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)>(&bytes)
                     .ok()?,
             );
-        } else if let Some(key) = name.strip_prefix(STATUS_INVOCATION_RESULT_PREFIX) {
-            let oplog_idx = deserialize::<OplogIndex>(&bytes).ok()?;
-            invocation_results.insert(IdempotencyKey::new(key.to_string()), oplog_idx);
         } else if let Some(transfer_id) = name.strip_prefix(STATUS_RECEIVED_CARD_TRANSFER_PREFIX) {
             let transfer_id = uuid::Uuid::parse_str(transfer_id).ok()?;
             let state = deserialize::<ReceivedCardTransferState>(&bytes).ok()?;
@@ -233,6 +262,7 @@ fn reassemble_cached_status(
     }
 
     let mut status = core?;
+    status.invocation_results = invocation_results?;
     if let Some((skipped_regions, deleted_regions)) = regions {
         status.skipped_regions = skipped_regions;
         status.deleted_regions = deleted_regions;
@@ -241,7 +271,6 @@ fn reassemble_cached_status(
         status.failed_updates = failed_updates;
         status.successful_updates = successful_updates;
     }
-    status.invocation_results = invocation_results;
     status.received_card_transfers = received_card_transfers;
     Some(status)
 }
@@ -261,9 +290,83 @@ pub trait WorkerService: Send + Sync {
 
     async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId);
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError>;
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
+
+    async fn lookup_durable_stream_session(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        key: &IdempotencyKey,
+    ) -> Result<Option<DurableStreamSessionStatus>, String>;
+
+    /// Reads per-session metadata through a captured persisted horizon, independently of status
+    /// publication. Payloads remain in the oplog and are addressed by index.
+    async fn lookup_durable_stream_control_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _key: &StreamSessionKeyV1,
+    ) -> Result<SessionControlMetadata, String> {
+        Err("durable stream control metadata is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_producer_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _keys: Vec<ProducerMetadataKey>,
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+        Err("durable stream producer metadata is unavailable".into())
+    }
+
+    async fn read_durable_stream_consumer_page(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _key: &StreamSessionKeyV1,
+        _stream: StreamId,
+        _page: u64,
+    ) -> Result<Vec<OplogIndex>, String> {
+        Err("durable stream consumer index is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_resume_offset(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _key: &StreamSessionKeyV1,
+        _attempt: golem_common::model::durable_stream::AttemptId,
+    ) -> Result<Option<OplogIndex>, String> {
+        Err("durable stream resume index is unavailable".into())
+    }
+
+    async fn lookup_durable_stream_recovery_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<DurableStreamRecoveryMetadata, String> {
+        Err("durable stream recovery index is unavailable".into())
+    }
+
+    async fn catch_up_invocation_result_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _status: &AgentStatusRecord,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn lookup_invocation_result_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _status: &AgentStatusRecord,
+        _idempotency_key: &IdempotencyKey,
+    ) -> Result<InvocationResultIndexLookup, String> {
+        Ok(InvocationResultIndexLookup::Incomplete)
+    }
 
     /// Returns the persisted [`AgentMode`] for the worker, if it exists.
     ///
@@ -277,10 +380,10 @@ pub trait WorkerService: Send + Sync {
     /// Writes the cached status *blob* for the worker (no `RunningWorkers` index maintenance).
     ///
     /// The cached `AgentStatusRecord` is stored split across several fields of a per-agent hash
-    /// (see [`KeyValueStorageNamespace::AgentStatus`]): a small `core`, the `regions`, the
-    /// `updates`, and one field per idempotency key. Only the fields that actually changed are
-    /// written, so the unbounded parts (most notably the invocation results) are not re-sent on
-    /// every flush.
+    /// (see [`KeyValueStorageNamespace::AgentStatus`]): a small `core`, the bounded `membership`,
+    /// the `regions`, the `updates`, and one field per received card transfer. Only fields that
+    /// changed are written. The complete invocation-result index is maintained in its dedicated
+    /// namespace.
     ///
     /// `previous_status` is the status currently held in the cache (i.e. the last value
     /// successfully written). When provided, the delta of changed fields is computed against it.
@@ -369,6 +472,27 @@ pub struct DefaultWorkerService {
     oplog_service: Arc<dyn OplogService>,
     component_service: Arc<dyn ComponentService>,
     config: Arc<GolemConfig>,
+    stream_session_index: Arc<StreamSessionIndexService>,
+    invocation_result_index_locks: Arc<StdMutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>>,
+}
+
+struct InvocationResultIndexLock {
+    registry: Arc<StdMutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>>,
+    owned_agent_id: OwnedAgentId,
+    inner: Arc<AsyncMutex<()>>,
+}
+
+impl Drop for InvocationResultIndexLock {
+    fn drop(&mut self) {
+        let mut locks = self.registry.lock().unwrap();
+        if Arc::strong_count(&self.inner) == 1
+            && locks
+                .get(&self.owned_agent_id)
+                .is_some_and(|registered| registered.ptr_eq(&Arc::downgrade(&self.inner)))
+        {
+            locks.remove(&self.owned_agent_id);
+        }
+    }
 }
 
 impl DefaultWorkerService {
@@ -379,12 +503,41 @@ impl DefaultWorkerService {
         component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
     ) -> Self {
+        let stream_session_index = oplog_service.stream_session_index().unwrap_or_else(|| {
+            let index = Arc::new(StreamSessionIndexService::new(
+                key_value_storage.clone(),
+                Arc::downgrade(&oplog_service),
+            ));
+            oplog_service.set_stream_session_index(index.clone());
+            index
+        });
         Self {
             key_value_storage,
             shard_service,
             oplog_service,
             component_service,
             config,
+            stream_session_index,
+            invocation_result_index_locks: Arc::new(StdMutex::new(HashMap::new())),
+        }
+    }
+
+    fn invocation_result_index_lock(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> InvocationResultIndexLock {
+        let mut locks = self.invocation_result_index_locks.lock().unwrap();
+        let inner = if let Some(lock) = locks.get(owned_agent_id).and_then(Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(AsyncMutex::new(()));
+            locks.insert(owned_agent_id.clone(), Arc::downgrade(&lock));
+            lock
+        };
+        InvocationResultIndexLock {
+            registry: self.invocation_result_index_locks.clone(),
+            owned_agent_id: owned_agent_id.clone(),
+            inner,
         }
     }
 
@@ -412,7 +565,7 @@ impl DefaultWorkerService {
     }
 
     /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
-    /// `core`, `regions`, `updates`, and `ir:{idempotency_key}`).
+    /// `core`, `membership`, `regions`, `updates`, and `tr:{transfer_id}`).
     fn status_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatus {
             agent_id: agent_id.clone(),
@@ -425,6 +578,12 @@ impl DefaultWorkerService {
     /// fold baseline that always predates any later jump region.
     fn checkpoint_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatusCheckpoint {
+            agent_id: agent_id.clone(),
+        }
+    }
+
+    fn invocation_result_index_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+        KeyValueStorageNamespace::AgentInvocationResultIndex {
             agent_id: agent_id.clone(),
         }
     }
@@ -444,7 +603,7 @@ impl DefaultWorkerService {
     }
 
     /// Reads the cached `AgentStatusRecord` for `owned_agent_id`, if any, reassembling it from the
-    /// split hash fields (`core`, `regions`, `updates`, `ir:{key}`, `tr:{transfer_id}`). Returns
+    /// split hash fields (`core`, `membership`, `regions`, `updates`, `tr:{transfer_id}`). Returns
     /// `None` if the `core` field is missing (cache miss) or any field cannot be deserialized in
     /// the current format (treated as a cache miss).
     ///
@@ -459,7 +618,7 @@ impl DefaultWorkerService {
     }
 
     /// Reads a split status record (live cache or checkpoint) from `namespace`, reassembling it
-    /// from the `core` / `regions` / `updates` / `ir:{key}` / `tr:{transfer_id}` fields. Returns
+    /// from the `core` / `membership` / `regions` / `updates` / `tr:{transfer_id}` fields. Returns
     /// `None` if `core` is missing (cache miss / torn write) or any field cannot be deserialized in
     /// the current format.
     ///
@@ -470,8 +629,8 @@ impl DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         namespace: KeyValueStorageNamespace,
     ) -> Option<AgentStatusRecord> {
-        // Single atomic read of every field of the per-agent status hash (`core`, `regions`,
-        // `updates`, `ir:{key}`, `tr:{transfer_id}`). This is one round-trip (Redis `HGETALL`, a single
+        // Single atomic read of every field of the per-agent status hash (`core`, `membership`,
+        // `regions`, `updates`, `tr:{transfer_id}`). This is one round-trip (Redis `HGETALL`, a single
         // `SELECT ... WHERE namespace`, or one locked scan in memory) that observes a consistent
         // snapshot, so it cannot reassemble a torn, mixed-generation record. (A naive `keys` +
         // `get_many` would be two round-trips, leaving a window where a concurrent writer — the
@@ -498,14 +657,14 @@ impl DefaultWorkerService {
     /// Writes the split status fields for an agent, sending only the parts that changed.
     ///
     /// `core` is always written (it carries the `oplog_idx` marker that versions the whole record).
-    /// `regions`/`updates` are written only when they differ from `previous_status`, and invocation
-    /// results and received card transfers are written per key (only newly added/changed keys).
+    /// `membership`/`regions`/`updates` are written only when they differ from `previous_status`,
+    /// and received card transfers are written per key (only newly added/changed keys).
     ///
     /// Atomicity: the marker (in `core`) and every field written in the same call advance together
     /// in a single atomic `set_many` (one `HMSET` on Redis, one transaction on SQL). This preserves
     /// the invariant that each persisted field's content matches `core.oplog_idx`, which the oplog
-    /// fold relies on. When stale fields must be removed (e.g. invocation results dropped by a
-    /// revert), they are deleted *together with* `core` before the `set_many`. Dropping `core`
+    /// fold relies on. When stale fields must be removed, they are deleted *together with* `core`
+    /// before the `set_many`. Dropping `core`
     /// first is what makes the two-step delete-then-write crash-safe: with `core` absent, any crash
     /// or read in the gap before the final write is treated as a cache miss and recomputed from the
     /// oplog, rather than reassembling a torn record whose remaining fields no longer match the
@@ -553,7 +712,7 @@ impl DefaultWorkerService {
                 })?;
         }
 
-        // Single atomic write: core + changed parts + new/updated invocation results.
+        // Single atomic write: core + changed parts.
         let pairs: Vec<(&str, &[u8])> = sets
             .iter()
             .map(|(field, bytes)| (field.as_str(), bytes.as_slice()))
@@ -583,7 +742,7 @@ impl DefaultWorkerService {
             return Ok(status_value);
         }
 
-        // Split the record: take the unbounded fields out so `core` stays small and fixed-size.
+        // Split the record: take the potentially large fields out so `core` stays small.
         // `split_status` moves the large fields out of `core` into `parts` (no clone).
         let mut core = status_value;
         let parts = split_status(&mut core);
@@ -594,11 +753,11 @@ impl DefaultWorkerService {
         // Reassemble the record (moving the parts back into `core`, no clone) so the caller gets
         // back a complete baseline for computing the next delta.
         let mut reassembled = core;
+        reassembled.invocation_results = parts.invocation_results;
         reassembled.skipped_regions = parts.skipped_regions;
         reassembled.deleted_regions = parts.deleted_regions;
         reassembled.failed_updates = parts.failed_updates;
         reassembled.successful_updates = parts.successful_updates;
-        reassembled.invocation_results = parts.invocation_results;
         reassembled.received_card_transfers = parts.received_card_transfers;
         Ok(reassembled)
     }
@@ -628,6 +787,31 @@ impl DefaultWorkerService {
                     panic!("failed to remove agent status in the KV storage: {err}")
                 });
         }
+    }
+
+    async fn clear_invocation_result_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        namespace: KeyValueStorageNamespace,
+    ) -> Result<(), String> {
+        let fields = self
+            .key_value_storage
+            .with("worker", "clear_invocation_result_index")
+            .keys(namespace.clone())
+            .await
+            .map_err(|err| {
+                format!("failed to list invocation result index fields for {owned_agent_id}: {err}")
+            })?;
+        if !fields.is_empty() {
+            self.key_value_storage
+                .with("worker", "clear_invocation_result_index")
+                .del_many(namespace, fields)
+                .await
+                .map_err(|err| {
+                    format!("failed to clear invocation result index for {owned_agent_id}: {err}")
+                })?;
+        }
+        Ok(())
     }
 
     /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
@@ -680,6 +864,63 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
+    async fn lookup_durable_stream_producer_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        keys: Vec<ProducerMetadataKey>,
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+        self.stream_session_index
+            .lookup_producer_metadata(owned_agent_id, agent_mode, keys)
+            .await
+    }
+
+    async fn lookup_durable_stream_recovery_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<DurableStreamRecoveryMetadata, String> {
+        self.stream_session_index
+            .lookup_recovery_metadata(owned_agent_id, agent_mode)
+            .await
+    }
+
+    async fn lookup_durable_stream_resume_offset(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        key: &StreamSessionKeyV1,
+        attempt: golem_common::model::durable_stream::AttemptId,
+    ) -> Result<Option<OplogIndex>, String> {
+        self.stream_session_index
+            .lookup_resume_offset(owned_agent_id, agent_mode, key, attempt)
+            .await
+    }
+
+    async fn lookup_durable_stream_control_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        key: &StreamSessionKeyV1,
+    ) -> Result<SessionControlMetadata, String> {
+        self.stream_session_index
+            .lookup_control_metadata(owned_agent_id, agent_mode, key)
+            .await
+    }
+
+    async fn read_durable_stream_consumer_page(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        key: &StreamSessionKeyV1,
+        stream: StreamId,
+        page: u64,
+    ) -> Result<Vec<OplogIndex>, String> {
+        self.stream_session_index
+            .read_consumer_page(owned_agent_id, key, stream, page)
+            .await
+    }
+
+    #[tracing::instrument(name = "worker_metadata.get", level = "debug", skip_all)]
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
@@ -758,6 +999,7 @@ impl WorkerService for DefaultWorkerService {
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,
+                        invocation_results: self.config.invocation_results.membership(),
                         agent_mode,
                         ..AgentStatusRecord::default()
                     },
@@ -786,8 +1028,26 @@ impl WorkerService for DefaultWorkerService {
                             None,
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
-                        .await
-                        .expect("Failed to recompute worker status for existing worker");
+                        .await;
+
+                        let last_known_status = match last_known_status {
+                            Ok(Some(status)) => status,
+                            Ok(None) => return None,
+                            Err(error) => {
+                                tracing::error!(
+                                    agent_id = %owned_agent_id,
+                                    %error,
+                                    "Failed to recompute cold worker status"
+                                );
+                                // The Create entry still proves the worker exists. Leave status
+                                // unresolved so typed reconstruction callers report the failure,
+                                // rather than treating a corrupt status payload as a missing worker.
+                                return Some(GetWorkerMetadataResult {
+                                    initial_worker_metadata,
+                                    last_known_status: None,
+                                });
+                            }
+                        };
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
@@ -819,13 +1079,17 @@ impl WorkerService for DefaultWorkerService {
         result
     }
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove");
 
         if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await {
             self.oplog_service.delete(owned_agent_id, agent_mode).await;
         }
         self.remove_cached_status(owned_agent_id).await;
+        self.stream_session_index
+            .clear(owned_agent_id)
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
 
         let shard_assignment = self
             .shard_service
@@ -844,6 +1108,7 @@ impl WorkerService for DefaultWorkerService {
                     "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
                 )
             });
+        Ok(())
     }
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId) {
@@ -856,6 +1121,11 @@ impl WorkerService for DefaultWorkerService {
             .await;
         self.remove_split_status(owned_agent_id, Self::checkpoint_namespace(agent_id))
             .await;
+        self.remove_split_status(
+            owned_agent_id,
+            Self::invocation_result_index_namespace(agent_id),
+        )
+        .await;
 
         // The `agent_mode` key has its own lifecycle and lives in the `Worker` namespace.
         self.key_value_storage
@@ -870,6 +1140,199 @@ impl WorkerService for DefaultWorkerService {
             .unwrap_or_else(|err| {
                 panic!("failed to remove worker agent mode in the KV storage: {err}")
             });
+    }
+
+    async fn lookup_durable_stream_session(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        key: &IdempotencyKey,
+    ) -> Result<Option<DurableStreamSessionStatus>, String> {
+        if let Some(value) = status.durable_stream_sessions.get(key) {
+            return Ok(Some(value.clone()));
+        }
+        if !status.durable_stream_sessions.has_history() {
+            return Ok(None);
+        }
+        self.stream_session_index
+            .lookup_persisted_offsets(owned_agent_id, agent_mode, status.oplog_idx, key)
+            .await
+    }
+
+    async fn catch_up_invocation_result_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+    ) -> Result<(), String> {
+        if agent_mode == AgentMode::Ephemeral {
+            return Ok(());
+        }
+
+        let lock = self.invocation_result_index_lock(owned_agent_id);
+        let _guard = lock.inner.lock().await;
+        async {
+            let namespace = Self::invocation_result_index_namespace(&owned_agent_id.agent_id);
+            let persisted: Option<Result<InvocationResultIndexMetadata, String>> = self
+                .key_value_storage
+                .with_entity("worker", "read_invocation_result_index", "metadata")
+                .get_attempt_deserialize(
+                    namespace.clone(),
+                    INVOCATION_RESULT_INDEX_METADATA_FIELD,
+                )
+                .await?;
+            let status_generation = status.invocation_results.revert_generation();
+            let mut metadata = match persisted {
+                Some(Ok(metadata)) if metadata.revert_generation > status_generation => {
+                    return Ok(());
+                }
+                Some(Ok(metadata)) if metadata.revert_generation == status_generation => {
+                    if metadata.covered_through >= status.oplog_idx {
+                        return Ok(());
+                    }
+                    metadata
+                }
+                Some(Ok(_)) | Some(Err(_)) => {
+                    self.clear_invocation_result_index(owned_agent_id, namespace.clone())
+                        .await?;
+                    InvocationResultIndexMetadata {
+                        covered_through: OplogIndex::NONE,
+                        revert_generation: status_generation,
+                        current_idempotency_key: None,
+                        cancelled_idempotency_key: None,
+                    }
+                }
+                None => InvocationResultIndexMetadata {
+                    covered_through: OplogIndex::NONE,
+                    revert_generation: status_generation,
+                    current_idempotency_key: None,
+                    cancelled_idempotency_key: None,
+                },
+            };
+
+            while metadata.covered_through < status.oplog_idx {
+                let remaining = status.oplog_idx.as_u64() - metadata.covered_through.as_u64();
+                let count = remaining
+                    .min(
+                        self.config
+                            .invocation_results
+                            .physical_index_catch_up_chunk_size,
+                    )
+                    .max(1);
+                let entries = self
+                    .oplog_service
+                    .read_exact(
+                        owned_agent_id,
+                        agent_mode,
+                        metadata.covered_through.next(),
+                        count,
+                    )
+                    .await;
+                if entries.is_empty() {
+                    return Err(format!(
+                        "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {} was empty",
+                        metadata.covered_through.next()
+                    ));
+                }
+
+                let mut mappings = HashMap::new();
+                fold_invocation_result_entries(
+                    &mut metadata.current_idempotency_key,
+                    &mut metadata.cancelled_idempotency_key,
+                    &status.deleted_regions,
+                    &entries,
+                    |key, index| {
+                        mappings.insert(key.clone(), index);
+                    },
+                );
+                metadata.covered_through = *entries.keys().max().unwrap();
+
+                let mut fields = Vec::with_capacity(mappings.len() + 1);
+                for (key, oplog_index) in mappings {
+                    fields.push((
+                        invocation_result_index_field(&key),
+                        serialize(&PersistedInvocationResult {
+                            revert_generation: metadata.revert_generation,
+                            oplog_index,
+                        })?,
+                    ));
+                }
+                fields.push((
+                    INVOCATION_RESULT_INDEX_METADATA_FIELD.to_string(),
+                    serialize(&metadata)?,
+                ));
+                let pairs: Vec<(&str, &[u8])> = fields
+                    .iter()
+                    .map(|(field, value)| (field.as_str(), value.as_slice()))
+                    .collect();
+                self.key_value_storage
+                    .with_entity(
+                        "worker",
+                        "advance_invocation_result_index",
+                        "invocation_result",
+                    )
+                    .set_many_raw(namespace.clone(), &pairs)
+                    .await?;
+                crate::metrics::workers::record_invocation_result_index_catch_up(entries.len());
+            }
+
+            Ok(())
+        }
+        .await
+    }
+
+    async fn lookup_invocation_result_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        status: &AgentStatusRecord,
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<InvocationResultIndexLookup, String> {
+        let values = self
+            .key_value_storage
+            .with_entity(
+                "worker",
+                "lookup_invocation_result_index",
+                "invocation_result",
+            )
+            .get_many_raw(
+                Self::invocation_result_index_namespace(&owned_agent_id.agent_id),
+                vec![
+                    INVOCATION_RESULT_INDEX_METADATA_FIELD.to_string(),
+                    invocation_result_index_field(idempotency_key),
+                ],
+            )
+            .await?;
+        let Some(metadata) = values.first().and_then(Option::as_ref) else {
+            return Ok(InvocationResultIndexLookup::Incomplete);
+        };
+        let metadata: InvocationResultIndexMetadata = deserialize(metadata)?;
+        if metadata.revert_generation != status.invocation_results.revert_generation() {
+            return Ok(InvocationResultIndexLookup::Incomplete);
+        }
+
+        let complete = metadata.covered_through >= status.oplog_idx
+            || status
+                .invocation_results
+                .oldest_retained_index()
+                .is_some_and(|oldest| oldest <= metadata.covered_through);
+        if !complete {
+            return Ok(InvocationResultIndexLookup::Incomplete);
+        }
+
+        let Some(value) = values.get(1).and_then(Option::as_ref) else {
+            return Ok(InvocationResultIndexLookup::DefinitiveMiss);
+        };
+        let value: PersistedInvocationResult = deserialize(value)?;
+        if value.revert_generation != metadata.revert_generation
+            || status
+                .deleted_regions
+                .is_in_deleted_region(value.oplog_index)
+        {
+            return Ok(InvocationResultIndexLookup::DefinitiveMiss);
+        }
+
+        Ok(InvocationResultIndexLookup::Found(value.oplog_index))
     }
 
     async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
@@ -914,6 +1377,22 @@ impl WorkerService for DefaultWorkerService {
 
         debug!("Writing cached agent status for {owned_agent_id} to {status_value:?}");
 
+        if status_value.has_durable_stream_history {
+            self.stream_session_index
+                .catch_up(
+                    owned_agent_id,
+                    status_value.agent_mode,
+                    status_value.oplog_idx,
+                )
+                .await?;
+        }
+
+        self.catch_up_invocation_result_index(
+            owned_agent_id,
+            status_value.agent_mode,
+            &status_value,
+        )
+        .await?;
         self.write_split_status(
             owned_agent_id,
             Self::status_namespace(&owned_agent_id.agent_id),
@@ -954,6 +1433,11 @@ impl WorkerService for DefaultWorkerService {
             checkpoint.oplog_idx
         );
 
+        if checkpoint.has_durable_stream_history {
+            self.stream_session_index
+                .catch_up(owned_agent_id, checkpoint.agent_mode, checkpoint.oplog_idx)
+                .await?;
+        }
         self.write_split_status(
             owned_agent_id,
             Self::checkpoint_namespace(&owned_agent_id.agent_id),
@@ -1032,16 +1516,329 @@ impl HasComponentService for DefaultWorkerService {
 }
 
 #[cfg(test)]
+pub(crate) mod session_index_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ExecutionStatus;
+    use crate::services::shard::ShardServiceDefault;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use async_trait::async_trait;
     use bytes::Bytes;
     use golem_common::model::Timestamp;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
     use golem_common::model::card::{Card, CardId, StoredCard};
-    use golem_common::model::component::ComponentRevision;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::{OplogPayload, PayloadId, RawOplogPayload};
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
-    use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
-    use std::collections::VecDeque;
+    use golem_common::model::{
+        AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor,
+    };
+    use golem_common::read_only_lock;
+    use golem_service_base::model::component::Component;
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
+    use tokio::sync::Notify;
+
+    #[derive(Debug)]
+    struct IndexTestOplogService {
+        entries: BTreeMap<OplogIndex, OplogEntry>,
+        stream_index: std::sync::OnceLock<Arc<StreamSessionIndexService>>,
+        reads: StdMutex<Vec<(OplogIndex, u64)>>,
+        pause_next_read: AtomicBool,
+        read_started: Notify,
+        resume_read: Notify,
+    }
+
+    impl IndexTestOplogService {
+        fn new(entries: BTreeMap<OplogIndex, OplogEntry>) -> Self {
+            Self {
+                entries,
+                stream_index: std::sync::OnceLock::new(),
+                reads: StdMutex::new(Vec::new()),
+                pause_next_read: AtomicBool::new(false),
+                read_started: Notify::new(),
+                resume_read: Notify::new(),
+            }
+        }
+
+        fn pause_next_read(&self) {
+            self.pause_next_read.store(true, Ordering::Release);
+        }
+
+        fn read_starts(&self) -> Vec<OplogIndex> {
+            self.reads
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(start, _)| *start)
+                .collect()
+        }
+
+        fn clear_reads(&self) {
+            self.reads.lock().unwrap().clear();
+        }
+    }
+
+    #[async_trait]
+    impl OplogService for IndexTestOplogService {
+        fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
+            self.stream_index.set(index).unwrap();
+        }
+
+        fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
+            self.stream_index.get().cloned()
+        }
+
+        async fn create(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _initial_entry: OplogEntry,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn crate::services::oplog::Oplog> {
+            unreachable!()
+        }
+
+        async fn create_fresh(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _initial_entry: OplogEntry,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn crate::services::oplog::Oplog> {
+            unreachable!()
+        }
+
+        async fn open(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _last_oplog_index: Option<OplogIndex>,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn crate::services::oplog::Oplog> {
+            unreachable!()
+        }
+
+        async fn get_last_index(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> OplogIndex {
+            self.entries
+                .keys()
+                .next_back()
+                .copied()
+                .unwrap_or(OplogIndex::NONE)
+        }
+
+        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+            unreachable!()
+        }
+
+        async fn read_exact(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            idx: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.reads.lock().unwrap().push((idx, n));
+            if self.pause_next_read.swap(false, Ordering::AcqRel) {
+                self.read_started.notify_one();
+                self.resume_read.notified().await;
+            }
+            let end = idx.as_u64().saturating_add(n.saturating_sub(1));
+            self.entries
+                .range(idx..=OplogIndex::from_u64(end))
+                .map(|(index, entry)| (*index, entry.clone()))
+                .collect()
+        }
+
+        async fn exists(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
+            true
+        }
+
+        async fn scan_for_component(
+            &self,
+            _environment_id: &EnvironmentId,
+            _component_id: &ComponentId,
+            _modes: Option<AgentMode>,
+            _cursor: ScanCursor,
+            _count: u64,
+        ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn upload_raw_payload(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _data: Vec<u8>,
+        ) -> Result<RawOplogPayload, String> {
+            unreachable!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unreachable!()
+        }
+    }
+
+    struct IndexTestComponentService;
+
+    #[async_trait]
+    impl ComponentService for IndexTestComponentService {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn get_metadata(
+            &self,
+            _component_id: ComponentId,
+            _forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            Vec::new()
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+    }
+
+    fn invocation_pair(
+        entries: &mut BTreeMap<OplogIndex, OplogEntry>,
+        started_at: u64,
+        key: &IdempotencyKey,
+    ) {
+        entries.insert(
+            OplogIndex::from_u64(started_at),
+            OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                idempotency_key: key.clone(),
+                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+                    target_revision: ComponentRevision::INITIAL,
+                })),
+                trace_id: TraceId::generate(),
+                trace_states: Vec::new(),
+                invocation_context: Vec::new(),
+                wallet_pin: None,
+            },
+        );
+        entries.insert(
+            OplogIndex::from_u64(started_at + 1),
+            OplogEntry::AgentInvocationFinished {
+                timestamp: Timestamp::now_utc(),
+                result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
+                method_name: None,
+                consumed_fuel: 0,
+                component_revision: ComponentRevision::INITIAL,
+            },
+        );
+    }
+
+    fn invocation_entries(keys: &[IdempotencyKey]) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut entries = BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::no_op())]);
+        for (offset, key) in keys.iter().enumerate() {
+            invocation_pair(&mut entries, 2 + offset as u64 * 2, key);
+        }
+        entries
+    }
+
+    fn invocation_status(
+        oplog_idx: u64,
+        capacity: usize,
+        results: &[(&IdempotencyKey, u64)],
+        revert_generation: u64,
+        deleted_regions: DeletedRegions,
+    ) -> AgentStatusRecord {
+        let mut invocation_results = InvocationResultMembership::new(capacity, 128, 3);
+        for (key, index) in results {
+            invocation_results.insert((*key).clone(), OplogIndex::from_u64(*index));
+        }
+        invocation_results.set_revert_generation(revert_generation);
+        AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(oplog_idx),
+            invocation_results,
+            deleted_regions,
+            ..AgentStatusRecord::default()
+        }
+    }
+
+    fn index_test_service(
+        entries: BTreeMap<OplogIndex, OplogEntry>,
+    ) -> (
+        Arc<DefaultWorkerService>,
+        Arc<IndexTestOplogService>,
+        OwnedAgentId,
+    ) {
+        let oplog = Arc::new(IndexTestOplogService::new(entries));
+        let mut config = GolemConfig::default();
+        config.invocation_results.physical_index_catch_up_chunk_size = 2;
+        let service = Arc::new(DefaultWorkerService::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            Arc::new(ShardServiceDefault::new()),
+            oplog.clone(),
+            Arc::new(IndexTestComponentService),
+            Arc::new(config),
+        ));
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "invocation-index-test".to_string(),
+        };
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+        (service, oplog, owned_agent_id)
+    }
+
+    async fn invocation_index_metadata(
+        service: &DefaultWorkerService,
+        owned_agent_id: &OwnedAgentId,
+    ) -> InvocationResultIndexMetadata {
+        let value: Option<Result<InvocationResultIndexMetadata, String>> = service
+            .key_value_storage
+            .with_entity("test", "read_invocation_result_index", "metadata")
+            .get_attempt_deserialize(
+                DefaultWorkerService::invocation_result_index_namespace(&owned_agent_id.agent_id),
+                INVOCATION_RESULT_INDEX_METADATA_FIELD,
+            )
+            .await
+            .unwrap();
+        value.unwrap().unwrap()
+    }
 
     fn idempotency_key(value: &str) -> IdempotencyKey {
         IdempotencyKey::new(value.to_string())
@@ -1084,6 +1881,16 @@ mod tests {
             ReceivedCardTransferState::Received {
                 source_card_id: Some(CardId::new()),
                 card: stored_card(CardId::new()),
+            },
+        );
+        status.durable_stream_sessions.insert(
+            idempotency_key("stream-1"),
+            DurableStreamSessionStatus {
+                first_prepared: Some(OplogIndex::from_u64(30)),
+                prepared: Some(OplogIndex::from_u64(35)),
+                invocation_result: Some(OplogIndex::from_u64(40)),
+                finished: None,
+                ..Default::default()
             },
         );
         status.skipped_regions = DeletedRegions::from_regions([OplogRegion::from_index_range(
@@ -1158,6 +1965,20 @@ mod tests {
     }
 
     #[test]
+    fn missing_membership_field_is_a_cache_miss() {
+        let full = sample_status();
+        let mut core = full.clone();
+        let parts = split_status(&mut core);
+        let (sets, _) = compute_status_field_writes(None, &[], &core, &parts).unwrap();
+
+        let without_membership = sets
+            .into_iter()
+            .filter(|(name, _)| name != STATUS_MEMBERSHIP_FIELD)
+            .map(|(name, bytes)| (name, Bytes::from(bytes)));
+        assert!(reassemble_cached_status(without_membership).is_none());
+    }
+
+    #[test]
     fn hot_delta_only_writes_changed_fields() {
         let previous = sample_status();
 
@@ -1172,8 +1993,8 @@ mod tests {
             }
         }
 
-        // New status: a new invocation result + advanced marker, but identical regions/updates and
-        // unchanged existing invocation results.
+        // New status: a new bounded invocation result + advanced marker, but identical split
+        // regions/updates.
         let mut new = previous.clone();
         new.oplog_idx = OplogIndex::from_u64(50);
         new.invocation_results
@@ -1186,12 +2007,12 @@ mod tests {
 
         let written: HashSet<&str> = sets.iter().map(|(f, _)| f.as_str()).collect();
         assert!(written.contains(STATUS_CORE_FIELD));
-        assert!(written.contains(status_invocation_result_field(&idempotency_key("k3")).as_str()));
+        assert!(written.contains(STATUS_MEMBERSHIP_FIELD));
         // Unchanged parts are NOT re-sent.
         assert!(!written.contains(STATUS_REGIONS_FIELD));
         assert!(!written.contains(STATUS_UPDATES_FIELD));
-        assert!(!written.contains(status_invocation_result_field(&idempotency_key("k1")).as_str()));
         assert!(!written.contains(status_received_card_transfer_field(&transfer_id(1)).as_str()));
+        assert_eq!(written.len(), 2);
         assert!(dels.is_empty());
 
         let reassembled = apply_and_reassemble(&mut store, sets, dels).unwrap();
@@ -1224,7 +2045,7 @@ mod tests {
     }
 
     #[test]
-    fn delta_deletes_removed_invocation_results() {
+    fn bounded_invocation_result_changes_are_stored_in_membership() {
         let previous = sample_status();
 
         let mut store = HashMap::new();
@@ -1246,36 +2067,15 @@ mod tests {
         let (sets, dels) =
             compute_status_field_writes(Some(&previous), &[], &core, &parts).unwrap();
 
+        assert!(dels.is_empty());
+        let written: HashSet<&str> = sets.iter().map(|(field, _)| field.as_str()).collect();
         assert_eq!(
-            dels,
-            vec![status_invocation_result_field(&idempotency_key("k2"))]
+            written,
+            HashSet::from([STATUS_CORE_FIELD, STATUS_MEMBERSHIP_FIELD])
         );
 
         let reassembled = apply_and_reassemble(&mut store, sets, dels).unwrap();
         assert_eq!(reassembled, new);
-    }
-
-    #[test]
-    fn cold_reconcile_deletes_stale_invocation_results() {
-        // Store already holds ir:k1 and ir:k2 from a previous state.
-        let existing_fields = vec![
-            STATUS_CORE_FIELD.to_string(),
-            status_invocation_result_field(&idempotency_key("k1")),
-            status_invocation_result_field(&idempotency_key("k2")),
-        ];
-
-        // New status only has k1.
-        let mut new = sample_status();
-        new.invocation_results.remove(&idempotency_key("k2"));
-
-        let mut core = new.clone();
-        let parts = split_status(&mut core);
-        let (_, dels) = compute_status_field_writes(None, &existing_fields, &core, &parts).unwrap();
-
-        assert_eq!(
-            dels,
-            vec![status_invocation_result_field(&idempotency_key("k2"))]
-        );
     }
 
     #[test]
@@ -1295,6 +2095,282 @@ mod tests {
         assert_eq!(
             dels,
             vec![status_received_card_transfer_field(&stale_transfer_id)]
+        );
+    }
+
+    #[test]
+    async fn invocation_result_index_resumes_across_calls_and_chunks() {
+        let first = idempotency_key("first");
+        let second = idempotency_key("second");
+        let (service, oplog, owned_agent_id) =
+            index_test_service(invocation_entries(&[first.clone(), second.clone()]));
+        let partial = invocation_status(2, 2, &[], 0, DeletedRegions::new());
+        let complete =
+            invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
+
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &partial)
+            .await
+            .unwrap();
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &complete)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            oplog.read_starts(),
+            vec![
+                OplogIndex::INITIAL,
+                OplogIndex::from_u64(3),
+                OplogIndex::from_u64(5)
+            ]
+        );
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &complete, &first)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::Found(OplogIndex::from_u64(3))
+        );
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &complete, &second)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::Found(OplogIndex::from_u64(5))
+        );
+    }
+
+    #[test]
+    async fn invocation_result_index_ahead_of_status_is_not_reset() {
+        let key = idempotency_key("completed");
+        let (service, oplog, owned_agent_id) =
+            index_test_service(invocation_entries(std::slice::from_ref(&key)));
+        let complete = invocation_status(3, 2, &[(&key, 3)], 0, DeletedRegions::new());
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &complete)
+            .await
+            .unwrap();
+        oplog.clear_reads();
+
+        let stale = invocation_status(2, 2, &[], 0, DeletedRegions::new());
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &stale)
+            .await
+            .unwrap();
+
+        assert!(oplog.read_starts().is_empty());
+        assert_eq!(
+            invocation_index_metadata(&service, &owned_agent_id)
+                .await
+                .covered_through,
+            OplogIndex::from_u64(3)
+        );
+    }
+
+    #[test]
+    async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
+        let first = idempotency_key("first");
+        let second = idempotency_key("second");
+        let third = idempotency_key("third");
+        let fourth = idempotency_key("fourth");
+        let fifth = idempotency_key("fifth");
+        let missing = idempotency_key("missing");
+        let (service, _oplog, owned_agent_id) = index_test_service(invocation_entries(&[
+            first.clone(),
+            second.clone(),
+            third.clone(),
+            fourth.clone(),
+            fifth.clone(),
+        ]));
+        let indexed = invocation_status(
+            9,
+            2,
+            &[(&first, 3), (&second, 5), (&third, 7), (&fourth, 9)],
+            0,
+            DeletedRegions::new(),
+        );
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &indexed)
+            .await
+            .unwrap();
+
+        let current = invocation_status(
+            11,
+            2,
+            &[
+                (&first, 3),
+                (&second, 5),
+                (&third, 7),
+                (&fourth, 9),
+                (&fifth, 11),
+            ],
+            0,
+            DeletedRegions::new(),
+        );
+        assert_eq!(
+            current.invocation_results.oldest_retained_index(),
+            Some(OplogIndex::from_u64(9))
+        );
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &current, &missing)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::DefinitiveMiss
+        );
+    }
+
+    #[test]
+    async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result() {
+        let repeated = idempotency_key("repeated");
+        let (service, _oplog, owned_agent_id) =
+            index_test_service(invocation_entries(&[repeated.clone(), repeated.clone()]));
+        let partial = invocation_status(3, 0, &[(&repeated, 3)], 0, DeletedRegions::new());
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &partial)
+            .await
+            .unwrap();
+
+        let current = invocation_status(
+            5,
+            0,
+            &[(&repeated, 3), (&repeated, 5)],
+            0,
+            DeletedRegions::new(),
+        );
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &current, &repeated)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::Incomplete
+        );
+
+        service
+            .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &current)
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &current, &repeated)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::Found(OplogIndex::from_u64(5))
+        );
+    }
+
+    #[test]
+    async fn concurrent_generation_catch_up_clears_reverted_results() {
+        let reverted = idempotency_key("reverted");
+        let current = idempotency_key("current");
+        let mut entries = invocation_entries(std::slice::from_ref(&reverted));
+        entries.insert(
+            OplogIndex::from_u64(4),
+            OplogEntry::revert(OplogRegion::from_index_range(
+                OplogIndex::from_u64(2)..=OplogIndex::from_u64(3),
+            )),
+        );
+        invocation_pair(&mut entries, 5, &current);
+        let (service, oplog, owned_agent_id) = index_test_service(entries);
+        let old_status = invocation_status(3, 2, &[(&reverted, 3)], 0, DeletedRegions::new());
+        let deleted_regions = DeletedRegions::from_regions([OplogRegion::from_index_range(
+            OplogIndex::from_u64(2)..=OplogIndex::from_u64(3),
+        )]);
+        let new_status = invocation_status(6, 2, &[(&current, 6)], 1, deleted_regions);
+
+        oplog.pause_next_read();
+        let old_task = tokio::spawn({
+            let service = service.clone();
+            let owned_agent_id = owned_agent_id.clone();
+            async move {
+                service
+                    .catch_up_invocation_result_index(
+                        &owned_agent_id,
+                        AgentMode::Durable,
+                        &old_status,
+                    )
+                    .await
+            }
+        });
+        oplog.read_started.notified().await;
+        let new_task = tokio::spawn({
+            let service = service.clone();
+            let owned_agent_id = owned_agent_id.clone();
+            let new_status = new_status.clone();
+            async move {
+                service
+                    .catch_up_invocation_result_index(
+                        &owned_agent_id,
+                        AgentMode::Durable,
+                        &new_status,
+                    )
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!new_task.is_finished());
+        oplog.resume_read.notify_one();
+        old_task.await.unwrap().unwrap();
+        new_task.await.unwrap().unwrap();
+
+        let metadata = invocation_index_metadata(&service, &owned_agent_id).await;
+        assert_eq!(metadata.revert_generation, 1);
+        assert_eq!(metadata.covered_through, OplogIndex::from_u64(6));
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &new_status, &reverted)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::DefinitiveMiss
+        );
+        assert_eq!(
+            service
+                .lookup_invocation_result_index(&owned_agent_id, &new_status, &current)
+                .await
+                .unwrap(),
+            InvocationResultIndexLookup::Found(OplogIndex::from_u64(6))
+        );
+        let fields = service
+            .key_value_storage
+            .with("test", "list_invocation_result_index")
+            .keys(DefaultWorkerService::invocation_result_index_namespace(
+                &owned_agent_id.agent_id,
+            ))
+            .await
+            .unwrap();
+        assert!(!fields.contains(&invocation_result_index_field(&reverted)));
+    }
+
+    #[test]
+    async fn cancelled_catch_up_releases_invocation_result_index_lock_registration() {
+        let key = idempotency_key("completed");
+        let (service, oplog, owned_agent_id) =
+            index_test_service(invocation_entries(std::slice::from_ref(&key)));
+        let status = invocation_status(3, 1, &[(&key, 3)], 0, DeletedRegions::new());
+
+        oplog.pause_next_read();
+        let catch_up = tokio::spawn({
+            let service = service.clone();
+            let owned_agent_id = owned_agent_id.clone();
+            async move {
+                service
+                    .catch_up_invocation_result_index(&owned_agent_id, AgentMode::Durable, &status)
+                    .await
+            }
+        });
+        oplog.read_started.notified().await;
+
+        catch_up.abort();
+        assert!(catch_up.await.unwrap_err().is_cancelled());
+
+        assert!(
+            !service
+                .invocation_result_index_locks
+                .lock()
+                .unwrap()
+                .contains_key(&owned_agent_id),
+            "a cancelled catch-up must not retain one dead lock registration per agent"
         );
     }
 

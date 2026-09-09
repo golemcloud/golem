@@ -27,12 +27,44 @@ use crate::model::card::PolymorphicCard;
 use crate::model::component::InstalledPlugin;
 use crate::model::tool::{ToolDeploymentMetadata, ToolName};
 use crate::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
-use crate::schema::agent::AgentTypeSchema;
+use crate::schema::agent::{AgentTypeSchema, FieldSource, contains_stream_in_graph};
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 
 impl ComponentMetadata {
+    fn derive_agent_method_streams(
+        agent_types: &[AgentTypeSchema],
+    ) -> BTreeMap<AgentTypeName, BTreeMap<String, AgentMethodStreamMetadata>> {
+        agent_types
+            .iter()
+            .map(|agent_type| {
+                let methods = agent_type
+                    .methods
+                    .iter()
+                    .map(|method| {
+                        let input = method
+                            .input_schema
+                            .fields()
+                            .iter()
+                            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                            .any(|field| {
+                                contains_stream_in_graph(&agent_type.schema, &field.schema)
+                            });
+                        let output = method.output_schema.schema().is_some_and(|schema| {
+                            contains_stream_in_graph(&agent_type.schema, schema)
+                        });
+                        (
+                            method.name.clone(),
+                            AgentMethodStreamMetadata { input, output },
+                        )
+                    })
+                    .collect();
+                (agent_type.type_name.clone(), methods)
+            })
+            .collect()
+    }
+
     pub fn analyse_component(
         data: &[u8],
         agent_types: Vec<AgentTypeSchema>,
@@ -108,6 +140,7 @@ impl ComponentMetadata {
                 memories,
                 root_package_name,
                 root_package_version,
+                agent_method_streams: Self::derive_agent_method_streams(&agent_types),
                 agent_types,
                 agent_type_provision_configs,
                 tools,
@@ -132,6 +165,7 @@ impl ComponentMetadata {
                 root_package_name: data.root_package_name.clone(),
                 root_package_version: data.root_package_version.clone(),
                 agent_types: data.agent_types.clone(),
+                agent_method_streams: data.agent_method_streams.clone(),
                 agent_type_provision_configs,
                 tools: data.tools.clone(),
                 tool_middlewares: data.tool_middlewares.clone(),
@@ -151,6 +185,7 @@ impl ComponentMetadata {
                 root_package_name: data.root_package_name.clone(),
                 root_package_version: data.root_package_version.clone(),
                 agent_types: data.agent_types.clone(),
+                agent_method_streams: data.agent_method_streams.clone(),
                 agent_type_provision_configs: data.agent_type_provision_configs.clone(),
                 tools,
                 tool_middlewares: data.tool_middlewares.clone(),
@@ -203,6 +238,18 @@ impl ComponentMetadata {
 
     pub fn agent_types(&self) -> &[AgentTypeSchema] {
         &self.data.agent_types
+    }
+
+    pub fn agent_method_stream_metadata(
+        &self,
+        agent_type: &AgentTypeName,
+        method: &str,
+    ) -> Option<AgentMethodStreamMetadata> {
+        self.data
+            .agent_method_streams
+            .get(agent_type)?
+            .get(method)
+            .copied()
     }
 
     pub fn agent_type_provision_configs(
@@ -590,6 +637,7 @@ impl RawComponentMetadata {
             memories,
             root_package_name: self.root_package_name,
             root_package_version: self.root_package_version,
+            agent_method_streams: ComponentMetadata::derive_agent_method_streams(&agent_types),
             agent_types,
             agent_type_provision_configs,
             tools,
@@ -694,8 +742,8 @@ mod protobuf {
     use crate::model::agent_secret::CanonicalAgentSecretPath;
     use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
     use crate::model::component_metadata::{
-        ComponentMetadata, ComponentMetadataInnerData, LinearMemory, ProducerField, Producers,
-        VersionedName,
+        AgentMethodStreamMetadata, ComponentMetadata, ComponentMetadataInnerData, LinearMemory,
+        ProducerField, Producers, VersionedName,
     };
     use crate::model::deployment::DeploymentRevision;
     use crate::model::tool::{
@@ -822,6 +870,26 @@ mod protobuf {
                     .into_iter()
                     .map(|at| at.try_into())
                     .collect::<Result<_, _>>()?,
+                agent_method_streams: value
+                    .agent_method_streams
+                    .into_iter()
+                    .map(|(agent, methods)| {
+                        let methods = methods
+                            .methods
+                            .into_iter()
+                            .map(|(name, metadata)| {
+                                (
+                                    name,
+                                    AgentMethodStreamMetadata {
+                                        input: metadata.input,
+                                        output: metadata.output,
+                                    },
+                                )
+                            })
+                            .collect();
+                        (AgentTypeName(agent), methods)
+                    })
+                    .collect(),
                 agent_type_provision_configs: value
                     .agent_type_provision_configs
                     .into_iter()
@@ -901,6 +969,22 @@ mod protobuf {
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
                 agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
+                agent_method_streams: value
+                    .agent_method_streams
+                    .into_iter()
+                    .map(|(agent, methods)| {
+                        let methods = methods
+                            .into_iter()
+                            .map(|(name, metadata)| {
+                                (name, golem_api_grpc::proto::golem::component::AgentMethodStreamMetadata {
+                                    input: metadata.input,
+                                    output: metadata.output,
+                                })
+                            })
+                            .collect();
+                        (agent.0, golem_api_grpc::proto::golem::component::AgentMethodStreams { methods })
+                    })
+                    .collect(),
                 agent_type_provision_configs: value
                     .agent_type_provision_configs
                     .into_iter()
