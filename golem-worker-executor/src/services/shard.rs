@@ -382,6 +382,52 @@ mod tests {
         assert!(service.try_get_current_assignment().is_none());
     }
 
+    /// A revoke is a delta rather than a full set, and it is gated on the revision like every
+    /// other delivery: one read from a state older than what this executor has already applied is
+    /// dropped whole, so a revoke that crossed a newer push on the network cannot take a shard the
+    /// newer push had just granted.
+    #[test]
+    fn a_revoke_older_than_the_last_delivery_is_ignored() {
+        let service = ShardServiceDefault::new();
+        service.register(
+            SHARDS,
+            &epochs([(0, 1), (1, 1)]),
+            live(),
+            ShardLeaseRevision(5),
+        );
+
+        let outcome = service
+            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(3))
+            .expect("a registered executor can be revoked from");
+
+        assert_eq!(
+            outcome,
+            ShardDeliveryOutcome::Stale {
+                delivered: ShardLeaseRevision(3),
+                applied: ShardLeaseRevision(5),
+            }
+        );
+        assert_eq!(
+            service.current_assignment().unwrap().shard_id_set(),
+            HashSet::from([ShardId::new(0), ShardId::new(1)]),
+            "a stale revoke must leave the set exactly as the newer delivery left it"
+        );
+        assert!(
+            service.check_worker(&agent_on_shard(0)).is_ok(),
+            "and the shard it named is still this executor's"
+        );
+
+        // ...while one at or above the applied revision does take the shard.
+        let outcome = service
+            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(5))
+            .expect("a registered executor can be revoked from");
+        assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
+        assert_eq!(
+            service.current_assignment().unwrap().shard_id_set(),
+            HashSet::from([ShardId::new(1)])
+        );
+    }
+
     /// `AssignShards` says "your shards are exactly these". Anything
     /// absent is dropped, and the sweep in `assign_shards_internal` restarts
     /// exactly the agents the new set rejects.

@@ -12,12 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::shard_lease;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
+
+const SHUTDOWN_GRACE_MILLIS: u64 = 10_000;
+const DEREGISTER_DEADLINE_MILLIS: u64 = 8_000;
+
+/// How long a termination signal waits for the tasks spawned through [`Shutdown::spawn`] to
+/// finish - in practice, for the shard lease deregistration to land. It is a bound, not a wait:
+/// a healthy shutdown drains in milliseconds, and this only binds when the shard manager is slow.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_millis(SHUTDOWN_GRACE_MILLIS);
+
+/// How long the deregister RPC itself may take. Lives here, beside the grace that contains it,
+/// because the two are only meaningful against each other.
+pub const DEREGISTER_DEADLINE: Duration = Duration::from_millis(DEREGISTER_DEADLINE_MILLIS);
+
+// The grace has to outlast the RPC it exists to wait for. Were it the other way round the RPC
+// would always be cut off first, and the arm that reports the lease being left to lapse could
+// never run.
+const _: () = assert!(DEREGISTER_DEADLINE_MILLIS < SHUTDOWN_GRACE_MILLIS);
+// A deregister is one shard manager write, so a deadline under that budget would abandon every
+// deregistration that had to wait for a busy manager - the shards would then sit out a whole
+// lease instead of being handed back.
+const _: () =
+    assert!(DEREGISTER_DEADLINE_MILLIS > shard_lease::SHARD_LEASE_STATE_WRITE_BUDGET_MILLIS);
+// Stopping never waits longer than renewing would.
+const _: () =
+    assert!(DEREGISTER_DEADLINE_MILLIS <= shard_lease::SHARD_LEASE_RPC_DEADLINE_FLOOR_MILLIS);
 
 /// A graph-wide shutdown signal for background tasks spawned by services.
 ///

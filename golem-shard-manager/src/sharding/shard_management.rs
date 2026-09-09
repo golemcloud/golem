@@ -23,6 +23,7 @@ use super::rebalancing::Rebalance;
 use super::worker_executor::{WorkerExecutorService, assign_shards, revoke_shards};
 use async_rwlock::RwLock;
 use chrono::Utc;
+use golem_common::base_model::shard_lease;
 use golem_common::model::ShardId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -33,10 +34,25 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tracing::{Instrument, debug, error, info, warn};
 
-/// Bounds a persistence round-trip, so a wedged backend cannot hold the shard state lock forever,
-/// leaving every [`ShardManagement::current_snapshot`] reader waiting while the fail-stop that
-/// should end the process never runs.
-pub(crate) const PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bounds the startup read of the shard lease state.
+///
+/// Generous on purpose, and deliberately not the write budget below: nothing is serving yet, so a
+/// slow read costs a slow start rather than a stalled cluster, and the retry budget in the etcd
+/// backend is sized against this.
+pub(crate) const STATE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bounds one write of the shard lease state.
+///
+/// A write holds the state lock while every [`ShardManagement::current_snapshot`] reader queues
+/// behind it and, for a lease RPC, while an executor waits on the answer. Exceeding it is a
+/// fail-stop: a standby takes over from the persisted state rather than a wedged leader serving a
+/// routing table it can no longer update.
+///
+/// The executor's per-attempt deadline is built to outlast this; the ordering is asserted in
+/// [`golem_common::base_model::shard_lease`].
+pub(crate) const STATE_WRITE_TIMEOUT: Duration = shard_lease::state_write_budget();
+
+const _: () = assert!(STATE_WRITE_TIMEOUT.as_millis() < STATE_READ_TIMEOUT.as_millis());
 
 const INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -102,11 +118,11 @@ impl ShardManagement {
         initial_health_check_timeout: Duration,
     ) -> Result<Self, ShardManagerError> {
         let (shard_state, external_revision) =
-            match timeout(PERSISTENCE_TIMEOUT, persistence_service.read()).await {
+            match timeout(STATE_READ_TIMEOUT, persistence_service.read()).await {
                 Ok(read) => read?,
                 Err(_) => {
                     return Err(ShardManagerError::Internal(format!(
-                        "reading the shard lease state timed out after {PERSISTENCE_TIMEOUT:?}"
+                        "reading the shard lease state timed out after {STATE_READ_TIMEOUT:?}"
                     )));
                 }
             };
@@ -444,7 +460,7 @@ impl ShardManagement {
         // shards would never be re-homed. A third of the lease is the same cadence the executors
         // renew at, and it is derived rather than configured so there is no second knob to keep
         // consistent with the lease duration.
-        let tick_period = std::cmp::max(self.lease_ttl / 3, Duration::from_millis(1));
+        let tick_period = shard_lease::renewal_interval(self.lease_ttl);
         // `interval_at`, not `interval`: the latter's first tick completes immediately and would
         // add a redundant pass on top of the startup notification. `Delay` so that a pass slower
         // than the period cannot queue a burst of catch-up ticks behind it.
@@ -700,10 +716,10 @@ impl ShardManagement {
                     .persistence
                     .write(&next_shard_state, prev_external_revision);
 
-                match timeout(PERSISTENCE_TIMEOUT, write).await {
+                match timeout(STATE_WRITE_TIMEOUT, write).await {
                     Ok(written) => written,
                     Err(_) => Err(ShardManagerError::Internal(format!(
-                        "persisting the shard lease state timed out after {PERSISTENCE_TIMEOUT:?}"
+                        "persisting the shard lease state timed out after {STATE_WRITE_TIMEOUT:?}"
                     ))),
                 }
             }

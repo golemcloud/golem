@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::services::shard::ShardService;
-use crate::services::shutdown::Shutdown;
+use crate::services::shutdown::{self, Shutdown};
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::future::BoxFuture;
+use golem_common::base_model::shard_lease;
 use golem_common::model::{
     ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
 };
@@ -28,13 +29,9 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-/// A renewal is attempted three times inside one lease, so a single lost
-/// response is not enough to lose the shards.
-const RENEWAL_INTERVAL_DIVISOR: u32 = 3;
-
 /// Floor on the derived renewal cadence, so a pathologically short lease cannot
 /// turn the loop into a busy loop. Also the first step of the retry backoff.
-const MIN_RENEWAL_INTERVAL: Duration = Duration::from_secs(1);
+const MIN_RENEWAL_INTERVAL: Duration = shard_lease::min_renewal_interval();
 
 /// Absolute ceiling on the retry backoff, so a shard-manager
 /// outage never becomes one RPC per second per executor. The effective ceiling
@@ -77,6 +74,12 @@ pub trait ShardManagerService: Send + Sync {
     /// replaces this executor's shard assignment. No-op by default: an
     /// implementation that never re-registers has nothing to announce.
     fn set_assignment_changed_hook(&self, _hook: &ShardAssignmentChangedHook) {}
+
+    /// Reports that agents have been recovered for the current set by a path other than a granted
+    /// renewal - an `AssignShards` push does its own. Without it a recovery that failed on a
+    /// renewal and then succeeded on a push would stay recorded as outstanding, and every later
+    /// renewal would sweep again for a failure that had already been repaired. No-op by default.
+    fn recovery_succeeded(&self) {}
 }
 
 /// The interval arm of the renewal loop. A `None` delay is a lease that never
@@ -116,6 +119,9 @@ pub struct GrpcShardManagerService {
     /// this service, so a strong reference here would be a cycle nothing could free.
     /// `WorkerExecutorImpl` holds the strong one, so the hook lives as long as the executor.
     assignment_changed_hook: RwLock<Option<Weak<ShardAssignmentChangedHookFn>>>,
+    /// Shortest per-attempt deadline this executor will use; see [`Self::rpc_deadline`].
+    /// A field rather than the constant so a test does not have to wait out the production floor.
+    rpc_deadline_floor: Duration,
     /// Set when the hook failed, so the next grant runs it again even if the set is unchanged.
     /// A push that fails this way is retried by the shard manager; a renewal has nobody to
     /// retry it, and an unchanged grant would otherwise never run it again.
@@ -128,6 +134,22 @@ impl GrpcShardManagerService {
         shard_service: Arc<dyn ShardService>,
         shutdown: Shutdown,
     ) -> Arc<Self> {
+        Self::new_with_rpc_deadline_floor(
+            client,
+            shard_service,
+            shutdown,
+            shard_lease::rpc_deadline_floor(),
+        )
+    }
+
+    /// [`Self::new`] with the per-attempt deadline floor taken as a parameter, so a test does not
+    /// have to wait out the production one.
+    pub fn new_with_rpc_deadline_floor(
+        client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        shard_service: Arc<dyn ShardService>,
+        shutdown: Shutdown,
+        rpc_deadline_floor: Duration,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             client,
             shard_service,
@@ -139,15 +161,24 @@ impl GrpcShardManagerService {
             retry_backoff: RwLock::new(MIN_RENEWAL_INTERVAL),
             granted_cadence: RwLock::new(None),
             assignment_changed_hook: RwLock::new(None),
+            rpc_deadline_floor,
             recovery_pending: AtomicBool::new(false),
         })
     }
 
-    /// How long one lease RPC may take: `retry_cap()`, so a manager that accepts the call and
-    /// never answers costs a bounded wait and a backoff rather than the lease. Every call from
-    /// the manager to an executor carries a deadline; this is the one in the other direction.
+    /// How long one lease RPC may take: half the cadence the last grant implied, so a manager
+    /// that accepts the call and never answers costs half the gap to the next renewal rather than
+    /// all of it - and never less than the floor, so it always outlasts the manager's own budget
+    /// for storing what the call asked for.
+    ///
+    /// Deliberately not `retry_cap()`. The backoff ceiling answers "how long may we wait between
+    /// attempts", this answers "how long may one attempt take"; conflating them let a single hung
+    /// call consume a whole renewal period.
     fn rpc_deadline(&self) -> Duration {
-        self.retry_cap()
+        shard_lease::rpc_deadline(
+            *self.granted_cadence.read().unwrap(),
+            self.rpc_deadline_floor,
+        )
     }
 
     fn executor_id(&self) -> Uuid {
@@ -157,6 +188,9 @@ impl GrpcShardManagerService {
     /// `min(last granted TTL / 3, 30 s)` — the ceiling the retry backoff climbs
     /// to. Before anything has been granted there is no lease to
     /// outlive, so only the absolute ceiling applies.
+    ///
+    /// Bounds the wait *between* attempts only; one attempt is bounded by
+    /// [`Self::rpc_deadline`].
     fn retry_cap(&self) -> Duration {
         match *self.granted_cadence.read().unwrap() {
             Some(cadence) => cadence.min(MAX_RETRY_INTERVAL),
@@ -193,6 +227,11 @@ impl GrpcShardManagerService {
             .as_ref()
             .and_then(Weak::upgrade);
         let Some(hook) = hook else {
+            // Only reachable once the executor that owns the hook is gone, i.e. during teardown.
+            // Recorded rather than passed over: a set-changing grant has been applied and the
+            // agents it moved have not been swept.
+            self.recovery_pending.store(true, Ordering::SeqCst);
+            warn!("No assignment-changed hook is installed; agents were not recovered");
             return;
         };
         match hook().await {
@@ -320,9 +359,8 @@ fn renewal_interval_for(
     Some(
         (expires_at - now)
             .to_std()
-            .map(|remaining| remaining / RENEWAL_INTERVAL_DIVISOR)
-            .unwrap_or(MIN_RENEWAL_INTERVAL)
-            .max(MIN_RENEWAL_INTERVAL),
+            .map(shard_lease::renewal_interval)
+            .unwrap_or(MIN_RENEWAL_INTERVAL),
     )
 }
 
@@ -466,7 +504,7 @@ impl ShardManagerService for GrpcShardManagerService {
 
         let executor_id = self.executor_id();
         match tokio::time::timeout(
-            self.rpc_deadline(),
+            shutdown::DEREGISTER_DEADLINE,
             self.client.deregister(executor_id, claim),
         )
         .await
@@ -483,6 +521,10 @@ impl ShardManagerService for GrpcShardManagerService {
 
     fn set_assignment_changed_hook(&self, hook: &ShardAssignmentChangedHook) {
         *self.assignment_changed_hook.write().unwrap() = Some(Arc::downgrade(hook));
+    }
+
+    fn recovery_succeeded(&self) {
+        self.recovery_pending.store(false, Ordering::SeqCst);
     }
 }
 
@@ -750,6 +792,23 @@ mod tests {
         (service, shard_service)
     }
 
+    /// [`make_service`] with the per-attempt deadline floor shrunk, so a test that has to watch a
+    /// renewal be given up on does not have to wait out the production floor.
+    fn make_service_with_rpc_deadline_floor(
+        mock: Arc<MockShardManager>,
+        shutdown: Shutdown,
+        floor: Duration,
+    ) -> (Arc<GrpcShardManagerService>, Arc<ShardServiceDefault>) {
+        let shard_service = Arc::new(ShardServiceDefault::new());
+        let service = GrpcShardManagerService::new_with_rpc_deadline_floor(
+            mock,
+            shard_service.clone(),
+            shutdown,
+            floor,
+        );
+        (service, shard_service)
+    }
+
     #[test]
     // The hook closes over the service graph that owns this service, so a strong reference here
     // would be a cycle nothing could free. `WorkerExecutorImpl` owns the hook; this only borrows
@@ -894,7 +953,14 @@ mod tests {
                 })
                 .with_renew_gate(gate.clone()),
         );
-        let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
+        // The production deadline floor is measured in seconds so that it always outlasts the
+        // shard manager's write budget; a test that has to watch an attempt be abandoned injects a
+        // small one instead of waiting it out.
+        let (service, shard_service) = make_service_with_rpc_deadline_floor(
+            mock.clone(),
+            Shutdown::new(),
+            Duration::from_millis(200),
+        );
 
         let assignment = service.register(PORT, None).await.unwrap();
         shard_service.register(
@@ -904,8 +970,8 @@ mod tests {
             assignment.revision,
         );
 
-        // Cadence 1 s, deadline 1 s, first backoff 1 s: a second renewal within a few seconds is
-        // only possible if the first one was given up on.
+        // Cadence 1 s, deadline 200 ms, first backoff 1 s: a second renewal within a few seconds
+        // is only possible if the first one was given up on.
         for _ in 0..160 {
             if mock.renew_calls().len() >= 2 {
                 break;
@@ -915,6 +981,55 @@ mod tests {
         assert!(
             mock.renew_calls().len() >= 2,
             "a renewal that never answers must time out so the loop can try again"
+        );
+    }
+
+    #[test]
+    // A recovery that failed on a renewal is recorded so the next grant repeats it - but an
+    // `AssignShards` push recovers the same agents on its own way in, so once one has, the record
+    // has to be cleared. Otherwise every later renewal sweeps again for a failure that has
+    // already been repaired, and says so in the log.
+    async fn a_push_that_recovers_agents_clears_a_failed_renewal_recovery() {
+        let expiry = Utc::now() + ChronoDuration::seconds(300);
+        let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
+            Ok(ShardLease {
+                shard_epochs: claim([(0, 1), (1, 1)]),
+                expires_at: Some(expiry),
+                revision: ShardLeaseRevision(2),
+            })
+        }));
+        let (service, shard_service) = make_service(mock, Shutdown::new());
+        shard_service.register(
+            SHARDS,
+            &epochs([(0, 1)]),
+            Some(expiry),
+            ShardLeaseRevision(1),
+        );
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hook_calls = calls.clone();
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let hook_calls = hook_calls.clone();
+            Box::pin(async move {
+                hook_calls.fetch_add(1, Ordering::SeqCst);
+                Err(anyhow::anyhow!("recovery failed"))
+            })
+        });
+        service.set_assignment_changed_hook(&hook);
+
+        // The corrected set: the hook runs, fails, and the failure is recorded.
+        service.renew_shard_lease().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // A push then recovers the agents itself and reports it.
+        service.recovery_succeeded();
+
+        // The next grant changes nothing and has nothing outstanding, so the hook stays quiet.
+        service.renew_shard_lease().await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a recovery already done by a push must not be repeated on the next renewal"
         );
     }
 

@@ -22,7 +22,7 @@ use crate::sharding::etcd_connection::connect_for_requests;
 use crate::sharding::etcd_retry::retry_retriable_until;
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::model::ShardLeaseState;
-use crate::sharding::shard_management::PERSISTENCE_TIMEOUT;
+use crate::sharding::shard_management::STATE_READ_TIMEOUT;
 use async_trait::async_trait;
 use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp, TxnOpResponse, TxnResponse};
 use golem_common::serialization::serialize;
@@ -37,11 +37,11 @@ pub const STATE_KEY: &str = "/golem/shard-manager/state";
 
 /// How long [`EtcdRoutingTablePersistence::read`] may spend retrying transient failures.
 ///
-/// Kept under [`PERSISTENCE_TIMEOUT`], which fail-stops the whole round trip: retrying past it
+/// Kept under [`STATE_READ_TIMEOUT`], which fail-stops the whole round trip: retrying past it
 /// would only replace a failure that names its cause with one that does not.
 const READ_RETRY_BUDGET: Duration = Duration::from_secs(10);
 // Leaves room for the attempt that may still be in flight when the budget is spent.
-const _: () = assert!(READ_RETRY_BUDGET.as_secs() * 2 <= PERSISTENCE_TIMEOUT.as_secs());
+const _: () = assert!(READ_RETRY_BUDGET.as_secs() * 2 <= STATE_READ_TIMEOUT.as_secs());
 
 pub struct EtcdRoutingTablePersistence {
     client: Client,

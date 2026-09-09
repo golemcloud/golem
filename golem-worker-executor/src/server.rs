@@ -17,8 +17,8 @@ use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::bootstrap;
 use golem_worker_executor::metrics;
 use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loader};
+use golem_worker_executor::services::shutdown::SHUTDOWN_GRACE;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
@@ -47,11 +47,6 @@ fn main() -> Result<(), anyhow::Error> {
         None => Ok(()),
     }
 }
-
-/// How long a termination signal waits for the shard lease deregistration to
-/// land before the process exits. It is one RPC to the shard manager; the lease
-/// expiring on its own is the fallback if it does not make it.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 async fn async_main(
     config: GolemConfig,

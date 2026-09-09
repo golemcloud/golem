@@ -784,11 +784,11 @@ async fn reconciliation_clears_duplicate_local_shard_owner() {
 }
 
 #[test]
-// A revoke is the one delivery with no revision of its own, so nothing on the executor can order
-// it against a renewal grant that crossed it on the network: a grant still listing the revoked
-// shard would simply put it back, and both executors would then admit it until the loser's next
-// renewal. What rules that out is that the plan is stored before any of it is sent - so a renewal
-// served in the middle of the fan-out already reads the shard as belonging to its new owner.
+// A revoke names the revision its move was stored under, so the executor can order it against a
+// renewal grant that crossed it on the network: a grant read before the move is older, and is
+// dropped rather than putting the shard back. Storing the plan before any of it is sent is the
+// other half - a renewal served in the middle of the fan-out already reads the shard as belonging
+// to its new owner.
 async fn a_renewal_served_during_the_revoke_fan_out_does_not_hand_the_shard_back() {
     let old_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
@@ -930,18 +930,21 @@ async fn failed_assignment_is_retried_with_a_full_push() {
 }
 
 #[test]
-// A revoke carries no revision, so it is only ever sent for a shard the store has already moved.
-// An old owner whose revoke did not reach it is queued for a full push, which tells it the set it
-// is recorded as holding, and the pass converges without another shard-manager event.
-async fn failed_revoke_is_repaired_by_a_full_push() {
+// A revoke is only ever sent for a shard the store has already moved, and it names the revision
+// that move was stored under. The store is what the pass converges on: an executor that missed
+// both the revoke and the full push sent alongside it is queued, and a later pass hands it the set
+// it is recorded as holding, without another shard-manager event.
+//
+// The revision cannot tell the same-pass push from the later one - a pass that only re-sends an
+// unchanged set stores nothing, so the no-op guard leaves the revision where it was. What
+// distinguishes them is that the old pod is pushed twice.
+async fn a_loser_that_misses_both_the_revoke_and_its_push_is_repaired_by_a_later_pass() {
     let old_pod = pod(1, 9000);
     let new_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     worker_executors
         .set_local_assignment(old_pod, &[0, 1, 2, 3])
         .await;
-    worker_executors.fail_next_revocations(old_pod, 1).await;
-
     let (shard_management, persistence, mut join_set) = new_shard_management(
         shard_state_with_executors(
             4,
@@ -950,6 +953,15 @@ async fn failed_revoke_is_repaired_by_a_full_push() {
         worker_executors.clone(),
     )
     .await;
+
+    // Armed after the startup pass, not before: that pass pushes its full set to every healthy
+    // executor, and would spend the counter meant for the pass under test.
+    //
+    // Both halves of that pass are failed for the old pod - the revoke, and the full push that
+    // would otherwise repair it there and then - so only a later pass can converge it.
+    let pushes_before = worker_executors.pushes_to(old_pod).await.len();
+    worker_executors.fail_next_revocations(old_pod, 1).await;
+    worker_executors.fail_next_assignments(old_pod, 1).await;
 
     shard_management
         .register_executor(
@@ -963,18 +975,44 @@ async fn failed_revoke_is_repaired_by_a_full_push() {
     wait_for_local_assignment(&worker_executors, old_pod, shard_ids(&[2, 3])).await;
     wait_for_local_assignment(&worker_executors, new_pod, shard_ids(&[0, 1])).await;
 
-    assert_eq!(
-        worker_executors.local_assignment(old_pod).await,
-        shard_ids(&[2, 3])
-    );
-    assert_eq!(
-        worker_executors.local_assignment(new_pod).await,
-        shard_ids(&[0, 1])
-    );
-
     let shard_state = persistence.latest().await;
     assert_eq!(shards_at(&shard_state, old_pod), shard_ids(&[2, 3]));
     assert_eq!(shards_at(&shard_state, new_pod), shard_ids(&[0, 1]));
+
+    // Twice: the push that failed alongside the revoke, and the one a later pass sent because the
+    // executor had been queued. Without the queue the old pod would still be holding four shards.
+    let pushes = worker_executors.pushes_to(old_pod).await;
+    assert!(
+        pushes.len() >= pushes_before + 2,
+        "the old pod missed both halves of its pass, so beyond the push that failed there must be \
+         a second one from a later pass; it was pushed {} time(s) after the {} it had at startup",
+        pushes.len() - pushes_before,
+        pushes_before
+    );
+    assert_eq!(
+        pushes
+            .last()
+            .expect("checked non-empty above")
+            .shard_epochs
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        shard_ids(&[2, 3]),
+        "and the repair carries the set the store records for it"
+    );
+
+    // The revoke it missed named a revision the store really held, with the shards already moved.
+    let (revoked, revoke_revision) = worker_executors
+        .revokes_to(old_pod)
+        .await
+        .pop()
+        .expect("the losing executor should have been revoked from");
+    assert_eq!(revoked, shard_ids(&[0, 1]));
+    let stored = persistence
+        .state_at(revoke_revision)
+        .await
+        .expect("the revoke must name a revision the store really held");
+    assert_eq!(shards_at(&stored, old_pod), shard_ids(&[2, 3]));
 
     join_set.abort_all();
 }

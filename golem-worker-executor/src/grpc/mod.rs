@@ -1084,6 +1084,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         Self::apply_shard_assignment_effects(self).await?;
+        // This push has recovered the agents for the set it delivered, so a recovery that failed
+        // on an earlier renewal no longer needs repeating.
+        self.shard_manager_service().recovery_succeeded();
 
         Ok(())
     }
