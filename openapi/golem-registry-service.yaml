@@ -10152,6 +10152,17 @@ components:
           allOf:
           - $ref: '#/components/schemas/ReadOnlyConfig'
           - nullable: true
+    AgentMethodStreamMetadata:
+      type: object
+      title: AgentMethodStreamMetadata
+      required:
+      - input
+      - output
+      properties:
+        input:
+          type: boolean
+        output:
+          type: boolean
     AgentMode:
       type: string
       enum:
@@ -11526,6 +11537,7 @@ components:
       - knownExports
       - producers
       - memories
+      - agentMethodStreams
       properties:
         knownExports:
           $ref: '#/components/schemas/KnownExports'
@@ -11546,6 +11558,13 @@ components:
           default: []
           items:
             $ref: '#/components/schemas/AgentTypeSchema'
+        agentMethodStreams:
+          type: object
+          description: Server-derived streaming classification for each declared agent method.
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/AgentMethodStreamMetadata'
         agentTypeProvisionConfigs:
           type: object
           description: |-

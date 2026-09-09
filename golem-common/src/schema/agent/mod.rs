@@ -40,7 +40,7 @@ use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::{NamedFieldType, SchemaType};
 use crate::schema::schema_value::SchemaValue;
 use crate::schema::validation::placement::validate_agent_type_placement;
-use crate::schema::validation::value::validate_value;
+use crate::schema::validation::value::{validate_record_fields, validate_value};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -74,6 +74,12 @@ pub fn json_input_schema_value_to_typed_schema_value(
     graph: &SchemaGraph,
     input_schema: &InputSchema,
 ) -> Result<TypedSchemaValue, String> {
+    let result_graph = projected_input_graph(graph, input_schema);
+    validate_input_value(&result_graph, &value)?;
+    Ok(TypedSchemaValue::new(result_graph, value))
+}
+
+fn projected_input_graph(graph: &SchemaGraph, input_schema: &InputSchema) -> SchemaGraph {
     // Only user-supplied fields are part of the caller's input; auto-injected
     // fields (e.g. the principal) are filled by the host out of band and are
     // not present in the incoming value, so they are excluded from the record
@@ -89,18 +95,36 @@ pub fn json_input_schema_value_to_typed_schema_value(
         })
         .collect();
     let root = SchemaType::record(fields);
-    let result_graph = SchemaGraph {
+    SchemaGraph {
         defs: reachable_defs(graph, &root),
         root,
+    }
+}
+
+fn validate_input_value(graph: &SchemaGraph, value: &SchemaValue) -> Result<(), String> {
+    let validation = match (&graph.root, value) {
+        (
+            SchemaType::Record {
+                fields: field_types,
+                ..
+            },
+            SchemaValue::Record { fields: values },
+        ) => validate_record_fields(
+            graph,
+            field_types
+                .iter()
+                .map(|field| (field.name.as_str(), &field.body)),
+            values,
+        ),
+        _ => validate_value(graph, &graph.root, value),
     };
-    validate_value(&result_graph, &result_graph.root, &value).map_err(|errors| {
+    validation.map_err(|errors| {
         errors
             .into_iter()
             .map(|err| err.to_string())
             .collect::<Vec<_>>()
             .join("; ")
-    })?;
-    Ok(TypedSchemaValue::new(result_graph, value))
+    })
 }
 
 pub use crate::schema::graph::reachable_defs;
@@ -379,8 +403,8 @@ impl AgentMethodSchema {
     /// Validates the caller-supplied parameter record against this method's
     /// input schema and the owning agent's graph.
     pub fn validate_input(&self, graph: &SchemaGraph, input: &SchemaValue) -> Result<(), String> {
-        json_input_schema_value_to_typed_schema_value(input.clone(), graph, &self.input_schema)
-            .map(|_| ())
+        let input_graph = projected_input_graph(graph, &self.input_schema);
+        validate_input_value(&input_graph, input)
     }
 
     /// Returns whether a caller-supplied input or the output of this method can

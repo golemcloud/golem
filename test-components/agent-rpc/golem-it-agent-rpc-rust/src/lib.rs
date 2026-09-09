@@ -292,6 +292,7 @@ pub trait StreamingRpcTarget {
     async fn drop_input(&self, input: AgentStream<u32>) -> u64;
     async fn hold_input(&self, input: AgentStream<u32>) -> u64;
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32>;
+    fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes>;
     fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8>;
     fn produce_bytes(&self, values: Vec<u8>) -> AgentStream<u8>;
@@ -354,6 +355,19 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
 
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32> {
         agent_stream(values)
+    }
+
+    fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            for index in 0..chunk_count {
+                writer
+                    .write_one(Bytes::from(vec![(index % 251) as u8; chunk_size as usize]))
+                    .await
+                    .expect("failed to write benchmark chunk");
+            }
+        });
+        output
     }
 
     fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
@@ -543,10 +557,22 @@ pub trait StreamingRpcCaller {
     fn new(name: String) -> Self;
 
     async fn run(&self) -> StreamingRpcReport;
+    async fn benchmark_producer(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+    ) -> StreamingRpcBenchmarkResult;
     fn create_input_gate(&self) -> PromiseId;
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct StreamingRpcBenchmarkResult {
+    pub first_chunk_nanos: u64,
+    pub total_nanos: u64,
+    pub chunks_read: u32,
 }
 
 struct StreamingRpcCallerImpl {
@@ -557,6 +583,33 @@ struct StreamingRpcCallerImpl {
 impl StreamingRpcCaller for StreamingRpcCallerImpl {
     fn new(name: String) -> Self {
         Self { name }
+    }
+
+    async fn benchmark_producer(
+        &self,
+        chunk_count: u32,
+        chunk_size: u32,
+    ) -> StreamingRpcBenchmarkResult {
+        assert!(chunk_count > 0);
+        let target = StreamingRpcTargetClient::get(self.name.clone());
+        let started = std::time::Instant::now();
+        let mut output = target.produce_binary_chunks(chunk_count, chunk_size).await;
+        let mut chunks_read = 0;
+        let mut first_chunk_nanos = 0;
+        while let Some(chunk) = output.next().await.expect("benchmark RPC stream failed") {
+            if chunks_read == 0 {
+                first_chunk_nanos = started.elapsed().as_nanos() as u64;
+            }
+            assert_eq!(chunk.len(), chunk_size as usize);
+            assert!(chunk.iter().all(|byte| *byte == (chunks_read % 251) as u8));
+            chunks_read += 1;
+        }
+        assert_eq!(chunks_read, chunk_count);
+        StreamingRpcBenchmarkResult {
+            first_chunk_nanos,
+            total_nanos: started.elapsed().as_nanos() as u64,
+            chunks_read,
+        }
     }
 
     async fn run(&self) -> StreamingRpcReport {

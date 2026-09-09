@@ -98,6 +98,35 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         Ok(())
     }
 
+    async fn compare_and_set_many(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        pairs: &[(&str, &[u8])],
+    ) -> Result<bool, String> {
+        let _guard = self.kvs_lock.write().await;
+        let matches = self
+            .kvs
+            .read_async(&Self::composite_key(&namespace, key), |_, value| {
+                expected == Some(value.as_slice())
+            })
+            .await
+            .unwrap_or(expected.is_none());
+        if !matches {
+            return Ok(false);
+        }
+        for (field_key, value) in pairs {
+            self.kvs
+                .upsert_async(Self::composite_key(&namespace, field_key), value.to_vec())
+                .await;
+        }
+        Ok(true)
+    }
+
     async fn set_if_not_exists(
         &self,
         _svc_name: &'static str,
