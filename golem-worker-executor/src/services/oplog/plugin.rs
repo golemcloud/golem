@@ -3133,11 +3133,19 @@ mod tests {
         oplog
             .add_start_with_reserved_raw_payload(Vec::new(), Box::new(|_| Ok(grow_memory(4))))
             .await
+            .unwrap()
+            .pending_upload
+            .wait()
+            .await
             .unwrap();
         oplog
             .add_start_with_indexed_reserved_raw_payload(Box::new(|_| {
                 Ok((Vec::new(), Box::new(|_| Ok(grow_memory(5)))))
             }))
+            .await
+            .unwrap()
+            .pending_upload
+            .wait()
             .await
             .unwrap();
         oplog
