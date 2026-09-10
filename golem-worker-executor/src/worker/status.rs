@@ -1856,6 +1856,63 @@ mod test {
         );
     }
 
+    /// Why `commit_and_update_state` still compares the folded record against the previous one
+    /// instead of taking "the commit produced entries" as the answer: the fold's `finalize` step
+    /// prunes oplog-processor checkpoints that are neither active nor in-flight, and it runs
+    /// whether or not there were entries. So an empty fold can still change the record, and
+    /// skipping it would drop that change.
+    #[test]
+    fn empty_fold_is_not_the_identity() {
+        let retry = RetryConfig::default();
+        let grant = EnvironmentPluginGrantId::new();
+        let baseline = AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(10),
+            active_plugins: HashSet::new(),
+            oplog_processor_checkpoints: HashMap::from([(
+                grant,
+                OplogProcessorCheckpointState {
+                    target_agent_id: None,
+                    confirmed_up_to: OplogIndex::from_u64(5),
+                    sending_up_to: OplogIndex::from_u64(5),
+                    last_batch_start: OplogIndex::from_u64(5),
+                },
+            )]),
+            ..AgentStatusRecord::default()
+        };
+
+        let folded = update_status_with_new_entries(
+            AgentMode::Durable,
+            baseline.clone(),
+            BTreeMap::new(),
+            &retry,
+        )
+        .unwrap();
+
+        assert!(folded.oplog_processor_checkpoints.is_empty());
+        assert_ne!(folded, baseline);
+    }
+
+    /// The other half: any entry moves `oplog_idx`, so a non-empty fold always differs.
+    #[test]
+    fn any_entry_moves_the_oplog_index() {
+        let retry = RetryConfig::default();
+        let baseline = AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(10),
+            ..AgentStatusRecord::default()
+        };
+
+        let folded = update_status_with_new_entries(
+            AgentMode::Durable,
+            baseline.clone(),
+            BTreeMap::from([(OplogIndex::from_u64(11), OplogEntry::grow_memory(8))]),
+            &retry,
+        )
+        .unwrap();
+
+        assert_eq!(folded.oplog_idx, OplogIndex::from_u64(11));
+        assert_ne!(folded, baseline);
+    }
+
     #[test]
     async fn empty() {
         let test_case = TestCase::builder(0).build();
