@@ -365,35 +365,7 @@ async fn serve_silent_peer() -> TestPeer {
 /// request on it, which is the whole point: a client that tears the connection
 /// down over one takes all of those with it.
 async fn serve_resetting_peer(reason: h2::Reason) -> TestPeer {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    let counter = connections.clone();
-    let server = tokio::spawn(async move {
-        let mut held = Vec::new();
-        while let Ok((socket, _)) = listener.accept().await {
-            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            held.push(tokio::spawn(async move {
-                let Ok(mut connection) = h2::server::handshake(socket).await else {
-                    return;
-                };
-                while let Some(Ok((_request, mut respond))) = connection.accept().await {
-                    respond.send_reset(reason);
-                }
-            }));
-        }
-        for task in held {
-            task.abort();
-        }
-    });
-
-    TestPeer {
-        addr,
-        connections,
-        shutdown: None,
-        server,
-    }
+    serve_resetting_peer_that_may_hold_one_stream(reason, None).await
 }
 
 /// A peer that speaks HTTP/2, holds the first stream it is sent open until told
@@ -413,15 +385,44 @@ struct HoldingPeer {
 }
 
 async fn serve_peer_holding_one_stream_and_resetting_the_rest(reason: h2::Reason) -> HoldingPeer {
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let peer = serve_resetting_peer_that_may_hold_one_stream(
+        reason,
+        Some(Hold {
+            held: held_tx,
+            release: release_rx,
+        }),
+    )
+    .await;
+    HoldingPeer {
+        peer,
+        held: held_rx,
+        release: release_tx,
+    }
+}
+
+/// The peer's end of a [`HoldingPeer`]'s held stream.
+struct Hold {
+    held: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// The one builder behind [`serve_resetting_peer`] and
+/// [`serve_peer_holding_one_stream_and_resetting_the_rest`]: with no `hold`,
+/// every stream is reset; with one, the first stream on the first connection is
+/// held instead.
+async fn serve_resetting_peer_that_may_hold_one_stream(
+    reason: h2::Reason,
+    hold: Option<Hold>,
+) -> TestPeer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (held_tx, held_rx) = tokio::sync::oneshot::channel();
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
 
     let counter = connections.clone();
     let server = tokio::spawn(async move {
-        let mut hold = Some((held_tx, release_rx));
+        let mut hold = hold;
         let mut tasks = Vec::new();
         while let Ok((socket, _)) = listener.accept().await {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -436,7 +437,7 @@ async fn serve_peer_holding_one_stream_and_resetting_the_rest(reason: h2::Reason
                 // pausing here.
                 while let Some(Ok((_request, mut respond))) = connection.accept().await {
                     match hold.take() {
-                        Some((held, release)) => {
+                        Some(Hold { held, release }) => {
                             let _ = held.send(());
                             tokio::spawn(async move {
                                 if release.await.is_ok() {
@@ -460,16 +461,21 @@ async fn serve_peer_holding_one_stream_and_resetting_the_rest(reason: h2::Reason
         }
     });
 
-    HoldingPeer {
-        peer: TestPeer {
-            addr,
-            connections,
-            shutdown: None,
-            server,
-        },
-        held: held_rx,
-        release: release_tx,
+    TestPeer {
+        addr,
+        connections,
+        shutdown: None,
+        server,
     }
+}
+
+/// Whether a `tonic::transport::Error` sits directly under a status, which is
+/// what the client's predicates read as the transport having failed. Tests about
+/// those predicates show it is there before asking anything of them.
+fn transport_error_under(status: &tonic::Status) -> bool {
+    std::error::Error::source(status)
+        .map(|source| source.is::<tonic::transport::Error>())
+        .unwrap_or(false)
 }
 
 /// The marker the parent sets on the child it spawns in [`delegated_to_namespace`].
@@ -1231,9 +1237,7 @@ async fn a_dead_transport_still_carries_a_transport_error_source() {
 
     let dead = ping(&client, uri.clone()).await;
     let dead_err = dead.expect_err("blackholed peer must fail");
-    let has_transport_source = std::error::Error::source(&dead_err)
-        .map(|s| s.is::<tonic::transport::Error>())
-        .unwrap_or(false);
+    let has_transport_source = transport_error_under(&dead_err);
     eprintln!(
         "[EVICT2] blackholed: code={:?} msg={:?} transport_source={has_transport_source}",
         dead_err.code(),
@@ -1546,9 +1550,7 @@ async fn a_reset_stream_does_not_tear_down_the_connection_carrying_it(
          changed, the predicate under test is guarding the wrong set of codes"
     );
     assert!(
-        std::error::Error::source(&first)
-            .map(|source| source.is::<tonic::transport::Error>())
-            .unwrap_or(false),
+        transport_error_under(&first),
         "expected a transport error under the status, which is what made \
          reading the source alone look like enough"
     );
@@ -1640,9 +1642,7 @@ async fn a_reset_of_one_stream_leaves_the_requests_beside_it_alone(
          changed, the predicate under test is guarding the wrong set of codes"
     );
     assert!(
-        std::error::Error::source(&reset)
-            .map(|source| source.is::<tonic::transport::Error>())
-            .unwrap_or(false),
+        transport_error_under(&reset),
         "expected a transport error under the status, which is what makes this \
          reset look like a dead connection"
     );
