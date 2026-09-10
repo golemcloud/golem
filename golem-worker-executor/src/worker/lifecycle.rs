@@ -17,10 +17,9 @@ use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::worker::{ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::{AgentMetadata, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
+use golem_common::model::{AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{debug, info, warn};
 
@@ -105,77 +104,45 @@ fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool)
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
-    async fn existing_metadata<T: HasAll<Ctx>>(
-        deps: &T,
-        owned_agent_id: &OwnedAgentId,
-    ) -> Result<AgentMetadata, WorkerExecutorError> {
-        Self::get_latest_metadata(deps, owned_agent_id)
-            .await
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
-    }
-
     async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        component_revision: Option<ComponentRevision>,
-        principal: Principal,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::get_or_create_suspended(
-            deps,
-            owned_agent_id,
-            None,
-            Vec::new(),
-            component_revision,
-            None,
-            &InvocationContextStack::fresh(),
-            principal,
-        )
-        .await
+        deps.active_agents()
+            .get_existing(deps, owned_agent_id)
+            .await
     }
 
     pub async fn delete<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        _principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let deletion_lock = deps.active_agents().deletion_lock(owned_agent_id);
-        let _deletion_guard = deletion_lock.lock().await;
-
-        Self::existing_metadata(deps, owned_agent_id).await?;
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
-
-        info!("Interrupting worker before deletion");
-        worker
-            .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-            .await;
-        info!("Marking worker for deletion");
-        worker.start_deleting_internal().await?;
-
-        worker.worker_service().remove(owned_agent_id).await?;
-        worker.remove_from_active_agents().await;
-
-        drop(worker);
-        Ok(())
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        worker.start_deletion().await.handle().wait().await
     }
 
     pub async fn interrupt<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
-        principal: Principal,
+        _principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let Some(metadata) = Self::get_latest_metadata(deps, owned_agent_id).await else {
-            return Ok(());
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
+            Err(error) => return Err(error),
         };
+        let metadata = worker.get_latest_worker_metadata().await;
 
         let decision = interrupt_decision(&metadata.last_known_status.status, recover_immediately);
         if decision == InterruptDecision::Ignore {
@@ -199,7 +166,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             _ => {}
         }
 
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
         let interrupt_kind = match decision {
             InterruptDecision::Interrupt => InterruptKind::Interrupt(Timestamp::now_utc()),
             InterruptDecision::Restart => InterruptKind::Restart,
@@ -220,12 +186,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         force: bool,
-        principal: Principal,
+        _principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let metadata = Self::existing_metadata(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        let metadata = worker.get_latest_worker_metadata().await;
 
         match resume_decision(&metadata.last_known_status.status, force) {
             ResumeDecision::PreviousFailed => {
@@ -259,17 +226,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ),
                     _ => unreachable!(),
                 }
-                Self::get_or_create_running(
-                    deps,
-                    owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
+                Self::start_if_needed(worker).await?;
                 Ok(())
             }
             ResumeDecision::Reject => Err(WorkerExecutorError::invalid_request(format!(
@@ -285,12 +242,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         mode: UpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
-        principal: Principal,
+        _principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let metadata = Self::existing_metadata(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        let metadata = worker.get_latest_worker_metadata().await;
+        if worker.deletion_owns_retirement() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ));
+        }
 
         if metadata.last_known_status.component_revision == target_revision {
             return Err(WorkerExecutorError::invalid_request(
@@ -388,20 +351,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 warn!("Attempted updating worker which already exited");
             }
             (UpdateMode::Automatic, decision) => {
-                let current_revision = metadata.last_known_status.component_revision;
-                let component_revision = match decision {
-                    UpdateDecision::Queue | UpdateDecision::QueueAndStart => Some(current_revision),
-                    UpdateDecision::QueueAndRestart => None,
-                    UpdateDecision::Ignore => unreachable!(),
-                };
-                let worker = Self::get_existing_suspended(
-                    deps,
-                    owned_agent_id,
-                    component_revision,
-                    principal,
-                )
-                .await?;
-
                 debug!("Enqueuing update");
                 worker
                     .enqueue_update(UpdateDescription::Automatic { target_revision })
@@ -424,8 +373,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
             (UpdateMode::Manual, decision) => {
-                let worker =
-                    Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
                 worker.enqueue_manual_update(target_revision).await?;
 
                 match decision {
@@ -448,13 +395,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
-        principal: Principal,
+        _principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::existing_metadata(deps, owned_agent_id).await?;
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker.revert_internal(target, resolved_revert).await
     }
 
@@ -536,13 +482,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        principal: Principal,
+        _principal: Principal,
         activate: bool,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let metadata = Self::existing_metadata(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        let metadata = worker.get_latest_worker_metadata().await;
+        if worker.deletion_owns_retirement() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ));
+        }
         let component_metadata = deps
             .component_service()
             .get_metadata(
@@ -580,7 +532,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
 
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
         if activate {
             worker.activate_plugin_internal(grant_id).await
         } else {

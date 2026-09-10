@@ -32,9 +32,8 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -51,7 +50,6 @@ use crate::services::golem_config::{
     ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
-use crate::worker::Worker;
 use crate::worker::entity_invocation::{
     EntityInvocationHandle, start_entity_invocation, start_pre_acquired_entity_invocation,
 };
@@ -65,6 +63,7 @@ use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
+use crate::worker::{Worker, WorkerAcquisition};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -532,57 +531,6 @@ pub struct ActiveAgents<Ctx: WorkerCtx> {
     component_size_coefficient: f64,
     status_flush_queue: Arc<AgentStatusFlushQueue>,
     invocation_loops: InvocationLoops,
-    deletion_locks: Arc<AgentDeletionLocks>,
-}
-
-#[derive(Default)]
-struct AgentDeletionLocks {
-    locks: Mutex<HashMap<OwnedAgentId, Weak<AsyncMutex<()>>>>,
-}
-
-pub(crate) struct AgentDeletionLock {
-    registry: Arc<AgentDeletionLocks>,
-    owned_agent_id: OwnedAgentId,
-    inner: Arc<AsyncMutex<()>>,
-}
-
-impl AgentDeletionLock {
-    pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.inner.lock().await
-    }
-}
-
-impl Drop for AgentDeletionLock {
-    fn drop(&mut self) {
-        let mut locks = self.registry.locks.lock().unwrap();
-        if Arc::strong_count(&self.inner) == 1
-            && locks
-                .get(&self.owned_agent_id)
-                .is_some_and(|registered| registered.ptr_eq(&Arc::downgrade(&self.inner)))
-        {
-            locks.remove(&self.owned_agent_id);
-        }
-    }
-}
-
-impl AgentDeletionLocks {
-    fn acquire(self: &Arc<Self>, owned_agent_id: &OwnedAgentId) -> AgentDeletionLock {
-        let mut locks = self.locks.lock().unwrap();
-        let inner = locks
-            .get(owned_agent_id)
-            .and_then(Weak::upgrade)
-            .unwrap_or_else(|| {
-                let inner = Arc::new(AsyncMutex::new(()));
-                locks.insert(owned_agent_id.clone(), Arc::downgrade(&inner));
-                inner
-            });
-
-        AgentDeletionLock {
-            registry: self.clone(),
-            owned_agent_id: owned_agent_id.clone(),
-            inner,
-        }
-    }
 }
 
 struct UnloadedWorkerEvictionTask(JoinHandle<()>);
@@ -698,7 +646,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 shutdown_token.clone(),
             ),
             invocation_loops: InvocationLoops::new(shutdown_token),
-            deletion_locks: Arc::new(AgentDeletionLocks::default()),
         };
         active_agents.initialize_metrics();
         Ok(active_agents)
@@ -716,10 +663,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
     pub(crate) fn agent_filesystems(&self) -> Arc<AgentFilesystems> {
         Arc::clone(&self.agent_filesystems)
-    }
-
-    pub(crate) fn deletion_lock(&self, owned_agent_id: &OwnedAgentId) -> AgentDeletionLock {
-        self.deletion_locks.acquire(owned_agent_id)
     }
 
     /// Acquire (or share) the per-component module charge for a worker of the
@@ -794,18 +737,57 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         &deps,
                         self.card_interest_index.clone(),
                         owned_agent_id.clone(),
-                        worker_env,
-                        worker_agent_config,
-                        component_revision,
-                        parent,
-                        &invocation_context_stack,
-                        principal,
-                        freshness_disposition,
+                        WorkerAcquisition::create_or_load(
+                            worker_env,
+                            worker_agent_config,
+                            component_revision,
+                            parent,
+                            invocation_context_stack,
+                            principal,
+                            freshness_disposition,
+                        ),
                     )
                     .in_current_span()
                     .await;
 
                     worker.map(|worker| {
+                        let worker = Arc::new(worker);
+                        Worker::start_durable_stream_attachment_reconciler(&worker);
+                        Arc::new(ActiveAgent::new(worker))
+                    })
+                })
+            })
+            .await?;
+        Ok(active_agent.primary())
+    }
+
+    /// Acquires a cached or persisted worker without ever creating a logical agent.
+    /// The cache initialization is shared with create-or-load, so absence is decided
+    /// inside the single-flight constructor rather than by a racy preflight lookup.
+    pub(crate) async fn get_existing<T>(
+        &self,
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let owned_agent_id = owned_agent_id.clone();
+        let cache_key = owned_agent_id.clone();
+        let deps = deps.clone();
+        let active_agent = self
+            .agents
+            .get_or_insert_simple(&cache_key, || {
+                Box::pin(async move {
+                    Worker::new(
+                        &deps,
+                        self.card_interest_index.clone(),
+                        owned_agent_id,
+                        WorkerAcquisition::ExistingOnly,
+                    )
+                    .in_current_span()
+                    .await
+                    .map(|worker| {
                         let worker = Arc::new(worker);
                         Worker::start_durable_stream_attachment_reconciler(&worker);
                         Arc::new(ActiveAgent::new(worker))
@@ -857,18 +839,48 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     }
 
     pub async fn remove(&self, owned_agent_id: &OwnedAgentId) {
-        if let Some(active_agent) = self.agents.get(owned_agent_id).await {
+        if let Some(worker) = self.try_get(owned_agent_id).await {
+            self.remove_worker(&worker, false).await;
+        }
+    }
+
+    /// Removes only the cache generation owned by `expected`. Bookkeeping is cleared only when
+    /// that exact generation was still authoritative at the point of removal.
+    pub(crate) async fn remove_worker(
+        &self,
+        expected: &Arc<Worker<Ctx>>,
+        deletion_owner: bool,
+    ) -> bool {
+        if !deletion_owner && expected.deletion_owns_retirement() {
+            return false;
+        }
+        let owned_agent_id = expected.owned_agent_id().clone();
+        let Some(active_agent) = self.agents.get(&owned_agent_id).await else {
+            return false;
+        };
+        if !Arc::ptr_eq(&active_agent.primary, expected) {
+            return false;
+        }
+        if !deletion_owner {
             active_agent
                 .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
                     Timestamp::now_utc(),
                 )))
                 .await;
-            let worker = active_agent.primary();
-            self.card_interest_index
-                .set_card_interest(worker.owned_agent_id().clone(), &[])
-                .await;
         }
-        self.agents.remove(owned_agent_id).await
+        let expected_active = active_agent.clone();
+        let expected_worker = expected.clone();
+        self.card_interest_index
+            .clear_agent_interest_if(
+                &owned_agent_id,
+                self.agents
+                    .remove_if_cached(&owned_agent_id, move |current| {
+                        Arc::ptr_eq(current, &expected_active)
+                            && Arc::ptr_eq(&current.primary, &expected_worker)
+                            && (deletion_owner || !expected_worker.deletion_owns_retirement())
+                    }),
+            )
+            .await
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
