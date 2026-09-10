@@ -3877,7 +3877,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
@@ -3886,6 +3886,18 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     executor
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(20))
         .await?;
+
+    // Running can refer to initialize; interrupting its subsequent idle gap is a no-op.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(Some(event)) = rx.recv().await {
+            if stdout_event_matching(&event, "Received initial\n") {
+                return Ok(());
+            }
+        }
+        Err(anyhow!("Log stream ended before the first poll completed"))
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
 
     let values1 = executor
         .get_running_workers_metadata(
@@ -4364,7 +4376,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
@@ -4374,9 +4386,25 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
-    executor.interrupt(&worker_id).await?;
+    // Running can refer to initialize; interrupting its subsequent idle gap is a no-op.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(Some(event)) = rx.recv().await {
+            if stdout_event_matching(&event, "Received initial\n") {
+                return Ok(());
+            }
+        }
+        Err(anyhow!("Log stream ended before the first poll completed"))
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
 
-    drain_connection(rx).await;
+    tokio::time::timeout(Duration::from_secs(30), executor.interrupt(&worker_id))
+        .await
+        .map_err(|_| anyhow!("Timed out interrupting poll-loop worker"))??;
+
+    tokio::time::timeout(Duration::from_secs(30), drain_connection(rx))
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for log stream termination after interrupt"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     executor.delete_worker(&worker_id).await?;
