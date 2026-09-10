@@ -50,12 +50,12 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
-    AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
-    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment, ShardId,
-    TransactionId,
+    AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, IdempotencyKey, OplogIndex,
+    OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment, ShardId, TransactionId,
 };
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -843,13 +843,13 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         this: &T,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
+        deleted_regions: &DeletedRegions,
     ) -> Option<LastError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
             agent_mode,
-            latest_worker_status,
+            deleted_regions,
         )
         .await
     }

@@ -40,7 +40,7 @@ use golem_common::model::oplog::{
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, ScanCursor, ShardId,
+    OplogProcessorCheckpointState, OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
 use golem_common::related_span;
@@ -999,14 +999,27 @@ impl ForwardingOplogState {
     /// Entries are always read from the persisted oplog (canonical source) to avoid
     /// buffer/index drift caused by checkpoint entries injected during flush.
     pub async fn try_flush(&mut self) {
-        let status = self.last_known_status.read().await.clone();
-        let flush_set = self.reconcile_plugin_state(&status);
+        // This runs every few commits on every agent, plugins or not, and the status record owns
+        // `invocation_results`, which grows with every invocation ever served. So decide from the
+        // two small fields the reconciliation needs, and copy the record only when a plugin is
+        // actually going to be sent to.
+        let status_lock = self.last_known_status.clone();
+        let status = status_lock.read().await;
+        let flush_set = self
+            .reconcile_plugin_state(&status.active_plugins, &status.oplog_processor_checkpoints);
 
         if flush_set.is_empty() {
+            drop(status);
             self.finish_empty_flush();
-        } else if let Some((metadata, component_metadata)) =
-            self.prepare_flush_context(&status).await
-        {
+            return;
+        }
+
+        let status = {
+            let snapshot = status.clone();
+            drop(status);
+            snapshot
+        };
+        if let Some((metadata, component_metadata)) = self.prepare_flush_context(&status).await {
             let committed_tail = self.last_committed_idx;
 
             for grant_id in flush_set {
@@ -1025,11 +1038,15 @@ impl ForwardingOplogState {
     /// Returns the flush set (active ∪ in-flight plugin grant IDs).
     fn reconcile_plugin_state(
         &mut self,
-        status: &AgentStatusRecord,
+        active_plugins: &HashSet<EnvironmentPluginGrantId>,
+        oplog_processor_checkpoints: &HashMap<
+            EnvironmentPluginGrantId,
+            OplogProcessorCheckpointState,
+        >,
     ) -> Vec<EnvironmentPluginGrantId> {
-        for grant_id in &status.active_plugins {
+        for grant_id in active_plugins {
             if let Entry::Vacant(e) = self.plugin_state.entry(*grant_id) {
-                let live = if let Some(cp) = status.oplog_processor_checkpoints.get(grant_id) {
+                let live = if let Some(cp) = oplog_processor_checkpoints.get(grant_id) {
                     LivePluginState {
                         target_agent_id: cp.target_agent_id.clone(),
                         confirmed_up_to: cp.confirmed_up_to,
@@ -1051,13 +1068,13 @@ impl ForwardingOplogState {
         }
 
         self.plugin_state.retain(|grant_id, state| {
-            status.active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
+            active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
         });
 
         self.plugin_state
             .iter()
             .filter(|(id, state)| {
-                status.active_plugins.contains(id) || state.sending_up_to > state.confirmed_up_to
+                active_plugins.contains(id) || state.sending_up_to > state.confirmed_up_to
             })
             .map(|(id, _)| *id)
             .collect()
@@ -1493,9 +1510,12 @@ impl ForwardingOplogState {
     /// delivery always goes to the recorded `target_agent_id` with deterministic
     /// idempotency keys.
     async fn try_locality_recovery(&mut self) {
-        let status = self.last_known_status.read().await.clone();
+        // Same shape as `try_flush`: reconcile from the two small fields, copy the record only
+        // once there is a plugin to recover.
+        let status_lock = self.last_known_status.clone();
+        let status = status_lock.read().await;
         // Ensure plugin_state is reconciled with current status
-        self.reconcile_plugin_state(&status);
+        self.reconcile_plugin_state(&status.active_plugins, &status.oplog_processor_checkpoints);
         let environment_id = self.initial_worker_metadata.environment_id;
 
         // Collect candidates: plugins with a target that might be non-local
@@ -1514,6 +1534,11 @@ impl ForwardingOplogState {
             return;
         }
 
+        let status = {
+            let snapshot = status.clone();
+            drop(status);
+            snapshot
+        };
         let component_metadata = match self.prepare_flush_context(&status).await {
             Some((_, cm)) => cm,
             None => return,

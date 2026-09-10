@@ -26,9 +26,9 @@ use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{AgentError, TimestampedUpdateDescription};
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
-    OwnedAgentId, Timestamp,
+    AgentId, AgentInvocation, AgentInvocationOutput, IdempotencyKey, OwnedAgentId, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
@@ -128,13 +128,13 @@ impl ExternalOperations<Self> for DebugContext {
         this: &This,
         agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
+        deleted_regions: &DeletedRegions,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Self>::get_last_error_and_retry_count(
             this,
             agent_id,
             agent_mode,
-            latest_worker_status,
+            deleted_regions,
         )
         .await
     }
