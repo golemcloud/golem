@@ -3598,7 +3598,7 @@ async fn ts_reflection_discovers_binds_and_invokes_durable_agent(
 
     assert_eq!(listed, &SchemaValue::Bool(true));
     assert_eq!(type_name, &SchemaValue::String("Counter".to_string()));
-    assert_eq!(method_name, &SchemaValue::String("get-value".to_string()));
+    assert_eq!(method_name, &SchemaValue::String("get_value".to_string()));
     assert_eq!(
         first_value,
         &SchemaValue::String(
