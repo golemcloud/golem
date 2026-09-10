@@ -1707,6 +1707,16 @@ where
             }
         }
 
+        // Cancellation is settled once the body and send span are durable. Without a recorded
+        // trailers delivery marker, holding its acknowledgement across the delivery wait would
+        // prevent the guest from returning (or dropping trailers) and advancing the replay tail.
+        // Recorded deliveries retain their ordering; their acknowledgement stays below the gate.
+        if !delivery.is_replay_at_marker()
+            && let Some(ack) = cancel_ack.take()
+        {
+            let _ = ack.send(());
+        }
+
         if delivery.is_replay_discarded() {
             // The recorded run persisted the parent terminal but the guest
             // dropped the trailers future before the outcome was delivered
@@ -1715,12 +1725,6 @@ where
             // pending, and park at the delivery boundary until the
             // deterministic guest drops the receiver at the same point it
             // did live.
-            // A cancelling body cannot finish dropping its trailers receiver
-            // until its stream cancellation is acknowledged. The discard is
-            // already durable on replay, so acknowledge before waiting for it.
-            if let Some(ack) = cancel_ack.take() {
-                let _ = ack.send(());
-            }
             let mut trailers_tx = trailers_tx;
             activity.park(trailers_tx.closed()).await;
             drop(trailers_tx);

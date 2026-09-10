@@ -134,7 +134,7 @@ pub trait HttpClient4 {
     /// Reads the full response but leaves its trailers future unconsumed.
     async fn get_and_ignore_trailers(&mut self) -> String;
 
-    /// Drops the body after its first chunk and leaves the trailers future unconsumed.
+    /// Cancels a pending body read after its first chunk and leaves trailers unconsumed.
     async fn get_and_cancel_body_ignoring_trailers(&mut self) -> String;
 
     /// Returns the response stored by the last `get_and_store_full_response`
@@ -672,6 +672,17 @@ async fn do_get_full_response(ignore_trailers: bool, cancel_body: bool) -> Strin
                 body_bytes.extend_from_slice(&buffer[..n]);
                 buffer.clear();
                 if cancel_body && n > 0 {
+                    use std::future::Future;
+                    use std::task::Poll;
+
+                    let mut pending = Box::pin(body.read(Vec::with_capacity(1024)));
+                    futures_util::future::poll_fn(|cx| {
+                        assert!(pending.as_mut().poll(cx).is_pending());
+                        Poll::Ready(())
+                    })
+                    .await;
+                    let (result, _) = pending.as_mut().cancel();
+                    assert_eq!(result, StreamResult::Cancelled);
                     break;
                 }
             }
