@@ -927,9 +927,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // `skipped_regions` already carries the snapshot baseline: the status reducer opens
         // an override at a snapshot-based `PendingUpdate` and folds it into the regions
         // proper on `SuccessfulUpdate`. `last_snapshot_index` is kept only for reading the
-        // snapshot payload back; deriving a region from it here would restate what the
-        // reducer computed, and `set_override` replaces rather than merges, so it used to
-        // overwrite a pending update's override with the previous update's narrower one.
+        // snapshot payload back.
         let replay_state = match &runtime {
             OwnerRuntime::Agent => {
                 owner_execution

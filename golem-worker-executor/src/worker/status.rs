@@ -2402,13 +2402,9 @@ mod test {
         run_test_case(test_case).await;
     }
 
-    /// Two snapshot-based updates that both succeed, which is the sequence the
-    /// runtime got wrong: the first update's region has to stay folded into the
-    /// skipped regions while the second one's override sits on top of it.
-    ///
-    /// `multiple_manual_updates_with_jump_and_revert` cannot reach this shape —
-    /// its first update fails, and `FailedUpdate` drops the override without
-    /// folding it, so nothing ever accumulates.
+    /// Two snapshot-based updates that both succeed: the first update's region
+    /// has to stay folded into the skipped regions while the second one's
+    /// override sits on top of it.
     #[test]
     async fn two_successful_manual_updates() {
         let k1 = IdempotencyKey::fresh();
@@ -2439,8 +2435,7 @@ mod test {
             )
             .pending_update(&update1, |_| {})
             .successful_update(update1, 1000, &HashSet::new())
-            // Work between the two updates. On a second manual update this is
-            // the suffix the runtime used to leave behind to replay.
+            // The suffix the second update has to replay.
             .agent_invocation_started("c", vec![], k2.clone())
             .host_call(
                 "d",

@@ -35,7 +35,7 @@ impl SnapshotCounter for SnapshotCounterImpl {
     }
 
     fn component_version(&self) -> u32 {
-        1
+        2
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

@@ -50,6 +50,10 @@ inherit_test_dep!(
     #[tagged_as("agent_update_v2")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 pub struct F1Blocker {
@@ -1609,8 +1613,7 @@ async fn manual_update_on_idle_twice(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Recorded work ahead of the first update, so the second one has a suffix
-    // between the two snapshots to account for.
+    // A suffix between the two snapshots for the second update to account for.
     let initial = executor
         .invoke_and_await_agent(
             &component,
@@ -1620,8 +1623,7 @@ async fn manual_update_on_idle_twice(
         )
         .await?;
 
-    // Both updates move forward, to two revisions carrying the same build, so
-    // nothing here depends on direction or on a behaviour change.
+    // Both revisions carry the same build, so nothing depends on a behaviour change.
     let first = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
@@ -1751,12 +1753,82 @@ async fn manual_update_on_idle_to_earlier_component(
 
     drop(executor);
 
-    // The snapshot has to carry the agent's state across both builds: v1 wrote
-    // the one v2 loaded on the way out, and v2 wrote the one v1 loaded coming
-    // back.
+    // The snapshot carries the agent's state across both builds.
     assert_eq!(after_forward.into_typed::<u32>()?, 1);
     assert_eq!(after_rollback.into_typed::<u32>()?, 2);
     assert_eq!(metadata.component_revision, back.revision);
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
+
+    Ok(())
+}
+
+/// An automatic update on an agent that has already had a manual one.
+///
+/// The manual update's snapshot is the authoritative replay baseline, so a later
+/// automatic update must replay only the suffix after it. The prefix cannot
+/// replay: it recorded a `component_version` of 1 under a build that now answers
+/// 2, so divergence detection would fail the update.
+///
+/// This does not guard the `set_override` fix, which it survives. It goes red
+/// when the status reducer stops folding the snapshot region into the skipped
+/// regions.
+#[test]
+#[tracing::instrument]
+async fn auto_update_on_idle_after_manual_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("SnapshotCounter", "auto-after-manual");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    // Recorded under the original build, and unreplayable under any other one.
+    let version_before = executor
+        .invoke_and_await_agent(&component, &counter_id, "component_version", data_value!())
+        .await?;
+
+    let migrated = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, migrated.revision, false)
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    // Same build again, so nothing after the snapshot can diverge.
+    let later = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, later.revision, false)
+        .await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    assert_eq!(version_before.into_typed::<u32>()?, 1);
+    assert_eq!(count.into_typed::<u32>()?, 2);
+    assert_eq!(metadata.component_revision, later.revision);
     assert_eq!(update_counts(&metadata), (0, 2, 0));
 
     Ok(())
