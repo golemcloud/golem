@@ -3122,6 +3122,86 @@ mod tests {
         );
     }
 
+    /// Puts an agent's entries straight into one archive layer.
+    ///
+    /// A sweep drains an agent through every layer in one visit, so nothing settles in a deeper
+    /// compressed level at rest and a stack's second route has nothing to scan unless it is seeded
+    /// like this. The real route into that state is an agent that outgrew `entry_count_limit`.
+    async fn seed_layer(
+        archive: &Arc<dyn OplogArchiveService>,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+    ) {
+        let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
+        let layer = archive.open(&owned_agent_id, AgentMode::Ephemeral).await;
+        layer
+            .append(vec![
+                (OplogIndex::INITIAL, create_entry(agent_id, environment_id)),
+                (OplogIndex::from_u64(2), OplogEntry::exited()),
+            ])
+            .await;
+    }
+
+    /// What a route spends has to come off the tick's budget, or a stack with several source
+    /// layers does as much work per route as the config allows for the whole tick. Only observable
+    /// with two routes that both have something to scan, since the charge is what the next route's
+    /// share is computed from.
+    #[test]
+    #[timeout("1m")]
+    async fn what_one_route_spends_is_taken_off_the_next_route_s_share() {
+        let layers = deep_layers(2);
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        seed_layer(
+            &layers.archives[1],
+            &agent("deep", component_id),
+            environment_id,
+        )
+        .await;
+        seed_layer(
+            &layers.archives[0],
+            &agent("shallow", component_id),
+            environment_id,
+        )
+        .await;
+
+        let sweeper = build(
+            &layers,
+            OplogSweepConfig {
+                // One key for the whole tick, so the first route to find something spends it all.
+                max_scanned_per_tick: 1,
+                ..manual()
+            },
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+        assert_eq!(sweeper.routes.len(), 2);
+        let deepest = sweeper.routes[0].id;
+        let shallowest = sweeper.routes[1].id;
+
+        let first = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(first.scanned(), 1, "one key, as configured");
+        assert_eq!(
+            first.routes.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![deepest],
+            "the second route could not be afforded once the first had spent the budget"
+        );
+        assert_eq!(
+            *sweeper.route_cursor.lock().await,
+            1,
+            "so the next tick starts with it"
+        );
+
+        let second = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(
+            second.routes.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![shallowest]
+        );
+        assert_eq!(second.scanned(), 1);
+        assert_eq!(*sweeper.route_cursor.lock().await, 0);
+    }
+
     /// A tick that stops early used to leave the routes it never reached to be skipped again by
     /// the next tick, and the one before that, for as long as the budget or the deadline kept
     /// running out in the same place.
