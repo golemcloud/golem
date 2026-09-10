@@ -628,12 +628,6 @@ fn validate_unshared_memory_growth(
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[cfg(feature = "test-utils")]
-    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
-        self.owner_execution
-            .test_should_skip_monotonic_clock_now_durability()
-    }
-
-    #[cfg(feature = "test-utils")]
     pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
         self.owner_execution
             .test_should_skip_wall_clock_now_durability()
