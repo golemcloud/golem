@@ -711,6 +711,16 @@ async fn automatic_snapshot_every_2nd_invocation(
     }
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .take_while(|entry| !matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "monotonic_clock::now"
+            )),
+        "core initializer must record a clock call before the snapshot"
+    );
     let snapshot_count = oplog
         .iter()
         .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))

@@ -1,6 +1,12 @@
 use golem_rust::{agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
+#[unsafe(export_name = "_initialize")]
+pub extern "C" fn initialize_snapshot_clock() {
+    // The reactor initializer runs during core instantiation, before snapshot loading.
+    std::hint::black_box(std::time::Instant::now());
+}
+
 #[agent_definition(snapshotting = "enabled")]
 trait SnapshotCounter {
     fn new(id: String) -> Self;
