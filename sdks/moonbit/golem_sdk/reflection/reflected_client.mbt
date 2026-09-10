@@ -27,7 +27,7 @@ pub(all) struct AgentType {
 pub(all) struct ReflectedAgentClient {
   priv agent_type : AgentType
   priv transport : Transport
-  reusable_identity : AgentId?
+  reusable_identity : ParsedAgentId?
   phantom_id : @types.Uuid?
 }
 
@@ -137,24 +137,10 @@ pub fn get_agent_type(name : String) -> AgentType? raise ReflectError {
 }
 
 ///|
-/// Resolves the component implementing an environment-unique agent type name.
-/// Unlike `get_agent_type`, absence is an error because identity metadata
-/// cannot be constructed without an implementing component.
-pub fn component_id_for(name : String) -> @types.ComponentId raise ReflectError {
-  match @agentHost.get_agent_type(name) {
-    Some(agent_type) => agent_type.implemented_by
-    None =>
-      raise Discovery(
-        "agent type '" + name + "' is not registered in the current environment",
-      )
-  }
-}
-
-///|
 pub fn get_agent_type_by_agent_id(
-  agent_id : AgentId,
+  agent_id : ParsedAgentId,
 ) -> AgentType? raise ReflectError {
-  match @agentHost.get_agent_type_by_agent_id(agent_id.to_wit()) {
+  match @agentHost.get_agent_type_by_agent_id(agent_id.value) {
     Some(agent_type) => Some(decode_agent_type(agent_type))
     None => None
   }
@@ -170,13 +156,8 @@ pub fn AgentType::agent_id_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
   phantom_id? : @types.Uuid? = None,
-) -> AgentId raise ReflectError {
-  AgentId::create(
-    self.implemented_by,
-    self.name,
-    constructor_value,
-    phantom_id~,
-  )
+) -> ParsedAgentId raise ReflectError {
+  ParsedAgentId::create(self.name, constructor_value, phantom_id~)
 }
 
 ///|
@@ -184,7 +165,7 @@ pub fn AgentType::agent_id_json(
   self : AgentType,
   constructor_json : Json,
   phantom_id? : @types.Uuid? = None,
-) -> AgentId raise ReflectError {
+) -> ParsedAgentId raise ReflectError {
   self.agent_id_value(
     self.constructor_input.pack_json(constructor_json),
     phantom_id~,
@@ -196,16 +177,11 @@ fn AgentType::client_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
   phantom_id : @types.Uuid?,
-  reusable_identity : AgentId?,
+  reusable_identity : ParsedAgentId?,
 ) -> ReflectedAgentClient raise ReflectError {
   {
     agent_type: self,
-    transport: Transport::create(
-      self.implemented_by,
-      self.name,
-      constructor_value,
-      phantom_id,
-    ),
+    transport: Transport::create(self.name, constructor_value, phantom_id),
     reusable_identity,
     phantom_id,
   }

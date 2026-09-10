@@ -3,17 +3,16 @@
 /// this client performs no discovery or local lifecycle verification.
 pub(all) struct DynamicAgentClient {
   priv transport : Transport
-  reusable_identity : AgentId?
+  reusable_identity : ParsedAgentId?
 }
 
 ///|
 pub fn DynamicAgentClient::from_agent_id(
-  agent_id : AgentId,
+  agent_id : ParsedAgentId,
 ) -> DynamicAgentClient raise ReflectError {
   let parts = agent_id.parts()
   {
     transport: Transport::create(
-      agent_id.component_id,
       parts.type_name,
       parts.constructor_value,
       parts.phantom_id,
@@ -26,26 +25,23 @@ pub fn DynamicAgentClient::from_agent_id(
 /// Attempts a durable lookup by manually constructing an identity without a
 /// phantom UUID. The runtime authoritatively accepts or rejects the operation.
 pub fn DynamicAgentClient::lookup(
-  component_id : @types.ComponentId,
   type_name : String,
   constructor_value : @model.SchemaValue,
 ) -> DynamicAgentClient raise ReflectError {
   DynamicAgentClient::from_agent_id(
-    AgentId::create(component_id, type_name, constructor_value),
+    ParsedAgentId::create(type_name, constructor_value),
   )
 }
 
 ///|
 /// Attempts to resume a durable phantom from a known UUID.
 pub fn DynamicAgentClient::resume_phantom(
-  component_id : @types.ComponentId,
   type_name : String,
   constructor_value : @model.SchemaValue,
   phantom_id : @types.Uuid,
 ) -> DynamicAgentClient raise ReflectError {
   DynamicAgentClient::from_agent_id(
-    AgentId::create(
-      component_id,
+    ParsedAgentId::create(
       type_name,
       constructor_value,
       phantom_id=Some(phantom_id),
@@ -57,13 +53,11 @@ pub fn DynamicAgentClient::resume_phantom(
 /// Generates a phantom UUID and exposes both the reusable agent identity and
 /// the UUID used to construct it.
 pub fn DynamicAgentClient::new_phantom(
-  component_id : @types.ComponentId,
   type_name : String,
   constructor_value : @model.SchemaValue,
 ) -> CreatedPhantomClient raise ReflectError {
   let phantom_id = @apiHost.generate_idempotency_key()
-  let agent_id = AgentId::create(
-    component_id,
+  let agent_id = ParsedAgentId::create(
     type_name,
     constructor_value,
     phantom_id=Some(phantom_id),
@@ -76,17 +70,11 @@ pub fn DynamicAgentClient::new_phantom(
 /// identity is guaranteed; use the final identity returned in invocation
 /// metadata.
 pub fn DynamicAgentClient::ephemeral(
-  component_id : @types.ComponentId,
   type_name : String,
   constructor_value : @model.SchemaValue,
 ) -> DynamicAgentClient raise ReflectError {
   {
-    transport: Transport::create(
-      component_id,
-      type_name,
-      constructor_value,
-      None,
-    ),
+    transport: Transport::create(type_name, constructor_value, None),
     reusable_identity: None,
   }
 }

@@ -22,10 +22,12 @@ guard counter_type.find_method("add") is Some(add) else {
 }
 ```
 
-Agent type names are unique within an environment. `AgentType` exposes its
-implementing component ID, lifecycle mode, constructor `SchemaRef`,
-and method schemas. `SchemaRef::pack_json` converts canonical JSON into a
-schema-native value; `unpack_json` performs the awaited conversion back.
+Agent type names and reflection identity strings are environment-scoped.
+`AgentType` exposes the currently implementing component as deployment
+metadata, plus its lifecycle mode, constructor `SchemaRef`, and method schemas.
+Reflection clients do not pin that component ID. `SchemaRef::pack_json`
+converts canonical JSON into a schema-native value; `unpack_json` performs the
+awaited conversion back.
 
 ## Use the three Level 3 invocation paths
 
@@ -106,15 +108,15 @@ counter.trigger(
 
 ## Raw lifecycle attempts
 
-- Use a supplied `AgentId` with `DynamicAgentClient::from_agent_id`, or inspect
-  it with `AgentId::parts`.
+- Use a supplied `ParsedAgentId` with `DynamicAgentClient::from_agent_id`, or
+  inspect it with `ParsedAgentId::parts`.
 - Use `DynamicAgentClient::lookup` for a manually packed durable identity
   without a phantom UUID.
 - Use `resume_phantom` with a known UUID.
 - Use `new_phantom` to generate a UUID and receive the client, reusable
-  `AgentId`, and phantom UUID together.
+  `ParsedAgentId`, and phantom UUID together.
 - Use `DynamicAgentClient::ephemeral` for a raw invocation address built from
-  component ID, type name, and manually packed constructor values.
+  the type name and manually packed constructor values.
 
 Raw lifecycle helpers perform no discovery, schema validation, lifecycle-mode
 verification, or local factory checks. The runtime is authoritative.

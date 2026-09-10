@@ -1,12 +1,10 @@
 ///|
 priv struct Transport {
-  component_id : @types.ComponentId
   raw : @agentHost.WasmRpc
 }
 
 ///|
 fn Transport::create(
-  component_id : @types.ComponentId,
   type_name : String,
   constructor_value : @model.SchemaValue,
   phantom_id : @types.Uuid?,
@@ -16,18 +14,17 @@ fn Transport::create(
   }
   match
     @agentHost.WasmRpc::create(type_name, constructor_input, phantom_id, []) {
-    Ok(raw) => { component_id, raw, }
+    Ok(raw) => { raw, }
     Err(error) => raise rpc_error(error)
   }
 }
 
 ///|
-fn Transport::metadata(
-  self : Transport,
+fn invocation_metadata(
   metadata : @agentHost.InvocationMetadata,
 ) -> InvocationMetadata {
   {
-    agent_id: { component_id: self.component_id, value: metadata.agent_id, },
+    agent_id: { value: metadata.agent_id, },
     idempotency_key: metadata.idempotency_key,
   }
 }
@@ -59,7 +56,7 @@ async fn Transport::invoke_value(
         }
         None => None
       }
-      { metadata: self.metadata(pending.metadata), value, }
+      { metadata: invocation_metadata(pending.metadata), value, }
     }
     Err(error) => raise rpc_error(error)
   }
@@ -75,7 +72,7 @@ fn Transport::trigger_value(
     error => raise Schema("failed to encode invocation input: \{repr(error)}")
   }
   match self.raw.invoke(method_name, wire, None) {
-    Ok(metadata) => self.metadata(metadata)
+    Ok(metadata) => invocation_metadata(metadata)
     Err(error) => raise rpc_error(error)
   }
 }
@@ -99,7 +96,7 @@ fn Transport::schedule_value(
     ) {
     Ok(receipt) =>
       {
-        metadata: self.metadata(receipt.metadata),
+        metadata: invocation_metadata(receipt.metadata),
         cancellation_token: receipt.cancellation_token,
       }
     Err(error) => raise rpc_error(error)
