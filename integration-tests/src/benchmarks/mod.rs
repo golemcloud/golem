@@ -72,21 +72,59 @@ pub async fn delete_workers(
     info!("Deleting {} workers completed", agent_ids.len());
 }
 
+/// Longest failure message kept per failed attempt. Response bodies can be
+/// large; the report needs enough to diagnose, not the whole payload.
+const MAX_FAILURE_MESSAGE_LEN: usize = 500;
+
+fn failure_message(message: String) -> String {
+    if message.len() <= MAX_FAILURE_MESSAGE_LEN {
+        message
+    } else {
+        let mut end = MAX_FAILURE_MESSAGE_LEN;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}... ({} bytes total)", &message[..end], message.len())
+    }
+}
+
 #[derive(Debug)]
 pub struct InvokeResult {
     pub value: Vec<SchemaValue>,
     pub retries: usize,
     pub timeouts: usize,
     pub accumulated_time: Duration,
+    /// One message per failed attempt (retry or timeout), in order.
+    pub failures: Vec<String>,
 }
 
 impl InvokeResult {
+    /// Records the invocation under `{prefix}invocation`.
+    ///
+    /// An invocation that needed a retry or timed out before succeeding is
+    /// recorded under `{prefix}invocation-recovered` instead, and every failed
+    /// attempt is recorded as a failure against `{prefix}invocation`. The
+    /// primary series therefore only measures invocations that succeeded on
+    /// the first attempt, and a run with failures says so in its report and
+    /// results instead of folding the retry time into the measured numbers.
     pub fn record(&self, recorder: &BenchmarkRecorder, prefix: &str, agent_id: &str) {
-        recorder.duration(&format!("{prefix}invocation").into(), self.accumulated_time);
-        recorder.duration(
-            &ResultKey::secondary(format!("{prefix}worker-{agent_id}")),
-            self.accumulated_time,
-        );
+        let invocation_key: ResultKey = format!("{prefix}invocation").into();
+        let recovered = !self.failures.is_empty();
+        let duration_key: ResultKey = if recovered {
+            format!("{prefix}invocation-recovered").into()
+        } else {
+            invocation_key.clone()
+        };
+        let worker_key = if recovered {
+            ResultKey::secondary(format!("{prefix}worker-{agent_id}-recovered"))
+        } else {
+            ResultKey::secondary(format!("{prefix}worker-{agent_id}"))
+        };
+        recorder.duration(&duration_key, self.accumulated_time);
+        recorder.duration(&worker_key, self.accumulated_time);
+        for failure in &self.failures {
+            recorder.failure(&invocation_key, failure.clone());
+        }
         recorder.count(
             &format!("{prefix}invocation-retries").into(),
             self.retries as u64,
@@ -122,6 +160,7 @@ pub async fn invoke_and_await_agent(
         let mut accumulated_time = Duration::from_secs(0);
         let mut retries = 0;
         let mut timeouts = 0;
+        let mut failures = Vec::new();
 
         loop {
             let start = SystemTime::now();
@@ -150,11 +189,15 @@ pub async fn invoke_and_await_agent(
                         retries,
                         timeouts,
                         accumulated_time,
+                        failures,
                     };
                 }
                 Ok(Err(e)) => {
                     println!("Invocation failed, retrying: {e:?}");
                     retries += 1;
+                    failures.push(failure_message(format!(
+                        "{method_name} on {agent_id} failed: {e:?}"
+                    )));
                     accumulated_time += duration;
                     tokio::time::sleep(RETRY_DELAY).await;
                     user.deps.ensure_all_deps_running().await;
@@ -163,6 +206,9 @@ pub async fn invoke_and_await_agent(
                     // timeout
                     // not counting timeouts into the accumulated time
                     timeouts += 1;
+                    failures.push(failure_message(format!(
+                        "{method_name} on {agent_id} timed out after {TIMEOUT:?}: {e:?}"
+                    )));
                     println!("Invocation timed out, retrying: {e:?}");
                     user.deps.ensure_all_deps_running().await;
                 }
@@ -201,6 +247,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
         let mut accumulated_time = Duration::from_secs(0);
         let mut retries = 0;
         let mut timeouts = 0;
+        let mut failures = Vec::new();
 
         loop {
             let start = SystemTime::now();
@@ -225,6 +272,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                             retries,
                             timeouts,
                             accumulated_time,
+                            failures,
                         };
                     } else {
                         // non-200 status. Read the body before deciding what to
@@ -251,6 +299,9 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                             "Invocation returned with status {status} for {url} \
                              (retry {retries}/{MAX_RETRIES}), body: {body}"
                         );
+                        failures.push(failure_message(format!(
+                            "status {status} for {url}: {body}"
+                        )));
                         let duration = start.elapsed().expect("SystemTime elapsed failed");
                         accumulated_time += duration;
                         tokio::time::sleep(RETRY_DELAY).await;
@@ -266,6 +317,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                         );
                     }
                     println!("Invocation failed, retrying ({retries}/{MAX_RETRIES}): {e:?}");
+                    failures.push(failure_message(format!("request to {url} failed: {e:?}")));
                     let duration = start.elapsed().expect("SystemTime elapsed failed");
                     accumulated_time += duration;
                     tokio::time::sleep(RETRY_DELAY).await;
@@ -281,10 +333,88 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
                         );
                     }
                     println!("Invocation timed out, retrying ({timeouts}/{MAX_TIMEOUTS}): {e:?}");
+                    failures.push(failure_message(format!(
+                        "request to {url} timed out after {TIMEOUT:?}: {e:?}"
+                    )));
                 }
             }
         }
     }
     .instrument(tracing::info_span!("invoke_http"))
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn result(failures: Vec<String>) -> InvokeResult {
+        InvokeResult {
+            value: vec![],
+            retries: failures.len(),
+            timeouts: 0,
+            accumulated_time: Duration::from_millis(7),
+            failures,
+        }
+    }
+
+    #[test]
+    fn clean_invocation_is_recorded_under_the_primary_key() {
+        let recorder = BenchmarkRecorder::new();
+        result(vec![]).record(&recorder, "hot-", "3");
+
+        let durations = recorder.durations();
+        assert_eq!(
+            durations[&ResultKey::primary("hot-invocation")],
+            vec![Duration::from_millis(7)]
+        );
+        assert_eq!(
+            durations[&ResultKey::secondary("hot-worker-3")],
+            vec![Duration::from_millis(7)]
+        );
+        assert!(!durations.contains_key(&ResultKey::primary("hot-invocation-recovered")));
+        assert!(recorder.failures().is_empty());
+    }
+
+    #[test]
+    fn recovered_invocation_is_kept_out_of_the_primary_series_and_its_failures_recorded() {
+        let recorder = BenchmarkRecorder::new();
+        result(vec!["status 503 for http://x: busy".to_string()]).record(&recorder, "hot-", "3");
+
+        let durations = recorder.durations();
+        assert!(!durations.contains_key(&ResultKey::primary("hot-invocation")));
+        assert_eq!(
+            durations[&ResultKey::primary("hot-invocation-recovered")],
+            vec![Duration::from_millis(7)]
+        );
+        assert_eq!(
+            durations[&ResultKey::secondary("hot-worker-3-recovered")],
+            vec![Duration::from_millis(7)]
+        );
+        assert_eq!(
+            recorder.failures()[&ResultKey::primary("hot-invocation")],
+            vec!["status 503 for http://x: busy".to_string()]
+        );
+        assert_eq!(
+            recorder.counts()[&ResultKey::primary("hot-invocation-retries")],
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn failure_messages_are_truncated_on_a_char_boundary() {
+        let short = "x".repeat(MAX_FAILURE_MESSAGE_LEN);
+        assert_eq!(failure_message(short.clone()), short);
+
+        let long = format!(
+            "{}é{}",
+            "x".repeat(MAX_FAILURE_MESSAGE_LEN - 1),
+            "y".repeat(10)
+        );
+        let truncated = failure_message(long.clone());
+        assert!(truncated.starts_with(&"x".repeat(MAX_FAILURE_MESSAGE_LEN - 1)));
+        assert!(truncated.ends_with(&format!("... ({} bytes total)", long.len())));
+        assert!(!truncated.contains('é'));
+    }
 }
