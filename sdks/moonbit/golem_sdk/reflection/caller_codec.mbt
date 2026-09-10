@@ -1,10 +1,10 @@
 ///|
 /// Typed client whose `IntoSchema` and `FromSchema` implementations are
-/// authored by the caller. Runtime lookup supplies only the component metadata
-/// for the environment-unique type name; it does not supply or verify codecs.
+/// authored by the caller. The environment-unique type name is the invocation
+/// address; no reflected schema is consulted.
 pub(all) struct CallerCodecClient {
   priv transport : Transport
-  reusable_identity : AgentId?
+  reusable_identity : ParsedAgentId?
 }
 
 ///|
@@ -13,25 +13,21 @@ pub fn[C : @schema.IntoSchema] CallerCodecClient::create(
   constructor_input : C,
   phantom_id? : @types.Uuid? = None,
 ) -> CallerCodecClient raise ReflectError {
-  let component_id = component_id_for(type_name)
   let constructor_value = @schema.to_value_as(constructor_input)
-  let identity = AgentId::create(
-    component_id,
+  let identity = ParsedAgentId::create(
     type_name,
     constructor_value,
     phantom_id~,
   )
   {
-    transport: Transport::create(
-      component_id, type_name, constructor_value, phantom_id,
-    ),
+    transport: Transport::create(type_name, constructor_value, phantom_id),
     reusable_identity: Some(identity),
   }
 }
 
 ///|
 pub fn CallerCodecClient::bind(
-  agent_id : AgentId,
+  agent_id : ParsedAgentId,
   type_name : String,
 ) -> CallerCodecClient raise ReflectError {
   let parts = agent_id.parts()
@@ -44,10 +40,8 @@ pub fn CallerCodecClient::bind(
       "'",
     )
   }
-  let component_id = component_id_for(type_name)
   {
     transport: Transport::create(
-      component_id,
       type_name,
       parts.constructor_value,
       parts.phantom_id,
