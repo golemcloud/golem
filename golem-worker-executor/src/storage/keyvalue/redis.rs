@@ -52,6 +52,10 @@ impl RedisKeyValueStorage {
                 "agent:durable_stream_session_index:{}",
                 agent_id.to_redis_key()
             )),
+            KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => Some(format!(
+                "agent:rejected_periodic_snapshots:{}",
+                agent_id.to_redis_key()
+            )),
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,

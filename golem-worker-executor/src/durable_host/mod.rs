@@ -108,7 +108,7 @@ use crate::worker::agent_config::{effective_agent_config, validate_agent_config}
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, lower_invocation,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -3713,24 +3713,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => (payload, mime_type),
             _ => {
                 let error = format!(
-                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry"
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
-                }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after invalid snapshot entry: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
+                );
+                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
             }
         };
 
@@ -3744,27 +3735,37 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             Ok(data) => data,
             Err(err) => {
-                let error = format!(
-                    "Failed to download snapshot payload: {err}; falling back to full replay"
+                let error =
+                    format!("Failed to download snapshot payload at {snapshot_index}: {err}");
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
+                    store
+                        .as_context()
+                        .data()
+                        .get_public_state()
+                        .worker()
+                        .unavailable_periodic_snapshot_through
+                        .fetch_max(snapshot_index.into(), Ordering::AcqRel);
+                    return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after snapshot download failure: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
+                return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
             }
         };
+
+        if let Err(error) = load_load_snapshot_guest(&mut store.as_context_mut(), instance) {
+            Self::emit_snapshot_recovery_event(
+                store,
+                snapshot_index,
+                false,
+                Some(error.to_string()),
+            );
+            return SnapshotRecoveryResult::Failed(error);
+        }
 
         let component_metadata = store
             .as_context()
@@ -3795,9 +3796,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Err(err) => {
                 let error =
                     format!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                return SnapshotRecoveryResult::Failed;
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
+                );
+                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
             }
         };
 
@@ -3811,9 +3816,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
         {
             let error = format!("Snapshot recovery failed to install invocation context: {err}");
-            warn!("{error}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            return SnapshotRecoveryResult::Failed;
+            return SnapshotRecoveryResult::Unavailable(err);
         }
 
         store
@@ -3846,10 +3850,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .remove_span(&span_id);
         }
 
+        let snapshot_divergence = load_result
+            .as_ref()
+            .is_ok_and(InvokeResult::is_snapshot_replay_divergence);
         let failed = match load_result {
-            Err(error) => Some(format!(
-                "Snapshot recovery failed to load snapshot: {error}"
-            )),
+            Err(error) => return SnapshotRecoveryResult::Unavailable(error),
+            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                return SnapshotRecoveryResult::Retry(
+                    Self::fixed_decision_for_trap_type(&TrapType::Interrupt(interrupt_kind))
+                        .expect("interrupts have a fixed retry decision"),
+                );
+            }
+            Ok(InvokeResult::Failed { error, .. }) if !snapshot_divergence => {
+                return SnapshotRecoveryResult::Unavailable(
+                    WorkerExecutorError::InvocationFailed {
+                        error,
+                        stderr: String::new(),
+                    },
+                );
+            }
             Ok(InvokeResult::Failed { error, .. }) => {
                 let stderr = store
                     .as_context()
@@ -3873,9 +3892,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         if let Some(error) = failed {
-            warn!("{error}; re-creating instance for full replay");
-            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            SnapshotRecoveryResult::Failed
+            warn!(%error, %snapshot_index, "Snapshot recovery failed");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error.clone()));
+            SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(format!(
+                "Snapshot recovery at {snapshot_index} failed: {error}"
+            )))
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
@@ -3891,12 +3912,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Abandons an automatic snapshot whose replayed tail diverged from the recorded oplog: the
-    /// worker is recreated with automatic snapshot recovery disabled so it replays the full oplog.
+    /// Recreates the instance from the authoritative baseline, excluding this periodic snapshot.
     fn abandon_diverged_automatic_snapshot(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-        full_function_name: &str,
-        error: &AgentError,
+        error: &impl std::fmt::Display,
     ) -> RetryDecision {
         let snapshot_index = store
             .as_context()
@@ -3906,18 +3925,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .last_snapshot_index
             .expect("an automatic snapshot tail is only replayed after loading a snapshot");
         let error = format!(
-            "Replaying {full_function_name} after loading the snapshot diverged from the recorded oplog: {}; falling back to full replay",
-            error.message()
+            "Snapshot recovery at {snapshot_index} diverged from the recorded oplog: {error}; retrying from the authoritative baseline"
         );
-        warn!("{error}");
-        Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+        warn!(%error, "Abandoning periodic snapshot");
+        if store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .replaying_automatic_snapshot_tail
+        {
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+        }
         store
             .as_context()
             .data()
             .get_public_state()
             .worker()
-            .snapshot_recovery_disabled
-            .store(true, Ordering::Release);
+            .rejected_periodic_snapshot_through
+            .fetch_max(snapshot_index.into(), Ordering::AcqRel);
         RetryDecision::Immediate
     }
 
@@ -3949,29 +3975,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 enum SnapshotRecoveryResult {
     Success,
     NotAttempted,
-    Failed,
+    Failed(WorkerExecutorError),
+    Unavailable(WorkerExecutorError),
+    Retry(RetryDecision),
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn restart_replay_without_snapshot(&mut self) -> Result<(), WorkerExecutorError> {
-        self.state.replay_state.drop_override_and_restart().await?;
-
-        self.state.agent_wallet_cards = match self.state.agent_id.as_ref() {
-            Some(agent_id) => {
-                let card = agent_initial_card_from_component_metadata(
-                    &self.state.component_metadata,
-                    agent_id,
-                )?;
-                BTreeMap::from([(card.card_id(), card)])
-            }
-            None => BTreeMap::new(),
-        };
-        self.state.wallet_generation = 0;
-        self.rederive_agent_effective_surface_from_wallet();
-
-        Ok(())
-    }
-
     /// Activity tracker for Golem-spawned store background tasks; see
     /// [`tail_work::TailWorkTracker`].
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
@@ -5416,6 +5425,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        let result = async {
         let mut number_of_replayed_functions = 0;
 
         if refresh_replay_target {
@@ -5692,6 +5702,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }
                             _ => {
                                 let details = format!("{invoke_result:?}");
+                                let snapshot_divergence = match &invoke_result {
+                                    Ok(result) => result.is_snapshot_replay_divergence(),
+                                    Err(WorkerExecutorError::UnexpectedOplogEntry { .. }) => true,
+                                    Err(_) => false,
+                                };
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
@@ -5711,14 +5726,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     // restored from the snapshot differs from the original one. The
                                     // recorded oplog is authoritative, so instead of committing the
                                     // failure the snapshot is abandoned and the worker replays from
-                                    // the beginning, which reproduces the recorded outcome.
+                                    // its authoritative baseline.
                                     Some(TrapType::Error { error, .. })
-                                        if store
-                                            .as_context()
-                                            .data()
-                                            .durable_ctx()
-                                            .state
-                                            .replaying_automatic_snapshot_tail
+                                        if snapshot_divergence
+                                            && store
+                                                .as_context()
+                                                .data()
+                                                .durable_ctx()
+                                                .state
+                                                .replaying_automatic_snapshot_tail
                                             && !store
                                                 .as_context()
                                                 .data()
@@ -5727,9 +5743,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     {
                                         Some(Self::abandon_diverged_automatic_snapshot(
                                             store,
-                                            &full_function_name,
-                                            &error,
+                                            &error.message(),
                                         ))
+                                    }
+                                    Some(trap_type)
+                                        if store.as_context().data().durable_ctx().state.replaying_automatic_snapshot_tail
+                                            && !store.as_context().data().durable_ctx().is_live() =>
+                                    {
+                                        // Speculative reconstruction failures must not append an
+                                        // authoritative invocation Error for already recorded work.
+                                        match trap_type {
+                                            TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
+                                                error,
+                                                stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
+                                            }),
+                                            TrapType::Interrupt(kind) => Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind)),
+                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during snapshot replay")),
+                                        }
                                     }
                                     Some(trap_type) => {
                                         let decision = store
@@ -5813,6 +5843,22 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         }
 
         resume_result
+        }.await;
+        // Result validation can consume the final recorded entry before detecting a mismatch.
+        // Its typed replay error, rather than the resulting live cursor, identifies divergence.
+        if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result
+            && store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .state
+                .replaying_automatic_snapshot_tail
+        {
+            return Ok(Some(Self::abandon_diverged_automatic_snapshot(
+                store, error,
+            )));
+        }
+        result
     }
 
     async fn prepare_instance(
@@ -5881,13 +5927,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             target_revision, ..
                         } => {
                             let replay_result = async {
-                                if let SnapshotRecoveryResult::Failed =
-                                    Self::try_load_snapshot(store, instance).await
-                                {
-                                    return Err(WorkerExecutorError::failed_to_resume_worker(
-                                        agent_id.clone(),
-                                        WorkerExecutorError::runtime("loading snapshot failed"),
-                                    ));
+                                match Self::try_load_snapshot(store, instance).await {
+                                    SnapshotRecoveryResult::Failed(error)
+                                    | SnapshotRecoveryResult::Unavailable(error) => {
+                                        return Err(error);
+                                    }
+                                    SnapshotRecoveryResult::Retry(decision) => {
+                                        return Ok(Some(decision));
+                                    }
+                                    SnapshotRecoveryResult::Success
+                                    | SnapshotRecoveryResult::NotAttempted => {}
                                 };
                                 // automatic update will be succeeded as part of the replay.
                                 let result = Self::resume_replay(store, instance, false).await?;
@@ -5947,21 +5996,47 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         record_resume_worker(start.elapsed());
                         result
                     }
-                    SnapshotRecoveryResult::Failed => {
-                        store
+                    SnapshotRecoveryResult::Failed(error) => {
+                        if store
                             .as_context()
                             .data()
-                            .get_public_state()
-                            .worker()
-                            .snapshot_recovery_disabled
-                            .store(true, Ordering::Release);
-                        Ok(Some(RetryDecision::Immediate))
+                            .durable_ctx()
+                            .state
+                            .last_snapshot_source
+                            == Some(SnapshotSource::Automatic)
+                        {
+                            Ok(Some(Self::abandon_diverged_automatic_snapshot(
+                                store, &error,
+                            )))
+                        } else {
+                            Err(error)
+                        }
                     }
+                    SnapshotRecoveryResult::Unavailable(error) => Err(error),
+                    SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
         };
         match prepare_result {
             Ok(None) => {
+                let worker = store.as_context().data().get_public_state().worker();
+                let rejected = worker
+                    .rejected_periodic_snapshot_through
+                    .load(Ordering::Acquire);
+                if rejected != 0 {
+                    let metadata = worker.get_initial_worker_metadata();
+                    worker
+                        .worker_service()
+                        .reject_periodic_snapshots_through(
+                            &metadata.owned_agent_id(),
+                            metadata.fingerprint,
+                            OplogIndex::from_u64(rejected),
+                        )
+                        .await?;
+                }
+                worker
+                    .unavailable_periodic_snapshot_through
+                    .store(0, Ordering::Release);
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }

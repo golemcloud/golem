@@ -851,7 +851,7 @@ impl CursorTx<'_> {
     /// Exactly-once holds because the `was_replay && is_live` edge is true only on the single advance
     /// that crosses into live: once live, the replay-driving loops stop and no further
     /// `move_replay_idx` runs until the replay target is grown (`set_replay_target`) or the cursor is
-    /// reset (`new` / `drop_override_and_restart`), each of which starts a fresh replay epoch that
+    /// recreated (`new`), each of which starts a fresh replay epoch that
     /// emits its own `ReplayFinished` on completion.
     pub(super) async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         let was_replay = self.cursor.is_replay();
@@ -1689,40 +1689,6 @@ impl CursorTx<'_> {
         self.switch_to_live();
         LivePublicationOutcome::Published
     }
-
-    /// Resets the cursor to the start of replay after dropping a manual-update override.
-    pub(super) async fn drop_override_and_restart(&mut self) -> Result<(), WorkerExecutorError> {
-        self.st.skipped_regions.drop_override();
-        self.st.initial_snapshot_skip_end = None;
-        let next = self
-            .st
-            .skipped_regions
-            .find_next_deleted_region(OplogIndex::NONE);
-        self.st.next_skipped_region = next;
-        self.cursor.set_log_hashes(HashMap::new());
-        self.cursor.pending_replay_events.lock().unwrap().clear();
-        self.st.claimed_starts.clear();
-        self.st.claimed_custom_invocation_ids.clear();
-        self.st.custom_subtrees.clear();
-        self.st.replay_buffer.clear();
-        self.cursor
-            .position
-            .last_replayed_index
-            .set(OplogIndex::NONE);
-        self.cursor
-            .position
-            .last_replayed_non_hint_index
-            .set(OplogIndex::NONE);
-        self.cursor
-            .transition_phase
-            .store(ReplayTransitionPhase::Replaying as u8, Ordering::Release);
-        self.move_replay_idx(OplogIndex::INITIAL).await;
-        self.skip_forward().await?;
-        if self.cursor.is_live() {
-            self.cursor.publish_live();
-        }
-        Ok(())
-    }
 }
 
 impl ReplayState {
@@ -1934,11 +1900,6 @@ impl ReplayState {
                 self.cursor.replay_target(),
             ),
         )
-    }
-
-    pub async fn drop_override_and_restart(&self) -> Result<(), WorkerExecutorError> {
-        self.with_tx(async |tx| tx.drop_override_and_restart().await)
-            .await
     }
 
     /// Runs a finite cursor operation on an independently-scheduled owned task and awaits its

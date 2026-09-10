@@ -757,6 +757,11 @@ pub enum KeyValueStorageNamespace {
     AgentDurableStreamSessionIndex {
         agent_id: AgentId,
     },
+    /// Per-agent periodic snapshot rejection watermarks, with one hash field per agent
+    /// incarnation fingerprint.
+    AgentRejectedPeriodicSnapshots {
+        agent_id: AgentId,
+    },
     Promise {
         agent_id: AgentId,
     },

@@ -85,6 +85,12 @@ impl SqliteKeyValueStorage {
                     agent_id.to_redis_key()
                 )
             }
+            KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
+                format!(
+                    "agent:rejected_periodic_snapshots:{}",
+                    agent_id.to_redis_key()
+                )
+            }
             KeyValueStorageNamespace::Promise { .. } => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {

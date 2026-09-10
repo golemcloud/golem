@@ -18,16 +18,16 @@ use async_lock::Mutex;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
-use golem_common::model::AgentStatus;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
 use golem_worker_executor::services::golem_config::{OplogConfig, SnapshotPolicy};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_customized, start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_customized, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use log::info;
@@ -432,12 +432,21 @@ async fn snapshot_after_auto_update_recovers_with_updated_component_context(
         .await?;
     assert_eq!(before_snapshot.into_typed::<u32>()?, 0);
 
-    let snapshot_count = executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await?
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
+    let snapshot_count = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let snapshot_count = executor
+                .get_oplog(&worker_id, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+                .count();
+            if snapshot_count > snapshots_before_invocation {
+                return anyhow::Ok(snapshot_count);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
     assert_eq!(snapshot_count, snapshots_before_invocation + 1);
 
     drop(executor);
@@ -477,6 +486,548 @@ enum AutomaticSnapshotLoadFailure {
     PayloadDownload,
 }
 
+async fn manual_update_with_periodic_snapshot(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    agent_update_v1: &PrecompiledComponent,
+) -> anyhow::Result<(ComponentDto, AgentId, OplogIndex)> {
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let initial = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(initial.into_typed::<u32>()?, 0);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    // The manual snapshot contains v1's marker, even though the new component saves marker 2.
+    let restored = executor
+        .invoke_and_await_agent(
+            &updated_component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(restored.into_typed::<u32>()?, 1);
+    let result = executor
+        .invoke_and_await_agent(
+            &updated_component,
+            &agent_id,
+            "revision_two_only",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 2);
+
+    let snapshot_index = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let update_position = oplog
+                .iter()
+                .rposition(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+                .unwrap();
+            if let Some(snapshot) = oplog[update_position + 1..]
+                .iter()
+                .find(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            {
+                return anyhow::Ok(snapshot.oplog_index);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok((updated_component, worker_id, snapshot_index))
+}
+
+#[test]
+#[timeout("120s")]
+async fn manual_periodic_snapshot_valid_tail_recovers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let (component, worker_id, snapshot_index) =
+        manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let tail = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+        .await?;
+    assert_eq!(tail.into_typed::<u32>()?, 2);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .rfind(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .unwrap()
+            .oplog_index,
+        snapshot_index
+    );
+    assert!(oplog.iter().any(|entry| entry.oplog_index > snapshot_index
+        && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))));
+    drop(executor);
+
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 2);
+    assert_snapshot_recovery_loaded(&mut events).await;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn manual_periodic_snapshot_result_divergence_uses_manual_baseline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let (component, worker_id, snapshot_index) =
+        manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let tail = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(tail.into_typed::<u32>()?, 1);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .rfind(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .unwrap()
+            .oplog_index,
+        snapshot_index
+    );
+    assert!(oplog.iter().any(|entry| entry.oplog_index > snapshot_index
+        && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))));
+    drop(executor);
+
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await;
+    let loaded_index = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    return snapshot_index;
+                }
+                Ok(AgentEvent::SnapshotRecoveryFailed { error, .. }) => {
+                    panic!("The periodic snapshot must load before its result diverges: {error}");
+                }
+                _ => {}
+            }
+        }
+        panic!("Missing snapshot load success before result divergence");
+    })
+    .await?;
+    assert_eq!(loaded_index, snapshot_index);
+    assert!(
+        result.is_ok(),
+        "Result divergence after snapshot {snapshot_index} must retry the valid manual baseline: {result:?}"
+    );
+    assert_eq!(result?.into_typed::<u32>()?, 1);
+    let failed_index = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            if let Ok(AgentEvent::SnapshotRecoveryFailed {
+                snapshot_index,
+                error,
+                ..
+            }) = AgentEvent::try_from(event)
+            {
+                assert!(error.contains("loaded_snapshot_revision"), "{error}");
+                return snapshot_index;
+            }
+        }
+        panic!("Missing periodic snapshot rejection");
+    })
+    .await?;
+    assert_eq!(failed_index, snapshot_index);
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
+}
+
+async fn assert_manual_periodic_snapshot_rejection(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    newer_snapshot: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let config = OplogConfig {
+        default_snapshotting: SnapshotPolicy::EveryNInvocation { count: 2 },
+        ..Default::default()
+    };
+    let executor =
+        start_customized(deps, &context, None, None, None, None, Some(config.clone())).await?;
+    let (component, worker_id, rejected_index) =
+        manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    executor
+        .return_empty_snapshot_payload(&worker_id, rejected_index)
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.stop_worker_if_idle(&owned).await? {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 2);
+    assert_snapshot_recovery_failed(&mut events, "load-snapshot returned error").await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            if let Ok(AgentEvent::InvocationFinished { function, .. }) = AgentEvent::try_from(event)
+                && function == "revision_two_only"
+            {
+                return;
+            }
+        }
+        panic!("Missing live invocation completion after fallback");
+    })
+    .await?;
+
+    let expected_snapshot = if newer_snapshot {
+        let result = executor
+            .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+            .await?;
+        assert_eq!(result.into_typed::<u32>()?, 2);
+        let new_index = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if let Some(entry) = oplog.iter().find(|entry| {
+                    entry.oplog_index > rejected_index
+                        && matches!(entry.entry, PublicOplogEntry::Snapshot(_))
+                }) {
+                    return anyhow::Ok(entry.oplog_index);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !executor.stop_worker_if_idle(&owned).await? {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+        Some(new_index)
+    } else {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .rfind(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                .unwrap()
+                .oplog_index,
+            rejected_index
+        );
+        None
+    };
+    let executor = if newer_snapshot {
+        executor
+    } else {
+        drop(executor);
+        start_customized(deps, &context, None, None, None, None, Some(config)).await?
+    };
+    let mut events = if newer_snapshot {
+        events
+    } else {
+        drop(events);
+        executor.capture_output(&worker_id).await?
+    };
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 2);
+    let selected_index = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    return snapshot_index;
+                }
+                Ok(AgentEvent::SnapshotRecoveryFailed { error, .. }) => {
+                    panic!("Unexpected recovery failure: {error}")
+                }
+                _ => {}
+            }
+        }
+        panic!("Missing recovery event");
+    })
+    .await?;
+    match expected_snapshot {
+        Some(expected) => assert_eq!(
+            selected_index, expected,
+            "A newer snapshot must be eligible after successful live execution and unload"
+        ),
+        None => assert_ne!(
+            selected_index, rejected_index,
+            "Executor restart selected the rejected periodic snapshot again"
+        ),
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn manual_periodic_snapshot_rejection_survives_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_manual_periodic_snapshot_rejection(last_unique_id, deps, agent_update_v1, false).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn manual_periodic_snapshot_rejection_allows_newer_snapshot_after_unload(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_manual_periodic_snapshot_rejection(last_unique_id, deps, agent_update_v1, true).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_looping(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let config = OplogConfig {
+        default_snapshotting: SnapshotPolicy::EveryNInvocation { count: 2 },
+        ..Default::default()
+    };
+    let executor = start_customized(deps, &context, None, None, None, None, Some(config)).await?;
+    let (component, worker_id, periodic_index) =
+        manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let manual_index = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+        .unwrap()
+        .oplog_index;
+    executor
+        .return_empty_snapshot_payload(&worker_id, periodic_index)
+        .await?;
+    executor
+        .return_empty_snapshot_payload(&worker_id, manual_index)
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.stop_worker_if_idle(&owned).await? {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+
+    let mut events = executor.capture_output(&worker_id).await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let invocation =
+        executor.invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!());
+    tokio::pin!(invocation);
+    let mut manual_failures = 0;
+    let mut periodic_failures = 0;
+    let outcome = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            tokio::select! {
+                biased;
+                event = events.recv() => {
+                    let event = event.expect("Recovery event stream ended before invocation returned");
+                    if let Ok(AgentEvent::SnapshotRecoveryFailed { snapshot_index, error, .. }) = AgentEvent::try_from(event) {
+                        if snapshot_index == periodic_index {
+                            periodic_failures += 1;
+                        } else {
+                            assert_eq!(snapshot_index, manual_index);
+                            manual_failures += 1;
+                            assert!(manual_failures <= 1, "Manual baseline {manual_index} was retried after its load failed: {error}");
+                        }
+                    }
+                }
+                result = &mut invocation => break result,
+            }
+        }
+    }).await.expect("Recovery must return the manual snapshot load failure rather than retry forever");
+    let error = outcome.expect_err("Both snapshot payloads are invalid");
+    let details = format!("{error:#}");
+    assert!(details.contains("Snapshot is empty"), "{details}");
+    assert!(details.contains(&manual_index.to_string()), "{details}");
+    assert!(!details.contains("PreviousInvocationFailed"), "{details}");
+    assert_eq!(periodic_failures, 1);
+    assert_eq!(manual_failures, 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cached_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    let (component, worker_id, periodic_index) =
+        manual_update_with_periodic_snapshot(&executor, &context, agent_update_v1).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let manual_index = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+        .unwrap()
+        .oplog_index;
+    executor
+        .return_empty_snapshot_payload(&worker_id, manual_index)
+        .await?;
+    executor.fail_snapshot_download_once(&worker_id, periodic_index);
+
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.stop_worker_if_idle(&owned).await? {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let mut events = executor.capture_output(&worker_id).await?;
+    let first = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+        .await;
+    let details = format!(
+        "{:#}",
+        first.expect_err("The periodic download and manual snapshot load must both fail")
+    );
+    assert!(details.contains("Snapshot is empty"), "{details}");
+    assert!(details.contains(&manual_index.to_string()), "{details}");
+    assert_snapshot_recovery_failed(&mut events, "Failed to download snapshot payload").await;
+    assert_snapshot_recovery_failed(&mut events, "load-snapshot returned error").await;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "Snapshot replay infrastructure failure must not append an oplog Error"
+    );
+    assert!(
+        executor.worker_is_cached(&owned).await,
+        "The second logical startup must reuse the same cached Worker"
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    executor.resume(&worker_id, false).await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 2);
+    let loaded_index = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    return snapshot_index;
+                }
+                Ok(AgentEvent::SnapshotRecoveryFailed { error, .. }) => {
+                    panic!("The healthy periodic snapshot must be retried: {error}")
+                }
+                _ => {}
+            }
+        }
+        panic!("Missing snapshot recovery success");
+    })
+    .await?;
+    assert_eq!(loaded_index, periodic_index);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "Successful retry must not require a durable oplog rejection/error"
+    );
+    Ok(())
+}
+
 async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -489,16 +1040,8 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
         default_snapshotting: SnapshotPolicy::EveryNInvocation { count: 1 },
         ..Default::default()
     };
-    let executor = start_customized(
-        deps,
-        &context,
-        None,
-        None,
-        None,
-        None,
-        Some(oplog_config.clone()),
-    )
-    .await?;
+    let executor =
+        start_customized(deps, &context, None, None, None, None, Some(oplog_config)).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
@@ -537,19 +1080,34 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
             data_value!(),
         )
         .await?;
-    let snapshot_index = executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await?
-        .iter()
-        .rev()
-        .find_map(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::Snapshot(_)).then_some(entry.oplog_index)
-        })
-        .expect("Expected an automatic snapshot after the post-update invocation");
+    let snapshot_index = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let last_finished = oplog
+                .iter()
+                .rev()
+                .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .expect("The invocation completed")
+                .oplog_index;
+            if let Some(snapshot) = oplog.iter().find(|entry| {
+                entry.oplog_index > last_finished
+                    && matches!(entry.entry, PublicOplogEntry::Snapshot(_))
+            }) {
+                break anyhow::Ok(snapshot.oplog_index);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
 
-    drop(executor);
-    let executor =
-        start_customized(deps, &context, None, None, None, None, Some(oplog_config)).await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.stop_worker_if_idle(&owned).await? {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
 
     let expected_error = match failure {
         AutomaticSnapshotLoadFailure::InvalidEntry => {
@@ -558,7 +1116,7 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
             "Expected Snapshot entry"
         }
         AutomaticSnapshotLoadFailure::PayloadDownload => {
-            executor.fail_next_oplog_download(&worker_id);
+            executor.fail_snapshot_download_once(&worker_id, snapshot_index);
             "Failed to download snapshot payload"
         }
     };
