@@ -173,6 +173,10 @@ pub const SWEPT_MODES: &[AgentMode] = &[AgentMode::Ephemeral];
 /// stayed where they were for the life of the pod.
 const ARCHIVE_STEP_SLACK: usize = 2;
 
+/// Resolved environments held at once. Far above the number of components one executor's shards
+/// can hold, so in practice the cache never fills; it is a bound rather than a policy.
+const MAX_CACHED_ENVIRONMENTS: usize = 10_000;
+
 /// The shortest a tick interval is allowed to be. A misconfigured zero would otherwise spin.
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -207,10 +211,14 @@ enum Decision {
     Archive(AgentId),
 }
 
-/// Per-route counters. Every field counts scanned keys except `truncated`, and the
-/// counted fields sum to `scanned`. A shutdown during the archive phase is the one case that
-/// leaves a scanned key with no outcome, so under it `scanned` counts fewer keys than the scan
-/// walked.
+/// Per-route counters.
+///
+/// `scanned` counts the keys this route took off the namespace, and every other counter except
+/// `truncated` counts an outcome. They no longer sum: an outcome can belong to a candidate an
+/// earlier tick scanned, because a tick that runs out of time carries its candidates forward, and
+/// [`tally_carried`] deliberately keeps that outcome out of `scanned` so the walk is charged once.
+/// A tick cut short during the archive phase leaves a scanned key with no outcome at all, which
+/// moves the totals the other way.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteReport {
     scanned: u64,
@@ -349,6 +357,27 @@ fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
         })
 }
 
+/// How much of a batch actually reached the store. Only these two open the oplog and move
+/// entries; every other outcome is decided before that and costs the archive budget nothing.
+fn archive_work(outcomes: &[Outcome]) -> u64 {
+    outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, Outcome::Archived | Outcome::ArchiveFailed))
+        .count() as u64
+}
+
+/// The same, for outcomes belonging to candidates an earlier tick scanned.
+///
+/// `scanned` counts what a tick took off the namespace, and a carried candidate was taken off it
+/// by the tick that probed it. Counting it again would charge this tick's scan budget for a key it
+/// never walked, and on a small budget that is enough to stop the routes behind it.
+fn tally_carried(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
+    RouteReport {
+        scanned: 0,
+        ..tally(outcomes)
+    }
+}
+
 /// Splits a scanned page into the keys worth a storage probe and the outcomes of those that are
 /// not, using only the assignment. No I/O has happened yet, so these two filters are free.
 fn triage(keys: &[String], assignment: &ShardAssignment) -> (Vec<AgentId>, Vec<Outcome>) {
@@ -401,7 +430,7 @@ impl TickBudget {
         }
     }
 
-    /// The next route's share: what is left, split evenly over the routes still to run.
+    /// The next route's share: what is left, split over the routes still to run, rounded up.
     ///
     /// `None` once either budget is spent, which is the point the tick stops. This used to floor
     /// at one of each so that no route was handed a budget it could not take a step with, and the
@@ -467,6 +496,21 @@ pub struct OplogSweeper {
     /// Capped at one tick's archive budget. An agent dropped off the end is found again by a later
     /// scan, so forgetting one costs a later visit rather than a stranded oplog.
     deferred: Mutex<HashMap<RouteId, Vec<AgentId>>>,
+    /// Environments already resolved, by component.
+    ///
+    /// A cold lookup costs a registry call, and for a deleted component two of them, once per
+    /// component per tick. Repaying that every tick is what let a tick that keeps losing its
+    /// deadline inside the resolution loop write back the same carried list forever: the loop
+    /// stops on the token, so the tick had archived nothing and learned nothing, and the next one
+    /// started from the same place. Remembering means a tick that resolves even one component
+    /// makes permanent progress, so the carried list drains in bounded time however slow the
+    /// registry is.
+    ///
+    /// An entry cannot go stale: a component does not move between environments, which is the
+    /// same fact that lets `environment_of` fall back to revision zero. Cleared wholesale when it
+    /// outgrows [`MAX_CACHED_ENVIRONMENTS`] rather than evicted one at a time, because it is a
+    /// cache and losing it costs lookups rather than correctness.
+    environments: Mutex<HashMap<ComponentId, EnvironmentId>>,
     /// The route the next tick starts at.
     ///
     /// A tick that runs out of budget, or out of time, leaves the routes it never reached here so
@@ -542,6 +586,7 @@ impl OplogSweeper {
             cursors: Mutex::new(HashMap::new()),
             passes: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
+            environments: Mutex::new(HashMap::new()),
             route_cursor: Mutex::new(0),
         })
     }
@@ -671,8 +716,9 @@ impl OplogSweeper {
             };
         };
 
-        // Where the last tick ran out of budget or time. Clamped rather than trusted, so a stack
-        // that shrank between ticks cannot leave this past the end of the list.
+        // Where the last tick ran out of budget or time. `self.routes` is built once in
+        // `over_layers` and never changes, so the clamp cannot fire; it costs one comparison and
+        // saves the next reader having to prove that.
         let start = {
             let cursor = *self.route_cursor.lock().await;
             if cursor < self.routes.len() {
@@ -698,9 +744,9 @@ impl OplogSweeper {
                 .sweep_route(route, &assignment, cancel, scans, archives)
                 .instrument(info_span!("oplog_sweep", route = %route.id))
                 .await;
-            // `scanned` counts the keys the route decided rather than the keys it walked, and the
-            // two differ only when the tick was cut short during the archive phase. That tick is
-            // ending anyway, so the difference cannot reach another route.
+            // `scanned` counts the keys this route took off the namespace. Candidates carried
+            // from an earlier tick are not among them: that tick already paid for the walk, and
+            // charging this one again would spend a scan budget on keys nobody walked.
             budget.spend(report.scanned, report.archived);
             routes.push((route.id, report));
         }
@@ -746,20 +792,45 @@ impl OplogSweeper {
         // forever and archived nothing, which is the one condition the deadline exists for. See
         // [`OplogSweeper::deferred`].
         let mut owed: Vec<AgentId> = Vec::new();
+        // Agents the carried batch reached. An agent that survived it, because its component would
+        // not resolve or its archive step failed, keeps its key in the layer and can be walked
+        // again by the scan below: the previous tick finishing its pass clears the cursor and
+        // bumps the pass, and `assess` then opens the gate on the sighting the carried attempt
+        // restamped. Archiving it twice in one tick would double-count it and charge the budgets
+        // twice for one agent's work.
+        let mut handled: HashSet<AgentId> = HashSet::new();
         let mut archive_allowance = archive_budget;
         let mut carried = self.take_deferred(route.id).await;
         if !carried.is_empty() {
+            // The scanned path drops what this executor no longer owns in `triage`, before the key
+            // ever reaches a probe. A carried candidate was triaged against the assignment of the
+            // tick that found it, and a reshard since then would move it to another executor, so
+            // it is checked again here rather than archived on an answer that may no longer hold.
+            let held = carried.len();
+            carried.retain(|agent_id| owns(assignment, agent_id));
+            report = merge(
+                report,
+                tally_carried(std::iter::repeat_n(Outcome::NotOwned, held - carried.len())),
+            );
+
             owed.extend(carried.split_off((archive_allowance as usize).min(carried.len())));
+            handled.extend(carried.iter().cloned());
             let (outcomes, declined) = self.archive_batch(route, carried, cancel).await;
-            archive_allowance = archive_allowance.saturating_sub(outcomes.len() as u64);
+            // Charged for the archive steps rather than for the length of the list. A carried
+            // agent that turns out to be resident, or whose layer emptied under it, costs the
+            // store nothing, and charging for it would let a list of those exhaust the allowance
+            // and stop the scan below from running at all.
+            archive_allowance = archive_allowance.saturating_sub(archive_work(&outcomes));
             owed.extend(declined);
-            report = merge(report, tally(outcomes));
+            report = merge(report, tally_carried(outcomes));
         }
 
-        // The scan runs to completion before anything is archived. `scan_stable` resumes by seeking
-        // rather than by counting, so deleting a key behind the walk cannot shift the rest of it,
-        // but a tick that archived while paging would still hand the archive phase a list built
-        // from a namespace that changed underneath it. Reading first keeps the two apart.
+        // Nothing is archived while the scan is paging. `scan_stable` resumes by seeking rather
+        // than by counting, so deleting a key behind the walk cannot shift the rest of it, but a
+        // tick that archived while paging would still hand the archive phase a list built from a
+        // namespace that changed underneath it. Reading first keeps the two apart. The carried
+        // batch above is not an exception: it finishes before the walk starts, and a walk that
+        // resumes by seeking does not care what left the namespace before it began.
         let mut pending: Vec<AgentId> = Vec::new();
         let mut walked: u64 = 0;
         let mut pages: u64 = 0;
@@ -837,6 +908,7 @@ impl OplogSweeper {
             }
         }
 
+        pending.retain(|agent_id| !handled.contains(agent_id));
         let (outcomes, declined) = self.archive_batch(route, pending, cancel).await;
         owed.extend(declined);
         report = merge(report, tally(outcomes));
@@ -922,21 +994,13 @@ impl OplogSweeper {
                     if cancel.is_cancelled() {
                         return Err(agent_id);
                     }
-                    // Asked again, because the residency answer that put this agent on the list
-                    // was taken before the scan finished paging, and for a carried candidate an
-                    // interval before that. `ActiveWorkers` is in memory and keyed by agent and
-                    // mode alone, so re-reading it costs nothing and no environment is needed to
-                    // address it.
-                    let probe = OwnedAgentId {
-                        environment_id: environment_id.unwrap_or_else(EnvironmentId::new),
-                        agent_id: agent_id.clone(),
-                    };
-                    if self
-                        .worker_access
-                        .active_worker_fingerprint(&probe)
-                        .await
-                        .is_some()
-                    {
+                    // Asked again on both paths, not only the carried one. The residency answer
+                    // that put an agent on this list was taken while the scan was still paging,
+                    // which on a slow store is seconds before the archive phase reaches it, and
+                    // for a carried candidate it is a whole interval older than that. An agent
+                    // that started running in either window is reported as resident instead of
+                    // being archived under a live writer.
+                    if self.is_resident(&agent_id, environment_id).await {
                         return Ok(Outcome::Resident);
                     }
                     Ok(self.archive_agent(route, agent_id, environment_id).await)
@@ -982,6 +1046,22 @@ impl OplogSweeper {
         self.deferred.lock().await.insert(route, agents);
     }
 
+    /// Whether this executor is running the agent right now.
+    ///
+    /// In memory, so it costs nothing to ask. `ActiveWorkers` is keyed by agent and mode alone, so
+    /// any environment addresses the same entry and a caller that has not resolved one yet can
+    /// still ask.
+    async fn is_resident(&self, agent_id: &AgentId, environment_id: Option<EnvironmentId>) -> bool {
+        let probe = OwnedAgentId {
+            environment_id: environment_id.unwrap_or_default(),
+            agent_id: agent_id.clone(),
+        };
+        self.worker_access
+            .active_worker_fingerprint(&probe)
+            .await
+            .is_some()
+    }
+
     /// Decides one agent without touching it.
     ///
     /// Reads only. A whole page of these can run while the scan is still walking the namespace,
@@ -1001,12 +1081,7 @@ impl OplogSweeper {
         // In memory, and it comes first because on a busy executor most scanned keys belong to
         // agents this pod is running. Probing their index would be one storage read each, every
         // tick, to learn what this answers for free.
-        if self
-            .worker_access
-            .active_worker_fingerprint(&probe)
-            .await
-            .is_some()
-        {
+        if self.is_resident(&agent_id, None).await {
             return Decision::Settled(Outcome::Resident);
         }
 
@@ -1144,23 +1219,36 @@ impl OplogSweeper {
     /// the lookup the rest of the executor warms a cache for, and most swept agents belong to
     /// components that are still there.
     async fn environment_of(&self, component_id: ComponentId) -> Option<EnvironmentId> {
-        if let Ok(component) = self.components.get_metadata(component_id, None).await {
-            return Some(component.environment_id);
+        if let Some(environment_id) = self.environments.lock().await.get(&component_id).copied() {
+            return Some(environment_id);
         }
-        match self
-            .components
-            .get_metadata(component_id, Some(ComponentRevision::INITIAL))
-            .await
+        let resolved = if let Ok(component) = self.components.get_metadata(component_id, None).await
         {
-            Ok(component) => Some(component.environment_id),
-            Err(error) => {
-                warn!(
-                    component_id = %component_id,
-                    "Oplog sweep could not resolve the component of a stranded oplog: {error}"
-                );
-                None
+            Some(component.environment_id)
+        } else {
+            match self
+                .components
+                .get_metadata(component_id, Some(ComponentRevision::INITIAL))
+                .await
+            {
+                Ok(component) => Some(component.environment_id),
+                Err(error) => {
+                    warn!(
+                        component_id = %component_id,
+                        "Oplog sweep could not resolve the component of a stranded oplog: {error}"
+                    );
+                    None
+                }
             }
+        };
+        if let Some(environment_id) = resolved {
+            let mut cache = self.environments.lock().await;
+            if cache.len() >= MAX_CACHED_ENVIRONMENTS {
+                cache.clear();
+            }
+            cache.insert(component_id, environment_id);
         }
+        resolved
     }
 
     async fn remember(&self, route: RouteId, agent_id: &AgentId, index: OplogIndex, pass: u64) {
@@ -1963,6 +2051,8 @@ mod tests {
         /// Answers only a pinned revision, which is what a deleted component looks like:
         /// `get_deployed_component_metadata` skips it, `get_component_metadata` still has it.
         deleted: bool,
+        /// Lookups that reached this far, so a test can prove the sweeper stopped repaying them.
+        lookups: std::sync::atomic::AtomicU64,
     }
 
     #[async_trait]
@@ -1981,6 +2071,8 @@ mod tests {
             component_id: ComponentId,
             forced_revision: Option<ComponentRevision>,
         ) -> Result<Component, WorkerExecutorError> {
+            self.lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.fails || (self.deleted && forced_revision.is_none()) {
                 return Err(WorkerExecutorError::runtime("component not found"));
             }
@@ -2117,6 +2209,7 @@ mod tests {
                 environment_id,
                 fails: false,
                 deleted: false,
+                lookups: std::sync::atomic::AtomicU64::new(0),
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
@@ -2317,6 +2410,11 @@ mod tests {
         assert_eq!(third.archived(), 1);
         assert!(sweeper.deferred.lock().await.is_empty());
         assert_eq!(
+            third.scanned(),
+            0,
+            "and the tick that scanned it paid for the walk, so this one is not charged again"
+        );
+        assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
                 .await,
@@ -2327,6 +2425,152 @@ mod tests {
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
                 .await,
             OplogIndex::from_u64(3)
+        );
+    }
+
+    /// Regression: `environment_of` used to pay a registry lookup per component per tick, two of
+    /// them for a deleted component. A tick that kept losing its deadline inside that loop
+    /// archived nothing and learned nothing, so it wrote back the same carried list and the next
+    /// tick started from exactly the same place. Remembering the answer is what bounds that.
+    #[test]
+    #[timeout("1m")]
+    async fn an_environment_is_resolved_once_and_not_once_per_tick() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        // Deleted, so a cold lookup costs two calls rather than one: the deployed lookup misses
+        // before the pinned one answers.
+        let components = Arc::new(FixedEnvironment {
+            environment_id,
+            fails: false,
+            deleted: true,
+            lookups: std::sync::atomic::AtomicU64::new(0),
+        });
+        for name in ["counter-1", "counter-2"] {
+            stranded_ephemeral_oplog(&layers, &agent(name, component_id), environment_id).await;
+        }
+
+        let sweeper = OplogSweeper::over_layers(
+            manual(),
+            layers.indexed_storage.clone(),
+            &layers.archives,
+            all_shards(),
+            components.clone(),
+            Arc::new(DirectAccess {
+                oplog_service: layers.oplog_service.clone(),
+                resident: HashSet::new(),
+            }),
+        );
+
+        // The first tick only records indexes, so it resolves nothing.
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(
+            components.lookups.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        // The second archives both agents, and they share one component.
+        let second = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(second.archived(), 2);
+        let after_first_resolve = components.lookups.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            after_first_resolve, 2,
+            "one deployed miss and one pinned hit, for the component both agents share"
+        );
+
+        // A later agent on the same component asks nothing further.
+        stranded_ephemeral_oplog(&layers, &agent("counter-3", component_id), environment_id).await;
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        let third = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(third.archived(), 1);
+        assert_eq!(
+            components.lookups.load(std::sync::atomic::Ordering::SeqCst),
+            after_first_resolve,
+            "the environment was already known"
+        );
+    }
+
+    /// The scanned path drops what this executor no longer owns in `triage`. A carried candidate
+    /// skips that, because it was triaged a tick ago, and archiving an agent this pod may no
+    /// longer own races the pod that took the shard: `archive_agent`'s mutual exclusion is a
+    /// suspended `Worker` in this process, which the new owner cannot see.
+    #[test]
+    #[timeout("1m")]
+    async fn a_carried_candidate_is_dropped_when_its_shard_moves_away() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+        let storage = Arc::new(FixedPages {
+            inner: layers.indexed_storage.clone(),
+            keys_per_page: 10,
+            duplicate_pages: false,
+            cancel_on_scan: std::sync::Mutex::new(None),
+            calls: std::sync::atomic::AtomicU64::new(0),
+        });
+        let shards = all_shards();
+        let sweeper = build_over(
+            storage.clone(),
+            &layers,
+            manual(),
+            shards.clone(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        let cut = CancellationToken::new();
+        *storage.cancel_on_scan.lock().unwrap() = Some(cut.clone());
+        sweeper.sweep_once(&cut).await;
+        assert_eq!(
+            sweeper.deferred.lock().await.get(&EPHEMERAL_L1),
+            Some(&vec![agent_id.clone()]),
+            "the tick ran out of time holding this candidate"
+        );
+
+        // The shard moves to another executor before the carried candidate is reached.
+        shards
+            .set_shard_assignment(4, &HashSet::new())
+            .expect("assignment");
+        let after = sweeper.sweep_once(&CancellationToken::new()).await;
+
+        assert_eq!(after.archived(), 0);
+        assert_eq!(
+            after.route(EPHEMERAL_L1).not_owned,
+            2,
+            "once for the carried candidate this tick declined, and once for the key still in the \
+             layer when the scan reached it"
+        );
+        assert!(sweeper.deferred.lock().await.is_empty());
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::from_u64(3),
+            "the entries stay for whoever owns the shard now"
+        );
+    }
+
+    /// Only these two open the oplog. Charging the archive budget for the rest let a carried list
+    /// of agents that turned out to be resident exhaust the allowance and stop the scan running.
+    #[test]
+    fn only_the_outcomes_that_reached_the_store_cost_archive_budget() {
+        assert_eq!(
+            archive_work(&[Outcome::Archived, Outcome::ArchiveFailed, Outcome::Archived]),
+            3
+        );
+        assert_eq!(
+            archive_work(&[
+                Outcome::Resident,
+                Outcome::Empty,
+                Outcome::NotOwned,
+                Outcome::Unaddressable,
+                Outcome::Moving,
+                Outcome::Unparseable,
+            ]),
+            0
         );
     }
 
@@ -2480,6 +2724,7 @@ mod tests {
                 environment_id,
                 fails: true,
                 deleted: false,
+                lookups: std::sync::atomic::AtomicU64::new(0),
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
@@ -2514,6 +2759,7 @@ mod tests {
                 environment_id,
                 fails: false,
                 deleted: true,
+                lookups: std::sync::atomic::AtomicU64::new(0),
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
@@ -2594,6 +2840,7 @@ mod tests {
                 environment_id,
                 fails: true,
                 deleted: false,
+                lookups: std::sync::atomic::AtomicU64::new(0),
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
@@ -3256,6 +3503,7 @@ mod tests {
                 environment_id: EnvironmentId::new(),
                 fails: false,
                 deleted: false,
+                lookups: std::sync::atomic::AtomicU64::new(0),
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
