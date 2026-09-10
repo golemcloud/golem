@@ -8331,11 +8331,11 @@ pub fn get_agent_type(agent_type_name : String) -> @common.RegisteredAgentType? 
 }
 ///|
 /// Gets the registered agent type used by an existing agent, identified by its agent ID.
-pub fn get_agent_type_by_agent_id(agent_id : @types.AgentId) -> @common.RegisteredAgentType? {
+pub fn get_agent_type_by_agent_id(agent_id : String) -> @common.RegisteredAgentType? {
 
-      let ptr = mbt_ffi_str2ptr((agent_id).agent_id)
+      let ptr = mbt_ffi_str2ptr(agent_id)
       let return_area = mbt_ffi_malloc(200)
-      wasmImportGetAgentTypeByAgentId(((((agent_id).component_id).uuid).high_bits).reinterpret_as_int64(), ((((agent_id).component_id).uuid).low_bits).reinterpret_as_int64(), ptr, (agent_id).agent_id.length(), return_area);
+      wasmImportGetAgentTypeByAgentId(ptr, agent_id.length(), return_area);
 
       let lifted578 : @common.RegisteredAgentType? = match mbt_ffi_load8_u((return_area) + 0) {
             0 => Option::None

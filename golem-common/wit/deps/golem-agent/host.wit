@@ -12,16 +12,16 @@ interface host {
     get-agent-type: func(agent-type-name: string) -> option<registered-agent-type>;
 
     /// An environment-scoped agent identity created by `make-agent-id`.
-    type parsed-agent-id = string;
+    type agent-id = string;
 
     /// Gets the registered agent type used by an existing agent, identified by its agent ID.
-    get-agent-type-by-agent-id: func(agent-id: parsed-agent-id) -> option<registered-agent-type>;
+    get-agent-type-by-agent-id: func(agent-id: agent-id) -> option<registered-agent-type>;
 
     /// Constructs a string agent-id from the agent type and its constructor parameters
     /// and an optional phantom ID.
     ///
     /// `input` is a value tree whose root encodes the constructor's parameter list.
-    make-agent-id: func(agent-type-name: string, input: schema-value-tree, phantom-id: option<uuid>) -> result<parsed-agent-id, agent-error>;
+    make-agent-id: func(agent-type-name: string, input: schema-value-tree, phantom-id: option<uuid>) -> result<agent-id, agent-error>;
 
     /// Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
     /// and an optional phantom ID.
@@ -29,7 +29,7 @@ interface host {
     /// The constructor parameters are returned as a self-contained typed value
     /// (graph + value tree) so the receiver can interpret them without an
     /// external schema registry.
-    parse-agent-id: func(agent-id: parsed-agent-id) -> result<tuple<string, typed-schema-value, option<uuid>>, agent-error>;
+    parse-agent-id: func(agent-id: agent-id) -> result<tuple<string, typed-schema-value, option<uuid>>, agent-error>;
 
     /// Creates a webhook that can be used to integrate with webhook driven apis.
     /// When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
@@ -62,7 +62,7 @@ interface host {
     /// Final identity allocated for one remote invocation. For an ephemeral
     /// target, `agent-id` contains the generated one-shot phantom ID.
     record invocation-metadata {
-      agent-id: parsed-agent-id,
+      agent-id: agent-id,
       idempotency-key: string,
     }
 

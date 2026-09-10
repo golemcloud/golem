@@ -13,14 +13,14 @@ declare module 'golem:agent/host@2.0.0' {
   /**
    * Gets the registered agent type used by an existing agent, identified by its agent ID.
    */
-  export function getAgentTypeByAgentId(agentId: ParsedAgentId): RegisteredAgentType | undefined;
+  export function getAgentTypeByAgentId(agentId: AgentId): RegisteredAgentType | undefined;
   /**
    * Constructs a string agent-id from the agent type and its constructor parameters
    * and an optional phantom ID.
    * `input` is a value tree whose root encodes the constructor's parameter list.
    * @throws AgentError
    */
-  export function makeAgentId(agentTypeName: string, input: SchemaValueTree, phantomId: Uuid | undefined): ParsedAgentId;
+  export function makeAgentId(agentTypeName: string, input: SchemaValueTree, phantomId: Uuid | undefined): AgentId;
   /**
    * Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
    * and an optional phantom ID.
@@ -29,7 +29,7 @@ declare module 'golem:agent/host@2.0.0' {
    * external schema registry.
    * @throws AgentError
    */
-  export function parseAgentId(agentId: ParsedAgentId): [string, TypedSchemaValue, Uuid | undefined];
+  export function parseAgentId(agentId: AgentId): [string, TypedSchemaValue, Uuid | undefined];
   /**
    * @throws WebhookError
    */
@@ -119,7 +119,7 @@ declare module 'golem:agent/host@2.0.0' {
   /**
    * An environment-scoped agent identity created by `make-agent-id`.
    */
-  export type ParsedAgentId = string;
+  export type AgentId = string;
   /**
    * Creates a webhook that can be used to integrate with webhook driven apis.
    * When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
@@ -171,7 +171,7 @@ declare module 'golem:agent/host@2.0.0' {
    * target, `agent-id` contains the generated one-shot phantom ID.
    */
   export type InvocationMetadata = {
-    agentId: ParsedAgentId;
+    agentId: AgentId;
     idempotencyKey: string;
   };
   /**
