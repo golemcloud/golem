@@ -266,9 +266,11 @@ fn no_keepalive(connect_timeout: Duration) -> GrpcClientConfig {
 
 /// A test peer, counting the TCP connections made to it.
 ///
-/// Comes in two kinds: [`serve_grpc`], which speaks HTTP/2 and answers every
-/// request `Unimplemented`, and [`serve_silent_peer`], which completes the TCP
-/// handshake and then says nothing at all.
+/// [`serve_grpc`] speaks HTTP/2 and answers every request `Unimplemented`,
+/// [`serve_silent_peer`] completes the TCP handshake and then says nothing at
+/// all, and [`serve_resetting_peer`] and
+/// [`serve_peer_holding_one_stream_and_resetting_the_rest`] speak HTTP/2 and
+/// reset streams.
 struct TestPeer {
     addr: std::net::SocketAddr,
     connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,

@@ -1093,8 +1093,11 @@ fn requires_reconnect(e: &Status) -> bool {
 /// every later request queued onto a connection that could never work again.
 /// Reading the source alone, as this once did, took every other code with it,
 /// including the ones tonic derives from an HTTP/2 reset: each of those ends one
-/// stream and leaves the connection carrying everybody else. See
-/// [`transport_failed`] for how a reset is kept out of both halves now.
+/// stream and leaves the connection carrying everybody else. [`transport_failed`]
+/// now keeps a reset out of the transport half. A `REFUSED_STREAM` still
+/// reconnects, because tonic maps it to `Unavailable` and that half asks no
+/// further: one reconnect over a stream the peer would not take is the cheaper
+/// way to be wrong, and it no longer releases the requests beside it.
 fn worth_reconnecting(code: Code, transport_failed: bool) -> bool {
     code == Code::Unavailable || connection_gone(code, transport_failed)
 }
