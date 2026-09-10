@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod fault_injecting;
 pub mod memory;
 pub mod multi_sqlite;
 pub mod namespace_routed;

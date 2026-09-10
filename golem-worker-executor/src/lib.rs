@@ -272,6 +272,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api))
     }
 
+    /// Wraps the key-value storage every service is built on, after the retry decorator has been
+    /// applied. The default is the identity. The in-process test harness uses it to inject
+    /// storage failures above the retry budget, standing in for an outage that outlived it.
+    fn wrap_key_value_storage(
+        &self,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        key_value_storage
+    }
+
     fn create_key_value_service(
         &self,
         key_value_storage: &Arc<dyn KeyValueStorage + Send + Sync>,
@@ -630,11 +640,11 @@ pub async fn create_worker_executor_impl<
 
     // Applied outermost, above the namespace router, so every backend - and every namespace - gets
     // the identical retry policy for transient failures.
-    let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-        Arc::new(RetryingKeyValueStorage::new(
+    let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = bootstrap
+        .wrap_key_value_storage(Arc::new(RetryingKeyValueStorage::new(
             key_value_storage,
             golem_config.key_value_storage_retry.clone(),
-        ));
+        )));
 
     let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
 

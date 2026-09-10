@@ -37,9 +37,42 @@ impl From<RedisError> for KeyValueStorageError {
             | ErrorKind::Canceled
             | ErrorKind::Cluster
             | ErrorKind::Routing => Self::Transient(message),
+            // A server reply the client has no kind for. Most are permanent (`ERR`, `WRONGTYPE`
+            // arrive with their own kinds; what lands here is unparsed). The exceptions are the
+            // replies a node gives while a failover is in progress, which the client also folds
+            // into `Unknown` - see `is_failover_refusal`.
+            ErrorKind::Unknown if is_failover_refusal(error.details()) => {
+                Self::NotAttempted(message)
+            }
             _ => Self::Other(message),
         }
     }
+}
+
+/// Whether a server reply is one of the refusals a node sends while a failover is in progress.
+///
+/// fred 10.1.0 (`protocol::utils::pretty_error`) maps only `MOVED`, `ASK` and `CLUSTERDOWN` to
+/// `ErrorKind::Cluster`; the other replies a failover produces come back as `ErrorKind::Unknown`
+/// with the raw reply as the details. All four are refusals - the server did not execute the
+/// command - so a retry cannot duplicate a write:
+///
+/// * `READONLY`: the node this connection is on was demoted to a replica. With the
+///   `custom-reconnect-errors` feature enabled in the workspace, fred treats this (and `LOADING`
+///   and `CLUSTERDOWN`) as a reconnect trigger and replays the command up to its
+///   `max_command_attempts` before it reaches this classification, so what arrives here is the
+///   residue after the client's own reconnect gave up.
+/// * `LOADING`: the node is still loading its dataset, typically the new primary right after
+///   promotion.
+/// * `MASTERDOWN`: a replica that has lost its primary and is configured not to serve stale data.
+/// * `TRYAGAIN`: a multi-key command hit a slot that is mid-migration.
+///
+/// The prefix is matched as the first whitespace-delimited token, which is how Redis formats every
+/// error reply and how fred's own classification reads them.
+fn is_failover_refusal(details: &str) -> bool {
+    matches!(
+        details.split_whitespace().next(),
+        Some("READONLY" | "LOADING" | "MASTERDOWN" | "TRYAGAIN")
+    )
 }
 
 #[derive(Debug)]
@@ -599,6 +632,48 @@ mod tests {
             assert!(
                 matches!(error, KeyValueStorageError::Transient(_)),
                 "{kind:?}: {error:?}"
+            );
+        }
+    }
+
+    /// The replies a node sends while a failover is in progress, exactly as Redis formats them.
+    /// fred gives all of these `ErrorKind::Unknown` with the reply as the details (its `protocol`
+    /// module is private, so the mapping is reproduced here rather than called), and each one is
+    /// a refusal: the command was not executed, so retrying it cannot duplicate a write.
+    #[test]
+    fn failover_refusals_are_classified_as_not_attempted() {
+        for reply in [
+            "READONLY You can't write against a read only replica.",
+            "LOADING Redis is loading the dataset in memory",
+            "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.",
+            "TRYAGAIN Multiple keys request during rehashing of slot",
+        ] {
+            let error = KeyValueStorageError::from(RedisError::new(ErrorKind::Unknown, reply));
+            assert!(
+                matches!(error, KeyValueStorageError::NotAttempted(_)),
+                "{reply}: {error:?}"
+            );
+        }
+    }
+
+    /// Only those prefixes are retried. Other `Unknown` errors - a reply the client did not
+    /// parse, or a client-internal channel failure - are not a failover and stay permanent.
+    #[test]
+    fn unknown_errors_that_are_not_failover_refusals_are_not_retried() {
+        for details in [
+            "ERR unknown command 'FOO'",
+            "NOSCRIPT No matching script. Please use EVAL.",
+            "EXECABORT Transaction discarded because of previous errors.",
+            "channel closed",
+            "",
+            // The prefix must be the whole first token, not a substring of one.
+            "READONLYISH",
+            "not READONLY",
+        ] {
+            let error = KeyValueStorageError::from(RedisError::new(ErrorKind::Unknown, details));
+            assert!(
+                matches!(error, KeyValueStorageError::Other(_)),
+                "{details:?}: {error:?}"
             );
         }
     }

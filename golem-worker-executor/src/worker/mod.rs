@@ -903,9 +903,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             // update with latest data from oplog
             let agent_mode = initial_worker_metadata.agent_mode;
-            // A status that cannot be recomputed is reported as no metadata rather than
-            // propagated: the caller asked whether the agent is there, and every caller treats
-            // absence as "not here". Logged so the storage failure behind it is still visible.
+            // `Ok(None)` means the oplog is gone - a delete raced this read - and the agent is
+            // reported as absent. A status that cannot be *recomputed* is a different thing and
+            // is propagated: every caller treats absence as "not here", and reporting a storage
+            // outage that way turns it into a not-found, or into validation against the deployed
+            // component revision for an agent that is pinned to an older one.
             let Some(last_known_status) = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
@@ -913,12 +915,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             )
             .await
-            .map_err(|error| {
-                tracing::error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status");
-                error
-            })
-            .ok()
-            .flatten()
+            .map_err(WorkerExecutorError::runtime)?
             else {
                 return Ok(None);
             };

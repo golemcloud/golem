@@ -5986,37 +5986,49 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         debug!(workers = ?workers, "Recovering running workers");
 
+        // Only a worker that is genuinely gone may be skipped; every other failure fails the
+        // assignment. The same distinction `enum_workers_at_key` draws for the scan itself:
+        //
+        // - `Ok(None)` from the status computation means the oplog is gone - a delete that raced
+        //   the index read. There is nothing to resume, so that one agent is skipped.
+        // - `Err`, from the status computation or from the restart, is not evidence the worker
+        //   is gone. Logging it and moving on would acknowledge the assignment with the worker
+        //   still stopped, and nothing would try again until an external invocation happened to
+        //   arrive: a running agent stranded silently for as long as this executor owns the
+        //   shard. Failing the assignment hands the retry to the caller instead. The shard
+        //   manager retries a failed `assign_shards`, and at startup the process exits and the
+        //   restart policy retries. Recovery is idempotent - a worker restarted on an earlier
+        //   attempt is simply found running on the next - so re-running the whole scan is safe.
+        //
+        // A worker that can never be restarted therefore keeps this executor from serving its
+        // shards, loudly, rather than being dropped from recovery quietly. That is the intended
+        // trade: the loud failure is visible and gets acted on, the quiet one is not.
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
             let agent_mode = worker.initial_worker_metadata.agent_mode;
-            // A running worker should always have a recoverable oplog (a `Create` entry), so a
-            // `None` here is an unexpected invariant violation (e.g. a corrupt/partially-deleted
-            // oplog). Isolate the failure to this one agent instead of aborting recovery of every
-            // other worker on this executor (which propagating would do — and would also fail
-            // executor startup or the shard-assignment RPC, since one poison worker could
-            // permanently block this executor from serving its shards).
-            let latest_worker_status = calculate_last_known_status_with_checkpoint(
+            let latest_worker_status = match calculate_last_known_status_with_checkpoint(
                 this,
                 &owned_agent_id,
                 agent_mode,
                 worker.last_known_status,
             )
-            .await;
-            let latest_worker_status = match latest_worker_status {
+            .await
+            {
                 Ok(Some(status)) => status,
                 Ok(None) => {
                     error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
                     continue;
                 }
                 Err(error) => {
-                    error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status during shard-assignment recovery; skipping agent");
-                    continue;
+                    return Err(anyhow!(
+                        "failed to calculate the status of {owned_agent_id} during shard-assignment recovery, so it cannot be resumed: {error}"
+                    ));
                 }
             };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            if should_restart_after_shard_assignment_change(&latest_worker_status)
-                && let Err(err) = Worker::get_or_create_running(
+            if should_restart_after_shard_assignment_change(&latest_worker_status) {
+                Worker::get_or_create_running(
                     this,
                     &owned_agent_id,
                     None,
@@ -6027,14 +6039,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     Principal::anonymous(),
                 )
                 .await
-            {
-                // Same isolation rationale: don't let one worker that fails to restart abort
-                // recovery of the rest. It will be retried on demand on its next invocation.
-                error!(
-                    agent_id = %owned_agent_id,
-                    error = %err,
-                    "Failed to restart worker during shard-assignment recovery; skipping agent"
-                );
+                .map_err(|error| {
+                    anyhow!(
+                        "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                    )
+                })?;
             }
         }
 
