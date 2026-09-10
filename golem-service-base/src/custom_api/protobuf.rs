@@ -18,7 +18,7 @@ use super::{
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
-    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
+    AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
     ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy, MethodParameter,
     OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
     WebhookCallbackBehaviour,
@@ -173,6 +173,17 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
 
         match value.kind.ok_or("RouteBehaviour.kind missing")? {
             Kind::CallAgent(call_agent) => Ok(RouteBehaviour::CallAgent(CallAgentBehaviour {
+                route_mode: match proto::golem::customapi::route_behaviour::AgentRouteMode::try_from(
+                    call_agent.route_mode,
+                ) {
+                    Ok(proto::golem::customapi::route_behaviour::AgentRouteMode::Rest) => {
+                        AgentRouteMode::Rest
+                    }
+                    Ok(
+                        proto::golem::customapi::route_behaviour::AgentRouteMode::DurableStreams,
+                    ) => AgentRouteMode::DurableStreams,
+                    _ => return Err("Invalid or missing agent route mode".into()),
+                },
                 component_id: call_agent
                     .component_id
                     .ok_or("Missing component_id")?
@@ -269,6 +280,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
 
         match value {
             RouteBehaviour::CallAgent(CallAgentBehaviour {
+                route_mode,
                 component_id,
                 component_revision,
                 agent_type,
@@ -285,6 +297,10 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
             }) => Self {
                 kind: Some(Kind::CallAgent(
                     proto::golem::customapi::route_behaviour::CallAgent {
+                        route_mode: match route_mode {
+                            AgentRouteMode::Rest => proto::golem::customapi::route_behaviour::AgentRouteMode::Rest as i32,
+                            AgentRouteMode::DurableStreams => proto::golem::customapi::route_behaviour::AgentRouteMode::DurableStreams as i32,
+                        },
                         component_id: Some(component_id.into()),
                         component_revision: component_revision.into(),
                         agent_type: agent_type.0,

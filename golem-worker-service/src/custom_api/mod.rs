@@ -15,6 +15,7 @@
 pub mod api_definition_lookup;
 pub mod call_agent;
 mod cors;
+mod durable_streams;
 pub mod error;
 pub mod model;
 pub mod oidc;

@@ -286,18 +286,98 @@ mod tests {
     use golem_common::base_model::UntypedJsonBody;
     use golem_common::base_model::retry_policy::{ApiNeverPolicy, ApiPredicateFalse};
     use golem_common::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
+    use golem_common::model::Empty;
+    use golem_common::model::agent::CorsOptions;
     use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::quota::{
         EnforcementAction, ResourceCapacityLimit, ResourceDefinitionId, ResourceLimit, ResourceName,
     };
     use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+    use golem_common::schema::agent::{InputSchema, NamedField, OutputSchema};
     use golem_common::schema::schema_type::SchemaType;
-    use golem_common::schema::{SchemaGraph, SchemaValue};
+    use golem_common::schema::{SchemaGraph, SchemaTypeDef, SchemaValue, TypeId};
     use uuid::Uuid;
 
     fn schema_str() -> SchemaType {
         SchemaType::string()
+    }
+
+    fn http_method(input: SchemaType, output: OutputSchema) -> AgentMethodSchema {
+        AgentMethodSchema {
+            name: "exchange".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([NamedField::user_supplied("input", input)]),
+            output_schema: output,
+            http_endpoint: vec![HttpEndpointDetails {
+                http_method: HttpMethod::Post(Empty {}),
+                path_suffix: vec![],
+                header_vars: vec![],
+                query_vars: vec![],
+                auth_details: None,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+            }],
+            read_only: None,
+        }
+    }
+
+    fn route_mode_diff(graph: &SchemaGraph, stream_method: &AgentMethodSchema) -> String {
+        let rest_method = http_method(SchemaType::string(), OutputSchema::Unit);
+        let current = display_method(&SourceLanguage::TypeScript, graph, &rest_method);
+        let new = display_method(&SourceLanguage::TypeScript, graph, stream_method);
+
+        diff::unified_diff(
+            serde_yaml::to_string(&current).unwrap(),
+            serde_yaml::to_string(&new).unwrap(),
+        )
+    }
+
+    #[::test_r::test]
+    fn deploy_diff_http_route_mode_tracks_method_streams() {
+        let empty_graph = SchemaGraph::empty();
+        let rest = display_method(
+            &SourceLanguage::TypeScript,
+            &empty_graph,
+            &http_method(SchemaType::string(), OutputSchema::Unit),
+        );
+        assert_eq!(rest.http[0].route_mode, "Rest");
+
+        let input_stream = http_method(
+            SchemaType::stream(Some(SchemaType::string())),
+            OutputSchema::Unit,
+        );
+        let output_stream = http_method(
+            SchemaType::string(),
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u8())))),
+        );
+        let ref_graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new("StreamRef"),
+                name: None,
+                body: SchemaType::stream(Some(SchemaType::u64())),
+            }],
+            root: SchemaType::record(vec![]),
+        };
+        let referenced_stream = http_method(
+            SchemaType::ref_to(TypeId::new("StreamRef")),
+            OutputSchema::Unit,
+        );
+
+        for (graph, method) in [
+            (&empty_graph, &input_stream),
+            (&empty_graph, &output_stream),
+            (&ref_graph, &referenced_stream),
+        ] {
+            let rendered = display_method(&SourceLanguage::TypeScript, graph, method);
+            assert_eq!(rendered.http[0].route_mode, "DurableStreams");
+
+            let route_mode_change = route_mode_diff(graph, method);
+            assert!(route_mode_change.contains("-  routeMode: Rest"));
+            assert!(route_mode_change.contains("+  routeMode: DurableStreams"));
+        }
     }
 
     fn secret_dto(
@@ -894,6 +974,7 @@ pub struct DeploymentDisplayMethod {
 pub struct DeploymentDisplayHttpEndpoint {
     pub method: String,
     pub path: String,
+    pub route_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_required: Option<bool>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -1354,6 +1435,11 @@ fn display_method(
     } else {
         format!("{}({}) -> {}", method.name, input, output)
     };
+    let route_mode = if method.uses_streams(graph) {
+        "DurableStreams"
+    } else {
+        "Rest"
+    };
 
     DeploymentDisplayMethod {
         signature,
@@ -1362,7 +1448,7 @@ fn display_method(
         http: method
             .http_endpoint
             .iter()
-            .map(display_http_endpoint)
+            .map(|endpoint| display_http_endpoint(endpoint, route_mode))
             .collect(),
     }
 }
@@ -1378,10 +1464,14 @@ fn display_http_mount(http_mount: &HttpMountDetails) -> DeploymentDisplayHttpMou
     }
 }
 
-fn display_http_endpoint(endpoint: &HttpEndpointDetails) -> DeploymentDisplayHttpEndpoint {
+fn display_http_endpoint(
+    endpoint: &HttpEndpointDetails,
+    route_mode: &str,
+) -> DeploymentDisplayHttpEndpoint {
     DeploymentDisplayHttpEndpoint {
         method: render_http_method(&endpoint.http_method).to_string(),
         path: render_path(&endpoint.path_suffix),
+        route_mode: route_mode.to_string(),
         auth_required: endpoint.auth_details.as_ref().map(|auth| auth.required),
         headers: endpoint
             .header_vars

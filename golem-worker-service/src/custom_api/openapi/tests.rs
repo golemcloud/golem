@@ -35,8 +35,8 @@ use golem_common::schema::{
 };
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema, CorsOptions,
-    MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment, PathSegmentType,
-    QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
+    CorsPreflightBehaviour, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment,
+    PathSegmentType, QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
 };
 use golem_service_base::model::SafeIndex;
 use http::Method;
@@ -276,6 +276,7 @@ fn call_agent_route(
         path,
         body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
+            route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
             component_id: ComponentId::new(),
             component_revision: ComponentRevision::INITIAL,
             agent_type: agent_type_name("TestAgent"),
@@ -308,6 +309,80 @@ fn spec_for(routes: Vec<RichCompiledRoute>) -> Value {
     HttpApiOpenApiSpec::from_routes(&routes, &Domain("example.com".to_string()))
         .expect("spec generation succeeds")
         .0
+}
+
+#[test]
+fn durable_stream_routes_do_not_break_rest_openapi() {
+    let rest = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "rest".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::empty(),
+            output_schema: OutputSchema::Unit,
+        },
+        None,
+    );
+    let mut stream = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "stream".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::string()))),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::string(),
+            )))),
+        },
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(ref mut call) = stream.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    let mut shared = call_agent_route(
+        Method::PUT,
+        rest.path.clone(),
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::empty(),
+            output_schema: OutputSchema::Unit,
+        },
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(ref mut call) = shared.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    let mut routes = vec![rest, stream, shared];
+    for path in [routes[0].path.clone(), routes[1].path.clone()] {
+        let mut preflight = call_agent_route(
+            Method::OPTIONS,
+            path,
+            RequestBodySchema::Unused,
+            vec![],
+            CompiledOutputSchema {
+                graph: SchemaGraph::empty(),
+                output_schema: OutputSchema::Unit,
+            },
+            None,
+        );
+        preflight.behavior = RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
+            method_policies: vec![],
+        });
+        routes.push(preflight);
+    }
+    let spec = spec_for(routes);
+    assert!(spec["paths"]["/rest"]["get"].is_object());
+    assert!(spec["paths"]["/rest"]["options"].is_object());
+    assert!(spec["paths"]["/rest"]["put"].is_null());
+    assert!(spec["paths"]["/stream"].is_null());
 }
 
 /// Build the OpenAPI document for a single route and return its operation

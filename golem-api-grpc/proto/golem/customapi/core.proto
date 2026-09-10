@@ -222,6 +222,13 @@ message RouteBehaviour {
     CompiledInputSchema constructor_input = 11;
     CompiledInputSchema method_input = 12;
     golem.component.AgentMode agent_mode = 13;
+    AgentRouteMode route_mode = 14;
+  }
+
+  enum AgentRouteMode {
+    AGENT_ROUTE_MODE_UNSPECIFIED = 0;
+    REST = 1;
+    DURABLE_STREAMS = 2;
   }
 
   message CorsPreflight {
