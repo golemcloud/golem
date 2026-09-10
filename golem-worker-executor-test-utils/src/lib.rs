@@ -628,6 +628,19 @@ impl TestWorkerExecutor {
         );
     }
 
+    pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        golem_worker_executor::services::HasOplog::oplog(worker.as_ref())
+            .commit(CommitLevel::Always)
+            .await;
+        Ok(())
+    }
+
     pub async fn commit_oplog_entry_bypassing_worker_status(
         &self,
         agent_id: &AgentId,
@@ -905,8 +918,8 @@ impl TestWorkerExecutor {
             .gate_next_entity_body_start(agent_id.clone())
     }
 
-    /// Pauses the next accessor monotonic-clock `now` call before it starts durability.
-    pub async fn gate_next_monotonic_clock_now(
+    /// Commits and pauses the next live monotonic clock call after its real Start, before End.
+    pub async fn gate_next_monotonic_clock_start(
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
@@ -917,7 +930,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
         Ok(worker
             .owner_execution()
-            .test_gate_next_monotonic_clock_now())
+            .test_gate_next_monotonic_clock_start())
     }
 
     /// Pauses the next exclusive wall-clock `now` call before it starts durability.
@@ -931,23 +944,6 @@ impl TestWorkerExecutor {
             .await
             .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
         Ok(worker.owner_execution().test_gate_next_wall_clock_now())
-    }
-
-    /// Makes the current generation's next monotonic-clock `now` call return its live value
-    /// without creating a durable record, so crash-tail tests can commit only earlier work.
-    pub async fn skip_next_monotonic_clock_now_durability(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<()> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        worker
-            .owner_execution()
-            .test_skip_next_monotonic_clock_now_durability();
-        Ok(())
     }
 
     /// Makes the current generation's next wall-clock `now` call return its live value
