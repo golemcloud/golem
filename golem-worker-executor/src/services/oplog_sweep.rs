@@ -131,10 +131,15 @@ enum Outcome {
 }
 
 impl Outcome {
-    /// Whether deciding this agent got as far as opening its oplog and taking a step.
+    /// Whether deciding this agent cost an archive attempt.
     ///
     /// Both archive budgets bound exactly that, so both are charged by this one rule rather than
     /// by two hand-written lists that the next variant would be added to only one of.
+    ///
+    /// [`Outcome::ArchiveFailed`] counts even for the one of its three causes that never reaches
+    /// the store, an oplog that would not open. It took a slot in the archive phase and it is an
+    /// attempt that will be made again, so charging it is the conservative reading; the other two
+    /// causes, an unrecognised layer and the step bound, both moved entries first.
     fn reached_the_store(&self) -> bool {
         match self {
             // Opened the oplog and took at least one step.
@@ -251,7 +256,10 @@ enum Decision {
 /// candidate an earlier tick walked, since a tick that runs out of time carries its candidates
 /// forward, and [`tally_carried`] keeps that outcome out of `scanned` so the walk is charged once.
 /// A key this tick walked can equally have no outcome yet, for the same reason, and is charged to
-/// `scanned` where it is deferred.
+/// `scanned` where it is deferred. A backend that hands the same key back twice in one page is a
+/// third case: `archive_batch` dedupes the agent, so the second walk is never charged. `scanned`
+/// is therefore a lower bound on the keys walked, never an upper one, which is the safe direction
+/// for a budget to be wrong in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteReport {
     scanned: u64,
@@ -267,9 +275,10 @@ struct RouteReport {
     /// and not recorded as one: it is what the archive budgets are charged, counted where every
     /// other outcome is counted so the two cannot drift apart.
     store_visits: u64,
-    /// An archive phase was stopped part-way, a scan failed, or a budget ran out before the walk
-    /// reached the end of the namespace. A tick can exhaust the namespace and still be truncated,
-    /// if what cut it short was the archiving rather than the walk.
+    /// The route did not finish what it set out to do: an archive phase stopped part-way, a scan
+    /// failed, a budget ran out, or the node began shutting down before the walk reached the end
+    /// of the namespace. A tick can exhaust the namespace and still be truncated, if what cut it
+    /// short was the archiving rather than the walk.
     truncated: bool,
 }
 
@@ -444,6 +453,15 @@ enum ResolvedEnvironment {
     Unknown {
         retry_after: Instant,
     },
+}
+
+/// Where a batch of archive candidates came from, which is how stale the facts behind it are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchOrigin {
+    /// Probed by this tick, so its index was read while the scan was still paging.
+    Scanned,
+    /// Deferred by an earlier tick, so everything known about it is at least one interval old.
+    Carried,
 }
 
 /// A memo entry: the index an agent showed, and the scan pass that last saw it.
@@ -890,7 +908,9 @@ impl OplogSweeper {
             handled.extend(overflow.iter().cloned());
             owed.extend(overflow);
             handled.extend(carried.iter().cloned());
-            let (outcomes, declined) = self.archive_batch(route, carried, cancel).await;
+            let (outcomes, declined) = self
+                .archive_batch(route, carried, BatchOrigin::Carried, cancel)
+                .await;
             cut_short = !declined.is_empty();
             // Charged for the archive steps rather than for the length of the list. A carried
             // agent that turns out to be resident, or whose layer emptied under it, costs the
@@ -992,7 +1012,9 @@ impl OplogSweeper {
             }
         }
 
-        let (outcomes, declined) = self.archive_batch(route, pending, cancel).await;
+        let (outcomes, declined) = self
+            .archive_batch(route, pending, BatchOrigin::Scanned, cancel)
+            .await;
         let cut_short = cut_short || !declined.is_empty();
         // Walked by this tick and left without an outcome, because the tick ran out before it
         // reached the agent. The key still came off the namespace, so it is charged here; the tick
@@ -1046,6 +1068,7 @@ impl OplogSweeper {
         &self,
         route: &Route,
         mut agents: Vec<AgentId>,
+        origin: BatchOrigin,
         cancel: &CancellationToken,
     ) -> (Vec<Outcome>, Vec<AgentId>) {
         // A backend is allowed to hand the same key back twice in one walk, and archiving an agent
@@ -1095,28 +1118,42 @@ impl OplogSweeper {
                     if self.is_resident(&agent_id, environment_id).await {
                         return Ok(Outcome::Resident);
                     }
-                    // On both paths, for the same reason the residency check is on both: the
-                    // index that put this agent on the list was read while the scan was still
-                    // paging, and for a carried candidate a whole interval before that. Its own
-                    // teardown drain may have emptied the layer in either window, and
-                    // `archive_agent` opens the oplog before anything below can notice.
-                    // `open_oplog` registers a suspended worker that nothing evicts, so opening
-                    // one for an agent with nothing left leaks an `ActiveWorkers` entry for the
-                    // life of the pod, reports an archive that moved nothing, and spends archive
-                    // budget on it. One read, and only for agents that already passed the quiet
-                    // gate, which the size trigger at `entry_count_limit` keeps rare.
-                    let probe = OwnedAgentId {
-                        environment_id: environment_id.unwrap_or_default(),
-                        agent_id: agent_id.clone(),
-                    };
-                    if route
-                        .source
-                        .get_last_index(&probe, route.id.agent_mode)
-                        .await
-                        == OplogIndex::NONE
-                    {
-                        self.forget(route.id, &agent_id).await;
-                        return Ok(Outcome::Empty);
+                    // Carried candidates only, and only once their environment is known.
+                    //
+                    // The two staleness checks have deliberately different scope, because they
+                    // cost differently. Residency is an `ActiveWorkers` lookup in memory, so it is
+                    // free and runs everywhere. This one is a storage read, on the store the tick
+                    // deadline exists to protect, sharing `max_concurrency` with the archiving
+                    // itself: buying it on the scanned path would spend a deadline on reads that a
+                    // deadline should be spending on archives.
+                    //
+                    // The windows are not the same size either. A carried candidate's index was
+                    // read an interval ago. A scanned one's was read during this tick's own
+                    // paging, and `probe_agent` found the agent non-resident then, so for it to
+                    // drain in that window it has to start, finish and tear down inside one tick
+                    // while the residency check above misses it.
+                    //
+                    // What the read buys: `archive_agent` opens the oplog before anything below
+                    // can notice an empty layer, and `open_oplog` registers a suspended worker
+                    // that nothing evicts, so opening one for an agent with nothing left leaks an
+                    // `ActiveWorkers` entry for the life of the pod, reports an archive that moved
+                    // nothing, and spends archive budget on it. An agent with no environment is
+                    // declined below without touching the store, so reading its index first would
+                    // buy nothing at all.
+                    if origin == BatchOrigin::Carried && environment_id.is_some() {
+                        let probe = OwnedAgentId {
+                            environment_id: environment_id.unwrap_or_default(),
+                            agent_id: agent_id.clone(),
+                        };
+                        if route
+                            .source
+                            .get_last_index(&probe, route.id.agent_mode)
+                            .await
+                            == OplogIndex::NONE
+                        {
+                            self.forget(route.id, &agent_id).await;
+                            return Ok(Outcome::Empty);
+                        }
                     }
                     Ok(self.archive_agent(route, agent_id, environment_id).await)
                 }
@@ -2251,7 +2288,9 @@ mod tests {
         /// it and the tick that comes to archive it.
         resident: Arc<std::sync::Mutex<HashSet<AgentId>>>,
         /// Agents whose oplog will not open, which is one of the three ways `archive_agent`
-        /// reports [`Outcome::ArchiveFailed`]: work that reached the store and moved nothing.
+        /// reports [`Outcome::ArchiveFailed`]. It is the one that never reaches the store, and it
+        /// is chosen here because it is the only one of the three a test double can force; what
+        /// the test pins is the budget rule, which charges all three alike.
         refuse_open: HashSet<AgentId>,
     }
 
@@ -3228,10 +3267,10 @@ mod tests {
         assert_eq!(*sweeper.route_cursor.lock().await, 0);
     }
 
-    /// The archive half of the tick budget, which is not the same as the archived count: an
-    /// archive that failed still opened the oplog and took its steps. Charging the tick only for
-    /// successes lets a stack with several source layers do `max_archives_per_tick` archives per
-    /// route instead of per tick.
+    /// The archive half of the tick budget, which is not the same as the archived count: a failed
+    /// archive took a slot in the archive phase and will be attempted again, so it is charged like
+    /// a successful one. Charging the tick only for successes lets a stack with several source
+    /// layers do `max_archives_per_tick` archives per route instead of per tick.
     #[test]
     #[timeout("1m")]
     async fn a_failed_archive_costs_the_tick_what_a_successful_one_costs() {
@@ -3264,8 +3303,8 @@ mod tests {
             }),
             Arc::new(DirectAccess {
                 oplog_service: layers.oplog_service.clone(),
-                // So the deeper route's agent reaches the store and comes back failed, rather than
-                // being settled before `archive_agent` gets there.
+                // So the deeper route's agent reaches `archive_agent` and comes back failed,
+                // rather than being settled before it gets there.
                 refuse_open: HashSet::from([deep_agent.clone()]),
                 resident: resident_set(HashSet::new()),
             }),
@@ -3280,7 +3319,7 @@ mod tests {
         assert_eq!(
             second.route(deepest).archive_failed,
             1,
-            "the deeper route opened an oplog and got nowhere"
+            "the deeper route spent an archive attempt and moved nothing"
         );
         assert_eq!(second.archived(), 0, "and archived nothing at all");
         assert_eq!(
