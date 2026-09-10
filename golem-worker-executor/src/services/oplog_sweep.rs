@@ -113,7 +113,9 @@ enum Outcome {
     /// the probe; on the carried path it lost them during the interval since, usually to the
     /// agent's own teardown drain winning the race.
     Empty,
-    /// The layer's last index moved since the previous tick, so something is still writing.
+    /// Not shown to be quiet, so the sweep leaves it alone for now. Either the layer's last index
+    /// moved since the sighting the tick is measuring against, or there is no sighting to measure
+    /// against yet, which is the ordinary state on an agent's first visit.
     Moving,
     /// This executor is running the agent right now.
     Resident,
@@ -145,7 +147,7 @@ impl Outcome {
     /// conservative reading. The third, the step bound, moved what it could before stopping.
     fn reached_the_store(&self) -> bool {
         match self {
-            // Opened the oplog and took at least one step.
+            // Each spent an attempt in the archive phase, whether or not it moved anything.
             Outcome::Archived | Outcome::ArchiveFailed => true,
             // All decided before `archive_agent` reaches the store.
             Outcome::Unparseable
@@ -475,8 +477,8 @@ struct Seen {
 /// cannot starve the ones behind it. Sharing the remainder rather than a fixed slice is what keeps
 /// that from wasting budget: a route that finds nothing to do leaves its share to the routes after
 /// it. The order routes run in is load-bearing -- deepest source layer first, which is the highest
-/// `source_level`, so a tick never hands
-/// entries to a layer it is about to drain -- so a tick that cannot afford the whole stack moves
+/// `source_level`, so a tick never hands entries to a layer it is about to drain -- so a tick that
+/// cannot afford the whole stack moves
 /// its starting point rather than reordering what it does run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TickBudget {
@@ -905,7 +907,7 @@ impl OplogSweeper {
             handled.extend(carried.iter().cloned());
             owed.extend(carried.split_off((archive_allowance as usize).min(carried.len())));
             let (outcomes, declined) = self
-                .archive_batch(route, carried, BatchOrigin::Carried, cancel)
+                .archive_batch(route, carried, BatchOrigin::Carried, pass, cancel)
                 .await;
             cut_short = !declined.is_empty();
             // Charged for the archive attempts rather than for the length of the list. A carried
@@ -1013,7 +1015,7 @@ impl OplogSweeper {
         }
 
         let (outcomes, declined) = self
-            .archive_batch(route, pending, BatchOrigin::Scanned, cancel)
+            .archive_batch(route, pending, BatchOrigin::Scanned, pass, cancel)
             .await;
         let cut_short = cut_short || !declined.is_empty();
         // Walked by this tick and left without an outcome, because the tick ran out before it
@@ -1072,6 +1074,7 @@ impl OplogSweeper {
         route: &Route,
         mut agents: Vec<AgentId>,
         origin: BatchOrigin,
+        pass: u64,
         cancel: &CancellationToken,
     ) -> (Vec<Outcome>, Vec<AgentId>) {
         // A backend is allowed to hand the same key back twice in one walk, and archiving an agent
@@ -1161,23 +1164,27 @@ impl OplogSweeper {
                         // has moved since means something wrote to the layer during the interval,
                         // and the quiet gate that `assess` enforces on the scanned path should
                         // hold here too. Compared against the remembered index rather than through
-                        // `assess`, because `assess` also requires an older pass and a carried
-                        // agent is usually reached before the pass turns over, which would stall
-                        // it indefinitely. Restamped so the next visit measures from here.
+                        // `assess`, because `assess` also requires an older pass. This agent has
+                        // already cleared that half once, on the tick that probed it, and a pass
+                        // can span many ticks on a large namespace: putting it back behind a whole
+                        // pass would re-impose a gate it has passed rather than test what actually
+                        // went stale. The index is what went stale, so the index is what is
+                        // checked.
+                        //
+                        // Written to fail closed. A missing sighting is not evidence of quiet, and
+                        // it is reachable: an agent held back for the allowance sits in `handled`,
+                        // so the scan never restamps it, while `finish_pass` drops entries that
+                        // fall far enough behind the pass. Reading that as "nothing has changed"
+                        // would archive it with no gate held at all, which is the case this whole
+                        // check exists for. Restamped either way, so the next visit has a baseline
+                        // to measure from.
                         let remembered = self
                             .memo
                             .lock()
                             .await
                             .get(&(route.id, agent_id.clone()))
                             .copied();
-                        if remembered.is_some_and(|seen| seen.index != current) {
-                            let pass = self
-                                .passes
-                                .lock()
-                                .await
-                                .get(&route.id)
-                                .copied()
-                                .unwrap_or(0);
+                        if !remembered.is_some_and(|seen| seen.index == current) {
                             self.remember(route.id, &agent_id, current, pass).await;
                             return Ok(Outcome::Moving);
                         }
@@ -3127,6 +3134,12 @@ mod tests {
         );
 
         defer_by_losing_the_deadline(&sweeper, &storage).await;
+        assert_eq!(
+            deferred_len(&sweeper).await,
+            Some(1),
+            "the scanned path can produce the same observables, so this has to prove the \
+             agent is being reached from the carried list"
+        );
 
         // The agent starts running while it sits on the carried list.
         resident.lock().unwrap().insert(agent_id.clone());
@@ -3171,6 +3184,12 @@ mod tests {
         );
 
         defer_by_losing_the_deadline(&sweeper, &storage).await;
+        assert_eq!(
+            deferred_len(&sweeper).await,
+            Some(1),
+            "the scanned path can produce the same observables, so this has to prove the \
+             agent is being reached from the carried list"
+        );
 
         // Something writes to the layer while the candidate sits on the carried list.
         layers.archives[0]
@@ -3229,6 +3248,11 @@ mod tests {
                 let cut = CancellationToken::new();
                 *storage.cancel_on_scan.lock().unwrap() = Some(cut.clone());
                 sweeper.sweep_once(&cut).await;
+                assert_eq!(
+                    deferred_len(&sweeper).await,
+                    Some(1),
+                    "the extra read is only the carried path's if the agent really is carried"
+                );
             }
             let report = sweeper.sweep_once(&CancellationToken::new()).await;
             assert_eq!(report.archived(), 1, "carried={carried}");
@@ -3292,6 +3316,54 @@ mod tests {
         );
     }
 
+    /// A carried agent can lose its sighting: one held back for the allowance sits in `handled`,
+    /// so the scan never restamps it, while `finish_pass` drops entries that fall far enough
+    /// behind the pass. With no sighting there is no evidence the agent is quiet, and reading that
+    /// as "nothing changed" would archive it with no gate held at all.
+    #[test]
+    #[timeout("1m")]
+    async fn a_carried_candidate_with_no_sighting_left_is_not_archived_on_trust() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let storage = pages_of(&layers);
+        let sweeper = sweeper_over(
+            &layers,
+            manual(),
+            storage.clone(),
+            Arc::new(FixedEnvironment {
+                environment_id,
+                fails: false,
+                deleted: false,
+                lookups: std::sync::atomic::AtomicU64::new(0),
+                resident_on_lookup: std::sync::Mutex::new(None),
+            }),
+            resident_set(HashSet::new()),
+        );
+
+        defer_by_losing_the_deadline(&sweeper, &storage).await;
+        assert_eq!(deferred_len(&sweeper).await, Some(1));
+
+        // The sighting ages out while the agent waits on the carried list.
+        sweeper.memo.lock().await.clear();
+
+        let after = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(after.archived(), 0, "no sighting is not evidence of quiet");
+        assert_eq!(after.route(EPHEMERAL_L1).moving, 1);
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::from_u64(3)
+        );
+        assert!(
+            !sweeper.memo.lock().await.is_empty(),
+            "and the visit leaves a baseline, so the next one can decide on evidence"
+        );
+    }
+
     /// `open_oplog` registers a suspended worker that nothing evicts, so opening one for an agent
     /// whose layer has already drained leaks an `ActiveWorkers` entry for the life of the pod and
     /// reports an archive that moved nothing.
@@ -3324,6 +3396,12 @@ mod tests {
         );
 
         defer_by_losing_the_deadline(&sweeper, &storage).await;
+        assert_eq!(
+            deferred_len(&sweeper).await,
+            Some(1),
+            "the scanned path can produce the same observables, so this has to prove the \
+             agent is being reached from the carried list"
+        );
 
         // The agent's own teardown drain wins the race while it sits on the carried list. Emptied
         // through the archive service rather than by a second sweeper, so the only thing that has
