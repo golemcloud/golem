@@ -1182,6 +1182,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         let component_revision = method_validation_revision(freshness_disposition, || async {
             Worker::<Ctx>::get_latest_metadata(self, owned_agent_id)
                 .await
+                .ok()
+                .flatten()
                 .map(|metadata| metadata.last_known_status.component_revision)
         })
         .await;
@@ -1616,7 +1618,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
         Worker::<Ctx>::get_latest_metadata(self, &target)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(target.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
@@ -1666,7 +1668,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
         Worker::<Ctx>::get_latest_metadata(self, &producer)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(producer.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
