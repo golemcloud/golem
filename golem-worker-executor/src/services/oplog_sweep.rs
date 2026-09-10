@@ -401,11 +401,20 @@ impl TickBudget {
         }
     }
 
-    /// The next route's share: what is left, split evenly over the routes still to run. At least
-    /// one of each, so a route is never handed a budget it cannot take a single step with.
-    fn share(&self) -> (u64, u64) {
+    /// The next route's share: what is left, split evenly over the routes still to run.
+    ///
+    /// `None` once either budget is spent, which is the point the tick stops. This used to floor
+    /// at one of each so that no route was handed a budget it could not take a step with, and the
+    /// floor applied to an exhausted budget too: with `max_scanned_per_tick = 1` and four routes a
+    /// tick scanned four keys, and a route whose archive phase overshot its page did not stop the
+    /// routes behind it. The routes a tick cannot afford are left to the next one, which starts
+    /// with them rather than behind the same earlier routes again.
+    fn share(&self) -> Option<(u64, u64)> {
+        if self.scans == 0 || self.archives == 0 {
+            return None;
+        }
         let left = self.routes_left.max(1);
-        ((self.scans / left).max(1), (self.archives / left).max(1))
+        Some((self.scans.div_ceil(left), self.archives.div_ceil(left)))
     }
 
     /// Books what a route used and drops it from the split.
@@ -446,6 +455,25 @@ pub struct OplogSweeper {
     cursors: Mutex<HashMap<RouteId, ScanResume>>,
     /// Which scan pass each route is on. Bumped when a pass reaches the end of the namespace.
     passes: Mutex<HashMap<RouteId, u64>>,
+    /// Candidates a tick probed but ran out of time to archive, per route.
+    ///
+    /// Probing is the expensive half: one storage read per scanned key that is neither resident
+    /// nor someone else's, and against a degraded store a single page of those can outlast the
+    /// whole tick deadline. Discarding them meant the deadline stopped the sweep archiving
+    /// anything at all, because the scan cursor still advanced and the next pass paid the same
+    /// probes and was cut in the same place. A tick spends this list before it scans, so one that
+    /// keeps timing out still makes progress.
+    ///
+    /// Capped at one tick's archive budget. An agent dropped off the end is found again by a later
+    /// scan, so forgetting one costs a later visit rather than a stranded oplog.
+    deferred: Mutex<HashMap<RouteId, Vec<AgentId>>>,
+    /// The route the next tick starts at.
+    ///
+    /// A tick that runs out of budget, or out of time, leaves the routes it never reached here so
+    /// the next one begins with them. Only the starting point moves: the routes a tick does run
+    /// still run in stack order, deepest source first, so a tick never hands entries to a layer it
+    /// is about to drain.
+    route_cursor: Mutex<usize>,
 }
 
 impl OplogSweeper {
@@ -513,6 +541,8 @@ impl OplogSweeper {
             memo: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             passes: Mutex::new(HashMap::new()),
+            deferred: Mutex::new(HashMap::new()),
+            route_cursor: Mutex::new(0),
         })
     }
 
@@ -641,23 +671,43 @@ impl OplogSweeper {
             };
         };
 
-        let mut routes = Vec::with_capacity(self.routes.len());
-        let mut budget = TickBudget::new(&self.config, self.routes.len());
-        for route in &self.routes {
+        // Where the last tick ran out of budget or time. Clamped rather than trusted, so a stack
+        // that shrank between ticks cannot leave this past the end of the list.
+        let start = {
+            let cursor = *self.route_cursor.lock().await;
+            if cursor < self.routes.len() {
+                cursor
+            } else {
+                0
+            }
+        };
+        let remaining = self.routes.len() - start;
+        let mut routes = Vec::with_capacity(remaining);
+        let mut budget = TickBudget::new(&self.config, remaining);
+        let mut stopped_at = None;
+        for (offset, route) in self.routes[start..].iter().enumerate() {
             if cancel.is_cancelled() {
+                stopped_at = Some(start + offset);
                 break;
             }
-            let (scans, archives) = budget.share();
+            let Some((scans, archives)) = budget.share() else {
+                stopped_at = Some(start + offset);
+                break;
+            };
             let report = self
                 .sweep_route(route, &assignment, cancel, scans, archives)
                 .instrument(info_span!("oplog_sweep", route = %route.id))
                 .await;
             // `scanned` counts the keys the route decided rather than the keys it walked, and the
-            // two differ only when shutdown cut the archive phase short. That tick is ending
-            // anyway, so the difference cannot reach another route.
+            // two differ only when the tick was cut short during the archive phase. That tick is
+            // ending anyway, so the difference cannot reach another route.
             budget.spend(report.scanned, report.archived);
             routes.push((route.id, report));
         }
+        // A tick that reached the end of the stack starts the next one at the top. One that
+        // stopped early leaves the routes it never reached to go first, so a short budget cannot
+        // serve the same prefix of the stack forever.
+        *self.route_cursor.lock().await = stopped_at.unwrap_or(0);
 
         SweepReport {
             routes,
@@ -690,6 +740,22 @@ impl OplogSweeper {
             .copied()
             .unwrap_or(0);
 
+        // What the last tick probed and ran out of time to archive, spent before the scan below
+        // gets the chance to spend this tick's deadline the same way. Without this a store slow
+        // enough to cut every tick during probing produced a sweep that advanced its cursor
+        // forever and archived nothing, which is the one condition the deadline exists for. See
+        // [`OplogSweeper::deferred`].
+        let mut owed: Vec<AgentId> = Vec::new();
+        let mut archive_allowance = archive_budget;
+        let mut carried = self.take_deferred(route.id).await;
+        if !carried.is_empty() {
+            owed.extend(carried.split_off((archive_allowance as usize).min(carried.len())));
+            let (outcomes, declined) = self.archive_batch(route, carried, cancel).await;
+            archive_allowance = archive_allowance.saturating_sub(outcomes.len() as u64);
+            owed.extend(declined);
+            report = merge(report, tally(outcomes));
+        }
+
         // The scan runs to completion before anything is archived. `scan_stable` resumes by seeking
         // rather than by counting, so deleting a key behind the walk cannot shift the rest of it,
         // but a tick that archived while paging would still hand the archive phase a list built
@@ -707,6 +773,12 @@ impl OplogSweeper {
         let page_budget = scan_budget.div_ceil(page_size).max(1);
         loop {
             if cancel.is_cancelled() {
+                truncated = true;
+                break;
+            }
+            // Finding more than the tick can archive only lengthens the list the next one
+            // inherits, and the carried work is older than anything a scan would turn up.
+            if archive_allowance == 0 {
                 truncated = true;
                 break;
             }
@@ -759,60 +831,21 @@ impl OplogSweeper {
             }
             // Soft by up to a page: a page is probed as a unit, so this stops at the first page
             // that carries the budget past its bound rather than splitting one.
-            if pending.len() as u64 >= archive_budget.max(1) {
+            if pending.len() as u64 >= archive_allowance {
                 truncated = true;
                 break;
             }
         }
 
-        // A backend is allowed to hand the same key back twice in one walk, and archiving an agent
-        // twice would race two transfers and count one of them twice.
-        pending.sort();
-        pending.dedup();
+        let (outcomes, declined) = self.archive_batch(route, pending, cancel).await;
+        owed.extend(declined);
+        report = merge(report, tally(outcomes));
 
-        // The layer below addresses its objects by environment and a scanned key does not carry
-        // one, so each agent needs its component resolved. `get_metadata` hands back the whole
-        // component, and ephemeral agents come in crowds that share one, so resolve each component
-        // once rather than once per agent.
-        let components: HashSet<ComponentId> = pending
-            .iter()
-            .map(|agent_id| agent_id.component_id)
-            .collect();
-        let mut environments: HashMap<ComponentId, Option<EnvironmentId>> =
-            HashMap::with_capacity(components.len());
-        for component_id in components {
-            // Same boundary as the archive phase below. A cold cache makes each of these a
-            // registry call, and there is one per component the page turned up, so a cancelled
-            // tick should not have to wait the list out. Leaving the rest unresolved costs
-            // nothing: once cancelled, the archive phase declines every agent anyway.
-            if cancel.is_cancelled() {
-                break;
-            }
-            let resolved = self.environment_of(component_id).await;
-            environments.insert(component_id, resolved);
-        }
-
-        // Now the deletes. One stream over the whole list rather than fixed batches, because the
-        // cost of an agent varies with how much its layers hold and a batch would run at the speed
-        // of its slowest member. The cancellation check sits before an agent and never inside one,
-        // so a cancelled tick finishes the agents under way and starts no more.
-        let archived: Vec<Option<Outcome>> = stream::iter(pending)
-            .map(|agent_id| {
-                let environment_id = environments.get(&agent_id.component_id).copied().flatten();
-                async move {
-                    if cancel.is_cancelled() {
-                        return None;
-                    }
-                    Some(self.archive_agent(route, agent_id, environment_id).await)
-                }
-            })
-            .buffer_unordered(self.config.max_concurrency.max(1))
-            .collect()
-            .await;
-        if archived.iter().any(Option::is_none) {
+        // Anything still owed means the tick stopped before its work list did.
+        if !owed.is_empty() {
             truncated = true;
         }
-        report = merge(report, tally(archived.into_iter().flatten()));
+        self.defer(route.id, owed).await;
 
         // Stored exactly as it came back. The archive phase above deleted keys the walk had
         // already passed, and with a positional cursor that would have shifted every key behind
@@ -838,6 +871,115 @@ impl OplogSweeper {
         report.truncated = truncated;
         report.record(&route.id.to_string(), started.elapsed());
         report
+    }
+
+    /// Resolves environments and archives, and hands back the agents it never reached.
+    ///
+    /// A cancelled tick declines the rest rather than dropping them. The probe that put an agent
+    /// on this list is a storage read, and throwing that away is what let a tick that keeps
+    /// hitting its deadline archive nothing: see [`OplogSweeper::deferred`].
+    async fn archive_batch(
+        &self,
+        route: &Route,
+        mut agents: Vec<AgentId>,
+        cancel: &CancellationToken,
+    ) -> (Vec<Outcome>, Vec<AgentId>) {
+        // A backend is allowed to hand the same key back twice in one walk, and archiving an agent
+        // twice would race two transfers and count one of them twice.
+        agents.sort();
+        agents.dedup();
+
+        // The layer below addresses its objects by environment and a scanned key does not carry
+        // one, so each agent needs its component resolved. `get_metadata` hands back the whole
+        // component, and ephemeral agents come in crowds that share one, so resolve each component
+        // once rather than once per agent.
+        let components: HashSet<ComponentId> = agents
+            .iter()
+            .map(|agent_id| agent_id.component_id)
+            .collect();
+        let mut environments: HashMap<ComponentId, Option<EnvironmentId>> =
+            HashMap::with_capacity(components.len());
+        for component_id in components {
+            // Same boundary as the archiving below. A cold cache makes each of these a registry
+            // call, and there is one per component the list turned up, so a cancelled tick should
+            // not have to wait them out. Leaving the rest unresolved costs nothing: every agent
+            // below tests the token before it reads this map.
+            if cancel.is_cancelled() {
+                break;
+            }
+            let resolved = self.environment_of(component_id).await;
+            environments.insert(component_id, resolved);
+        }
+
+        // Now the deletes. One stream over the whole list rather than fixed batches, because the
+        // cost of an agent varies with how much its layers hold and a batch would run at the speed
+        // of its slowest member. The cancellation check sits before an agent and never inside one,
+        // so a cancelled tick finishes the agents under way and starts no more.
+        let results: Vec<Result<Outcome, AgentId>> = stream::iter(agents)
+            .map(|agent_id| {
+                let environment_id = environments.get(&agent_id.component_id).copied().flatten();
+                async move {
+                    if cancel.is_cancelled() {
+                        return Err(agent_id);
+                    }
+                    // Asked again, because the residency answer that put this agent on the list
+                    // was taken before the scan finished paging, and for a carried candidate an
+                    // interval before that. `ActiveWorkers` is in memory and keyed by agent and
+                    // mode alone, so re-reading it costs nothing and no environment is needed to
+                    // address it.
+                    let probe = OwnedAgentId {
+                        environment_id: environment_id.unwrap_or_else(EnvironmentId::new),
+                        agent_id: agent_id.clone(),
+                    };
+                    if self
+                        .worker_access
+                        .active_worker_fingerprint(&probe)
+                        .await
+                        .is_some()
+                    {
+                        return Ok(Outcome::Resident);
+                    }
+                    Ok(self.archive_agent(route, agent_id, environment_id).await)
+                }
+            })
+            .buffer_unordered(self.config.max_concurrency.max(1))
+            .collect()
+            .await;
+
+        let mut outcomes = Vec::with_capacity(results.len());
+        let mut declined = Vec::new();
+        for result in results {
+            match result {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(agent_id) => declined.push(agent_id),
+            }
+        }
+        (outcomes, declined)
+    }
+
+    /// Takes the candidates the last tick could not reach, leaving the route owing nothing.
+    async fn take_deferred(&self, route: RouteId) -> Vec<AgentId> {
+        self.deferred
+            .lock()
+            .await
+            .remove(&route)
+            .unwrap_or_default()
+    }
+
+    /// Records what this tick could not reach, capped at one tick's archive budget.
+    ///
+    /// A route that keeps being cut short cannot grow this without bound. An agent dropped from
+    /// the tail is found again by a later scan, because the work list is the layer itself, so the
+    /// cap costs a later visit rather than a stranded oplog.
+    async fn defer(&self, route: RouteId, mut agents: Vec<AgentId>) {
+        if agents.is_empty() {
+            self.deferred.lock().await.remove(&route);
+            return;
+        }
+        agents.sort();
+        agents.dedup();
+        agents.truncate(self.config.max_archives_per_tick.max(1));
+        self.deferred.lock().await.insert(route, agents);
     }
 
     /// Decides one agent without touching it.
@@ -1223,40 +1365,66 @@ mod tests {
         let mut budget = TickBudget::new(&config, 2);
         assert_eq!(
             budget.share(),
-            (50, 5),
+            Some((50, 5)),
             "an even split, not the whole of it"
         );
 
         // A route that finds nothing leaves its share to the one behind it rather than wasting it.
         budget.spend(0, 0);
-        assert_eq!(budget.share(), (100, 10));
+        assert_eq!(budget.share(), Some((100, 10)));
 
         let mut budget = TickBudget::new(&config, 2);
         budget.spend(50, 5);
         assert_eq!(
             budget.share(),
-            (50, 5),
+            Some((50, 5)),
             "and a route that spends its share does not"
         );
     }
 
-    /// Zero would hand a route a budget it cannot take one step with, and the route would report a
-    /// truncated tick having done nothing.
+    /// The share used to floor at one of each, so an exhausted tick still handed every route a
+    /// step: four routes and `max_scanned_per_tick = 1` scanned four keys, and an archive phase
+    /// that overshot its page did not stop the routes behind it.
     #[test]
-    fn a_route_is_never_handed_an_empty_share() {
+    fn a_spent_budget_hands_out_no_more_work() {
         let config = OplogSweepConfig {
             max_scanned_per_tick: 1,
             max_archives_per_tick: 1,
             ..OplogSweepConfig::default()
         };
+
         let mut budget = TickBudget::new(&config, 4);
-        assert_eq!(budget.share(), (1, 1));
-        budget.spend(10, 10);
         assert_eq!(
             budget.share(),
-            (1, 1),
-            "and an overspent budget still floors at one"
+            Some((1, 1)),
+            "the first route gets the one key there is to spend"
         );
+        budget.spend(1, 1);
+        assert_eq!(
+            budget.share(),
+            None,
+            "and there is nothing left for a second"
+        );
+
+        // Overshooting is the same answer. An archive phase stops at the first page that carries
+        // it past its bound rather than splitting one, so a route can spend more than it was
+        // handed.
+        let mut budget = TickBudget::new(&config, 4);
+        budget.spend(10, 10);
+        assert_eq!(budget.share(), None);
+
+        // Either budget alone is enough to stop the tick: a route with keys left to scan but no
+        // archives left would only lengthen the list the next tick inherits.
+        let mut budget = TickBudget::new(
+            &OplogSweepConfig {
+                max_scanned_per_tick: 100,
+                max_archives_per_tick: 1,
+                ..OplogSweepConfig::default()
+            },
+            4,
+        );
+        budget.spend(1, 1);
+        assert_eq!(budget.share(), None);
     }
 
     #[test]
@@ -1498,6 +1666,10 @@ mod tests {
         /// token is ignored. That is the smallest shape of what Redis `SCAN` is allowed to do: a
         /// key present throughout is returned at least once, not exactly once.
         duplicate_pages: bool,
+        /// Cancelled once a page has been served, then disarmed. That is where a tick deadline
+        /// lands when probing one page of keys outlasts it, which is the whole reason the deadline
+        /// exists: see `OplogSweepConfig::max_tick_duration`.
+        cancel_on_scan: std::sync::Mutex<Option<CancellationToken>>,
         calls: std::sync::atomic::AtomicU64,
     }
 
@@ -1561,6 +1733,9 @@ mod tests {
                     .inner
                     .scan_stable(svc_name, api_name, namespace, prefix, None, 10_000)
                     .await?;
+                if let Some(token) = self.cancel_on_scan.lock().unwrap().take() {
+                    token.cancel();
+                }
                 let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 return if call.is_multiple_of(2) {
                     Ok((Some(ScanResume::Marker("again".to_string())), keys))
@@ -1568,7 +1743,8 @@ mod tests {
                     Ok((None, keys))
                 };
             }
-            self.inner
+            let page = self
+                .inner
                 .scan_stable(
                     svc_name,
                     api_name,
@@ -1577,7 +1753,11 @@ mod tests {
                     resume,
                     self.keys_per_page,
                 )
-                .await
+                .await;
+            if let Some(token) = self.cancel_on_scan.lock().unwrap().take() {
+                token.cancel();
+            }
+            page
         }
 
         async fn append(
@@ -2073,6 +2253,145 @@ mod tests {
         ));
     }
 
+    /// Regression: an expired tick used to drop every candidate it had not reached while still
+    /// saving the scan cursor it had advanced, so a store slow enough to cut every tick during
+    /// probing gave a sweep that walked its namespace forever and archived nothing. That store is
+    /// the one condition the deadline exists for, so the deadline disabled the sweep exactly when
+    /// it was needed.
+    #[test]
+    #[timeout("1m")]
+    async fn a_tick_cut_short_before_archiving_keeps_its_candidates() {
+        let layers = layers();
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+        let storage = Arc::new(FixedPages {
+            inner: layers.indexed_storage.clone(),
+            keys_per_page: 10,
+            duplicate_pages: false,
+            cancel_on_scan: std::sync::Mutex::new(None),
+            calls: std::sync::atomic::AtomicU64::new(0),
+        });
+        let sweeper = build_over(
+            storage.clone(),
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        // Unarmed: the first tick only records the index, and has nothing to archive anyway.
+        let first = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(first.route(EPHEMERAL_L1).moving, 1);
+        assert!(sweeper.deferred.lock().await.is_empty());
+
+        // Armed. The gate is open now, so this tick probes the agent and then loses its deadline
+        // before it can archive it.
+        let cut = CancellationToken::new();
+        *storage.cancel_on_scan.lock().unwrap() = Some(cut.clone());
+        let second = sweeper.sweep_once(&cut).await;
+        assert_eq!(second.archived(), 0, "the tick ran out of time to archive");
+        assert!(second.route(EPHEMERAL_L1).truncated);
+        assert_eq!(
+            sweeper.deferred.lock().await.get(&EPHEMERAL_L1),
+            Some(&vec![agent_id.clone()]),
+            "but the probe it paid for is kept"
+        );
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::from_u64(3),
+            "and nothing moved"
+        );
+
+        // Cut in the same place again. The carried candidate is archived before the scan gets the
+        // chance to spend this tick's deadline the same way, so a tick that keeps timing out
+        // still makes progress.
+        let cut_again = CancellationToken::new();
+        *storage.cancel_on_scan.lock().unwrap() = Some(cut_again.clone());
+        let third = sweeper.sweep_once(&cut_again).await;
+        assert_eq!(third.archived(), 1);
+        assert!(sweeper.deferred.lock().await.is_empty());
+        assert_eq!(
+            layers.archives[0]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::NONE
+        );
+        assert_eq!(
+            layers.archives[1]
+                .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+                .await,
+            OplogIndex::from_u64(3)
+        );
+    }
+
+    /// A tick that stops early used to leave the routes it never reached to be skipped again by
+    /// the next tick, and the one before that, for as long as the budget or the deadline kept
+    /// running out in the same place.
+    #[test]
+    #[timeout("1m")]
+    async fn a_tick_that_stops_early_starts_the_next_one_where_it_stopped() {
+        let layers = deep_layers(2);
+        let environment_id = EnvironmentId::new();
+        let storage = Arc::new(FixedPages {
+            inner: layers.indexed_storage.clone(),
+            keys_per_page: 10,
+            duplicate_pages: false,
+            cancel_on_scan: std::sync::Mutex::new(None),
+            calls: std::sync::atomic::AtomicU64::new(0),
+        });
+        let sweeper = build_over(
+            storage.clone(),
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+        assert_eq!(
+            sweeper.routes.len(),
+            2,
+            "two compressed sources over a blob bottom"
+        );
+
+        // Cut during the first route, so the second is never reached.
+        let cut = CancellationToken::new();
+        *storage.cancel_on_scan.lock().unwrap() = Some(cut.clone());
+        let first = sweeper.sweep_once(&cut).await;
+        assert_eq!(first.routes.len(), 1);
+        assert_eq!(first.routes[0].0, sweeper.routes[0].id);
+        assert_eq!(
+            *sweeper.route_cursor.lock().await,
+            1,
+            "so the next tick begins with the route this one skipped"
+        );
+
+        let second = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(second.routes.len(), 1);
+        assert_eq!(
+            second.routes[0].0, sweeper.routes[1].id,
+            "the skipped route, not the one that already ran"
+        );
+        assert_eq!(
+            *sweeper.route_cursor.lock().await,
+            0,
+            "and a tick that reaches the end of the stack starts the next one at the top"
+        );
+
+        // Route order inside a tick is untouched: the deepest source still runs first, so a tick
+        // never hands entries to a layer it is about to drain.
+        let third = sweeper.sweep_once(&CancellationToken::new()).await;
+        assert_eq!(
+            third.routes.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![sweeper.routes[0].id, sweeper.routes[1].id]
+        );
+    }
+
     #[test]
     #[timeout("1m")]
     async fn an_agent_invoked_a_second_time_is_still_archived() {
@@ -2230,6 +2549,7 @@ mod tests {
                 inner: layers.indexed_storage.clone(),
                 keys_per_page: 1,
                 duplicate_pages: true,
+                cancel_on_scan: std::sync::Mutex::new(None),
                 calls: std::sync::atomic::AtomicU64::new(0),
             }),
             &layers,
@@ -2728,6 +3048,7 @@ mod tests {
                 inner: layers.indexed_storage.clone(),
                 keys_per_page: 1,
                 duplicate_pages: false,
+                cancel_on_scan: std::sync::Mutex::new(None),
                 calls: std::sync::atomic::AtomicU64::new(0),
             }),
             &layers,
@@ -2769,6 +3090,7 @@ mod tests {
                 inner: layers.indexed_storage.clone(),
                 keys_per_page: 4,
                 duplicate_pages: false,
+                cancel_on_scan: std::sync::Mutex::new(None),
                 calls: std::sync::atomic::AtomicU64::new(0),
             }),
             &layers,
