@@ -51,8 +51,8 @@ import './schema/effect';
 
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
-export { AgentId } from './agentId';
-export type { AgentIdCreateOptions, AgentIdParts } from './agentId';
+export { ParsedAgentId } from './agentId';
+export type { ParsedAgentIdCreateOptions, ParsedAgentIdParts } from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';

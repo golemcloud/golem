@@ -628,12 +628,6 @@ fn validate_unshared_memory_growth(
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[cfg(feature = "test-utils")]
-    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
-        self.owner_execution
-            .test_should_skip_monotonic_clock_now_durability()
-    }
-
-    #[cfg(feature = "test-utils")]
     pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
         self.owner_execution
             .test_should_skip_wall_clock_now_durability()
@@ -1914,7 +1908,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .get_attached_last_known_status()
             .await;
         let status_idx = status.oplog_idx;
-        let status_pending = status.pending_card_events;
+        let status_pending = status.pending_card_events.clone();
 
         let oplog = self.public_state.worker().oplog();
         let current_idx = oplog.current_oplog_index().await;

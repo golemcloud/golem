@@ -32,7 +32,7 @@ import {
 import { getAgentType, getAgentTypeByAgentId } from '../src/reflection';
 import { RemoteCallError, RemoteOutputError } from '../src/client';
 import { Uuid } from '../src/uuid';
-import { AgentId } from '../src/agentId';
+import { ParsedAgentId } from '../src/agentId';
 
 const stringGraph: SchemaGraph = { defs: new Map(), root: t.string() };
 
@@ -155,11 +155,8 @@ describe('agent reflection', () => {
     vi.mocked(parseAgentId).mockImplementationOnce(() => {
       throw new TypeError('malformed agent id');
     });
-    const malformed = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'not-an-agent-id',
-    });
-    expect(() => AgentId.parse(malformed)).toThrow('malformed agent id');
+    const malformed = new ParsedAgentId('not-an-agent-id');
+    expect(() => malformed.parts()).toThrow('malformed agent id');
   });
 
   it('discovers a type and invokes through its reflected schemas', async () => {
@@ -228,14 +225,11 @@ describe('agent reflection', () => {
   });
 
   it('looks up the current schema for a concrete agent instance', () => {
-    const rawId = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'ReflectedEcho(one)',
-    });
+    const rawId = new ParsedAgentId('ReflectedEcho(one)');
     vi.mocked(hostGetAgentTypeByAgentId).mockReturnValueOnce(registeredType());
 
     expect(getAgentTypeByAgentId(rawId)?.name).toBe('ReflectedEcho');
-    expect(hostGetAgentTypeByAgentId).toHaveBeenLastCalledWith(rawId);
+    expect(hostGetAgentTypeByAgentId).toHaveBeenLastCalledWith(rawId.value);
   });
 
   it('creates a bare client without a discovery lookup', async () => {
@@ -248,10 +242,7 @@ describe('agent reflection', () => {
       undefined,
     ]);
     const before = vi.mocked(hostGetAgentType).mock.calls.length;
-    const agentId = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'ReflectedEcho(one)',
-    });
+    const agentId = new ParsedAgentId('ReflectedEcho(one)');
     const client = agentId.dynamicClient();
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -279,10 +270,7 @@ describe('agent reflection', () => {
       undefined,
     ]);
     const reflected = getAgentType('ReflectedEcho')!;
-    const agentId = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'ReflectedEcho(one)',
-    });
+    const agentId = new ParsedAgentId('ReflectedEcho(one)');
 
     const client = agentId.client(reflected);
 
@@ -301,14 +289,11 @@ describe('agent reflection', () => {
       undefined,
     ]);
     const reflected = getAgentType('ReflectedEcho')!;
-    const agentId = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'ReflectedEcho(one)',
-    });
+    const agentId = new ParsedAgentId('ReflectedEcho(one)');
     const creates = vi.mocked(WasmRpc.create).mock.calls.length;
 
     expect(() => agentId.client(reflected)).toThrow(
-      "Cannot bind existing AgentId 'ReflectedEcho(one)' to ephemeral agent type 'ReflectedEcho'; use agentType.client.newPhantom(...)",
+      "Cannot bind existing ParsedAgentId 'ReflectedEcho(one)' to ephemeral agent type 'ReflectedEcho'; use agentType.client.newPhantom(...)",
     );
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
@@ -346,10 +331,7 @@ describe('agent reflection', () => {
       },
     });
 
-    expect(reflected.agentId({ id: 'one' }, phantomId)).toMatchObject({
-      agentId: 'MockAgent()',
-      componentId: reflected.implementedBy,
-    });
+    expect(reflected.agentId({ id: 'one' }, phantomId).value).toBe('MockAgent()');
     expect(known).not.toHaveProperty('agentId');
     if ('client' in fresh) throw new Error('ephemeral newPhantom returned a durable wrapper');
     expect(fresh).not.toHaveProperty('agentId');

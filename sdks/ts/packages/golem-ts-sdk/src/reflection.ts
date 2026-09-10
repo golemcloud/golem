@@ -45,7 +45,7 @@ import { SchemaRef, type JsonValue } from './schema/ref';
 import { Uuid } from './uuid';
 import { ComponentId } from './ids';
 export { ComponentId } from './ids';
-import { AgentId, bindAgentClient } from './agentId';
+import { ParsedAgentId, bindAgentClient } from './agentId';
 export {
   DynamicAgentClient,
   DynamicAgentMethod,
@@ -113,28 +113,27 @@ export class AgentType {
   }
 
   /** Construct an agent identity from canonical JSON constructor input. */
-  agentId(input: JsonValue, phantomId?: Uuid): AgentId {
+  agentId(input: JsonValue, phantomId?: Uuid): ParsedAgentId {
     return this.agentIdValue(this.constructorInput.packJson(input), phantomId);
   }
 
   /** Construct an agent identity from an already packed constructor value. */
-  agentIdValue(input: SchemaValue, phantomId?: Uuid): AgentId {
-    return AgentId.create({
-      componentId: this.implementedBy,
+  agentIdValue(input: SchemaValue, phantomId?: Uuid): ParsedAgentId {
+    return ParsedAgentId.create({
       typeName: this.name,
       constructorValue: input,
       phantomId,
     });
   }
 
-  [bindAgentClient](agentId: AgentId): ReflectedAgentClient {
-    const parts = AgentId.parse(agentId);
+  [bindAgentClient](agentId: ParsedAgentId): ReflectedAgentClient {
+    const parts = agentId.parts();
     if (parts.typeName !== this.name) {
       throw new TypeError(`Reflected agent type '${this.name}' cannot bind '${parts.typeName}'`);
     }
     if (this.mode === 'ephemeral') {
       throw new TypeError(
-        `Cannot bind existing AgentId '${agentId.agentId}' to ephemeral agent type '${this.name}'; use agentType.client.newPhantom(...)`,
+        `Cannot bind existing ParsedAgentId '${agentId.value}' to ephemeral agent type '${this.name}'; use agentType.client.newPhantom(...)`,
       );
     }
     return new ReflectedAgentClient(
@@ -151,7 +150,7 @@ export class AgentType {
 }
 
 export interface ReflectedPhantomClient {
-  readonly agentId: AgentId;
+  readonly agentId: ParsedAgentId;
   readonly phantomId: Uuid;
   readonly client: ReflectedAgentClient;
 }
@@ -303,11 +302,11 @@ export function getAgentType(name: string): AgentType | undefined {
  * Look up the current deployed schema for a full environment-scoped identity.
  *
  * Returns `undefined` when the agent does not exist, its ID is malformed, its type is missing, or
- * the caller lacks `View` permission. Use {@link AgentId.parse} when strict identity parsing is
+ * the caller lacks `View` permission. Use {@link ParsedAgentId.parsed} when strict identity parsing is
  * required independently of discovery.
  */
-export function getAgentTypeByAgentId(agentId: AgentId): AgentType | undefined {
-  const registered = hostGetAgentTypeByAgentId(agentId);
+export function getAgentTypeByAgentId(agentId: ParsedAgentId): AgentType | undefined {
+  const registered = hostGetAgentTypeByAgentId(agentId.value);
   return registered === undefined ? undefined : new AgentType(registered);
 }
 

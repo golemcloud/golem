@@ -349,7 +349,7 @@ oplog_payload! {
             error: SerializableToolRpcError,
         },
         GolemAgentGetAgentTypeByAgentId {
-            agent_id: AgentId
+            agent_id: String
         },
     }
 }

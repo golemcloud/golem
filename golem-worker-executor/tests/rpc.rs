@@ -3551,6 +3551,7 @@ async fn ts_reflection_discovers_binds_and_invokes_durable_agent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -3559,6 +3560,11 @@ async fn ts_reflection_discovers_binds_and_invokes_durable_agent(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
+    let target_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    assert_ne!(component.id, target_component.id);
     let agent_id = agent_id!(
         "TestAgent",
         "ts_reflection_discovers_binds_and_invokes_durable_agent"
@@ -3591,13 +3597,16 @@ async fn ts_reflection_discovers_binds_and_invokes_durable_agent(
     };
 
     assert_eq!(listed, &SchemaValue::Bool(true));
+    assert_eq!(type_name, &SchemaValue::String("Counter".to_string()));
+    assert_eq!(method_name, &SchemaValue::String("get-value".to_string()));
     assert_eq!(
-        type_name,
-        &SchemaValue::String("SimpleChildAgent".to_string())
+        first_value,
+        &SchemaValue::String(
+            "counter-reflection-ts_reflection_discovers_binds_and_invokes_durable_agent"
+                .to_string()
+        )
     );
-    assert_eq!(method_name, &SchemaValue::String("value".to_string()));
-    assert_eq!(first_value, &SchemaValue::F64(1.0));
-    assert_eq!(second_value, &SchemaValue::F64(1.0));
+    assert_eq!(second_value, first_value);
     assert_eq!(missing_name, &SchemaValue::Bool(true));
     assert_eq!(missing_id, &SchemaValue::Bool(true));
 

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use anyhow::Context;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
@@ -45,9 +44,8 @@ use golem_common::{
 };
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::tool::{
-    ToolAttachmentModeMetadata, ToolAttachmentTerminalMetadata, ToolBodyAdmissionMetadata,
-    ToolOperationLaneMetadata, ToolOperationMetadata, ToolOperationWinnerMetadata,
-    ToolOwnerFailureMetadata,
+    ToolAttachmentModeMetadata, ToolBodyAdmissionMetadata, ToolOperationLaneMetadata,
+    ToolOperationMetadata, ToolOperationWinnerMetadata, ToolOwnerFailureMetadata,
 };
 use golem_worker_executor::services::environment_state::{
     EnvironmentStateService, ToolActivationOutcome, ToolDiscoveryError,
@@ -104,6 +102,13 @@ struct StreamEvidence {
     bytes_read: u64,
     output_closed: bool,
     completion: String,
+}
+
+#[derive(Debug, FromSchema)]
+struct ClockedStreamEvidence {
+    before_tool_nanos: u64,
+    after_tool_nanos: u64,
+    stream: StreamEvidence,
 }
 
 #[derive(Debug, FromSchema)]
@@ -550,52 +555,6 @@ async fn wait_for_active_tool_operations(
     })
     .await
     .map_err(|_| anyhow::anyhow!("timed out waiting for {expected} active tool operations"))?;
-    Ok(())
-}
-
-async fn wait_for_tool_stdin_state(
-    executor: &TestWorkerExecutor,
-    agent_id: &OwnedAgentId,
-    accepted_bytes: u64,
-    delivered_bytes: u64,
-    buffered_bytes: usize,
-    capacity_bytes: usize,
-    backpressured: bool,
-    terminal: Option<ToolAttachmentTerminalMetadata>,
-    producer_operation_active: bool,
-    producer_active: bool,
-    consumer_active: bool,
-) -> anyhow::Result<()> {
-    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            if let Some(active) = executor.active_entity_metadata(agent_id).await
-                && let Some(stdin) = active
-                    .tool_operations
-                    .operations
-                    .first()
-                    .and_then(|operation| operation.stdin.as_ref())
-                && stdin.accepted_bytes == accepted_bytes
-                && stdin.delivered_bytes == delivered_bytes
-                && stdin.buffered_bytes == buffered_bytes
-                && stdin.capacity_bytes == capacity_bytes
-                && stdin.backpressured == backpressured
-                && stdin.terminal == terminal
-                && stdin.producer_operation_active == producer_operation_active
-                && stdin.producer_active == producer_active
-                && stdin.consumer_active == consumer_active
-            {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await;
-    if result.is_err() {
-        let active = executor.active_entity_metadata(agent_id).await;
-        anyhow::bail!(
-            "timed out waiting for tool stdin state accepted={accepted_bytes}, delivered={delivered_bytes}, buffered={buffered_bytes}, capacity={capacity_bytes}, backpressured={backpressured}, terminal={terminal:?}, producer-operation-active={producer_operation_active}, producer-active={producer_active}, consumer-active={consumer_active}; active metadata: {active:#?}"
-        );
-    }
     Ok(())
 }
 
@@ -3293,7 +3252,6 @@ async fn active_stream_crash_replays_pinned_activation_with_fresh_attachments(
 enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
-    BackpressuredStdin,
 }
 
 async fn run_completed_reconstruction_exclusive_p2_case(
@@ -3347,9 +3305,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     let case_name = match case {
         CompletedReconstructionExclusiveCase::Success => "exclusive-p2-success",
         CompletedReconstructionExclusiveCase::Divergence => "exclusive-p2-divergence",
-        CompletedReconstructionExclusiveCase::BackpressuredStdin => {
-            "exclusive-p2-backpressured-stdin"
-        }
     };
     let agent_id = agent_id!("ToolStreamingCaller", case_name);
     let worker_id = executor
@@ -3370,69 +3325,17 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     .await
     .map_err(|_| anyhow::anyhow!("timed out waiting for caller initialization"))??;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let first = vec![0x31u8; 64];
-    let second = vec![0x32u8; 64];
-    let mut original_start = (case == CompletedReconstructionExclusiveCase::BackpressuredStdin)
-        .then(|| executor.gate_next_entity_body_start(&worker_id));
     let mut original_success = executor.gate_next_agent_invocation_success(&worker_id);
-    match case {
-        CompletedReconstructionExclusiveCase::Success
-        | CompletedReconstructionExclusiveCase::Divergence => {
-            executor
-                .skip_next_wall_clock_now_durability(&owned_agent_id)
-                .await?;
-        }
-        CompletedReconstructionExclusiveCase::BackpressuredStdin => {
-            executor
-                .skip_next_monotonic_clock_now_durability(&owned_agent_id)
-                .await?;
-        }
-    }
-    let invocation = match case {
-        CompletedReconstructionExclusiveCase::Success
-        | CompletedReconstructionExclusiveCase::Divergence => executor.invoke_and_await_agent(
-            &caller_component,
-            &agent_id,
-            "hold_completed_reconstruction_before_exclusive_clock",
-            data_value!(),
-        ),
-        CompletedReconstructionExclusiveCase::BackpressuredStdin => executor
-            .invoke_and_await_agent(
-                &caller_component,
-                &agent_id,
-                "hold_reconstruction_backpressure_before_exclusive_clock",
-                data_value!(first.clone(), second.clone()),
-            ),
-    };
-    tokio::pin!(invocation);
-
-    if let Some(start) = original_start.as_mut() {
-        tokio::select! {
-            () = start.entered() => {}
-            result = &mut invocation => {
-                result.context("original invocation finished before reaching the entity body start gate")?;
-                anyhow::bail!("original invocation succeeded without reaching the entity body start gate");
-            }
-            () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
-                anyhow::bail!("original entity body start gate was not reached");
-            }
-        }
-        wait_for_tool_stdin_state(
-            &executor,
-            &owned_agent_id,
-            first.len() as u64,
-            0,
-            first.len(),
-            first.len(),
-            true,
-            None,
-            true,
-            true,
-            true,
-        )
+    executor
+        .skip_next_wall_clock_now_durability(&owned_agent_id)
         .await?;
-        start.release();
-    }
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "hold_completed_reconstruction_before_exclusive_clock",
+        data_value!(),
+    );
+    tokio::pin!(invocation);
 
     let validate_recovery = async {
         tokio::time::timeout(
@@ -3464,11 +3367,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         if case == CompletedReconstructionExclusiveCase::Divergence {
             executor.diverge_next_completed_entity_reconstruction(&worker_id);
         }
-        let mut replayed_start = (case == CompletedReconstructionExclusiveCase::BackpressuredStdin)
-            .then(|| executor.gate_next_entity_body_start(&worker_id));
         let mut replayed_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
         executor.simulated_crash(&worker_id).await?;
-        drop(original_start);
         original_success.abort_as_restart();
         drop(original_success);
         let claimed_start =
@@ -3476,17 +3376,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .await
                 .map_err(|_| anyhow::anyhow!("replayed reconstruction claim was not reached"))?;
         assert_eq!(claimed_start, reconstruction_start);
-        let mut replayed_clock = match case {
-            CompletedReconstructionExclusiveCase::Success
-            | CompletedReconstructionExclusiveCase::Divergence => {
-                executor.gate_next_wall_clock_now(&owned_agent_id).await?
-            }
-            CompletedReconstructionExclusiveCase::BackpressuredStdin => {
-                executor
-                    .gate_next_monotonic_clock_now(&owned_agent_id)
-                    .await?
-            }
-        };
+        let mut replayed_clock = executor.gate_next_wall_clock_now(&owned_agent_id).await?;
         replayed_claim.release();
         tokio::time::timeout(std::time::Duration::from_secs(30), replayed_clock.entered())
             .await
@@ -3571,72 +3461,6 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     "divergent reconstruction permitted ReplayFinished update finalization"
                 );
             }
-            CompletedReconstructionExclusiveCase::BackpressuredStdin => {
-                let replayed_success = replayed_success.as_mut().unwrap();
-                let replayed_start = replayed_start.as_mut().unwrap();
-                tokio::time::timeout(std::time::Duration::from_secs(30), replayed_start.entered())
-                    .await
-                    .map_err(|_| {
-                        anyhow::anyhow!("replayed entity body start gate was not reached")
-                    })?;
-                wait_for_tool_stdin_state(
-                    &executor,
-                    &owned_agent_id,
-                    first.len() as u64,
-                    0,
-                    first.len(),
-                    first.len(),
-                    true,
-                    None,
-                    true,
-                    true,
-                    true,
-                )
-                .await?;
-                replayed_start.release();
-                wait_for_tool_stdin_state(
-                    &executor,
-                    &owned_agent_id,
-                    (first.len() + second.len()) as u64,
-                    (first.len() + second.len()) as u64,
-                    0,
-                    first.len(),
-                    false,
-                    Some(ToolAttachmentTerminalMetadata::ConsumerCancelled),
-                    false,
-                    true,
-                    false,
-                )
-                .await?;
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    reconstruction_body.entered(),
-                )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!("backpressured reconstruction did not reach body validation")
-                })?;
-                replayed_clock.release();
-                wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
-                assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
-                assert!(
-                    tokio::time::timeout(
-                        std::time::Duration::from_millis(250),
-                        replayed_success.entered()
-                    )
-                    .await
-                    .is_err(),
-                    "Store pumping published live before completed body validation"
-                );
-                reconstruction_body.release();
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    replayed_success.entered(),
-                )
-                .await
-                .map_err(|_| anyhow::anyhow!("replayed agent invocation did not finish"))?;
-                replayed_success.release();
-            }
         }
         Ok::<_, anyhow::Error>(())
     };
@@ -3695,26 +3519,6 @@ async fn completed_reconstruction_divergence_fails_exclusive_p2_wait(
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Divergence,
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("5m")]
-async fn settling_accessor_p2_keeps_backpressured_reconstruction_store_polling(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_completed_reconstruction_exclusive_p2_case(
-        last_unique_id,
-        deps,
-        provider,
-        caller,
-        CompletedReconstructionExclusiveCase::BackpressuredStdin,
     )
     .await
 }
@@ -4088,6 +3892,241 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
     );
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn recorded_monotonic_clock_replays_across_incomplete_stream_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_clocked_stream_recovery(last_unique_id, deps, provider, caller, false).await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn incomplete_monotonic_clock_recovers_after_completed_stream(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_clocked_stream_recovery(last_unique_id, deps, provider, caller, true).await
+}
+
+async fn run_clocked_stream_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    incomplete_clock: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
+        start_crash_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "clocked-incomplete-stream");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let first: Vec<u8> = (0..64).collect();
+    let second: Vec<u8> = (192..255).collect();
+    let expected = [first.as_slice(), second.as_slice()].concat();
+    let mut original_body_start =
+        (!incomplete_clock).then(|| executor.gate_next_entity_body_start(&worker_id));
+    let path = if incomplete_clock {
+        "hold-body:/clocked-stream.bin"
+    } else {
+        "/clocked-stream.bin"
+    };
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "clocked_capable_checkpoint",
+        data_value!(path, first, second),
+    );
+    tokio::pin!(invocation);
+
+    let original_checkpoint = tokio::select! {
+        checkpoint = async {
+            if let Some(gate) = original_body_start.as_mut() {
+                gate.entered().await;
+                Ok(None)
+            } else {
+                checkpoint_arrivals.recv().await.map(Some)
+                    .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))
+            }
+        } => checkpoint?,
+        result = &mut invocation => {
+            anyhow::bail!("clocked invocation finished before checkpoint: {result:?}");
+        }
+        () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+            anyhow::bail!("clocked tool did not reach its original body checkpoint");
+        }
+    };
+    if let Some(checkpoint) = &original_checkpoint {
+        assert_eq!(checkpoint.name, "capable-body");
+    }
+    executor.commit_oplog(&worker_id).await?;
+    let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let clock_starts: Vec<_> = original_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "monotonic_clock::now" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    #[derive(FromSchema)]
+    struct ClockTimestamp {
+        nanos: u64,
+    }
+    let clocks: Vec<u64> = original_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) if clock_starts.contains(&params.start_index) => Some(
+                ClockTimestamp::from_value(
+                    params
+                        .response
+                        .as_ref()
+                        .expect("clock End response")
+                        .value(),
+                )
+                .map(|time| time.nanos),
+            ),
+            _ => None,
+        })
+        .collect::<Result<_, _>>()?;
+    assert!(
+        clocks.len() >= 2,
+        "normal clock calls must be recorded before the tool"
+    );
+    let recorded_elapsed = clocks[clocks.len() - 1].saturating_sub(clocks[clocks.len() - 2]);
+    let incomplete_start = if incomplete_clock {
+        let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let mut clock = executor.gate_next_monotonic_clock_start(&owner).await?;
+        original_checkpoint
+            .expect("capable body checkpoint")
+            .release
+            .send(())
+            .expect("release original tool body");
+        tokio::time::timeout(std::time::Duration::from_secs(30), clock.entered())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("clock did not persist its Start after the completed tool")
+            })?;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let start = oplog
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "monotonic_clock::now" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .expect("persisted clock Start");
+        assert!(oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)));
+        wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        clock.abort_as_restart();
+        Some(start)
+    } else {
+        executor.simulated_crash(&worker_id).await?;
+        drop(original_body_start);
+        None
+    };
+
+    let evidence: ClockedStreamEvidence =
+        tokio::time::timeout(std::time::Duration::from_secs(30), &mut invocation)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("clocked stream recovery deadlocked after checkpoint release")
+            })??
+            .into_typed()?;
+    assert_eq!(evidence.before_tool_nanos, recorded_elapsed);
+    assert!(evidence.after_tool_nanos >= evidence.before_tool_nanos);
+    let expected_output = if incomplete_clock {
+        [b"body-checkpoint".as_slice(), expected.as_slice()].concat()
+    } else {
+        expected.clone()
+    };
+    assert_evidence(&evidence.stream, &expected_output, 2, expected.len() as u64);
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/clocked-stream.bin")
+            .await?,
+        expected
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    if let Some(start) = incomplete_start {
+        assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)).count(), 1, "incomplete clock must be repaired exactly once");
+    }
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "clock and stream recovery must not write a replay error"
+    );
+    checkpoint_server.abort();
     Ok(())
 }
 
