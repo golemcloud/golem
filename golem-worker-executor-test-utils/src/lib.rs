@@ -648,6 +648,26 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
+    /// The bus every caller parked in `Worker::wait_for_invocation_result`
+    /// subscribes to, so a test can flood it. There is one per executor, built
+    /// in `create_worker_executor_impl` and shared by `Arc`, so any loaded
+    /// agent's handle is the executor's; the agent only has to be resident at
+    /// the moment this is called, and the handle outlives it.
+    pub async fn event_bus(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Arc<golem_worker_executor::services::events::Events>> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        Ok(golem_worker_executor::services::HasEvents::events(
+            worker.as_ref(),
+        ))
+    }
+
     pub async fn commit_oplog_entry_bypassing_worker_status(
         &self,
         agent_id: &AgentId,

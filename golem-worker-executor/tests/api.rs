@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use axum::Router;
 use axum::routing::get;
@@ -42,6 +42,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{
     AgentResult, drain_connection, stdout_event_matching, stdout_events,
 };
+use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 use golem_worker_executor_test_utils::{
@@ -62,6 +63,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -5718,7 +5720,7 @@ async fn a_caller_is_answered_when_its_agents_shard_comes_back(
 /// agent belongs to a different executor, neither can happen here - the work is
 /// finished over there, on a bus this caller does not subscribe to. There is no
 /// timeout and no ownership re-check, so the caller waits for as long as it is
-/// willing to. Chaos scenario S11 (GOL-377) measured that as the client's own
+/// willing to. Chaos scenario S11 measured that as the client's own
 /// timeout, 120s, on an executor that was never killed and whose transport was
 /// never disturbed, so nothing below the application layer had anything to
 /// notice.
@@ -5888,6 +5890,106 @@ async fn a_caller_is_not_given_up_on_while_the_shard_assignment_is_missing(
         SchemaValue::List {
             elements: vec![SchemaValue::U8(42)]
         }
+    );
+    Ok(())
+}
+
+/// The ownership re-check has to run while the event bus is lagging, too.
+///
+/// A subscriber that has fallen `invocation_result_broadcast_capacity` events
+/// behind is handed `Lagged` the instant it is polled, and the wait backs off
+/// 100ms and starts over. When unrelated events keep overflowing the buffer
+/// inside that 100ms, every restart is handed `Lagged` at once. A `select!`
+/// that polls the subscription ahead of the deadline then takes that arm every
+/// time and never reaches the deadline, so the caller whose agent moved is
+/// back to waiting out its own timeout, which is the one thing the re-check
+/// exists to prevent.
+///
+/// The buffer is shrunk to 16 so a burst of 64 every 50ms is enough to keep
+/// the receiver behind; with the default 100000 the flood would have to be
+/// that much larger to say the same thing.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_event_bus_lags(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.limits.invocation_result_broadcast_capacity = 16;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let parked = park_a_caller_on_a_promise(
+        &executor,
+        &context,
+        host_api_tests,
+        "promise-shard-taken-bus-lagging",
+    )
+    .await?;
+
+    // Taken while the agent is still resident; revoking its shard drops it.
+    let events = executor.event_bus(&parked.agent_id).await?;
+
+    info!("Revoking the shard for good, then flooding the event bus with somebody else's news");
+
+    revoke_shard_zero(&executor).await?;
+
+    let somebody_else = AgentId {
+        component_id: parked.agent_id.component_id,
+        agent_id: agent_id!("GolemHostApi", "somebody-else-entirely").to_string(),
+    };
+    // A probe that is never read, on the same bus. A quiet bus answers the
+    // caller too, so without this the assertion below passes whether or not
+    // the flood reaches the buffer at all.
+    let mut probe = events.subscribe();
+    let flood = tokio::spawn(async move {
+        loop {
+            for _ in 0..64 {
+                events.publish(Event::WorkerLoaded {
+                    agent_id: somebody_else.clone(),
+                    start_attempt: uuid::Uuid::new_v4(),
+                    result: Ok(()),
+                });
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    });
+
+    let overflowed =
+        tokio::time::timeout(Duration::from_secs(2), probe.wait_for(|_| None::<()>)).await;
+    if !matches!(overflowed, Ok(Err(RecvError::Lagged(_)))) {
+        flood.abort();
+        bail!(
+            "the flood did not overflow the event bus (probe saw {overflowed:?}), so this \
+             test would say nothing about a lagging subscription"
+        );
+    }
+
+    // Same absolute bound as the quiet-bus test, for the same reason.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered: this executor no \
+             longer owns the agent, and the lagging event bus kept the ownership \
+             re-check from ever running",
+        )
+        .await;
+    flood.abort();
+    let answer = answer?;
+    info!(result = ?answer, "caller was answered");
+
+    let error =
+        answer.expect_err("nobody completed the promise, so the only honest answer is an error");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("InvalidShardId"),
+        "the caller has to be told the shard moved; instead it got: {rendered}"
     );
     Ok(())
 }

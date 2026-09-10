@@ -5439,10 +5439,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // rather than of how often this loop happens to restart. Both `continue`
         // paths below re-enter it, and a sleep started fresh each time would
         // measure the interval from the last restart instead of running every
-        // interval. Reaching that today needs a receiver falling
-        // `invocation_result_broadcast_capacity` events behind over and over,
-        // which is remote enough that this is insurance rather than a fix, but
-        // it costs a single `Instant`.
+        // interval. A receiver that keeps falling
+        // `invocation_result_broadcast_capacity` events behind restarts this
+        // loop every 100ms, and with a fresh sleep each time the check would
+        // never run at all.
         let mut next_ownership_check =
             tokio::time::Instant::now() + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 
@@ -5463,9 +5463,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         _ => None,
                     });
 
+                    // The deadline is polled first, and `biased` makes that an
+                    // order rather than a coin toss. A receiver that has fallen
+                    // behind the bus is ready at once, with `Lagged`, and a
+                    // select that polled it first would take that arm every
+                    // time and never look at the timer. Under sustained lag
+                    // that starves the ownership check for as long as the lag
+                    // lasts, and a caller whose agent has moved is back to
+                    // waiting out its own timeout. Polling the deadline first
+                    // costs nothing while it is in the future, and when it is
+                    // due, a result that arrived in the same instant is not
+                    // lost: the check either re-enters the loop, whose lookup
+                    // finds it, or reads it before rerouting.
                     let wait_result = tokio::select! {
                         biased;
-                        result = waiting => result,
                         () = tokio::time::sleep_until(next_ownership_check) => {
                             next_ownership_check = tokio::time::Instant::now()
                                 + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
@@ -5501,6 +5512,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             }
                             continue;
                         }
+                        result = waiting => result,
                     };
                     match wait_result {
                         Ok(result) => break Ok(result),
