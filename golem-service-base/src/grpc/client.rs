@@ -1076,7 +1076,7 @@ fn requires_reconnect(e: &Status) -> bool {
         return false;
     }
 
-    worth_reconnecting(e.code(), has_transport_source(e))
+    worth_reconnecting(e.code(), transport_failed(e))
 }
 
 /// Whether the cached connection is worth replacing, given what a status says
@@ -1093,7 +1093,8 @@ fn requires_reconnect(e: &Status) -> bool {
 /// every later request queued onto a connection that could never work again.
 /// Reading the source alone, as this once did, took every other code with it,
 /// including the ones tonic derives from an HTTP/2 reset: each of those ends one
-/// stream and leaves the connection carrying everybody else.
+/// stream and leaves the connection carrying everybody else. See
+/// [`transport_failed`] for how a reset is kept out of both halves now.
 fn worth_reconnecting(code: Code, transport_failed: bool) -> bool {
     code == Code::Unavailable || connection_gone(code, transport_failed)
 }
@@ -1126,7 +1127,7 @@ fn request_timed_out(e: &Status) -> bool {
 /// request that ran out of its own time cannot reach here: it is excluded there,
 /// once.
 fn connection_is_gone(e: &Status) -> bool {
-    connection_gone(e.code(), has_transport_source(e))
+    connection_gone(e.code(), transport_failed(e))
 }
 
 /// Whether the connection carrying a request is gone, as opposed to one request
@@ -1137,30 +1138,65 @@ fn connection_is_gone(e: &Status) -> bool {
 /// hint; declaring it gone releases every other request riding it, so it has to
 /// be right.
 ///
-/// Both halves are needed, because the source alone cannot answer it: `Channel`
-/// reports every failure as a `tonic::transport::Error`, a single reset stream
-/// included, so the code is what separates them. Measured against a real peer, a
-/// connect into a blackhole and an expired keep-alive ping arrive as
-/// `Unavailable`, a connection the kernel gives up on arrives as `Unknown`, and
-/// a connection that closes with requests still on it arrives as `Cancelled` —
-/// the commonest of the three, because it is what killing a busy pod looks like.
-/// `Internal`, `ResourceExhausted` and `PermissionDenied` are left out: tonic
-/// derives those from an HTTP/2 reset, which ends one stream and leaves the
-/// connection carrying everyone else.
+/// Both halves are needed. A peer that answered a status did so over a
+/// transport that works, whatever the code, so the transport has to have failed.
+/// And not every transport failure is the connection's: the code separates the
+/// ones that are. Measured against a real peer, a connect into a blackhole and
+/// an expired keep-alive ping arrive as `Unavailable`, a connection the kernel
+/// gives up on arrives as `Unknown`, and a connection that closes with requests
+/// still on it arrives as `Cancelled` — the commonest of the three, because it
+/// is what killing a busy pod looks like. `Internal`, `ResourceExhausted` and
+/// `PermissionDenied` are left out: tonic only derives those from an HTTP/2
+/// reset, which ends one stream and leaves the connection carrying everyone
+/// else.
 ///
-/// The split is not clean, and cannot be. `REFUSED_STREAM` also resets a single
-/// stream and also arrives as `Unavailable`, where an expired keep-alive ping
-/// arrives too, so no code tells those two apart. Reading a refused stream as a
-/// dead connection costs a reconnect and a retry, which is the cheaper way to be
-/// wrong.
+/// The code alone cannot finish the job, because two reset reasons land on codes
+/// in the first set: tonic maps `CANCEL` to `Cancelled` and `REFUSED_STREAM` to
+/// `Unavailable`. Read here, either declared a healthy connection gone and
+/// released every request beside the reset one with `Unavailable`; a call that
+/// could not be replayed was failed for good over a stream it was never on.
+/// That is why [`transport_failed`] answers `false` for any reset before the
+/// code is consulted.
 fn connection_gone(code: Code, transport_failed: bool) -> bool {
     matches!(code, Code::Unavailable | Code::Unknown | Code::Cancelled) && transport_failed
+}
+
+/// Whether the transport under a status failed, as opposed to the peer having
+/// answered over one that works, or having reset the one stream the request was
+/// on.
+///
+/// `Channel` wraps everything that goes wrong below it in a
+/// `tonic::transport::Error`, an HTTP/2 reset of one stream included, so the
+/// wrapper alone says only that the failure came from below tonic. The
+/// `h2::Error` further down the chain knows whether it came from RST_STREAM,
+/// and a reset ends one stream while the connection carries everybody else. A
+/// connection that dies reaches h2 as an I/O error or a GOAWAY instead, and
+/// neither is a reset.
+fn transport_failed(e: &Status) -> bool {
+    has_transport_source(e) && !reset_one_stream(e)
 }
 
 fn has_transport_source(e: &Status) -> bool {
     std::error::Error::source(e)
         .map(|source| source.is::<tonic::transport::Error>())
         .unwrap_or(false)
+}
+
+/// Whether the failure was an HTTP/2 RST_STREAM, which ends the one stream it
+/// names and nothing else.
+///
+/// Found by walking the source chain: `Status::from_error` keeps the whole
+/// `tonic::transport::Error` it was given as the source, and the `hyper::Error`
+/// under that carries the `h2::Error` the reset arrived as.
+fn reset_one_stream(e: &Status) -> bool {
+    let mut source = std::error::Error::source(e);
+    while let Some(err) = source {
+        if let Some(h2) = err.downcast_ref::<h2::Error>() {
+            return h2.is_reset();
+        }
+        source = err.source();
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1666,10 +1702,13 @@ mod test {
     }
 
     /// `Channel` reports a reset stream and a dead connection alike as a
-    /// transport error, so the code is the only thing separating them. Pinned
-    /// against the codes tonic derives from an HTTP/2 reset, because reading one
-    /// of those as a dead connection would end every request riding a connection
-    /// that is still perfectly good.
+    /// transport error. `transport_failed` reads the reset out of the chain
+    /// before the code is consulted, but the codes are pinned as well, against
+    /// the ones tonic only ever derives from an HTTP/2 reset: reading one of
+    /// those as a dead connection would end every request riding a connection
+    /// that is still perfectly good. The two reset reasons whose codes collide
+    /// with a dead connection's, `CANCEL` and `REFUSED_STREAM`, cannot be built
+    /// without a peer, so they are covered by the integration tests.
     #[test]
     async fn only_some_codes_describe_a_connection_that_is_gone() {
         // Measured against a real peer: a blackholed connect and an expired

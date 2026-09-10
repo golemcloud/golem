@@ -394,6 +394,82 @@ async fn serve_resetting_peer(reason: h2::Reason) -> TestPeer {
     }
 }
 
+/// A peer that speaks HTTP/2, holds the first stream it is sent open until told
+/// to answer it, and resets every stream after it for a reason of the caller's
+/// choosing.
+///
+/// Holding one stream while resetting another is what tells "one stream was
+/// reset" apart from "the connection was torn down": only the second takes the
+/// held stream with it. Later connections, which a client that reconnected over
+/// the reset will open, hold nothing and reset everything.
+struct HoldingPeer {
+    peer: TestPeer,
+    /// Fires once the held stream has reached the peer.
+    held: tokio::sync::oneshot::Receiver<()>,
+    /// Answers the held stream `Unimplemented`, as [`serve_grpc`] would have.
+    release: tokio::sync::oneshot::Sender<()>,
+}
+
+async fn serve_peer_holding_one_stream_and_resetting_the_rest(reason: h2::Reason) -> HoldingPeer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+    let counter = connections.clone();
+    let server = tokio::spawn(async move {
+        let mut hold = Some((held_tx, release_rx));
+        let mut tasks = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Only the first connection has a stream to hold.
+            let mut hold = hold.take();
+            tasks.push(tokio::spawn(async move {
+                let Ok(mut connection) = h2::server::handshake(socket).await else {
+                    return;
+                };
+                // `accept` is also what drives the connection, so the held
+                // stream is answered from a task of its own rather than by
+                // pausing here.
+                while let Some(Ok((_request, mut respond))) = connection.accept().await {
+                    match hold.take() {
+                        Some((held, release)) => {
+                            let _ = held.send(());
+                            tokio::spawn(async move {
+                                if release.await.is_ok() {
+                                    let unimplemented = http::Response::builder()
+                                        .status(200)
+                                        .header("content-type", "application/grpc")
+                                        .header("grpc-status", "12")
+                                        .body(())
+                                        .unwrap();
+                                    let _ = respond.send_response(unimplemented, true);
+                                }
+                            });
+                        }
+                        None => respond.send_reset(reason),
+                    }
+                }
+            }));
+        }
+        for task in tasks {
+            task.abort();
+        }
+    });
+
+    HoldingPeer {
+        peer: TestPeer {
+            addr,
+            connections,
+            shutdown: None,
+            server,
+        },
+        held: held_rx,
+        release: release_tx,
+    }
+}
+
 /// The marker the parent sets on the child it spawns in [`delegated_to_namespace`].
 const IN_OWN_NAMESPACE: &str = "GOLEM_TEST_NET_NAMESPACE";
 
@@ -1445,11 +1521,11 @@ async fn a_request_timeout_does_not_tear_down_the_shared_connection() {
 /// the nested `hyper::Error` and from there `Status::code_from_h2`, and the
 /// outer `transport::Error` is then attached as the source. Stopping at the
 /// failed downcast is how this was first written off as unreachable.
-#[test]
-async fn a_reset_stream_does_not_tear_down_the_connection_carrying_it() {
-    // What a peer under load sends. tonic maps it to ResourceExhausted, which is
-    // neither Unavailable nor anything a dead connection reports.
-    let peer = serve_resetting_peer(h2::Reason::ENHANCE_YOUR_CALM).await;
+async fn a_reset_stream_does_not_tear_down_the_connection_carrying_it(
+    reason: h2::Reason,
+    expected: tonic::Code,
+) {
+    let peer = serve_resetting_peer(reason).await;
     let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
     let client = executor_client(no_keepalive(Duration::from_secs(5)));
 
@@ -1463,7 +1539,7 @@ async fn a_reset_stream_does_not_tear_down_the_connection_carrying_it() {
     );
     assert_eq!(
         first.code(),
-        tonic::Code::ResourceExhausted,
+        expected,
         "expected the code tonic derives from the reset reason; if this has \
          changed, the predicate under test is guarding the wrong set of codes"
     );
@@ -1483,4 +1559,121 @@ async fn a_reset_stream_does_not_tear_down_the_connection_carrying_it() {
         "a reset stream was read as a dead connection: the second call opened a \
          new one instead of reusing the channel every other request rides"
     );
+}
+
+/// What a peer under load sends. tonic maps it to `ResourceExhausted`, which is
+/// neither `Unavailable` nor anything a dead connection reports, so the code
+/// alone keeps the connection.
+#[test]
+async fn a_reset_stream_under_load_does_not_tear_down_the_connection_carrying_it() {
+    a_reset_stream_does_not_tear_down_the_connection_carrying_it(
+        h2::Reason::ENHANCE_YOUR_CALM,
+        tonic::Code::ResourceExhausted,
+    )
+    .await;
+}
+
+/// What a peer that gave up on one request sends. tonic maps it to `Cancelled`,
+/// which is also what a connection that closed with requests still on it
+/// arrives as, so the code alone cannot keep the connection: only the
+/// `h2::Error` under the status knows this was RST_STREAM.
+#[test]
+async fn a_cancelled_stream_does_not_tear_down_the_connection_carrying_it() {
+    a_reset_stream_does_not_tear_down_the_connection_carrying_it(
+        h2::Reason::CANCEL,
+        tonic::Code::Cancelled,
+    )
+    .await;
+}
+
+/// A reset stream must not cut short the other requests riding its connection.
+///
+/// The test above shows the connection survives for the next caller. This one
+/// is about the callers already on it, and about the two reset reasons whose
+/// codes collide with a dead connection's: tonic maps `CANCEL` to `Cancelled`
+/// and `REFUSED_STREAM` to `Unavailable`, which are what a connection closing
+/// with requests on it and an expired keep-alive ping arrive as, over the same
+/// `tonic::transport::Error`. Read by code and source alone, a peer resetting
+/// one stream was declared a dead connection, and every sibling on it was
+/// released with `Unavailable`.
+///
+/// The sibling here cannot be replayed, so the client has one chance to get it
+/// right: a call it gives up on is failed for good.
+async fn a_reset_of_one_stream_leaves_the_requests_beside_it_alone(
+    reason: h2::Reason,
+    expected: tonic::Code,
+) {
+    let peer = serve_peer_holding_one_stream_and_resetting_the_rest(reason).await;
+    let uri: Uri = format!("http://{}", peer.peer.addr).parse().unwrap();
+    let client = executor_client(no_keepalive(Duration::from_secs(5)));
+
+    let sibling = tokio::spawn({
+        let client = client.clone();
+        let uri = uri.clone();
+        async move {
+            client
+                .call_without_retry("assign_shards", uri, move |executor| {
+                    Box::pin(executor.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                })
+                .await
+                .map(|_| ())
+        }
+    });
+    peer.held
+        .await
+        .expect("the peer holds the first stream it is sent");
+
+    let reset = ping(&client, uri)
+        .await
+        .expect_err("the peer resets every stream after the first");
+    eprintln!(
+        "[SIBLING] reset call: {:?} - {}",
+        reset.code(),
+        reset.message()
+    );
+    assert_eq!(
+        reset.code(),
+        expected,
+        "expected the code tonic derives from the reset reason; if this has \
+         changed, the predicate under test is guarding the wrong set of codes"
+    );
+    assert!(
+        std::error::Error::source(&reset)
+            .map(|source| source.is::<tonic::transport::Error>())
+            .unwrap_or(false),
+        "expected a transport error under the status, which is what makes this \
+         reset look like a dead connection"
+    );
+
+    peer.release
+        .send(())
+        .expect("the peer is still holding the sibling's stream");
+    let outcome = tokio::time::timeout(Duration::from_secs(5), sibling)
+        .await
+        .expect("the sibling never completed after its stream was answered")
+        .expect("the sibling task panicked");
+    eprintln!("[SIBLING] sibling outcome: {outcome:?}");
+    assert_eq!(
+        outcome.as_ref().err().map(|e| e.code()),
+        Some(tonic::Code::Unimplemented),
+        "a reset that ended a different stream cut the sibling short: {outcome:?}"
+    );
+}
+
+#[test]
+async fn a_cancelled_stream_leaves_the_requests_beside_it_alone() {
+    a_reset_of_one_stream_leaves_the_requests_beside_it_alone(
+        h2::Reason::CANCEL,
+        tonic::Code::Cancelled,
+    )
+    .await;
+}
+
+#[test]
+async fn a_refused_stream_leaves_the_requests_beside_it_alone() {
+    a_reset_of_one_stream_leaves_the_requests_beside_it_alone(
+        h2::Reason::REFUSED_STREAM,
+        tonic::Code::Unavailable,
+    )
+    .await;
 }
