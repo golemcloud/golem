@@ -505,7 +505,7 @@ where
                 ctx.state.card_event_boundary_scan =
                     Some(crate::durable_host::CardEventBoundaryScan::new(
                         status.oplog_idx,
-                        status.pending_card_events,
+                        status.pending_card_events.clone(),
                     ));
             }
         }

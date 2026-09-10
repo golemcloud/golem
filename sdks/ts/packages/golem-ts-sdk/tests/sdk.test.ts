@@ -29,7 +29,7 @@ import { compileSchema } from '../src/schema/adapter';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
 import { Uuid } from '../src/uuid';
-import { AgentId } from '../src/agentId';
+import { ParsedAgentId } from '../src/agentId';
 import { AgentClassName } from '../src/agentClassName';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
@@ -593,14 +593,8 @@ describe('RPC client', () => {
     const contract = defineAgentClient({
       methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
     });
-    const first = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'FirstAgent(one)',
-    });
-    const second = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 2n } },
-      agentId: 'SecondAgent(team,two)',
-    });
+    const first = new ParsedAgentId('FirstAgent(one)');
+    const second = new ParsedAgentId('SecondAgent(team,two)');
     vi.mocked(parseAgentId)
       .mockReturnValueOnce([
         'FirstAgent',
@@ -635,10 +629,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     const phantomId = new Uuid(1n, 2n);
-    const target = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'DurablePhantom(one)[00000000-0000-0001-0000-000000000002]',
-    });
+    const target = new ParsedAgentId('DurablePhantom(one)[00000000-0000-0001-0000-000000000002]');
     vi.mocked(parseAgentId).mockReturnValueOnce([
       'DurablePhantom',
       {
@@ -669,10 +660,7 @@ describe('RPC client', () => {
       id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
-    const target = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'ExactDurableAgent(one)',
-    });
+    const target = new ParsedAgentId('ExactDurableAgent(one)');
     vi.mocked(parseAgentId).mockReturnValueOnce([
       'ExactDurableAgent',
       {
@@ -692,10 +680,7 @@ describe('RPC client', () => {
       id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
-    const target = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'ExactEphemeralAgent(one)',
-    });
+    const target = new ParsedAgentId('ExactEphemeralAgent(one)');
     vi.mocked(parseAgentId).mockReturnValueOnce([
       'ExactEphemeralAgent',
       {
@@ -707,7 +692,7 @@ describe('RPC client', () => {
     const creates = vi.mocked(WasmRpc.create).mock.calls.length;
 
     expect(() => target.client(definition)).toThrow(
-      "Cannot bind existing AgentId 'ExactEphemeralAgent(one)' to ephemeral agent type 'ExactEphemeralAgent'; use its client.newPhantom(...) factory",
+      "Cannot bind existing ParsedAgentId 'ExactEphemeralAgent(one)' to ephemeral agent type 'ExactEphemeralAgent'; use its client.newPhantom(...) factory",
     );
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
@@ -717,10 +702,7 @@ describe('RPC client', () => {
       name: 'ExpectedAgent',
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
-    const target = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'OtherAgent(one)',
-    });
+    const target = new ParsedAgentId('OtherAgent(one)');
     vi.mocked(parseAgentId).mockReturnValueOnce([
       'OtherAgent',
       {
@@ -741,10 +723,7 @@ describe('RPC client', () => {
     const contract = defineAgentClient({
       methods: { analyze: method({ input: { topic: z.string() }, returns: z.string() }) },
     });
-    const target = AgentId.from({
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'ReportArchive(reports)',
-    });
+    const target = new ParsedAgentId('ReportArchive(reports)');
     vi.mocked(parseAgentId).mockReturnValueOnce([
       'ReportArchive',
       {
@@ -756,7 +735,7 @@ describe('RPC client', () => {
     const client = target.client(contract);
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: { agentId: target.agentId, idempotencyKey: 'key' },
+      metadata: { agentId: target.value, idempotencyKey: 'key' },
       future: {
         get: vi.fn().mockRejectedValue({
           tag: 'remote-agent-error',
@@ -798,7 +777,7 @@ describe('RPC client', () => {
     const client = def.client.getPhantom({}, phantomId);
 
     expect(client.agentId).toBeTypeOf('function');
-    expect(def.agentId({}, phantomId)).toMatchObject({ agentId: 'MockAgent()' });
+    expect(def.agentId({}, phantomId).value).toBe('MockAgent()');
   });
 
   it('creates a fresh phantom client and exposes the generated id', () => {

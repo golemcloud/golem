@@ -1,6 +1,6 @@
 ---
 name: golem-agent-reflection
-description: "Choosing Golem agent reflection levels and identity lookup behavior across SDKs. Use when agent types or methods are discovered dynamically, schemas are inspected at runtime, or a full AgentId must be resolved."
+description: "Choosing Golem agent reflection levels and identity lookup behavior across SDKs. Use when agent types or methods are discovered dynamically, schemas are inspected at runtime, or an environment-scoped agent identity must be resolved."
 ---
 
 # Agent Reflection
@@ -12,9 +12,9 @@ Use the narrowest client surface that matches what the caller knows:
 - Use runtime reflection when the type or method is selected dynamically and the caller needs registered constructor, input, or output schemas.
 - Use a schema-free dynamic client only when infrastructure deliberately works with schema-native values and arbitrary method names.
 
-Agent identity strings are environment-scoped. A full `AgentId` pairs that string with a component ID so it can cross component boundaries without becoming globally ambiguous.
+Agent identity strings are environment-scoped. Reflection identities do not include a component ID: the runtime resolves the agent type's implementing component within the caller's environment. Component-bearing IDs belong to lower-level host-management APIs, not reflection clients.
 
-Discovery lookups are optional: a name or full-ID lookup returns no type when the deployment is missing, the identity is malformed, or the caller cannot view it. Parsing an identity is strict and reports malformed input. Full-ID discovery never creates the target agent.
+Discovery lookups are optional: a name or identity lookup returns no type when the deployment is missing, the identity is malformed, or the caller cannot view it. Parsing an identity is strict and reports malformed input. Identity discovery never creates the target agent.
 
 Reflected schema graphs are immutable snapshots of the deployed contract. Validate or pack JSON through the reflected constructor or method schema, and treat a missing or malformed declared output as a remote output error.
 
