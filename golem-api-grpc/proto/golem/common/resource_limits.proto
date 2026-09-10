@@ -20,6 +20,10 @@ message MonthlyResourcePolicy {
   uint64 available_fuel = 3;
   uint64 available_memory_gb_seconds = 4;
   uint64 available_memory_byte_nanoseconds_remainder = 5;
+  uint64 available_durable_storage_byte_seconds = 6;
+  uint64 available_durable_storage_byte_nanoseconds_remainder = 7;
+  uint64 available_ephemeral_storage_byte_seconds = 8;
+  uint64 available_ephemeral_storage_byte_nanoseconds_remainder = 9;
 }
 
 message ResourceLimits {

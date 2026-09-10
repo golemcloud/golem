@@ -5,7 +5,9 @@ use crate::sandbox_filesystem::{
     ScriptedSandboxPath, ScriptedSandboxPathBase, ScriptedSandboxPathCall,
 };
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
-use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
+use crate::services::golem_config::{
+    FilesystemStorageConfig, GolemConfig, ResourceUsageMeteringConfig,
+};
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::close_window;
@@ -288,12 +290,12 @@ async fn unmetered_reconstructing_with_recovery(
     .await
     .unwrap();
     let (account, entry) = configured_account(false);
-    let filesystem = bind_configured_resource_usage_metering(
-        created,
-        account,
-        ResourceUsageMeteringConfig::default(),
-    )
-    .unwrap();
+    let mut config = GolemConfig::default();
+    config.resource_usage_metering.filesystem = true;
+    config.filesystem_storage.managed_xfs_root_dir = None;
+    let metering = config.effective_resource_usage_metering();
+    assert!(!metering.filesystem);
+    let filesystem = bind_configured_resource_usage_metering(created, account, metering).unwrap();
     (filesystem, control, entry)
 }
 
@@ -836,7 +838,7 @@ async fn reconstruction_seed_storage_full_at_limit_is_agent_quota() {
 }
 
 #[test]
-async fn managed_quota_behavior_remains_active_with_storage_metering_disabled() {
+async fn per_agent_quota_remains_active_when_unmanaged_config_disables_monthly_storage() {
     let storage_limits = limits(4096, 8);
     let (filesystem, control, entry) =
         unmetered_reconstructing_with_recovery(ResolvedStorageLimits::Finite(storage_limits), None)

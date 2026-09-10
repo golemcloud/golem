@@ -145,6 +145,10 @@ pub struct MonthlyResourcePolicy {
     pub available_fuel: u64,
     pub available_memory_gb_seconds: u64,
     pub available_memory_byte_nanoseconds_remainder: u64,
+    pub available_durable_storage_byte_seconds: u64,
+    pub available_durable_storage_byte_nanoseconds_remainder: u64,
+    pub available_ephemeral_storage_byte_seconds: u64,
+    pub available_ephemeral_storage_byte_nanoseconds_remainder: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +215,14 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
                     available_memory_gb_seconds: monthly_policy.available_memory_gb_seconds,
                     available_memory_byte_nanoseconds_remainder: monthly_policy
                         .available_memory_byte_nanoseconds_remainder,
+                    available_durable_storage_byte_seconds: monthly_policy
+                        .available_durable_storage_byte_seconds,
+                    available_durable_storage_byte_nanoseconds_remainder: monthly_policy
+                        .available_durable_storage_byte_nanoseconds_remainder,
+                    available_ephemeral_storage_byte_seconds: monthly_policy
+                        .available_ephemeral_storage_byte_seconds,
+                    available_ephemeral_storage_byte_nanoseconds_remainder: monthly_policy
+                        .available_ephemeral_storage_byte_nanoseconds_remainder,
                 },
             ),
             max_memory_per_worker: value.max_memory_per_worker,
@@ -261,6 +273,22 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
                 monthly_policy.available_memory_byte_nanoseconds_remainder
             ));
         }
+        for (dimension, remainder) in [
+            (
+                "durable storage",
+                monthly_policy.available_durable_storage_byte_nanoseconds_remainder,
+            ),
+            (
+                "ephemeral storage",
+                monthly_policy.available_ephemeral_storage_byte_nanoseconds_remainder,
+            ),
+        ] {
+            if remainder >= 1_000_000_000 {
+                return Err(format!(
+                    "invalid available {dimension} byte-nanoseconds remainder: {remainder}"
+                ));
+            }
+        }
 
         Ok(Self {
             monthly_usage_mode_revision: value.monthly_usage_mode_revision,
@@ -274,6 +302,14 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
                 available_memory_gb_seconds: monthly_policy.available_memory_gb_seconds,
                 available_memory_byte_nanoseconds_remainder: monthly_policy
                     .available_memory_byte_nanoseconds_remainder,
+                available_durable_storage_byte_seconds: monthly_policy
+                    .available_durable_storage_byte_seconds,
+                available_durable_storage_byte_nanoseconds_remainder: monthly_policy
+                    .available_durable_storage_byte_nanoseconds_remainder,
+                available_ephemeral_storage_byte_seconds: monthly_policy
+                    .available_ephemeral_storage_byte_seconds,
+                available_ephemeral_storage_byte_nanoseconds_remainder: monthly_policy
+                    .available_ephemeral_storage_byte_nanoseconds_remainder,
             },
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
@@ -592,6 +628,10 @@ mod tests {
             available_fuel: 1,
             available_memory_gb_seconds: 2,
             available_memory_byte_nanoseconds_remainder: 3,
+            available_durable_storage_byte_seconds: 4,
+            available_durable_storage_byte_nanoseconds_remainder: 5,
+            available_ephemeral_storage_byte_seconds: 6,
+            available_ephemeral_storage_byte_nanoseconds_remainder: 7,
         }
     }
 
@@ -657,6 +697,18 @@ mod tests {
                 .available_memory_byte_nanoseconds_remainder,
             3
         );
+        assert_eq!(
+            converted
+                .monthly_policy
+                .available_durable_storage_byte_seconds,
+            4
+        );
+        assert_eq!(
+            converted
+                .monthly_policy
+                .available_ephemeral_storage_byte_nanoseconds_remainder,
+            7
+        );
     }
 
     #[test]
@@ -672,6 +724,10 @@ mod tests {
                 available_fuel: 123,
                 available_memory_gb_seconds: 456,
                 available_memory_byte_nanoseconds_remainder: 789,
+                available_durable_storage_byte_seconds: 1_234,
+                available_durable_storage_byte_nanoseconds_remainder: 567,
+                available_ephemeral_storage_byte_seconds: 8_901,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 234,
             },
             max_memory_per_worker: 0,
             max_table_elements_per_worker: 0,
@@ -697,6 +753,11 @@ mod tests {
         assert_eq!(
             monthly_policy.available_memory_byte_nanoseconds_remainder,
             789
+        );
+        assert_eq!(monthly_policy.available_durable_storage_byte_seconds, 1_234);
+        assert_eq!(
+            monthly_policy.available_ephemeral_storage_byte_nanoseconds_remainder,
+            234
         );
 
         let account_limits =
@@ -730,6 +791,10 @@ mod tests {
                 available_fuel: 0,
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             }),
             ..Default::default()
         };
@@ -745,6 +810,10 @@ mod tests {
                 available_fuel: 0,
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             }),
             ..Default::default()
         };
@@ -761,9 +830,32 @@ mod tests {
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder:
                     golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND as u64,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             }),
             ..Default::default()
         };
         assert!(super::ResourceLimits::try_from(invalid_memory_remainder).is_err());
+
+        let invalid_storage_remainder = ResourceLimits {
+            monthly_policy: Some(MonthlyResourcePolicy {
+                period: Some(AccountUsagePeriod {
+                    year: 2026,
+                    month: 9,
+                }),
+                mode: MonthlyUsageMode::HardLimit.into(),
+                available_fuel: 0,
+                available_memory_gb_seconds: 0,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 1_000_000_000,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            }),
+            ..Default::default()
+        };
+        assert!(super::ResourceLimits::try_from(invalid_storage_remainder).is_err());
     }
 }

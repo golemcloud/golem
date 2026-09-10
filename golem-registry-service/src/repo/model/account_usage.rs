@@ -124,6 +124,8 @@ pub struct AccountUsage {
     pub monthly_usage_mode: MonthlyUsageMode,
     pub monthly_usage_mode_revision: u64,
     pub monthly_memory_byte_nanoseconds_remainder: u128,
+    pub monthly_durable_storage_byte_nanoseconds_remainder: u128,
+    pub monthly_ephemeral_storage_byte_nanoseconds_remainder: u128,
     pub monthly_usage_attribution: Option<MonthlyUsageAttribution>,
     pub changes: BTreeMap<UsageType, i64>,
 }
@@ -564,6 +566,22 @@ impl AccountUsage {
             .min(u64::MAX as u128) as u64;
         let available_memory_byte_nanoseconds_remainder =
             (available_memory_byte_nanoseconds % BYTE_NANOSECONDS_PER_GB_SECOND) as u64;
+        let available_durable_storage_byte_nanoseconds =
+            (monthly_amounts.durable_storage_byte_seconds as u128)
+                .saturating_mul(1_000_000_000)
+                .saturating_sub(
+                    (self.final_value(UsageType::MonthlyDurableAgentStorageByteSeconds) as u128)
+                        .saturating_mul(1_000_000_000)
+                        .saturating_add(self.monthly_durable_storage_byte_nanoseconds_remainder),
+                );
+        let available_ephemeral_storage_byte_nanoseconds =
+            (monthly_amounts.ephemeral_storage_byte_seconds as u128)
+                .saturating_mul(1_000_000_000)
+                .saturating_sub(
+                    (self.final_value(UsageType::MonthlyEphemeralStorageByteSeconds) as u128)
+                        .saturating_mul(1_000_000_000)
+                        .saturating_add(self.monthly_ephemeral_storage_byte_nanoseconds_remainder),
+                );
 
         let http_limit = self.plan.limit(UsageType::MonthlyHttpCalls);
         let available_http_calls =
@@ -584,6 +602,17 @@ impl AccountUsage {
                 available_fuel,
                 available_memory_gb_seconds,
                 available_memory_byte_nanoseconds_remainder,
+                available_durable_storage_byte_seconds: (available_durable_storage_byte_nanoseconds
+                    / 1_000_000_000)
+                    .min(u64::MAX as u128)
+                    as u64,
+                available_durable_storage_byte_nanoseconds_remainder:
+                    (available_durable_storage_byte_nanoseconds % 1_000_000_000) as u64,
+                available_ephemeral_storage_byte_seconds:
+                    (available_ephemeral_storage_byte_nanoseconds / 1_000_000_000)
+                        .min(u64::MAX as u128) as u64,
+                available_ephemeral_storage_byte_nanoseconds_remainder:
+                    (available_ephemeral_storage_byte_nanoseconds % 1_000_000_000) as u64,
             },
             max_memory_per_worker: self.max_memory_per_worker.effective_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
@@ -602,14 +631,18 @@ impl AccountUsage {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountUsageRecord, MonthlyUsageModeStateRecord, MonthlyUsageModeTransitionRecord,
-        UsageType, monthly_usage_mode, monthly_usage_mode_transition_source,
+        AccountUsage, AccountUsageRecord, AdminResourceGrantValues, MonthlyUsageModeStateRecord,
+        MonthlyUsageModeTransitionRecord, UsageType, monthly_usage_mode,
+        monthly_usage_mode_transition_source,
     };
+    use crate::repo::model::plan::PlanRecord;
     use chrono::{DateTime, Utc};
     use golem_common::model::account_usage::{
-        AccountUsagePeriod, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+        AccountUsagePeriod, MemoryLimit, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+        StorageLimit,
     };
     use golem_service_base::repo::{NumericU64, SqlDateTime};
+    use std::collections::BTreeMap;
     use test_r::test;
     use uuid::Uuid;
 
@@ -633,6 +666,112 @@ mod tests {
         );
 
         assert_eq!(record.as_of, Some(timestamp(200)));
+    }
+
+    #[test]
+    fn account_usage_record_maps_storage_usage_by_class() {
+        let mut record = AccountUsageRecord::new(AccountUsagePeriod {
+            year: 2026,
+            month: 4,
+        });
+
+        record.apply(
+            UsageType::MonthlyDurableAgentStorageByteSeconds,
+            17,
+            timestamp(100),
+        );
+        record.apply(
+            UsageType::MonthlyEphemeralStorageByteSeconds,
+            29,
+            timestamp(100),
+        );
+
+        assert_eq!(record.durable_storage_byte_seconds, 17);
+        assert_eq!(record.ephemeral_storage_byte_seconds, 29);
+    }
+
+    #[test]
+    fn resource_limits_preserve_storage_whole_seconds_and_remainders() {
+        let plan = PlanRecord {
+            plan_id: Uuid::new_v4(),
+            name: "storage-conversion".to_string(),
+            max_memory_per_worker: NumericU64::new(u64::MAX),
+            max_memory_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_memory_per_worker_user_configurable: false,
+            monthly_compute_gcu: NumericU64::new(0),
+            monthly_memory_gb_seconds: NumericU64::new(u64::MAX),
+            monthly_durable_storage_gb_month: NumericU64::new(1),
+            monthly_ephemeral_storage_gb_month: NumericU64::new(2),
+            overage_eligible: false,
+            max_table_elements_per_worker: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_enabled: false,
+            max_disk_space_per_worker: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_ceiling: NumericU64::new(u64::MAX),
+            max_disk_space_per_worker_user_configurable: false,
+            max_concurrent_agents_per_executor: NumericU64::new(u64::MAX),
+            total_app_count: NumericU64::new(u64::MAX),
+            total_env_count: NumericU64::new(u64::MAX),
+            total_component_count: NumericU64::new(u64::MAX),
+            total_worker_connection_count: NumericU64::new(u64::MAX),
+            total_component_storage_bytes: NumericU64::new(u64::MAX),
+            monthly_gas_limit: NumericU64::new(u64::MAX),
+            monthly_component_upload_limit_bytes: NumericU64::new(u64::MAX),
+            per_invocation_http_call_limit: NumericU64::new(u64::MAX),
+            per_invocation_rpc_call_limit: NumericU64::new(u64::MAX),
+            monthly_http_call_limit: NumericU64::new(u64::MAX),
+            monthly_rpc_call_limit: NumericU64::new(u64::MAX),
+            oplog_writes_per_second: NumericU64::new(u64::MAX),
+        };
+        let mut usage_values = BTreeMap::new();
+        usage_values.insert(UsageType::MonthlyDurableAgentStorageByteSeconds, 3);
+        usage_values.insert(UsageType::MonthlyEphemeralStorageByteSeconds, 5);
+        let usage = AccountUsage {
+            account_id: Uuid::new_v4(),
+            year: 2026,
+            month: 4,
+            usage: usage_values,
+            plan,
+            storage_limit: StorageLimit::resolve(false, 0, None, 0, false),
+            max_memory_per_worker: MemoryLimit::resolve(u64::MAX, None, u64::MAX, false),
+            admin_grant_values: AdminResourceGrantValues::default(),
+            admin_grants: Vec::new(),
+            metering: None,
+            monthly_usage_mode: MonthlyUsageMode::HardLimit,
+            monthly_usage_mode_revision: 0,
+            monthly_memory_byte_nanoseconds_remainder: 0,
+            monthly_durable_storage_byte_nanoseconds_remainder: 400_000_000,
+            monthly_ephemeral_storage_byte_nanoseconds_remainder: 250_000_000,
+            monthly_usage_attribution: None,
+            changes: BTreeMap::new(),
+        };
+
+        let policy = usage.resource_limits().unwrap().monthly_policy;
+        let durable_total = usage
+            .monthly_plan_amounts()
+            .resolve()
+            .unwrap()
+            .durable_storage_byte_seconds;
+        let ephemeral_total = usage
+            .monthly_plan_amounts()
+            .resolve()
+            .unwrap()
+            .ephemeral_storage_byte_seconds;
+        assert_eq!(
+            policy.available_durable_storage_byte_seconds,
+            durable_total - 4
+        );
+        assert_eq!(
+            policy.available_durable_storage_byte_nanoseconds_remainder,
+            600_000_000
+        );
+        assert_eq!(
+            policy.available_ephemeral_storage_byte_seconds,
+            ephemeral_total - 6
+        );
+        assert_eq!(
+            policy.available_ephemeral_storage_byte_nanoseconds_remainder,
+            750_000_000
+        );
     }
 
     #[test]

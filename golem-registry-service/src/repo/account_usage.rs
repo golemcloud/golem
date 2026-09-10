@@ -299,26 +299,6 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbAccountUsageRepo<PostgresPool> {
-    async fn monthly_memory_remainder_byte_nanoseconds(
-        &self,
-        account_id: Uuid,
-        date: &SqlDateTime,
-    ) -> RepoResult<u128> {
-        let value: Option<(NumericU64,)> = self
-            .with_ro("get_monthly_memory_remainders")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT byte_nanoseconds
-                    FROM account_monthly_memory_remainders
-                    WHERE account_id = $1 AND usage_key = $2
-                "#})
-                .bind(account_id)
-                .bind(date_to_usage_key(date)),
-            )
-            .await?;
-        Ok(value.map_or(0, |(value,)| value.get() as u128))
-    }
-
     async fn usage_baseline_in_tx(
         tx: &mut PoolLabelledTransaction<PostgresPool>,
         account_id: Uuid,
@@ -523,19 +503,25 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     SELECT
                         usage_type,
                         value,
-                        CAST(NULL AS NUMERIC) AS memory_byte_nanoseconds_remainder
+                        CAST(NULL AS NUMERIC) AS memory_byte_nanoseconds_remainder,
+                        CAST(NULL AS NUMERIC) AS durable_storage_byte_nanoseconds_remainder,
+                        CAST(NULL AS NUMERIC) AS ephemeral_storage_byte_nanoseconds_remainder
                     FROM
                         account_usage_stats
                     WHERE
                         account_id = $1
                         AND usage_key IN ($2, $3)
-                    UNION ALL SELECT $4 AS usage_type, total_apps AS value, CAST(NULL AS NUMERIC) FROM counts
-                    UNION ALL SELECT $5 AS usage_type, total_envs AS value, CAST(NULL AS NUMERIC) FROM counts
-                    UNION ALL SELECT $6 AS usage_type, total_components AS value, CAST(NULL AS NUMERIC) FROM counts
-                    UNION ALL SELECT $7 AS usage_type, total_component_size AS value, CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL SELECT $4 AS usage_type, total_apps AS value, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL SELECT $5 AS usage_type, total_envs AS value, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL SELECT $6 AS usage_type, total_components AS value, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC) FROM counts
+                    UNION ALL SELECT $7 AS usage_type, total_component_size AS value, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC) FROM counts
                     UNION ALL
-                    SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), byte_nanoseconds
+                    SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), byte_nanoseconds, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC)
                     FROM account_monthly_memory_remainders
+                    WHERE account_id = $1 AND usage_key = $2
+                    UNION ALL
+                    SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), durable_byte_nanoseconds, ephemeral_byte_nanoseconds
+                    FROM account_monthly_storage_remainders
                     WHERE account_id = $1 AND usage_key = $2;
                 "#})
                 .bind(account_id)
@@ -550,6 +536,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
 
         let mut usage = BTreeMap::new();
         let mut monthly_memory_byte_nanoseconds_remainder = 0u128;
+        let mut monthly_durable_storage_byte_nanoseconds_remainder = 0u128;
+        let mut monthly_ephemeral_storage_byte_nanoseconds_remainder = 0u128;
         for row in usage_rows {
             let usage_type = row.try_get::<Option<UsageType>, _>("usage_type")?;
             let value = row.try_get::<Option<NumericU64>, _>("value")?;
@@ -561,6 +549,20 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             {
                 monthly_memory_byte_nanoseconds_remainder =
                     monthly_memory_byte_nanoseconds_remainder
+                        .saturating_add(remainder.get() as u128);
+            }
+            if let Some(remainder) =
+                row.try_get::<Option<NumericU64>, _>("durable_storage_byte_nanoseconds_remainder")?
+            {
+                monthly_durable_storage_byte_nanoseconds_remainder =
+                    monthly_durable_storage_byte_nanoseconds_remainder
+                        .saturating_add(remainder.get() as u128);
+            }
+            if let Some(remainder) = row
+                .try_get::<Option<NumericU64>, _>("ephemeral_storage_byte_nanoseconds_remainder")?
+            {
+                monthly_ephemeral_storage_byte_nanoseconds_remainder =
+                    monthly_ephemeral_storage_byte_nanoseconds_remainder
                         .saturating_add(remainder.get() as u128);
             }
         }
@@ -581,6 +583,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             monthly_usage_mode,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
             monthly_memory_byte_nanoseconds_remainder,
+            monthly_durable_storage_byte_nanoseconds_remainder,
+            monthly_ephemeral_storage_byte_nanoseconds_remainder,
             monthly_usage_attribution: None,
             plan: account_plan.plan,
             changes: Default::default(),
@@ -603,14 +607,29 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     self.with_ro("get_for_type - stats")
                         .fetch_all(
                             sqlx::query(indoc! { r#"
-                                SELECT usage_type, value FROM account_usage_stats
+                                SELECT
+                                    usage_type,
+                                    value,
+                                    CAST(NULL AS NUMERIC) AS memory_byte_nanoseconds_remainder,
+                                    CAST(NULL AS NUMERIC) AS durable_storage_byte_nanoseconds_remainder,
+                                    CAST(NULL AS NUMERIC) AS ephemeral_storage_byte_nanoseconds_remainder
+                                FROM account_usage_stats
                                 WHERE account_id = $1 AND usage_key = $2
+                                UNION ALL
+                                SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), byte_nanoseconds, CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC)
+                                FROM account_monthly_memory_remainders
+                                WHERE account_id = $1 AND usage_key = $3
+                                UNION ALL
+                                SELECT CAST(NULL AS INTEGER), CAST(NULL AS NUMERIC), CAST(NULL AS NUMERIC), durable_byte_nanoseconds, ephemeral_byte_nanoseconds
+                                FROM account_monthly_storage_remainders
+                                WHERE account_id = $1 AND usage_key = $3
                             "#})
                                 .bind(account_id)
                                 .bind(match usage_type.grouping() {
                                     UsageGrouping::Total => USAGE_KEY_TOTAL.to_string(),
                                     UsageGrouping::Monthly => date_to_usage_key(date),
-                                }),
+                                })
+                                .bind(date_to_usage_key(date)),
                         )
                         .await?
                 }
@@ -618,14 +637,20 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     self.with_ro("get_for_type - total apps")
                         .fetch_all(
                             sqlx::query(indoc! { r#"
-                                SELECT $1 as usage_type, (
-                                    SELECT CAST(COUNT(*) AS NUMERIC)
-                                    FROM applications
-                                    WHERE account_id = $2 AND deleted_at IS NULL
-                                ) as value
+                                SELECT
+                                    $1 AS usage_type,
+                                    (
+                                        SELECT CAST(COUNT(*) AS NUMERIC)
+                                        FROM applications
+                                        WHERE account_id = $2 AND deleted_at IS NULL
+                                    ) AS value,
+                                    (SELECT byte_nanoseconds FROM account_monthly_memory_remainders WHERE account_id = $2 AND usage_key = $3) AS memory_byte_nanoseconds_remainder,
+                                    (SELECT durable_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS durable_storage_byte_nanoseconds_remainder,
+                                    (SELECT ephemeral_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS ephemeral_storage_byte_nanoseconds_remainder
                             "#})
                                 .bind(UsageType::TotalAppCount)
-                                .bind(account_id),
+                                .bind(account_id)
+                                .bind(date_to_usage_key(date)),
                         )
                         .await?
                 }
@@ -633,15 +658,21 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     self.with_ro("get_for_type - total envs")
                         .fetch_all(
                             sqlx::query(indoc! { r#"
-                                SELECT $1 as usage_type, (
-                                    SELECT CAST(COUNT(*) AS NUMERIC)
-                                    FROM applications a
-                                    JOIN environments e ON e.application_id = a.application_id
-                                    WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
-                                ) as value
+                                SELECT
+                                    $1 AS usage_type,
+                                    (
+                                        SELECT CAST(COUNT(*) AS NUMERIC)
+                                        FROM applications a
+                                        JOIN environments e ON e.application_id = a.application_id
+                                        WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
+                                    ) AS value,
+                                    (SELECT byte_nanoseconds FROM account_monthly_memory_remainders WHERE account_id = $2 AND usage_key = $3) AS memory_byte_nanoseconds_remainder,
+                                    (SELECT durable_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS durable_storage_byte_nanoseconds_remainder,
+                                    (SELECT ephemeral_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS ephemeral_storage_byte_nanoseconds_remainder
                             "#})
                                 .bind(UsageType::TotalEnvCount)
-                                .bind(account_id),
+                                .bind(account_id)
+                                .bind(date_to_usage_key(date)),
                         )
                         .await?
                 }
@@ -649,16 +680,22 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                     self.with_ro("get_for_type - total components")
                         .fetch_all(
                             sqlx::query(indoc! { r#"
-                                SELECT $1 as usage_type, (
-                                    SELECT CAST(COUNT(*) AS NUMERIC)
-                                    FROM applications a
-                                    JOIN environments e ON e.application_id = a.application_id
-                                    JOIN components c ON c.environment_id = e.environment_id
-                                    WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL AND c.deleted_at IS NULL
-                                ) as value
+                                SELECT
+                                    $1 AS usage_type,
+                                    (
+                                        SELECT CAST(COUNT(*) AS NUMERIC)
+                                        FROM applications a
+                                        JOIN environments e ON e.application_id = a.application_id
+                                        JOIN components c ON c.environment_id = e.environment_id
+                                        WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL AND c.deleted_at IS NULL
+                                    ) AS value,
+                                    (SELECT byte_nanoseconds FROM account_monthly_memory_remainders WHERE account_id = $2 AND usage_key = $3) AS memory_byte_nanoseconds_remainder,
+                                    (SELECT durable_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS durable_storage_byte_nanoseconds_remainder,
+                                    (SELECT ephemeral_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS ephemeral_storage_byte_nanoseconds_remainder
                             "#})
                                 .bind(UsageType::TotalAppCount)
-                                .bind(account_id),
+                                .bind(account_id)
+                                .bind(date_to_usage_key(date)),
                         )
                         .await?
                 }
@@ -690,29 +727,55 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                                 AND e.deleted_at IS NULL
                                                 AND c.deleted_at IS NULL
                                         ) AS t
-                                    ) AS value;
+                                    ) AS value,
+                                    (SELECT byte_nanoseconds FROM account_monthly_memory_remainders WHERE account_id = $2 AND usage_key = $3) AS memory_byte_nanoseconds_remainder,
+                                    (SELECT durable_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS durable_storage_byte_nanoseconds_remainder,
+                                    (SELECT ephemeral_byte_nanoseconds FROM account_monthly_storage_remainders WHERE account_id = $2 AND usage_key = $3) AS ephemeral_storage_byte_nanoseconds_remainder;
                             "#})
                                 .bind(UsageType::TotalComponentStorageBytes)
-                                .bind(account_id),
+                                .bind(account_id)
+                                .bind(date_to_usage_key(date)),
                         )
                         .await?
                 }
             }
         };
         let mut usage = BTreeMap::new();
+        let mut monthly_memory_byte_nanoseconds_remainder = 0u128;
+        let mut monthly_durable_storage_byte_nanoseconds_remainder = 0u128;
+        let mut monthly_ephemeral_storage_byte_nanoseconds_remainder = 0u128;
         for row in usage_rows {
-            usage.insert(
-                row.try_get("usage_type")?,
-                row.try_get::<NumericU64, _>("value")?.get(),
-            );
+            let usage_type = row.try_get::<Option<UsageType>, _>("usage_type")?;
+            let value = row.try_get::<Option<NumericU64>, _>("value")?;
+            if let (Some(usage_type), Some(value)) = (usage_type, value) {
+                usage.insert(usage_type, value.get());
+            }
+            if let Some(remainder) =
+                row.try_get::<Option<NumericU64>, _>("memory_byte_nanoseconds_remainder")?
+            {
+                monthly_memory_byte_nanoseconds_remainder =
+                    monthly_memory_byte_nanoseconds_remainder
+                        .saturating_add(remainder.get() as u128);
+            }
+            if let Some(remainder) =
+                row.try_get::<Option<NumericU64>, _>("durable_storage_byte_nanoseconds_remainder")?
+            {
+                monthly_durable_storage_byte_nanoseconds_remainder =
+                    monthly_durable_storage_byte_nanoseconds_remainder
+                        .saturating_add(remainder.get() as u128);
+            }
+            if let Some(remainder) = row
+                .try_get::<Option<NumericU64>, _>("ephemeral_storage_byte_nanoseconds_remainder")?
+            {
+                monthly_ephemeral_storage_byte_nanoseconds_remainder =
+                    monthly_ephemeral_storage_byte_nanoseconds_remainder
+                        .saturating_add(remainder.get() as u128);
+            }
         }
 
         let admin_grant_values = account_plan.admin_grant_values();
         let admin_grants = account_plan.admin_grants()?;
         let monthly_usage_mode = account_plan.monthly_usage_mode()?;
-        let monthly_memory_byte_nanoseconds_remainder = self
-            .monthly_memory_remainder_byte_nanoseconds(account_id, date)
-            .await?;
         Ok(Some(AccountUsage {
             account_id,
             year: date.as_utc().year(),
@@ -726,6 +789,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             monthly_usage_mode,
             monthly_usage_mode_revision: account_plan.monthly_usage_mode_revision.get(),
             monthly_memory_byte_nanoseconds_remainder,
+            monthly_durable_storage_byte_nanoseconds_remainder,
+            monthly_ephemeral_storage_byte_nanoseconds_remainder,
             monthly_usage_attribution: None,
             plan: account_plan.plan,
             changes: Default::default(),
@@ -1098,6 +1163,69 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                 date_usage_key.clone(),
                                 carry,
                             ));
+                        }
+                    }
+                }
+                if attributed_remainders.1 != 0 || attributed_remainders.2 != 0 {
+                    let previous: Option<(NumericU64, NumericU64)> = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(indoc! { r#"
+                                SELECT durable_byte_nanoseconds, ephemeral_byte_nanoseconds
+                                FROM account_monthly_storage_remainders
+                                WHERE account_id = $1 AND usage_key = $2
+                            "#})
+                            .bind(account_id)
+                            .bind(&date_usage_key),
+                        )
+                        .await?;
+                    let previous = previous.map_or((0, 0), |(durable, ephemeral)| {
+                        (durable.get() as u128, ephemeral.get() as u128)
+                    });
+                    let durable_total = previous.0 + attributed_remainders.1 as u128;
+                    let ephemeral_total = previous.1 + attributed_remainders.2 as u128;
+                    let durable_carry = durable_total / 1_000_000_000;
+                    let ephemeral_carry = ephemeral_total / 1_000_000_000;
+
+                    tx.execute(
+                        sqlx::query(indoc! { r#"
+                            INSERT INTO account_monthly_storage_remainders (
+                                account_id, usage_key, durable_byte_nanoseconds,
+                                ephemeral_byte_nanoseconds, updated_at
+                            ) VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (account_id, usage_key) DO UPDATE SET
+                                durable_byte_nanoseconds = excluded.durable_byte_nanoseconds,
+                                ephemeral_byte_nanoseconds = excluded.ephemeral_byte_nanoseconds,
+                                updated_at = excluded.updated_at
+                        "#})
+                        .bind(account_id)
+                        .bind(&date_usage_key)
+                        .bind(NumericU64::new((durable_total % 1_000_000_000) as u64))
+                        .bind(NumericU64::new((ephemeral_total % 1_000_000_000) as u64))
+                        .bind(&updated_at),
+                    )
+                    .await?;
+
+                    for (usage_type, carry) in [
+                        (
+                            UsageType::MonthlyDurableAgentStorageByteSeconds,
+                            durable_carry,
+                        ),
+                        (
+                            UsageType::MonthlyEphemeralStorageByteSeconds,
+                            ephemeral_carry,
+                        ),
+                    ] {
+                        if carry == 0 {
+                            continue;
+                        }
+                        let carry = i64::try_from(carry).unwrap_or(i64::MAX);
+                        if let Some((_, _, change)) = changes
+                            .iter_mut()
+                            .find(|(candidate, _, _)| *candidate == usage_type)
+                        {
+                            *change = change.saturating_add(carry);
+                        } else {
+                            changes.push((usage_type, date_usage_key.clone(), carry));
                         }
                     }
                 }

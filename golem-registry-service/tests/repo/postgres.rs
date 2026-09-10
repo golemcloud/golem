@@ -536,6 +536,21 @@ async fn test_fractional_memory_attribution_reduces_available_capacity(
 }
 
 #[test]
+async fn test_total_grouped_usage_reads_monthly_remainders(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_total_grouped_usage_reads_monthly_remainders(deps).await;
+}
+
+#[test]
+async fn test_fractional_storage_attribution_reduces_separate_capacities(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_fractional_storage_attribution_reduces_separate_capacities(deps)
+        .await;
+}
+
+#[test]
 async fn test_monthly_usage_mode_consent_invariants(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_monthly_usage_mode_consent_invariants(deps).await;
 }

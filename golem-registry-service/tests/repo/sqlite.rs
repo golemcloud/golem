@@ -315,6 +315,17 @@ async fn test_fractional_memory_attribution_reduces_available_capacity(deps: &De
 }
 
 #[test]
+async fn test_total_grouped_usage_reads_monthly_remainders(deps: &Deps) {
+    crate::repo::common::test_total_grouped_usage_reads_monthly_remainders(deps).await;
+}
+
+#[test]
+async fn test_fractional_storage_attribution_reduces_separate_capacities(deps: &Deps) {
+    crate::repo::common::test_fractional_storage_attribution_reduces_separate_capacities(deps)
+        .await;
+}
+
+#[test]
 async fn test_resource_usage_update_uses_declared_period(deps: &Deps) {
     crate::repo::common::test_resource_usage_update_uses_declared_period(deps).await;
 }

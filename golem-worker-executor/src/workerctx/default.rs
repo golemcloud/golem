@@ -440,15 +440,13 @@ fn ensure_monthly_resource_capacity(
     if let Some(fuel_tracker) = fuel_tracker {
         fuel_tracker.ensure_fuel(resource_limit_entry, agent_mode, current_level)?;
     }
-    if resource_limit_entry.has_monthly_memory_capacity() {
-        Ok(())
-    } else {
-        Err(AgentError::EphemeralCannotSuspend(
-            EphemeralCannotSuspendError {
-                reason: "monthly memory exhausted".to_string(),
-            },
-        ))
-    }
+    resource_limit_entry
+        .monthly_memory_and_storage_capacity(agent_mode)
+        .map_err(|exhaustion| {
+            AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                reason: exhaustion.reason().to_string(),
+            })
+        })
 }
 
 impl DurableWorkerCtxView<Context> for Context {
@@ -1316,6 +1314,10 @@ mod tests {
                 available_fuel: u64::MAX,
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: u64::MAX,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: u64::MAX,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             },
             0,
         ));
@@ -1334,11 +1336,68 @@ mod tests {
                 available_fuel: u64::MAX,
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: u64::MAX,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: u64::MAX,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             },
             1,
         ));
         assert!(
             ensure_monthly_resource_capacity(&entry, None, AgentMode::Durable, u64::MAX).is_ok()
+        );
+    }
+
+    #[test]
+    fn storage_exhaustion_is_checked_for_the_matching_agent_mode() {
+        let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX, u64::MAX);
+        assert!(entry.apply_monthly_snapshot_for_test(
+            1,
+            MonthlyResourcePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: u64::MAX,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            },
+            0,
+        ));
+
+        assert!(
+            ensure_monthly_resource_capacity(&entry, None, AgentMode::Durable, u64::MAX).is_ok()
+        );
+        assert!(matches!(
+            ensure_monthly_resource_capacity(&entry, None, AgentMode::Ephemeral, u64::MAX),
+            Err(AgentError::EphemeralCannotSuspend(error))
+                if error.reason == "monthly ephemeral storage exhausted"
+        ));
+
+        assert!(entry.apply_monthly_snapshot_for_test(
+            2,
+            MonthlyResourcePolicy {
+                period: AccountUsagePeriod::current(),
+                mode: MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: u64::MAX,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            },
+            0,
+        ));
+        assert!(matches!(
+            ensure_monthly_resource_capacity(&entry, None, AgentMode::Durable, u64::MAX),
+            Err(AgentError::EphemeralCannotSuspend(error))
+                if error.reason == "monthly durable storage exhausted"
+        ));
+        assert!(
+            ensure_monthly_resource_capacity(&entry, None, AgentMode::Ephemeral, u64::MAX).is_ok()
         );
     }
 
@@ -1353,6 +1412,10 @@ mod tests {
                 available_fuel: 1_000,
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: u64::MAX,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: u64::MAX,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             },
             0,
         ));
@@ -1385,6 +1448,23 @@ mod tests {
 
         tracker.settle_fuel(&entry, current_level);
         assert_eq!(entry.fuel_delta(), 150);
+    }
+
+    #[test]
+    fn borrowing_the_last_compute_batch_does_not_fail_the_epoch_capacity_check() {
+        let entry = AtomicResourceEntry::new(100, usize::MAX, usize::MAX, u64::MAX, u64::MAX);
+        let mut tracker = FuelTracker::new(100, 1_000);
+
+        assert!(
+            ensure_monthly_resource_capacity(
+                &entry,
+                Some(&mut tracker),
+                AgentMode::Durable,
+                INITIAL,
+            )
+            .is_ok()
+        );
+        assert_eq!(entry.fuel_delta(), 100);
     }
 
     #[test]
@@ -1583,6 +1663,10 @@ mod tests {
                 available_fuel: 0,
                 available_memory_gb_seconds: u64::MAX,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: u64::MAX,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: u64::MAX,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             },
             0,
         ));
@@ -1610,6 +1694,10 @@ mod tests {
                 available_fuel: 0,
                 available_memory_gb_seconds: u64::MAX,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: u64::MAX,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: u64::MAX,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             },
             0,
         ));
@@ -1784,29 +1872,76 @@ mod tests {
         let engine = Engine::new(&config)?;
         let module = Module::new(&engine, r#"(module (func (export "run")))"#)?;
 
-        for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
-            let mut store = Store::new(
-                &engine,
-                FuelTestContext {
-                    tracker: Some(fuel_tracker()),
-                    resource_limit_entry: Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
-                    agent_mode,
-                },
-            );
-            store.set_fuel(INITIAL)?;
-            store.epoch_deadline_callback(|mut store| {
-                let current_level = store.get_fuel().unwrap_or(0);
-                store
-                    .data_mut()
-                    .ensure_fuel(current_level)
-                    .map_err(|error| wasmtime::Error::msg(format!("{error:?}")))?;
-                Ok(UpdateDeadline::Continue(1))
-            });
-            store.set_epoch_deadline(0);
-            let instance = wasmtime::Instance::new_async(&mut store, &module, &[]).await?;
-            let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
+        for (exhausted_mode, durable_storage, ephemeral_storage, reason) in [
+            (
+                AgentMode::Durable,
+                0,
+                u64::MAX,
+                "monthly durable storage exhausted",
+            ),
+            (
+                AgentMode::Ephemeral,
+                u64::MAX,
+                0,
+                "monthly ephemeral storage exhausted",
+            ),
+        ] {
+            for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+                let resource_limit_entry = Arc::new(AtomicResourceEntry::new(
+                    u64::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                ));
+                assert!(resource_limit_entry.apply_monthly_snapshot_for_test(
+                    1,
+                    MonthlyResourcePolicy {
+                        period: AccountUsagePeriod::current(),
+                        mode: MonthlyUsageMode::HardLimit,
+                        available_fuel: u64::MAX,
+                        available_memory_gb_seconds: u64::MAX,
+                        available_memory_byte_nanoseconds_remainder: 0,
+                        available_durable_storage_byte_seconds: durable_storage,
+                        available_durable_storage_byte_nanoseconds_remainder: 0,
+                        available_ephemeral_storage_byte_seconds: ephemeral_storage,
+                        available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+                    },
+                    0,
+                ));
+                let mut store = Store::new(
+                    &engine,
+                    FuelTestContext {
+                        tracker: Some(fuel_tracker()),
+                        resource_limit_entry,
+                        agent_mode,
+                    },
+                );
+                store.set_fuel(INITIAL)?;
+                store.epoch_deadline_callback(|mut store| {
+                    let current_level = store.get_fuel().unwrap_or(0);
+                    store
+                        .data_mut()
+                        .ensure_fuel(current_level)
+                        .map_err(|error| wasmtime::Error::msg(format!("{error:?}")))?;
+                    Ok(UpdateDeadline::Continue(1))
+                });
+                store.set_epoch_deadline(0);
+                let instance = wasmtime::Instance::new_async(&mut store, &module, &[]).await?;
+                let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
 
-            assert!(run.call_async(&mut store, ()).await.is_err());
+                let result = run.call_async(&mut store, ()).await;
+                if agent_mode == exhausted_mode {
+                    let error =
+                        result.expect_err("matching storage class must interrupt the store");
+                    assert!(
+                        format!("{error:?}").contains(reason),
+                        "expected {reason}, got {error:?}"
+                    );
+                } else {
+                    result.expect("opposite storage class must remain runnable");
+                }
+            }
         }
         Ok(())
     }
@@ -1832,6 +1967,10 @@ mod tests {
                 available_fuel: u64::MAX,
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: u64::MAX,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: u64::MAX,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             },
             0,
         ));

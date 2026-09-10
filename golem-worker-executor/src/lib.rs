@@ -257,7 +257,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     ) -> Arc<dyn ResourceLimits> {
         crate::services::resource_limits::configured(
             &golem_config.resource_limits,
-            golem_config.resource_usage_metering,
+            golem_config.effective_resource_usage_metering(),
             registry_service.clone(),
             shutdown_token.clone(),
         )

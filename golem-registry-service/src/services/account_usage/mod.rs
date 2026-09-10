@@ -600,6 +600,10 @@ impl AccountUsageService {
                 available_fuel: 0,
                 available_memory_gb_seconds: 0,
                 available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
             },
             max_memory_per_worker: 0,
             max_table_elements_per_worker: 0,
@@ -626,6 +630,10 @@ impl AccountUsageService {
             available_fuel: 0,
             available_memory_gb_seconds: 0,
             available_memory_byte_nanoseconds_remainder: 0,
+            available_durable_storage_byte_seconds: 0,
+            available_durable_storage_byte_nanoseconds_remainder: 0,
+            available_ephemeral_storage_byte_seconds: 0,
+            available_ephemeral_storage_byte_nanoseconds_remainder: 0,
         };
         limits.available_http_calls = 0;
         limits.available_rpc_calls = 0;
@@ -923,6 +931,8 @@ mod tests {
             monthly_usage_mode: MonthlyUsageMode::HardLimit,
             monthly_usage_mode_revision: 0,
             monthly_memory_byte_nanoseconds_remainder: 0,
+            monthly_durable_storage_byte_nanoseconds_remainder: 0,
+            monthly_ephemeral_storage_byte_nanoseconds_remainder: 0,
             monthly_usage_attribution: None,
             changes: BTreeMap::new(),
         }
@@ -1073,6 +1083,15 @@ mod tests {
             .insert(UsageType::MonthlyGasLimit, FUEL_PER_GCU + FUEL_PER_GCU / 2);
         usage.usage.insert(UsageType::MonthlyMemoryGbSeconds, 17);
         usage.monthly_memory_byte_nanoseconds_remainder = BYTE_NANOSECONDS_PER_GB_SECOND / 2;
+        usage.usage.insert(
+            UsageType::MonthlyDurableAgentStorageByteSeconds,
+            2 * BYTE_SECONDS_PER_GB_MONTH + 3,
+        );
+        usage.usage.insert(
+            UsageType::MonthlyEphemeralStorageByteSeconds,
+            12 * BYTE_SECONDS_PER_GB_MONTH,
+        );
+        usage.monthly_durable_storage_byte_nanoseconds_remainder = 500_000_000;
 
         let limits = usage.resource_limits().unwrap();
 
@@ -1091,6 +1110,28 @@ mod tests {
                 .monthly_policy
                 .available_memory_byte_nanoseconds_remainder,
             (BYTE_NANOSECONDS_PER_GB_SECOND / 2) as u64
+        );
+        assert_eq!(
+            limits.monthly_policy.available_durable_storage_byte_seconds,
+            5 * BYTE_SECONDS_PER_GB_MONTH - 4
+        );
+        assert_eq!(
+            limits
+                .monthly_policy
+                .available_durable_storage_byte_nanoseconds_remainder,
+            500_000_000
+        );
+        assert_eq!(
+            limits
+                .monthly_policy
+                .available_ephemeral_storage_byte_seconds,
+            0
+        );
+        assert_eq!(
+            limits
+                .monthly_policy
+                .available_ephemeral_storage_byte_nanoseconds_remainder,
+            0
         );
         assert_eq!(limits.monthly_usage_mode_revision, 7);
 

@@ -6924,6 +6924,205 @@ pub async fn test_fractional_memory_attribution_reduces_available_capacity(deps:
     assert_eq!(after_policy.available_memory_byte_nanoseconds_remainder, 0);
 }
 
+pub async fn test_total_grouped_usage_reads_monthly_remainders(deps: &Deps) {
+    let account_id = deps.create_account().await.revision.account_id;
+    let date = SqlDateTime::now();
+    let mut usage = deps
+        .account_usage_repo
+        .get(account_id, &date)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(usage.add_change(UsageType::TotalWorkerConnectionCount, 7));
+    usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+        revision: 0,
+        memory_byte_nanoseconds_remainder: 125_000_000,
+        durable_storage_byte_nanoseconds_remainder: 250_000_000,
+        ephemeral_storage_byte_nanoseconds_remainder: 500_000_000,
+    });
+    deps.account_usage_repo.add(&usage).await.unwrap();
+
+    let usage = deps
+        .account_usage_repo
+        .get_for_type(account_id, &date, UsageType::TotalWorkerConnectionCount)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(usage.usage(UsageType::TotalWorkerConnectionCount), 7);
+    assert_eq!(usage.monthly_memory_byte_nanoseconds_remainder, 125_000_000);
+    assert_eq!(
+        usage.monthly_durable_storage_byte_nanoseconds_remainder,
+        250_000_000
+    );
+    assert_eq!(
+        usage.monthly_ephemeral_storage_byte_nanoseconds_remainder,
+        500_000_000
+    );
+}
+
+pub async fn test_fractional_storage_attribution_reduces_separate_capacities(deps: &Deps) {
+    let account_id = deps.create_account().await.revision.account_id;
+    let date = SqlDateTime::now();
+    let before = deps
+        .account_usage_repo
+        .get(account_id, &date)
+        .await
+        .unwrap()
+        .unwrap();
+    let initial_policy = before.resource_limits().unwrap().monthly_policy;
+    let initial_durable = initial_policy.available_durable_storage_byte_seconds;
+    let initial_ephemeral = initial_policy.available_ephemeral_storage_byte_seconds;
+
+    assert!(initial_durable > 0);
+    assert!(initial_ephemeral > 0);
+    for (index, (durable_remainder, ephemeral_remainder)) in
+        [(250_000_000, 600_000_000), (750_000_000, 400_000_000)]
+            .into_iter()
+            .enumerate()
+    {
+        let mut usage = deps
+            .account_usage_repo
+            .get(account_id, &date)
+            .await
+            .unwrap()
+            .unwrap();
+        usage.monthly_usage_attribution = Some(MonthlyUsageAttribution {
+            revision: 0,
+            memory_byte_nanoseconds_remainder: 0,
+            durable_storage_byte_nanoseconds_remainder: durable_remainder,
+            ephemeral_storage_byte_nanoseconds_remainder: ephemeral_remainder,
+        });
+        deps.account_usage_repo.add(&usage).await.unwrap();
+        if index == 0 {
+            let partial_usage = deps
+                .account_usage_repo
+                .get_with_active_overrides_at(account_id, &date, &SqlDateTime::now())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                partial_usage.monthly_durable_storage_byte_nanoseconds_remainder,
+                250_000_000
+            );
+            assert_eq!(
+                partial_usage.monthly_ephemeral_storage_byte_nanoseconds_remainder,
+                600_000_000
+            );
+            let partial = partial_usage.resource_limits().unwrap().monthly_policy;
+            assert_eq!(
+                partial.available_durable_storage_byte_seconds,
+                initial_durable - 1
+            );
+            assert_eq!(
+                partial.available_durable_storage_byte_nanoseconds_remainder,
+                750_000_000
+            );
+            assert_eq!(
+                partial.available_ephemeral_storage_byte_seconds,
+                initial_ephemeral - 1
+            );
+            assert_eq!(
+                partial.available_ephemeral_storage_byte_nanoseconds_remainder,
+                400_000_000
+            );
+
+            let durable = deps
+                .account_usage_repo
+                .get_for_type(
+                    account_id,
+                    &date,
+                    UsageType::MonthlyDurableAgentStorageByteSeconds,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                durable.usage(UsageType::MonthlyDurableAgentStorageByteSeconds),
+                0
+            );
+            assert_eq!(
+                durable.monthly_durable_storage_byte_nanoseconds_remainder,
+                250_000_000
+            );
+
+            let ephemeral = deps
+                .account_usage_repo
+                .get_for_type(
+                    account_id,
+                    &date,
+                    UsageType::MonthlyEphemeralStorageByteSeconds,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                ephemeral.usage(UsageType::MonthlyEphemeralStorageByteSeconds),
+                0
+            );
+            assert_eq!(
+                ephemeral.monthly_ephemeral_storage_byte_nanoseconds_remainder,
+                600_000_000
+            );
+        }
+    }
+
+    let after = deps
+        .account_usage_repo
+        .get(account_id, &date)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.monthly_durable_storage_byte_nanoseconds_remainder, 0);
+    assert_eq!(
+        after.monthly_ephemeral_storage_byte_nanoseconds_remainder,
+        0
+    );
+    assert_eq!(
+        deps.account_usage_repo
+            .get_for_type(
+                account_id,
+                &date,
+                UsageType::MonthlyDurableAgentStorageByteSeconds,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .usage(UsageType::MonthlyDurableAgentStorageByteSeconds),
+        1
+    );
+    assert_eq!(
+        deps.account_usage_repo
+            .get_for_type(
+                account_id,
+                &date,
+                UsageType::MonthlyEphemeralStorageByteSeconds,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .usage(UsageType::MonthlyEphemeralStorageByteSeconds),
+        1
+    );
+    let after_policy = after.resource_limits().unwrap().monthly_policy;
+    assert_eq!(
+        after_policy.available_durable_storage_byte_seconds,
+        initial_durable - 1
+    );
+    assert_eq!(
+        after_policy.available_ephemeral_storage_byte_seconds,
+        initial_ephemeral - 1
+    );
+    assert_eq!(
+        after_policy.available_durable_storage_byte_nanoseconds_remainder,
+        0
+    );
+    assert_eq!(
+        after_policy.available_ephemeral_storage_byte_nanoseconds_remainder,
+        0
+    );
+}
+
 pub async fn test_monthly_usage_mode_baseline_serializes_with_usage_updates(deps: &Deps) {
     let TestDb::Postgres(pool) = &deps.test_db else {
         panic!("this race depends on PostgreSQL row-lock semantics");

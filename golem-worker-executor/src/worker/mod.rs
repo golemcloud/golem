@@ -1145,7 +1145,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             replaying,
             Arc::clone(&self.resource_entry),
             retained_memory_grant,
-            self.config().resource_usage_metering.memory,
+            self.config().effective_resource_usage_metering().memory,
         );
         if let Some(meter) = linear_memory.meter_if_enabled() {
             meter.resume(initial_linear_memory, std::time::Instant::now());
@@ -6989,7 +6989,7 @@ impl RunningWorker {
             false,
             Arc::clone(&parent.resource_entry),
             retained_memory_grant,
-            parent.config().resource_usage_metering.memory,
+            parent.config().effective_resource_usage_metering().memory,
         );
         let reconstructing = match bind_configured_resource_usage_metering(
             created,
@@ -6998,7 +6998,7 @@ impl RunningWorker {
                 linear_memory.clone(),
                 Arc::clone(&parent.resource_entry),
             ),
-            parent.config().resource_usage_metering,
+            parent.config().effective_resource_usage_metering(),
         ) {
             Ok(filesystem) => filesystem,
             Err(failure) => {

@@ -175,11 +175,9 @@ fn monthly_resource_exhausted_invocation_error(
                         .saturating_mul(config.limits.ephemeral_fuel_overdraft_multiplier),
                 })
             }
-            MonthlyResourceExhaustion::Memory => {
-                AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
-                    reason: "monthly memory exhausted".to_string(),
-                })
-            }
+            exhaustion => AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError {
+                reason: exhaustion.reason().to_string(),
+            }),
         },
         stderr: String::new(),
     }
@@ -945,7 +943,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         async {
             debug!("Creating the worker instance");
             match monthly_resource_admission(
-                self.parent.resource_entry.monthly_resource_capacity(),
+                self.parent
+                    .resource_entry
+                    .monthly_resource_capacity(self.parent.agent_mode()),
                 self.parent.agent_mode(),
             ) {
                 MonthlyResourceAdmission::Admit => {}
@@ -1764,7 +1764,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ) -> CommandOutcome {
         async {
             match monthly_resource_admission(
-                self.parent.resource_entry.monthly_resource_capacity(),
+                self.parent
+                    .resource_entry
+                    .monthly_resource_capacity(self.parent.agent_mode()),
                 self.parent.agent_mode(),
             ) {
                 MonthlyResourceAdmission::Admit => {}
@@ -2144,7 +2146,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let display_name = invocation.display_name();
         let invocation_idempotency_key = idempotency_key.clone();
         match monthly_resource_admission(
-            self.parent.resource_entry.monthly_resource_capacity(),
+            self.parent
+                .resource_entry
+                .monthly_resource_capacity(self.parent.agent_mode()),
             self.parent.agent_mode(),
         ) {
             MonthlyResourceAdmission::Admit => {}
@@ -3062,7 +3066,7 @@ mod tests {
         filesystem_activity, flush, metered_resident_with_open_node_for_unload_test,
         resident_for_unload_test, seal,
     };
-    use crate::services::resource_limits::MonthlyResourceExhaustion;
+    use crate::services::resource_limits::{AtomicResourceEntry, MonthlyResourceExhaustion};
     use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
     use crate::worker::{
@@ -3121,6 +3125,88 @@ mod tests {
                 AgentMode::Ephemeral
             ),
             MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Memory)
+        );
+        assert_eq!(
+            monthly_resource_admission(
+                Err(MonthlyResourceExhaustion::DurableStorage),
+                AgentMode::Durable
+            ),
+            MonthlyResourceAdmission::Suspend
+        );
+        assert_eq!(
+            monthly_resource_admission(
+                Err(MonthlyResourceExhaustion::EphemeralStorage),
+                AgentMode::Ephemeral
+            ),
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::EphemeralStorage)
+        );
+    }
+
+    #[test]
+    fn storage_gate_composes_with_invocation_admission_and_isolates_agent_modes() {
+        let period = golem_common::model::account_usage::AccountUsagePeriod::current();
+        let durable_exhausted = AtomicResourceEntry::new_with_monthly_policy(
+            golem_service_base::model::MonthlyResourcePolicy {
+                period,
+                mode: golem_common::model::account_usage::MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 1,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            },
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+        );
+        assert_eq!(
+            monthly_resource_admission(
+                durable_exhausted.monthly_resource_capacity(AgentMode::Durable),
+                AgentMode::Durable,
+            ),
+            MonthlyResourceAdmission::Suspend
+        );
+        assert_eq!(
+            monthly_resource_admission(
+                durable_exhausted.monthly_resource_capacity(AgentMode::Ephemeral),
+                AgentMode::Ephemeral,
+            ),
+            MonthlyResourceAdmission::Admit
+        );
+
+        let ephemeral_exhausted = AtomicResourceEntry::new_with_monthly_policy(
+            golem_service_base::model::MonthlyResourcePolicy {
+                period,
+                mode: golem_common::model::account_usage::MonthlyUsageMode::HardLimit,
+                available_fuel: u64::MAX,
+                available_memory_gb_seconds: u64::MAX,
+                available_memory_byte_nanoseconds_remainder: 0,
+                available_durable_storage_byte_seconds: 1,
+                available_durable_storage_byte_nanoseconds_remainder: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+            },
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+        );
+        assert_eq!(
+            monthly_resource_admission(
+                ephemeral_exhausted.monthly_resource_capacity(AgentMode::Ephemeral),
+                AgentMode::Ephemeral,
+            ),
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::EphemeralStorage)
+        );
+        assert_eq!(
+            monthly_resource_admission(
+                ephemeral_exhausted.monthly_resource_capacity(AgentMode::Durable),
+                AgentMode::Durable,
+            ),
+            MonthlyResourceAdmission::Admit
         );
     }
 
