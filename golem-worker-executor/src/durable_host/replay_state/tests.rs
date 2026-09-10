@@ -1012,6 +1012,23 @@ fn begin_atomic_region() -> OplogEntry {
     }
 }
 
+fn anchored_noop(parent_start_index: u64) -> OplogEntry {
+    OplogEntry::NoOp {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: Some(OplogIndex::from_u64(parent_start_index)),
+    }
+}
+
+fn anchored_error(entity_parent_start_index: u64, retry_from: u64) -> OplogEntry {
+    OplogEntry::error(
+        Some(OplogIndex::from_u64(entity_parent_start_index)),
+        AgentError::TransientError("retry".to_string()),
+        OplogIndex::from_u64(retry_from),
+        false,
+        None,
+    )
+}
+
 fn end_for(start_index: u64, nanos: u64) -> OplogEntry {
     OplogEntry::End {
         timestamp: Timestamp::now_utc(),
@@ -4168,6 +4185,189 @@ async fn completed_entity_body_detects_unconsumed_owned_start_at_cursor_head() {
         Some(OplogIndex::from_u64(3)),
         "once no nested body can consume the owned Start, it is structural divergence"
     );
+}
+
+#[test]
+async fn completed_entity_body_uses_explicit_owner_for_anchored_noop() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        anchored_noop(3),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    drop(child);
+    drop(outer);
+
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "the active nested entity body can still consume its explicitly anchored NoOp"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(4)),
+        "once the owner settles without a live resolver, the anchored NoOp is divergence"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(99)]),
+        )
+        .await
+        .unwrap(),
+        Some(OplogIndex::from_u64(4)),
+        "an unrelated active entity body must not mask the divergence"
+    );
+}
+
+#[test]
+fn scope_entry_owner_prefers_error_entity_anchor_over_retry_group() {
+    let begin = begin_atomic_region();
+    assert!(matches!(begin, OplogEntry::BeginAtomicRegion { .. }));
+    let error = anchored_error(2, 3);
+
+    assert_eq!(
+        cursor::scope_entry_owner(
+            OplogIndex::from_u64(4),
+            &error,
+            Some(OplogIndex::from_u64(3)),
+            None,
+        ),
+        Some(OplogIndex::from_u64(2)),
+        "the explicit entity owner must take precedence over retry_from"
+    );
+}
+
+#[test]
+async fn deferred_anchored_error_is_not_structural_divergence() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        begin_atomic_region(),
+        end_for(2, 42),
+        delivered_for(2),
+        anchored_error(2, 3),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(root).await.unwrap();
+    let (begin_idx, begin) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(begin_idx, OplogIndex::from_u64(3));
+    assert!(matches!(begin, OplogEntry::BeginAtomicRegion { .. }));
+    rs.drain_awaited_terminals().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(5)),
+        "CompletionDelivered remains a non-skippable delivery barrier"
+    );
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(5),
+        "the anchored Error must remain exposed at the head until delivery is acknowledged"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "a deferred auto-skippable Error hint is not structural divergence"
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    barrier.acknowledge();
+}
+
+#[test]
+async fn deferred_root_error_ignores_live_retry_from_descendant() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(2, 42),
+        delivered_for(2),
+        anchored_error(2, 3),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let descendant = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(root).await.unwrap();
+    rs.drain_awaited_terminals().await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        assert!(
+            internal
+                .concurrent_resolver
+                .is_awaited(OplogIndex::from_u64(3)),
+            "the retry_from descendant must still have a live awaiter"
+        );
+    }
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "the deferred Error remains non-divergent after its explicit root owner settles"
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    barrier.acknowledge();
+    drop(descendant);
 }
 
 #[test]

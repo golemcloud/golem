@@ -24,8 +24,7 @@ use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
-    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
-    EntityInvocationRequest,
+    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationRequest,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
@@ -54,7 +53,7 @@ use golem_common::model::oplog::{
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
     HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
     MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
-    OplogScopeProjection, PluginInstallationDescription, ProcessOplogEntriesParameters,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
@@ -515,19 +514,6 @@ fn public_entity_invocation(
         call_mode,
         operation,
     }
-}
-
-/// Projects one entity invocation's transitive durable-call tree from its owner's raw oplog.
-/// Entity histories remain owner records; this is a filtered view, not a child oplog or status.
-pub fn project_entity_oplog_entries(
-    invocation_id: &EntityInvocationId,
-    entries: impl IntoIterator<Item = (OplogIndex, OplogEntry)>,
-) -> Vec<(OplogIndex, OplogEntry)> {
-    let mut projection = OplogScopeProjection::new(invocation_id.start_index());
-    entries
-        .into_iter()
-        .filter(|(index, entry)| projection.includes(*index, entry))
-        .collect()
 }
 
 pub async fn get_public_oplog_chunk(

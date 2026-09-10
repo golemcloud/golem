@@ -652,7 +652,7 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Option<OplogIndex> {
-        if entry.is_hint() && !matches!(entry, OplogEntry::CompletionDelivered { .. }) {
+        if is_auto_skippable_hint(entry) {
             // Advance to the hint entry itself; the caller publishes this (via `move_replay_idx`) so
             // the next read gets `read_idx.next()`.
             Some(read_idx)
@@ -2468,6 +2468,9 @@ impl ReplayState {
                         if !included {
                             return Ok(None);
                         }
+                        if is_auto_skippable_hint(&entry) {
+                            return Ok(None);
+                        }
                         if terminal_start_index(&entry).is_some_and(|start_index| {
                             st.concurrent_resolver.owns_terminal(start_index, index)
                         }) || custom_subtree_entry_is_drainable(&st, &entry)
@@ -3017,12 +3020,20 @@ fn custom_subtree_entry_is_drainable(state: &CursorState, entry: &OplogEntry) ->
     }
 }
 
-fn scope_entry_owner(
+fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {
+    entry.is_hint() && !matches!(entry, OplogEntry::CompletionDelivered { .. })
+}
+
+pub(super) fn scope_entry_owner(
     index: OplogIndex,
     entry: &OplogEntry,
     previous_index: Option<OplogIndex>,
     previous_included_start: Option<OplogIndex>,
 ) -> Option<OplogIndex> {
+    if let Some(owner) = entry.entity_parent_start_index() {
+        return Some(owner);
+    }
+
     match entry {
         OplogEntry::Start { .. } => Some(index),
         OplogEntry::End { start_index, .. }
