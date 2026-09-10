@@ -22,10 +22,7 @@ struct SnapshotCounterImpl {
 #[agent_implementation]
 impl SnapshotCounter for SnapshotCounterImpl {
     fn new(id: String) -> Self {
-        Self {
-            _id: id,
-            count: 0,
-        }
+        Self { _id: id, count: 0 }
     }
 
     fn increment(&mut self) -> u32 {
