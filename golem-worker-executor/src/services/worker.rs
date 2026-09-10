@@ -1670,6 +1670,9 @@ mod tests {
     use crate::services::oplog::Oplog;
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::keyvalue::KeyValueStorageError;
+    use crate::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -2721,235 +2724,19 @@ mod tests {
         }
     }
 
+    /// The error an unreachable cluster answers every operation with.
+    fn unreachable() -> KeyValueStorageError {
+        KeyValueStorageError::NotAttempted("pool acquire timed out".to_string())
+    }
+
     /// Key-value storage whose every operation fails, standing in for an unreachable cluster.
-    #[derive(Debug, Default)]
-    struct UnreachableKeyValueStorage {
-        /// When set, `members_of_set` succeeds and returns these while every other read still
-        /// fails - the shape of an index that is readable but whose workers are not.
-        readable_index: Option<Vec<Bytes>>,
-    }
-
-    impl UnreachableKeyValueStorage {
-        fn error<T>() -> Result<T, KeyValueStorageError> {
-            Err(KeyValueStorageError::NotAttempted(
-                "pool acquire timed out".to_string(),
-            ))
-        }
-
-        fn with_readable_index(members: Vec<Bytes>) -> Self {
-            Self {
-                readable_index: Some(members),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl KeyValueStorage for UnreachableKeyValueStorage {
-        async fn set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn set_many(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _pairs: &[(&str, &[u8])],
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn compare_and_set_many(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _expected: Option<&[u8]>,
-            _pairs: &[(&str, &[u8])],
-        ) -> Result<bool, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn set_if_not_exists(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _value: &[u8],
-        ) -> Result<bool, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn get(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-        ) -> Result<Option<Bytes>, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn get_many(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _keys: Arc<[String]>,
-        ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn get_all(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-        ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn del(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn del_many(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _keys: Arc<[String]>,
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn exists(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-        ) -> Result<bool, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn keys(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-        ) -> Result<Vec<String>, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn add_to_set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn remove_from_set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn members_of_set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-        ) -> Result<Vec<Bytes>, KeyValueStorageError> {
-            match &self.readable_index {
-                Some(members) => Ok(members.clone()),
-                None => Self::error(),
-            }
-        }
-
-        async fn add_to_sorted_set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _score: f64,
-            _value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn remove_from_sorted_set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn get_sorted_set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
-            Self::error()
-        }
-
-        async fn query_sorted_set(
-            &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _min: f64,
-            _max: f64,
-        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
-            Self::error()
-        }
+    fn unreachable_storage() -> Arc<FaultInjectingKeyValueStorage> {
+        let faults = KeyValueStorageFaults::default();
+        faults.fail_all(usize::MAX, unreachable());
+        Arc::new(FaultInjectingKeyValueStorage::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            faults,
+        ))
     }
 
     fn test_owned_agent_id(name: &str) -> OwnedAgentId {
@@ -3004,10 +2791,22 @@ mod tests {
     async fn recovery_scan_fails_rather_than_stranding_a_worker_it_cannot_read() {
         let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
         let stranded = test_owned_agent_id("running-but-unreadable");
-        let index = vec![Bytes::from(serialize(&stranded).unwrap())];
+        // The index itself still answers; every read of the worker behind it does not.
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        storage
+            .with_entity("worker", "add", "agent_id")
+            .add_to_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &shard_key,
+                &stranded,
+            )
+            .await
+            .unwrap();
+        let faults = KeyValueStorageFaults::default();
+        faults.fail_all_except(&["enum"], unreachable());
 
         let service = test_worker_service(
-            Arc::new(UnreachableKeyValueStorage::with_readable_index(index)),
+            Arc::new(FaultInjectingKeyValueStorage::new(storage, faults)),
             Arc::new(FakeOplogService::default()),
         );
 
@@ -3021,10 +2820,8 @@ mod tests {
 
     #[test]
     async fn delete_reports_an_unreachable_storage() {
-        let service = test_worker_service(
-            Arc::new(UnreachableKeyValueStorage::default()),
-            Arc::new(FakeOplogService::default()),
-        );
+        let service =
+            test_worker_service(unreachable_storage(), Arc::new(FakeOplogService::default()));
         let owned_agent_id = test_owned_agent_id("doomed");
 
         assert!(
@@ -3039,10 +2836,8 @@ mod tests {
 
     #[test]
     async fn recovery_scan_reports_an_unreadable_index() {
-        let service = test_worker_service(
-            Arc::new(UnreachableKeyValueStorage::default()),
-            Arc::new(FakeOplogService::default()),
-        );
+        let service =
+            test_worker_service(unreachable_storage(), Arc::new(FakeOplogService::default()));
 
         let result = service
             .enum_workers_at_key(&DefaultWorkerService::running_in_shard_key(&ShardId::new(

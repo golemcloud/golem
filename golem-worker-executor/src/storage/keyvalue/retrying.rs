@@ -553,16 +553,16 @@ impl KeyValueStorage for RetryingKeyValueStorage {
 #[cfg(test)]
 mod tests {
     use super::RetryingKeyValueStorage;
+    use crate::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use crate::storage::keyvalue::{
         KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace,
     };
-    use async_trait::async_trait;
     use bytes::Bytes;
     use golem_common::model::RetryConfig;
     use std::sync::Arc;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::time::Duration;
     use test_r::test;
 
@@ -576,413 +576,37 @@ mod tests {
         }
     }
 
-    /// Fails the first `failures` attempts of every operation with `error`, then delegates to an
-    /// in-memory storage.
-    #[derive(Debug)]
-    struct FlakyKeyValueStorage {
-        inner: InMemoryKeyValueStorage,
-        error: KeyValueStorageError,
-        remaining_failures: AtomicU32,
-        attempts: AtomicU32,
-        /// Every value handed to `set_if_not_exists`, in order, so a test can tell how many times
-        /// the write actually reached the backend.
-        writes: Mutex<Vec<Vec<u8>>>,
-        /// When set, a failing `set_if_not_exists` applies its write before reporting the failure -
-        /// the lost-response case, where the backend did the work and the answer never arrived.
-        apply_before_failing: AtomicBool,
+    /// An in-memory storage behind the shared fault decorator, failing the first `failures`
+    /// attempts of every operation with `error`.
+    struct Flaky {
+        storage: Arc<FaultInjectingKeyValueStorage>,
+        faults: KeyValueStorageFaults,
+        inner: Arc<InMemoryKeyValueStorage>,
     }
 
-    impl FlakyKeyValueStorage {
-        fn new(error: KeyValueStorageError, failures: u32) -> Self {
-            Self {
-                inner: InMemoryKeyValueStorage::new(),
-                error,
-                remaining_failures: AtomicU32::new(failures),
-                attempts: AtomicU32::new(0),
-                writes: Mutex::new(Vec::new()),
-                apply_before_failing: AtomicBool::new(false),
-            }
+    impl Flaky {
+        fn attempts(&self) -> u32 {
+            self.faults.attempts() as u32
         }
 
         /// Makes a failing `set_if_not_exists` apply its write first, so the retry observes a key
         /// that already exists and reports `false` for a write this caller performed.
         fn apply_before_failing(&self) {
-            self.apply_before_failing.store(true, Ordering::SeqCst);
-        }
-
-        fn attempts(&self) -> u32 {
-            self.attempts.load(Ordering::SeqCst)
-        }
-
-        fn fail_now(&self) -> Option<KeyValueStorageError> {
-            self.attempts.fetch_add(1, Ordering::SeqCst);
-            let remaining = self.remaining_failures.load(Ordering::SeqCst);
-            if remaining > 0 {
-                self.remaining_failures
-                    .store(remaining - 1, Ordering::SeqCst);
-                Some(self.error.clone())
-            } else {
-                None
-            }
+            self.faults.apply_before_failing();
         }
     }
 
-    #[async_trait]
-    impl KeyValueStorage for FlakyKeyValueStorage {
-        async fn set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .set(svc_name, api_name, entity_name, namespace, key, value)
-                        .await
-                }
-            }
-        }
-
-        async fn set_many(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            pairs: &[(&str, &[u8])],
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .set_many(svc_name, api_name, entity_name, namespace, pairs)
-                        .await
-                }
-            }
-        }
-
-        async fn compare_and_set_many(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            expected: Option<&[u8]>,
-            pairs: &[(&str, &[u8])],
-        ) -> Result<bool, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .compare_and_set_many(
-                            svc_name,
-                            api_name,
-                            entity_name,
-                            namespace,
-                            key,
-                            expected,
-                            pairs,
-                        )
-                        .await
-                }
-            }
-        }
-
-        async fn set_if_not_exists(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            value: &[u8],
-        ) -> Result<bool, KeyValueStorageError> {
-            self.writes.lock().unwrap().push(value.to_vec());
-            match self.fail_now() {
-                Some(err) => {
-                    if self.apply_before_failing.load(Ordering::SeqCst) {
-                        let _ = self
-                            .inner
-                            .set_if_not_exists(
-                                svc_name,
-                                api_name,
-                                entity_name,
-                                namespace,
-                                key,
-                                value,
-                            )
-                            .await;
-                    }
-                    Err(err)
-                }
-                None => {
-                    self.inner
-                        .set_if_not_exists(svc_name, api_name, entity_name, namespace, key, value)
-                        .await
-                }
-            }
-        }
-
-        async fn get(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-        ) -> Result<Option<Bytes>, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .get(svc_name, api_name, entity_name, namespace, key)
-                        .await
-                }
-            }
-        }
-
-        async fn get_many(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            keys: Arc<[String]>,
-        ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .get_many(svc_name, api_name, entity_name, namespace, keys)
-                        .await
-                }
-            }
-        }
-
-        async fn get_all(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-        ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .get_all(svc_name, api_name, entity_name, namespace)
-                        .await
-                }
-            }
-        }
-
-        async fn del(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => self.inner.del(svc_name, api_name, namespace, key).await,
-            }
-        }
-
-        async fn del_many(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            keys: Arc<[String]>,
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .del_many(svc_name, api_name, namespace, keys)
-                        .await
-                }
-            }
-        }
-
-        async fn exists(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-        ) -> Result<bool, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => self.inner.exists(svc_name, api_name, namespace, key).await,
-            }
-        }
-
-        async fn keys(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-        ) -> Result<Vec<String>, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => self.inner.keys(svc_name, api_name, namespace).await,
-            }
-        }
-
-        async fn add_to_set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .add_to_set(svc_name, api_name, entity_name, namespace, key, value)
-                        .await
-                }
-            }
-        }
-
-        async fn remove_from_set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .remove_from_set(svc_name, api_name, entity_name, namespace, key, value)
-                        .await
-                }
-            }
-        }
-
-        async fn members_of_set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-        ) -> Result<Vec<Bytes>, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .members_of_set(svc_name, api_name, entity_name, namespace, key)
-                        .await
-                }
-            }
-        }
-
-        async fn add_to_sorted_set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            score: f64,
-            value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .add_to_sorted_set(
-                            svc_name,
-                            api_name,
-                            entity_name,
-                            namespace,
-                            key,
-                            score,
-                            value,
-                        )
-                        .await
-                }
-            }
-        }
-
-        async fn remove_from_sorted_set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            value: &[u8],
-        ) -> Result<(), KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .remove_from_sorted_set(
-                            svc_name,
-                            api_name,
-                            entity_name,
-                            namespace,
-                            key,
-                            value,
-                        )
-                        .await
-                }
-            }
-        }
-
-        async fn get_sorted_set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .get_sorted_set(svc_name, api_name, entity_name, namespace, key)
-                        .await
-                }
-            }
-        }
-
-        async fn query_sorted_set(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            entity_name: &'static str,
-            namespace: KeyValueStorageNamespace,
-            key: &str,
-            min: f64,
-            max: f64,
-        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
-            match self.fail_now() {
-                Some(err) => Err(err),
-                None => {
-                    self.inner
-                        .query_sorted_set(svc_name, api_name, entity_name, namespace, key, min, max)
-                        .await
-                }
-            }
+    fn flaky(error: KeyValueStorageError, failures: u32) -> Flaky {
+        let inner = Arc::new(InMemoryKeyValueStorage::new());
+        let faults = KeyValueStorageFaults::default();
+        faults.fail_all(failures as usize, error);
+        Flaky {
+            storage: Arc::new(FaultInjectingKeyValueStorage::new(
+                inner.clone(),
+                faults.clone(),
+            )),
+            faults,
+            inner,
         }
     }
 
@@ -992,11 +616,11 @@ mod tests {
 
     #[test]
     async fn transient_failure_succeeds_on_retry() {
-        let flaky = Arc::new(FlakyKeyValueStorage::new(
+        let flaky = flaky(
             KeyValueStorageError::Transient("connection reset".to_string()),
             2,
-        ));
-        let storage = RetryingKeyValueStorage::new(flaky.clone(), fast_retry(5));
+        );
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(5));
 
         let result = storage
             .set("test", "api", "entity", namespace(), "key", b"value")
@@ -1015,11 +639,11 @@ mod tests {
 
     #[test]
     async fn transient_read_failure_succeeds_on_retry() {
-        let flaky = Arc::new(FlakyKeyValueStorage::new(
+        let flaky = flaky(
             KeyValueStorageError::Transient("connection reset".to_string()),
             1,
-        ));
-        let storage = RetryingKeyValueStorage::new(flaky.clone(), fast_retry(5));
+        );
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(5));
 
         let result = storage
             .get("test", "api", "entity", namespace(), "missing")
@@ -1031,11 +655,11 @@ mod tests {
 
     #[test]
     async fn exhausted_retries_return_the_error_instead_of_panicking() {
-        let flaky = Arc::new(FlakyKeyValueStorage::new(
+        let flaky = flaky(
             KeyValueStorageError::Transient("connection reset".to_string()),
             u32::MAX,
-        ));
-        let storage = RetryingKeyValueStorage::new(flaky.clone(), fast_retry(3));
+        );
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(3));
 
         let result = storage
             .add_to_set("test", "api", "entity", namespace(), "key", b"value")
@@ -1052,11 +676,11 @@ mod tests {
 
     #[test]
     async fn non_transient_errors_are_not_retried() {
-        let flaky = Arc::new(FlakyKeyValueStorage::new(
+        let flaky = flaky(
             KeyValueStorageError::Other("bad request".to_string()),
             u32::MAX,
-        ));
-        let storage = RetryingKeyValueStorage::new(flaky.clone(), fast_retry(5));
+        );
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(5));
 
         let result = storage
             .members_of_set("test", "api", "entity", namespace(), "key")
@@ -1074,11 +698,11 @@ mod tests {
     /// the reasoning on the method itself, and the test below for what the flag costs.
     #[test]
     async fn set_if_not_exists_is_retried_after_a_possibly_applied_write() {
-        let flaky = Arc::new(FlakyKeyValueStorage::new(
+        let flaky = flaky(
             KeyValueStorageError::Transient("connection reset".to_string()),
             1,
-        ));
-        let storage = RetryingKeyValueStorage::new(flaky.clone(), fast_retry(5));
+        );
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(5));
 
         let result = storage
             .set_if_not_exists("test", "api", "entity", namespace(), "key", b"value")
@@ -1095,13 +719,13 @@ mod tests {
     /// the payload it just wrote. If that ever stops being true, this test fails first.
     #[test]
     async fn a_retried_set_if_not_exists_reports_false_for_its_own_write() {
-        let flaky = Arc::new(FlakyKeyValueStorage::new(
+        let flaky = flaky(
             KeyValueStorageError::Transient("connection reset".to_string()),
             1,
-        ));
+        );
         // The first attempt applies the write before its response is lost.
         flaky.apply_before_failing();
-        let storage = RetryingKeyValueStorage::new(flaky.clone(), fast_retry(5));
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(5));
 
         let result = storage
             .set_if_not_exists("test", "api", "entity", namespace(), "key", b"value")
@@ -1119,11 +743,11 @@ mod tests {
     /// `set_if_not_exists` can be retried without changing what its result means.
     #[test]
     async fn set_if_not_exists_is_retried_when_the_write_was_not_attempted() {
-        let flaky = Arc::new(FlakyKeyValueStorage::new(
+        let flaky = flaky(
             KeyValueStorageError::NotAttempted("pool timed out".to_string()),
             2,
-        ));
-        let storage = RetryingKeyValueStorage::new(flaky.clone(), fast_retry(5));
+        );
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(5));
 
         let result = storage
             .set_if_not_exists("test", "api", "entity", namespace(), "key", b"value")
@@ -1264,17 +888,13 @@ mod tests {
         }
     }
 
-    fn flaky(error: KeyValueStorageError, failures: u32) -> Arc<FlakyKeyValueStorage> {
-        Arc::new(FlakyKeyValueStorage::new(error, failures))
-    }
-
     /// The decorator delegates rather than answering by itself: every operation reaches the
     /// backend exactly once when nothing fails.
     #[test]
     async fn every_operation_reaches_the_backend() {
         for op in Op::ALL {
             let inner = flaky(KeyValueStorageError::Other("unused".to_string()), 0);
-            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+            let storage = RetryingKeyValueStorage::new(inner.storage.clone(), fast_retry(5));
 
             assert_eq!(op.run(&storage).await, Ok(()), "{op:?}");
             assert_eq!(inner.attempts(), 1, "{op:?}");
@@ -1289,7 +909,7 @@ mod tests {
                 KeyValueStorageError::NotAttempted("pool timed out".to_string()),
                 2,
             );
-            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+            let storage = RetryingKeyValueStorage::new(inner.storage.clone(), fast_retry(5));
 
             assert_eq!(op.run(&storage).await, Ok(()), "{op:?}");
             assert_eq!(inner.attempts(), 3, "{op:?}");
@@ -1307,7 +927,7 @@ mod tests {
                 KeyValueStorageError::Transient("connection reset".to_string()),
                 2,
             );
-            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+            let storage = RetryingKeyValueStorage::new(inner.storage.clone(), fast_retry(5));
 
             assert_eq!(op.run(&storage).await, Ok(()), "{op:?}");
             assert_eq!(inner.attempts(), 3, "{op:?}");
@@ -1322,7 +942,7 @@ mod tests {
                 KeyValueStorageError::Other("bad request".to_string()),
                 u32::MAX,
             );
-            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+            let storage = RetryingKeyValueStorage::new(inner.storage.clone(), fast_retry(5));
 
             assert_eq!(
                 op.run(&storage).await,
@@ -1341,7 +961,8 @@ mod tests {
                 KeyValueStorageError::NotAttempted("pool timed out".to_string()),
                 u32::MAX,
             );
-            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(max_attempts));
+            let storage =
+                RetryingKeyValueStorage::new(inner.storage.clone(), fast_retry(max_attempts));
 
             let result = storage
                 .set("test", "api", "entity", namespace(), "key", b"value")
