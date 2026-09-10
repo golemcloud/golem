@@ -661,21 +661,6 @@ impl Streaming for StreamingImpl {
                 let _ = stdout.finish().await;
                 return Ok(summary);
             }
-            "historical-reconstruction-backpressure" => {
-                for expected in [vec![0x31; 64], vec![0x32; 64]] {
-                    let chunk = stdin
-                        .next()
-                        .await
-                        .expect("backpressured reconstruction stdin ended early")
-                        .expect("backpressured reconstruction stdin failed");
-                    assert_eq!(chunk, expected);
-                    summary.chunks_read += 1;
-                    summary.bytes_read += chunk.len() as u64;
-                }
-                drop(stdin);
-                let _ = stdout.finish().await;
-                return Ok(summary);
-            }
             _ => {
                 while let Some(item) = stdin.next().await {
                     let Ok(chunk) = item else {
