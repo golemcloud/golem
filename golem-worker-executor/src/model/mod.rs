@@ -74,9 +74,6 @@ pub enum SnapshotSource {
 /// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
-    /// The regions of the oplog that replay must skip: jumps, reverts, and the prefix
-    /// superseded by a snapshot. Distinct from `AgentStatusRecord::deleted_regions`,
-    /// which holds only the regions dropped by a revert.
     pub skipped_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_revision_for_replay: ComponentRevision,
