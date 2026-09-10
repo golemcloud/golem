@@ -53,32 +53,31 @@ object ComponentId {
     ComponentId(Uuid(BigInt(value.uuid.highBits.toString), BigInt(value.uuid.lowBits.toString)))
 }
 
-final case class AgentId(componentId: ComponentId, value: String) {
-  def parts: Either[GolemReflectError, AgentIdParts]               = AgentId.parse(this)
+final case class ParsedAgentId(value: String) {
+  def parts: Either[GolemReflectError, ParsedAgentIdParts]         = ParsedAgentId.parse(this)
   def dynamicClient: Either[GolemReflectError, DynamicAgentClient] = DynamicAgentClient.fromAgentId(this)
   def client[Constructor](
     definition: AgentClientDefinition[Constructor]
   ): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] = definition.bind(this)
 }
 
-final case class AgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[Uuid])
+final case class ParsedAgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[Uuid])
 
-object AgentId {
+object ParsedAgentId {
   def create(
-    componentId: ComponentId,
     typeName: String,
     constructorValue: SchemaValue,
     phantomId: Option[Uuid] = None
-  ): Either[GolemReflectError, AgentId] =
+  ): Either[GolemReflectError, ParsedAgentId] =
     encode(constructorValue).flatMap(payload =>
       AgentHostApi
         .makeAgentId(typeName, payload, phantomId)
         .left
         .map(GolemReflectError.Identity.apply)
-        .map(AgentId(componentId, _))
+        .map(ParsedAgentId(_))
     )
 
-  def parse(agentId: AgentId): Either[GolemReflectError, AgentIdParts] =
+  def parse(agentId: ParsedAgentId): Either[GolemReflectError, ParsedAgentIdParts] =
     AgentHostApi
       .parseAgentId(agentId.value)
       .left
@@ -86,7 +85,7 @@ object AgentId {
       .flatMap { parts =>
         try
           Right(
-            AgentIdParts(
+            ParsedAgentIdParts(
               parts.agentTypeName,
               SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(parts.payload.value)),
               parts.phantom
@@ -131,17 +130,17 @@ final class AgentType private[reflection] (
 
   def method(name: String): Option[AgentMethod] = methods.find(_.name == name)
 
-  def agentId(input: Json, phantomId: Option[Uuid] = None): Either[GolemReflectError, AgentId] =
+  def agentId(input: Json, phantomId: Option[Uuid] = None): Either[GolemReflectError, ParsedAgentId] =
     constructorInput
       .packJson(input)
       .left
       .map(error => GolemReflectError.Validation(error.message))
       .flatMap(agentIdValue(_, phantomId))
 
-  def agentIdValue(input: SchemaValue, phantomId: Option[Uuid] = None): Either[GolemReflectError, AgentId] =
-    validate(constructorInput, input).flatMap(_ => AgentId.create(implementedBy, name, input, phantomId))
+  def agentIdValue(input: SchemaValue, phantomId: Option[Uuid] = None): Either[GolemReflectError, ParsedAgentId] =
+    validate(constructorInput, input).flatMap(_ => ParsedAgentId.create(name, input, phantomId))
 
-  def bind(agentId: AgentId): Either[GolemReflectError, ReflectedAgentClient] =
+  def bind(agentId: ParsedAgentId): Either[GolemReflectError, ReflectedAgentClient] =
     for {
       parts <- agentId.parts
       _     <- Either.cond(
@@ -171,12 +170,12 @@ object Reflection {
         .fold[Either[GolemReflectError, Option[AgentType]]](Right(None))(_.map(Some(_)))
     catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
 
-  private[reflection] def componentIdFor(name: String): Either[GolemReflectError, ComponentId] =
+  def getAgentTypeFor(agentId: ParsedAgentId): Either[GolemReflectError, Option[AgentType]] =
     try
       AgentHostApi
-        .registeredAgentType(name)
-        .map(value => ComponentId.fromJs(value.implementedBy))
-        .toRight(GolemReflectError.Discovery(s"Agent type '$name' is not registered in the current environment"))
+        .registeredAgentTypeFor(agentId.value)
+        .map(decodeAgentType)
+        .fold[Either[GolemReflectError, Option[AgentType]]](Right(None))(_.map(Some(_)))
     catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
 
   private def decodeAgentType(registered: AgentHostApi.RegisteredAgentType): Either[GolemReflectError, AgentType] =
@@ -233,7 +232,7 @@ object Reflection {
     }
 }
 
-final case class ReflectedPhantomClient(agentId: AgentId, phantomId: Uuid, client: ReflectedAgentClient)
+final case class ReflectedPhantomClient(agentId: ParsedAgentId, phantomId: Uuid, client: ReflectedAgentClient)
 
 final class ReflectedAgentClientFactory private[reflection] (agentType: AgentType) {
   def get(input: Json): Either[GolemReflectError, ReflectedAgentClient] =
@@ -268,7 +267,7 @@ final class ReflectedAgentClientFactory private[reflection] (agentType: AgentTyp
     phantomId: Option[Uuid]
   ): Either[GolemReflectError, ReflectedAgentClient] =
     validate(agentType.constructorInput, input)
-      .flatMap(_ => Transport.create(agentType.implementedBy, agentType.name, input, phantomId))
+      .flatMap(_ => Transport.create(agentType.name, input, phantomId))
       .map(new ReflectedAgentClient(agentType, _))
 
   private def pack(input: Json): Either[GolemReflectError, SchemaValue] =
@@ -348,29 +347,28 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
     )
 }
 
-final case class InvocationMetadata(agentId: AgentId, idempotencyKey: String)
+final case class InvocationMetadata(agentId: ParsedAgentId, idempotencyKey: String)
 final case class Invocation[+A](metadata: InvocationMetadata, value: Option[A])
 final case class ScheduledInvocation(metadata: InvocationMetadata, cancellationToken: CancellationToken)
 
-final class DynamicAgentClient private (transport: Transport, val agentId: Option[AgentId]) {
+final class DynamicAgentClient private (transport: Transport, val agentId: Option[ParsedAgentId]) {
   def method(name: String): DynamicAgentMethod = new DynamicAgentMethod(name, transport)
 }
 
 object DynamicAgentClient {
-  def fromAgentId(agentId: AgentId): Either[GolemReflectError, DynamicAgentClient] =
+  def fromAgentId(agentId: ParsedAgentId): Either[GolemReflectError, DynamicAgentClient] =
     agentId.parts
-      .flatMap(parts => Transport.create(agentId.componentId, parts.typeName, parts.constructorValue, parts.phantomId))
+      .flatMap(parts => Transport.create(parts.typeName, parts.constructorValue, parts.phantomId))
       .map(new DynamicAgentClient(_, Some(agentId)))
 
   /**
    * A raw one-shot address. Final identity is supplied by invocation metadata.
    */
   def ephemeral(
-    componentId: ComponentId,
     typeName: String,
     constructor: SchemaValue
   ): Either[GolemReflectError, DynamicAgentClient] =
-    Transport.create(componentId, typeName, constructor, None).map(new DynamicAgentClient(_, None))
+    Transport.create(typeName, constructor, None).map(new DynamicAgentClient(_, None))
 }
 
 final class DynamicAgentMethod private[reflection] (val name: String, transport: Transport) {
@@ -381,7 +379,7 @@ final class DynamicAgentMethod private[reflection] (val name: String, transport:
     transport.schedule(at, name, input)
 }
 
-private[reflection] final class Transport private (componentId: ComponentId, raw: WasmRpcApi.WasmRpcClient) {
+private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient) {
   def invokeAndAwait(method: String, input: SchemaValue): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
     encodeAsync(input).flatMap { payload =>
       raw.asyncInvokeAndAwaitWithMetadata(method, payload) match {
@@ -415,12 +413,11 @@ private[reflection] final class Transport private (componentId: ComponentId, raw
     )
 
   private def toMetadata(value: golem.runtime.rpc.InvocationMetadata): InvocationMetadata =
-    InvocationMetadata(AgentId(componentId, value.agentId), value.idempotencyKey)
+    InvocationMetadata(ParsedAgentId(value.agentId), value.idempotencyKey)
 }
 
 private[reflection] object Transport {
   def create(
-    componentId: ComponentId,
     typeName: String,
     constructor: SchemaValue,
     phantom: Option[Uuid]
@@ -429,7 +426,7 @@ private[reflection] object Transport {
       val phantomArg = phantom.fold[js.UndefOr[JsSchemaUuid]](js.undefined)(uuid =>
         JsSchemaUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString))
       )
-      new Transport(componentId, WasmRpcApi.newClient(typeName, payload, phantomArg, js.Array()))
+      new Transport(WasmRpcApi.newClient(typeName, payload, phantomArg, js.Array()))
     }
 }
 

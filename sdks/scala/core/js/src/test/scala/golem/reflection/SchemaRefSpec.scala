@@ -10,7 +10,6 @@
 
 package golem.reflection
 
-import golem.Uuid
 import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
@@ -111,7 +110,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
     test("rejects missing, unexpected, and malformed reflected outputs") {
       val input    = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(RecordType(Nil))))
       val output   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
-      val metadata = InvocationMetadata(AgentId(ComponentId(Uuid(0, 0)), "test"), "key")
+      val metadata = InvocationMetadata(ParsedAgentId("test"), "key")
       val unit     = AgentMethod("unit", "", None, input, None)
       val single   = AgentMethod("single", "", None, input, Some(output))
 

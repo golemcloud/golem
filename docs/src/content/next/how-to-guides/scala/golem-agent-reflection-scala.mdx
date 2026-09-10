@@ -66,7 +66,7 @@ stream.
 
 `AgentClientDefinition` does not discover remote schemas. `InputRecordCodec`
 and `OutputCodec` are the caller's schema authority; the environment-unique
-type name is used only to resolve current implementation identity metadata:
+type name is the invocation address:
 
 ```scala
 import golem.reflection._
@@ -87,17 +87,16 @@ val result = counter.map(_.method(add).invoke(5))
 ```
 
 Use `agentId.client(contract)` to bind the same caller-owned codecs to an
-existing durable identity. Both creation and binding fail when the named type
-is not registered in the current environment.
+existing durable identity.
 
 ## Lifecycle attempts
 
-- Use a supplied `AgentId` directly or inspect it with `parts`.
-- Use `AgentId.create` for schema-free durable, known-phantom, or newly
+- Use a supplied `ParsedAgentId` directly or inspect it with `parts`.
+- Use `ParsedAgentId.create` for schema-free durable, known-phantom, or newly
   generated phantom identities.
 - Reflected and caller-codec factories provide `get`, `getPhantom`, and
   `newPhantom`.
-- Use `DynamicAgentClient.ephemeral(componentId, typeName, constructorValue)`
+- Use `DynamicAgentClient.ephemeral(typeName, constructorValue)`
   for a raw ephemeral invocation address.
 
 An ephemeral address has no guaranteed reusable pre-invocation identity. The
