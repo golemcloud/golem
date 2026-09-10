@@ -22,7 +22,7 @@ use crate::schema::validation::validate_value;
 use crate::schema::{
     MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
-use crate::{AgentId, ComponentId, ScheduledTime, Uuid};
+use crate::{ComponentId, ScheduledTime, Uuid};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -367,14 +367,9 @@ impl AgentType {
         &self,
         constructor: SchemaValue,
         phantom_id: Option<Uuid>,
-    ) -> Result<AgentId, GolemReflectError> {
+    ) -> Result<ParsedAgentId, GolemReflectError> {
         self.constructor_input.validate_value(&constructor)?;
-        make_agent_id_value(
-            self.component_id.clone(),
-            self.name(),
-            constructor,
-            phantom_id,
-        )
+        make_agent_id_value(self.name(), constructor, phantom_id)
     }
 
     #[cfg(feature = "json")]
@@ -382,11 +377,14 @@ impl AgentType {
         &self,
         constructor: &serde_json::Value,
         phantom_id: Option<Uuid>,
-    ) -> Result<AgentId, GolemReflectError> {
+    ) -> Result<ParsedAgentId, GolemReflectError> {
         self.agent_id_value(self.constructor_input.pack_json(constructor)?, phantom_id)
     }
 
-    pub fn bind(&self, agent_id: &AgentId) -> Result<ReflectedAgentClient, GolemReflectError> {
+    pub fn bind(
+        &self,
+        agent_id: &ParsedAgentId,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
         if self.mode == AgentMode::Ephemeral {
             return Err(GolemReflectError::KnownEphemeralBinding(
                 self.name().to_string(),
@@ -401,7 +399,6 @@ impl AgentType {
             )));
         }
         let transport = RpcTransport::create(
-            agent_id.component_id.clone(),
             parts.type_name,
             parts.constructor_value,
             parts.phantom_id,
@@ -428,80 +425,59 @@ pub fn get_agent_type(name: &str) -> Result<AgentType, GolemReflectError> {
     AgentType::from_registered(registered)
 }
 
-pub fn get_agent_type_for(agent_id: &AgentId) -> Result<AgentType, GolemReflectError> {
-    let raw_id = crate::schema_agent_id_to_wire(agent_id.clone());
-    let registered = host::get_agent_type_by_agent_id(&raw_id)
-        .ok_or_else(|| GolemReflectError::AgentTypeNotFound(agent_id.agent_id.clone()))?;
+pub fn get_agent_type_for(agent_id: &ParsedAgentId) -> Result<AgentType, GolemReflectError> {
+    let registered = host::get_agent_type_by_agent_id(agent_id.as_str())
+        .ok_or_else(|| GolemReflectError::AgentTypeNotFound(agent_id.as_str().to_string()))?;
     AgentType::from_registered(registered)
 }
 
 #[derive(Clone, Debug)]
-pub struct AgentIdParts {
-    pub component_id: ComponentId,
+pub struct ParsedAgentIdParts {
     pub type_name: String,
     pub constructor_value: SchemaValue,
     pub constructor_schema: SchemaGraph,
     pub phantom_id: Option<Uuid>,
 }
 
-pub trait AgentIdExt: Sized {
-    fn from_value(
-        component_id: ComponentId,
-        type_name: impl Into<String>,
-        constructor_value: SchemaValue,
-        phantom_id: Option<Uuid>,
-    ) -> Result<Self, GolemReflectError>;
+/// Environment-scoped agent identity encoded by the Golem host.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ParsedAgentId(String);
 
-    fn from_schema<T: crate::IntoSchema>(
-        component_id: ComponentId,
-        type_name: impl Into<String>,
-        constructor: &T,
-        phantom_id: Option<Uuid>,
-    ) -> Result<Self, GolemReflectError>;
+impl ParsedAgentId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
 
-    fn parts(&self) -> Result<AgentIdParts, GolemReflectError>;
-    fn dynamic_client(&self) -> Result<DynamicAgentClient, GolemReflectError>;
-    fn client(
-        &self,
-        definition: &AgentClientDefinition,
-    ) -> Result<TypedAgentClient, GolemReflectError>;
-    fn reflected_client(
-        &self,
-        agent_type: &AgentType,
-    ) -> Result<ReflectedAgentClient, GolemReflectError>;
-}
-
-impl AgentIdExt for AgentId {
-    fn from_value(
-        component_id: ComponentId,
+    pub fn from_value(
         type_name: impl Into<String>,
         constructor_value: SchemaValue,
         phantom_id: Option<Uuid>,
     ) -> Result<Self, GolemReflectError> {
-        make_agent_id_value(
-            component_id,
-            &type_name.into(),
-            constructor_value,
-            phantom_id,
-        )
+        make_agent_id_value(&type_name.into(), constructor_value, phantom_id)
     }
 
-    fn from_schema<T: crate::IntoSchema>(
-        component_id: ComponentId,
+    pub fn from_schema<T: crate::IntoSchema>(
         type_name: impl Into<String>,
         constructor: &T,
         phantom_id: Option<Uuid>,
     ) -> Result<Self, GolemReflectError> {
-        Self::from_value(component_id, type_name, constructor.to_value(), phantom_id)
+        Self::from_value(type_name, constructor.to_value(), phantom_id)
     }
 
-    fn parts(&self) -> Result<AgentIdParts, GolemReflectError> {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    pub fn parts(&self) -> Result<ParsedAgentIdParts, GolemReflectError> {
         let (type_name, typed, phantom_id) =
-            host::parse_agent_id(&self.agent_id).map_err(agent_error_to_reflect)?;
+            host::parse_agent_id(&self.0).map_err(agent_error_to_reflect)?;
         let typed = crate::decode_typed_schema_value(&typed)
             .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
-        Ok(AgentIdParts {
-            component_id: self.component_id.clone(),
+        Ok(ParsedAgentIdParts {
             type_name,
             constructor_value: typed.value().clone(),
             constructor_schema: typed.graph().clone(),
@@ -509,18 +485,18 @@ impl AgentIdExt for AgentId {
         })
     }
 
-    fn dynamic_client(&self) -> Result<DynamicAgentClient, GolemReflectError> {
+    pub fn dynamic_client(&self) -> Result<DynamicAgentClient, GolemReflectError> {
         DynamicAgentClient::from_agent_id(self)
     }
 
-    fn client(
+    pub fn client(
         &self,
         definition: &AgentClientDefinition,
     ) -> Result<TypedAgentClient, GolemReflectError> {
         definition.bind(self)
     }
 
-    fn reflected_client(
+    pub fn reflected_client(
         &self,
         agent_type: &AgentType,
     ) -> Result<ReflectedAgentClient, GolemReflectError> {
@@ -528,12 +504,23 @@ impl AgentIdExt for AgentId {
     }
 }
 
+impl Display for ParsedAgentId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl AsRef<str> for ParsedAgentId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 pub fn make_agent_id_value(
-    component_id: ComponentId,
     type_name: &str,
     constructor_value: SchemaValue,
     phantom_id: Option<Uuid>,
-) -> Result<AgentId, GolemReflectError> {
+) -> Result<ParsedAgentId, GolemReflectError> {
     let encoded = crate::encode_schema_value(&constructor_value)
         .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
     let agent_id = host::make_agent_id(
@@ -542,7 +529,7 @@ pub fn make_agent_id_value(
         phantom_id.map(crate::schema_uuid_to_wire),
     )
     .map_err(agent_error_to_reflect)?;
-    Ok(AgentId::new(component_id, agent_id))
+    Ok(ParsedAgentId::new(agent_id))
 }
 
 #[derive(Clone, Debug)]
@@ -553,7 +540,7 @@ pub struct AgentConfigValue {
 
 #[derive(Clone, Debug)]
 pub struct ReflectedPhantomClient {
-    pub agent_id: AgentId,
+    pub agent_id: ParsedAgentId,
     pub phantom_id: Uuid,
     pub client: ReflectedAgentClient,
 }
@@ -694,7 +681,6 @@ impl ReflectedAgentClientFactory {
             })
             .transpose()?;
         let transport = RpcTransport::create(
-            self.agent_type.component_id.clone(),
             self.agent_type.name().to_string(),
             constructor,
             phantom_id,
@@ -712,7 +698,7 @@ impl ReflectedAgentClientFactory {
 pub struct ReflectedAgentClient {
     agent_type: AgentType,
     transport: Rc<RpcTransport>,
-    reusable_identity: Option<AgentId>,
+    reusable_identity: Option<ParsedAgentId>,
 }
 
 impl std::fmt::Debug for ReflectedAgentClient {
@@ -725,7 +711,7 @@ impl std::fmt::Debug for ReflectedAgentClient {
 }
 
 impl ReflectedAgentClient {
-    pub fn agent_id(&self) -> Option<&AgentId> {
+    pub fn agent_id(&self) -> Option<&ParsedAgentId> {
         self.reusable_identity.as_ref()
     }
 
@@ -840,14 +826,13 @@ impl ReflectedAgentMethod {
 #[derive(Clone)]
 pub struct DynamicAgentClient {
     transport: Rc<RpcTransport>,
-    reusable_identity: Option<AgentId>,
+    reusable_identity: Option<ParsedAgentId>,
 }
 
 impl DynamicAgentClient {
-    pub fn from_agent_id(agent_id: &AgentId) -> Result<Self, GolemReflectError> {
+    pub fn from_agent_id(agent_id: &ParsedAgentId) -> Result<Self, GolemReflectError> {
         let parts = agent_id.parts()?;
         let transport = RpcTransport::create(
-            agent_id.component_id.clone(),
             parts.type_name,
             parts.constructor_value,
             parts.phantom_id,
@@ -862,13 +847,11 @@ impl DynamicAgentClient {
     /// Construct a raw one-shot invocation address. No reusable identity is
     /// guaranteed before invocation; final identity comes from metadata.
     pub fn ephemeral(
-        component_id: ComponentId,
         type_name: impl Into<String>,
         constructor: SchemaValue,
     ) -> Result<Self, GolemReflectError> {
         Ok(Self {
             transport: Rc::new(RpcTransport::create(
-                component_id,
                 type_name.into(),
                 constructor,
                 None,
@@ -878,7 +861,7 @@ impl DynamicAgentClient {
         })
     }
 
-    pub fn agent_id(&self) -> Option<&AgentId> {
+    pub fn agent_id(&self) -> Option<&ParsedAgentId> {
         self.reusable_identity.as_ref()
     }
 
@@ -933,7 +916,7 @@ impl DynamicAgentMethod {
 
 #[derive(Clone, Debug)]
 pub struct InvocationMetadata {
-    pub agent_id: AgentId,
+    pub agent_id: ParsedAgentId,
     pub idempotency_key: String,
 }
 
@@ -970,7 +953,6 @@ type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
 pub struct PendingInvocation {
     pub metadata: InvocationMetadata,
     raw: Rc<host::FutureInvokeResult>,
-    component_id: ComponentId,
     state: RefCell<Option<Pin<Box<dyn Future<Output = PendingResult>>>>>,
 }
 
@@ -991,7 +973,6 @@ impl Future for PendingInvocation {
         let this = self.get_mut();
         if this.state.borrow().is_none() {
             let raw = this.raw.clone();
-            let component_id = this.component_id.clone();
             let metadata = this.metadata.clone();
             *this.state.borrow_mut() = Some(Box::pin(async move {
                 let result = raw.get().await.map_err(rpc_error_to_reflect)?;
@@ -999,13 +980,7 @@ impl Future for PendingInvocation {
                     .map(crate::decode_schema_value)
                     .transpose()
                     .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
-                Ok(Invocation {
-                    metadata: InvocationMetadata {
-                        agent_id: AgentId::new(component_id, metadata.agent_id.agent_id.clone()),
-                        idempotency_key: metadata.idempotency_key,
-                    },
-                    value,
-                })
+                Ok(Invocation { metadata, value })
             }));
         }
         let mut state = this.state.borrow_mut();
@@ -1018,13 +993,11 @@ impl Future for PendingInvocation {
 }
 
 struct RpcTransport {
-    component_id: ComponentId,
     raw: host::WasmRpc,
 }
 
 impl RpcTransport {
     fn create(
-        component_id: ComponentId,
         type_name: String,
         constructor: SchemaValue,
         phantom_id: Option<Uuid>,
@@ -1049,7 +1022,7 @@ impl RpcTransport {
             config,
         )
         .map_err(rpc_error_to_reflect)?;
-        Ok(Self { component_id, raw })
+        Ok(Self { raw })
     }
 
     async fn invoke_and_await(
@@ -1099,7 +1072,6 @@ impl RpcTransport {
         Ok(PendingInvocation {
             metadata,
             raw: Rc::new(pending.future),
-            component_id: self.component_id.clone(),
             state: RefCell::new(None),
         })
     }
@@ -1126,7 +1098,7 @@ impl RpcTransport {
 
     fn metadata(&self, raw: host::InvocationMetadata) -> InvocationMetadata {
         InvocationMetadata {
-            agent_id: AgentId::new(self.component_id.clone(), raw.agent_id),
+            agent_id: ParsedAgentId::new(raw.agent_id),
             idempotency_key: raw.idempotency_key,
         }
     }
@@ -1402,7 +1374,7 @@ impl AgentClientDefinition {
         AgentClientDefinitionBuilder::default()
     }
 
-    pub fn bind(&self, agent_id: &AgentId) -> Result<TypedAgentClient, GolemReflectError> {
+    pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
         let parts = agent_id.parts()?;
         if let Some(expected) = &self.type_name
             && expected != &parts.type_name
@@ -1412,11 +1384,7 @@ impl AgentClientDefinition {
                 parts.type_name
             )));
         }
-        let registered = host::get_agent_type(&parts.type_name)
-            .ok_or_else(|| GolemReflectError::AgentTypeNotFound(parts.type_name.clone()))?;
-        let component_id = crate::wire_component_id_to_schema(registered.implemented_by);
         let transport = RpcTransport::create(
-            component_id,
             parts.type_name,
             parts.constructor_value,
             parts.phantom_id,

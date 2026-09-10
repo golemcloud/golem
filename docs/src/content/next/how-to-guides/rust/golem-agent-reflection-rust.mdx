@@ -59,7 +59,7 @@ let result = counter
     .await?;
 
 println!("{:?}", result.value);
-println!("{}", result.metadata.agent_id.agent_id);
+println!("{}", result.metadata.agent_id.as_str());
 ```
 
 Reflected methods also expose `trigger_value`, `pending_value`, and
@@ -76,7 +76,7 @@ performing discovery. The trait's Rust `IntoSchema` and `FromSchema` codecs are
 the schema authority:
 
 ```rust
-use golem_rust::{AgentId, agent_client};
+use golem_rust::{ParsedAgentId, agent_client};
 
 #[agent_client(type_name = "CounterAgent")]
 trait CounterContract {
@@ -84,15 +84,14 @@ trait CounterContract {
     fn reset(&self);
 }
 
-fn bind(agent_id: &AgentId) -> Result<CounterContractClient, golem_rust::GolemReflectError> {
+fn bind(agent_id: &ParsedAgentId) -> Result<CounterContractClient, golem_rust::GolemReflectError> {
     CounterContractClient::for_agent_id(agent_id)
 }
 ```
 
-Binding resolves the type's current implementation metadata by its
-environment-unique name, but the trait's codecs remain the schema authority.
-It fails when that type is not registered. Generated named methods are awaited
-calls. The client also generates
+Binding addresses the type by its environment-unique name, while the trait's
+codecs remain the schema authority. Generated named methods are awaited calls.
+The client also generates
 `trigger_<method>`, `pending_<method>`, and `schedule_<method>`. Binding checks
 the agent type name but does not discover the remote schema or lifecycle.
 
@@ -112,14 +111,13 @@ let typed = CounterContractClient::for_agent_id(&agent_id)?;
 `get_agent_type_for(&agent_id)` resolves the currently registered type for an
 existing identity. It does not create the agent.
 
-For schema-free infrastructure, construct an ID from a component ID, type name,
-manually packed constructor record, and optional phantom UUID:
+For schema-free infrastructure, construct an environment-scoped ID from a type
+name, manually packed constructor record, and optional phantom UUID:
 
 ```rust
-use golem_rust::{AgentId, AgentIdExt, SchemaValue};
+use golem_rust::{ParsedAgentId, SchemaValue};
 
-let agent_id = AgentId::from_value(
-    component_id,
+let agent_id = ParsedAgentId::from_value(
     "CounterAgent",
     SchemaValue::Record {
         fields: vec![SchemaValue::String("main".to_string())],
@@ -164,7 +162,6 @@ For raw ephemeral invocation, construct a one-shot address directly:
 use golem_rust::{DynamicAgentClient, SchemaValue};
 
 let request = DynamicAgentClient::ephemeral(
-    component_id,
     "RequestAgent",
     SchemaValue::Record {
         fields: vec![SchemaValue::String("summarize".to_string())],
@@ -178,7 +175,7 @@ let result = request
         fields: vec![SchemaValue::String("hello".to_string())],
     })
     .await?;
-println!("{}", result.metadata.agent_id.agent_id);
+println!("{}", result.metadata.agent_id.as_str());
 ```
 
 No reusable pre-invocation identity is guaranteed for an ephemeral call. The
@@ -193,4 +190,4 @@ again.
 | Partial typed contract owned by the caller | `#[agent_client]` |
 | Type or method selected at runtime with JSON | `get_agent_type` plus `invoke_json` |
 | Explicit runtime-schema packing | `SchemaRef::pack_json`, `invoke_value`, `unpack_json` |
-| Schema-free infrastructure with Golem values | `AgentId::from_value` and `dynamic_client` |
+| Schema-free infrastructure with Golem values | `ParsedAgentId::from_value` and `dynamic_client` |

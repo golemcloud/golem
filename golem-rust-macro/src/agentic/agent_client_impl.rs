@@ -266,7 +266,7 @@ fn expand(
                 Ok(builder.build())
             }
 
-            pub fn for_agent_id(agent_id: &#golem_rust::AgentId)
+            pub fn for_agent_id(agent_id: &#golem_rust::ParsedAgentId)
                 -> Result<Self, #golem_rust::GolemReflectError>
             {
                 Ok(Self { inner: Self::client_definition()?.bind(agent_id)? })
