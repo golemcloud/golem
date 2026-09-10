@@ -704,6 +704,12 @@ async fn automatic_snapshot_every_2nd_invocation(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    // Construction counts as an invocation; align subsequent snapshots with even increments.
+    let initial = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_eq!(initial.into_typed::<u32>()?, 0);
+
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
             .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
@@ -728,8 +734,23 @@ async fn automatic_snapshot_every_2nd_invocation(
 
     assert_eq!(
         snapshot_count,
-        SNAPSHOT_TEST_INVOCATIONS / 2,
+        1 + SNAPSHOT_TEST_INVOCATIONS / 2,
         "Expected a snapshot every 2 invocations"
+    );
+
+    let tail = executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    assert_eq!(tail.into_typed::<u32>()?, 11);
+    let oplog_with_tail = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog_with_tail
+            .iter()
+            .rposition(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_))),
+        oplog
+            .iter()
+            .rposition(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_))),
+        "The final increment must remain outside the last snapshot"
     );
 
     drop(executor);
@@ -748,8 +769,8 @@ async fn automatic_snapshot_every_2nd_invocation(
 
     assert_eq!(
         result_after_restart.into_typed::<u32>()?,
-        SNAPSHOT_TEST_INVOCATIONS as u32,
-        "Counter should be restored from the automatic snapshot after restart"
+        11,
+        "Counter should include the increment replayed after the automatic snapshot"
     );
 
     drop(executor);
