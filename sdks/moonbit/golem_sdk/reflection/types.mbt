@@ -18,13 +18,12 @@ pub(all) enum AgentMode {
 ///|
 /// A reusable agent identity. Ephemeral invocation addresses do not have one
 /// before invocation; their final identity is returned in invocation metadata.
-pub(all) struct AgentId {
-  component_id : @types.ComponentId
+pub(all) struct ParsedAgentId {
   value : String
 } derive(Debug, Eq)
 
 ///|
-pub(all) struct AgentIdParts {
+pub(all) struct ParsedAgentIdParts {
   type_name : String
   constructor_value : @model.SchemaValue
   phantom_id : @types.Uuid?
@@ -32,7 +31,7 @@ pub(all) struct AgentIdParts {
 
 ///|
 pub(all) struct InvocationMetadata {
-  agent_id : AgentId
+  agent_id : ParsedAgentId
   idempotency_key : String
 } derive(Debug, Eq)
 
@@ -51,7 +50,7 @@ pub(all) struct ScheduledInvocation {
 ///|
 /// Both identities produced when attempting to create a durable phantom.
 pub(all) struct CreatedPhantomClient {
-  agent_id : AgentId
+  agent_id : ParsedAgentId
   phantom_id : @types.Uuid
   client : DynamicAgentClient
 }

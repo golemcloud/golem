@@ -76,10 +76,7 @@ fn test_invocation(
 ) -> Invocation[@model.SchemaValue?] {
   {
     metadata: {
-      agent_id: {
-        component_id: { uuid: { high_bits: 0UL, low_bits: 0UL, }, },
-        value: "test-agent",
-      },
+      agent_id: { value: "test-agent", },
       idempotency_key: "test-key",
     },
     value,
