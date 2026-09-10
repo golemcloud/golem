@@ -19,13 +19,11 @@ use super::model::{
 };
 use crate::config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::Pod;
 use golem_common::model::ShardId;
-use golem_common::model::protobuf::lease_ttl_to_proto;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
@@ -169,7 +167,6 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             assigned_shards =
                 shard_assignments_to_string(pod, None, assignment.shard_epochs.keys()),
             number_of_shards = assignment.number_of_shards,
-            expires_at = %assignment.expires_at,
             "Assigning shards",
         );
 
@@ -270,7 +267,6 @@ impl WorkerExecutorServiceDefault {
                     epoch: epoch.0,
                 })
                 .collect(),
-            lease_ttl: Some(lease_ttl_to_proto(assignment.expires_at, Utc::now())),
             revision: assignment.revision.0,
             number_of_shards: assignment.number_of_shards as u32,
         };

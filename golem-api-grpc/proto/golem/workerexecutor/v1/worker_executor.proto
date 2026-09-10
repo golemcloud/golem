@@ -188,16 +188,16 @@ message AssignShardsRequest {
   reserved 1;
   reserved "shard_ids";
   // The executor's complete shard set with epochs: hold exactly these, drop
-  // everything else.
+  // everything else. A push carries no lease: only the answer to a request the
+  // executor made can extend one, because only the executor knows when it
+  // asked - see golem.shardmanager.v1.RegisterSuccess.lease_ttl.
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
-  // See golem.shardmanager.v1.RegisterSuccess.lease_ttl.
-  google.protobuf.Duration lease_ttl = 3;
   // Total number of shards in the cluster; never 0 — the executor divides by
   // it in check_worker.
-  uint32 number_of_shards = 4;
+  uint32 number_of_shards = 3;
   // The revision of the shard manager's persisted state this set was read
   // from; see golem.shardmanager.v1.RegisterSuccess.revision.
-  uint64 revision = 5;
+  uint64 revision = 4;
 }
 
 message AssignShardsResponse {

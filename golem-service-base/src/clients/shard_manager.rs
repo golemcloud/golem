@@ -15,7 +15,6 @@
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::model::quota_lease::{PendingReservation, QuotaLease};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::{
     AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest, DeregisterRequest,
@@ -38,6 +37,8 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::future::Future;
+use std::time::Instant;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -130,17 +131,14 @@ pub struct ShardRegistration {
 /// An executor's shard lease: the complete set of shards it owns with the epoch
 /// of each, and when the lease lapses if it is not renewed.
 ///
-/// Deliberately not `Default`: the default expiry would be `None`, which is the never-expires
-/// sentinel, and a lease that never expires is something only the single-shard executor may
-/// declare - never something a wire decode falls back to.
+/// A wire decode always has an expiry. The executor's never-expires sentinel lives on its
+/// `ShardAssignment`, where only the single-shard executor may declare it - never here.
 #[derive(Debug, Clone)]
 pub struct ShardLease {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
-    /// On this executor's own clock. The wire carries the time left on the
-    /// lease, anchored here at the moment the message arrived, so the shard
-    /// manager's clock is never compared against ours.
-    /// `None` means the lease never expires.
-    pub expires_at: Option<DateTime<Utc>>,
+    /// On this executor's own monotonic clock, anchored at the moment the
+    /// request this lease answers was sent - see [`shard_lease_from_wire`].
+    pub expires_at: Instant,
     /// The revision of the shard manager's persisted state this set was read
     /// from; the executor applies a delivery only if it is at least the last
     /// one applied, so a renewal and a push that cross cannot leave the older
@@ -148,26 +146,38 @@ pub struct ShardLease {
     pub revision: ShardLeaseRevision,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::shardmanager::v1::ShardLease> for ShardLease {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::shardmanager::v1::ShardLease,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            shard_epochs: shard_epochs_from_proto(value.shard_epochs)?,
-            expires_at: expires_at_from_ttl(value.lease_ttl)?,
-            revision: ShardLeaseRevision(value.revision),
-        })
-    }
+/// Decodes a granted lease off the wire, anchoring its TTL at `sent_at`: the instant the request
+/// it answers went out, read by [`issued`]. The shard manager granted the lease after that
+/// instant, so this executor's copy lapses no later than the manager's, however long the request
+/// and the answer spent in flight. The wire carries only the time left, so the two clocks are
+/// never compared.
+fn shard_lease_from_wire(
+    lease: golem_api_grpc::proto::golem::shardmanager::v1::ShardLease,
+    sent_at: Instant,
+) -> Result<ShardLease, String> {
+    Ok(ShardLease {
+        shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
+        expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
+        revision: ShardLeaseRevision(lease.revision),
+    })
 }
 
-/// The receiving clock is read here, at the network boundary, because "now"
-/// for a TTL means the instant the message arrived.
-pub(crate) fn expires_at_from_ttl(
+fn expires_at_from_ttl(
     lease_ttl: Option<prost_types::Duration>,
-) -> Result<Option<DateTime<Utc>>, String> {
-    lease_expiry_from_ttl(lease_ttl, Utc::now(), "lease_ttl").map(Some)
+    sent_at: Instant,
+) -> Result<Instant, String> {
+    lease_expiry_from_ttl(lease_ttl, sent_at, "lease_ttl")
+}
+
+/// Awaits one lease RPC and returns the instant it was issued alongside its answer.
+///
+/// A lease TTL in the answer is anchored to that instant, so it is read here, immediately before
+/// the request is first polled - a tonic call sends nothing until then - and never by a caller
+/// after the answer is back. Inside the per-attempt closure rather than around the whole call, so
+/// that the client's own connection retries do not age the anchor.
+async fn issued<R>(rpc: impl Future<Output = R>) -> (Instant, R) {
+    let sent_at = Instant::now();
+    (sent_at, rpc.await)
 }
 
 /// One entry in a batch renewal request.
@@ -284,19 +294,21 @@ impl ShardManager for GrpcShardManager {
             &(self.client.clone(), port, pod_name, executor_id),
             |(client, port, pod_name, executor_id)| {
                 Box::pin(async move {
-                    let response = client
+                    let (sent_at, response) = client
                         .call("register", move |client| {
                             let request = RegisterRequest {
                                 port: *port as i32,
                                 pod_name: pod_name.clone(),
                                 executor_id: executor_id.to_string(),
                             };
-                            Box::pin(client.register(request))
+                            Box::pin(async move {
+                                let (sent_at, response) = issued(client.register(request)).await;
+                                response.map(|response| (sent_at, response))
+                            })
                         })
-                        .await?
-                        .into_inner();
+                        .await?;
 
-                    match response.result {
+                    match response.into_inner().result {
                         None => Err(ShardManagerError::empty_response()),
                         Some(register_response::Result::Success(success)) => {
                             Ok(ShardRegistration {
@@ -304,7 +316,7 @@ impl ShardManager for GrpcShardManager {
                                 lease: ShardLease {
                                     shard_epochs: shard_epochs_from_proto(success.shard_epochs)
                                         .map_err(ShardManagerError::ConversionError)?,
-                                    expires_at: expires_at_from_ttl(success.lease_ttl)
+                                    expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
                                         .map_err(ShardManagerError::ConversionError)?,
                                     revision: ShardLeaseRevision(success.revision),
                                 },
@@ -328,7 +340,7 @@ impl ShardManager for GrpcShardManager {
         executor_id: Uuid,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError> {
-        let response = self
+        let (sent_at, response) = self
             .client
             .call_without_retry("renew_shard_lease", move |client| {
                 let request = RenewShardLeaseRequest {
@@ -339,15 +351,17 @@ impl ShardManager for GrpcShardManager {
                             .map(|(shard_id, epoch)| (*shard_id, *epoch)),
                     ),
                 };
-                Box::pin(client.renew_shard_lease(request))
+                Box::pin(async move {
+                    let (sent_at, response) = issued(client.renew_shard_lease(request)).await;
+                    response.map(|response| (sent_at, response))
+                })
             })
-            .await?
-            .into_inner();
+            .await?;
 
-        match response.result {
+        match response.into_inner().result {
             None => Err(ShardLeaseError::empty_response()),
             Some(renew_shard_lease_response::Result::Success(lease)) => {
-                lease.try_into().map_err(ShardLeaseError::ConversionError)
+                shard_lease_from_wire(lease, sent_at).map_err(ShardLeaseError::ConversionError)
             }
             Some(renew_shard_lease_response::Result::Failure(failure)) => Err(failure.into()),
         }
@@ -765,5 +779,57 @@ impl From<String> for ShardLeaseError {
 impl From<&'static str> for ShardLeaseError {
     fn from(value: &'static str) -> Self {
         Self::internal_client_error(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use test_r::test;
+
+    /// The instant a lease TTL is anchored to is read immediately before the request goes out,
+    /// not after the answer is back: the answer's time in flight has to come off the lease.
+    #[test]
+    fn the_send_instant_is_read_before_the_request_goes_out_not_after_the_answer_is_back() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+
+        let (sent_at, ()) = runtime.block_on(issued(async {
+            // the answer took its time
+            std::thread::sleep(Duration::from_millis(20));
+        }));
+
+        assert!(
+            sent_at.elapsed() >= Duration::from_millis(20),
+            "the instant must precede the request, not follow its answer"
+        );
+    }
+
+    /// The decode is handed the send instant, so an answer that took its time yields an expiry
+    /// earlier than one anchored on arrival would - by exactly the time it took.
+    #[test]
+    fn a_delayed_grant_is_anchored_where_the_request_was_sent_not_where_the_answer_arrived() {
+        let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
+            shard_epochs: vec![],
+            lease_ttl: Some(prost_types::Duration {
+                seconds: 60,
+                nanos: 0,
+            }),
+            revision: 3,
+        };
+        let sent_at = Instant::now();
+        // the answer took its time
+        std::thread::sleep(Duration::from_millis(20));
+
+        let lease = shard_lease_from_wire(on_the_wire, sent_at).unwrap();
+
+        assert_eq!(lease.expires_at, sent_at + Duration::from_secs(60));
+        assert!(
+            lease.expires_at < Instant::now() + Duration::from_secs(60),
+            "time the answer spent in flight must come off the lease, never on to it"
+        );
+        assert_eq!(lease.revision, ShardLeaseRevision(3));
     }
 }

@@ -25,7 +25,7 @@ use crate::model::public_oplog::{
 };
 use crate::model::{LastError, LookupResult, ReadFileResult};
 use crate::services::events::Event;
-use crate::services::shard_manager::ShardAssignmentChangedHook;
+use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
 };
@@ -1043,10 +1043,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    /// Full replace: the request carries this executor's complete
-    /// shard set with epochs, the lease TTL, and the cluster's shard count.
-    /// Anything absent from the set is dropped, and any agent whose shard went
-    /// away is restarted.
+    /// Full replace: the request carries this executor's complete shard set
+    /// with epochs and the cluster's shard count. Anything absent from the
+    /// set is dropped, and any agent whose shard went away is restarted.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
@@ -1067,17 +1066,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let expires_at = golem_common::model::protobuf::lease_expiry_from_ttl(
-            request.lease_ttl,
-            chrono::Utc::now(),
-            "AssignShardsRequest.lease_ttl",
-        )
-        .map_err(WorkerExecutorError::invalid_request)?;
-
         let revision = ShardLeaseRevision(request.revision);
         if let ShardDeliveryOutcome::Stale { delivered, applied } = self
             .shard_service()
-            .assign_shards(number_of_shards, &shard_epochs, Some(expires_at), revision)?
+            .assign_shards(number_of_shards, &shard_epochs, revision)?
         {
             // Crossed on the network with a newer delivery, which has already
             // been applied; applying this one would put the older set back.
@@ -1089,22 +1081,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return Ok(());
         }
 
-        Self::apply_shard_assignment_effects(self).await?;
-        // This push has recovered the agents for the set it delivered, so a recovery that failed
-        // on an earlier renewal no longer needs repeating.
-        self.shard_manager_service().recovery_succeeded();
+        // Latched before the receipt path runs, so a grant that revives the lease meanwhile
+        // cannot read it clear and leave a deferred recovery to the next cadence. A recovery that
+        // ran clears it, and one run more than needed is idempotent.
+        self.shard_manager_service().recovery_deferred();
+        if let RecoveryOutcome::Recovered = Self::apply_shard_assignment_effects(self).await? {
+            // This push has recovered the agents for the set it delivered, so a recovery that
+            // failed on an earlier renewal no longer needs repeating.
+            self.shard_manager_service().recovery_succeeded();
+        }
 
         Ok(())
     }
 
     /// The one receipt path for a delivered shard set, whichever way it came:
-    /// a registration, an `AssignShards` push, or a renewal response that
+    /// a registration, an `AssignShards` push, or a renewal reply that
     /// corrected the set. Sweeps the agents whose shard went away, then hands
-    /// the executor the new set to recover agents for. Both halves run for
+    /// the executor the new set to recover agents for. The sweep runs for
     /// every path, because a renewal can narrow the set as well as widen it:
-    /// a path without the sweep would leave agents running on shards this
-    /// executor no longer owns.
-    pub(crate) async fn apply_shard_assignment_effects<T>(this: &T) -> Result<(), anyhow::Error>
+    /// a path without it would leave agents running on shards this executor
+    /// no longer owns. The recovery runs only under a live lease: a fenced
+    /// executor starts nothing, so a push that lands after the local lease
+    /// lapsed - the first one after a manager outage does - reports the
+    /// recovery deferred, and the grant that revives the lease runs it.
+    pub(crate) async fn apply_shard_assignment_effects<T>(
+        this: &T,
+    ) -> Result<RecoveryOutcome, anyhow::Error>
     where
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
@@ -1122,7 +1124,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        Ctx::on_shard_assignment_changed(this).await
+        if !this.shard_service().is_ready() {
+            tracing::info!(
+                "Shard lease has lapsed; agents for the delivered set are recovered once it is renewed"
+            );
+            return Ok(RecoveryOutcome::DeferredUntilLeaseIsLive);
+        }
+        Ctx::on_shard_assignment_changed(this).await?;
+        Ok(RecoveryOutcome::Recovered)
     }
 
     async fn get_agent_metadata_internal(

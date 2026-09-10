@@ -197,14 +197,14 @@ pub struct RegisterAck {
 }
 
 /// The complete shard set the manager wants one executor to hold, the ownership epoch of each
-/// shard, the absolute time that executor's lease lapses, and the cluster shard count.
+/// shard, and the cluster shard count. No lease: a push has no request of the executor's to anchor
+/// a lease to, so it cannot carry one - only the answer to a registration or a renewal does.
 ///
 /// This is the whole of `AssignShardsRequest`: the push is a full replace, so the executor holds
 /// exactly `shard_epochs` afterwards and drops everything else.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShardAssignmentPush {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
-    pub expires_at: DateTime<Utc>,
     pub number_of_shards: usize,
     /// See [`ShardLeaseGrant::revision`].
     pub revision: ShardLeaseRevision,
@@ -286,14 +286,18 @@ impl ShardLeaseState {
     pub fn lease_grant_for(&self, executor_id: ExecutorId) -> Option<PendingGrant> {
         let lease = self.executor_leases.get(&executor_id)?;
         Some(PendingGrant {
-            shard_epochs: self
-                .shard_assignments
-                .iter()
-                .filter(|(_, entry)| entry.executor_id == executor_id)
-                .map(|(shard_id, entry)| (*shard_id, entry.epoch))
-                .collect(),
+            shard_epochs: self.owned_epochs(executor_id),
             expires_at: lease.expires_at,
         })
+    }
+
+    /// The shards `executor_id` owns, with the epoch each was granted at.
+    fn owned_epochs(&self, executor_id: ExecutorId) -> BTreeMap<ShardId, ShardEpoch> {
+        self.shard_assignments
+            .iter()
+            .filter(|(_, entry)| entry.executor_id == executor_id)
+            .map(|(shard_id, entry)| (*shard_id, entry.epoch))
+            .collect()
     }
 
     /// The full-replace payload for `executor_id`, or `None` if it holds no lease.
@@ -301,15 +305,16 @@ impl ShardLeaseState {
     /// An executor that holds a lease but no shards still gets a payload: an empty `shard_epochs`
     /// is how the manager tells it to drop everything it thinks it owns.
     pub fn assignment_push_for(&self, executor_id: ExecutorId) -> Option<ShardAssignmentPush> {
-        // Read off a state that is already stored, so this state's own revision is the one its
-        // set was stored under. The loop persists a rebalance before it pushes anything, so the
-        // revision here is a real one and never a prediction.
-        let grant = self.lease_grant_for(executor_id)?.stamp(self.revision);
+        if !self.has_executor(executor_id) {
+            return None;
+        }
         Some(ShardAssignmentPush {
-            shard_epochs: grant.shard_epochs,
-            expires_at: grant.expires_at,
+            shard_epochs: self.owned_epochs(executor_id),
             number_of_shards: self.number_of_shards,
-            revision: grant.revision,
+            // Read off a state that is already stored, so this state's own revision is the one
+            // its set was stored under. The loop persists a rebalance before it pushes anything,
+            // so the revision here is a real one and never a prediction.
+            revision: self.revision,
         })
     }
 
@@ -424,6 +429,12 @@ impl ShardLeaseState {
     /// is in the past and the first housekeeping would evict a cluster that is perfectly healthy.
     /// A shard manager coming up re-grants to exactly the executors its startup health check just
     /// found alive.
+    ///
+    /// Never for less than the executor was last told. The executor still holds that length on
+    /// its own clock, anchored no later than the grant that told it, and nothing but its next
+    /// renewal can shorten its copy - so a re-grant under a reduced `shard_lease_duration` that
+    /// used the new length would lapse here before it lapses there. The configured length applies
+    /// from that renewal; a longer one applies at once.
     pub fn regrant_leases(
         &mut self,
         executors: &HashSet<ExecutorId>,
@@ -432,7 +443,15 @@ impl ShardLeaseState {
     ) -> usize {
         executors
             .iter()
-            .filter(|executor_id| self.renew_lease(**executor_id, now, lease_ttl))
+            .filter(|executor_id| {
+                let Some(lease) = self.executor_leases.get(executor_id) else {
+                    return false;
+                };
+                let told = (lease.expires_at - lease.granted_at)
+                    .to_std()
+                    .unwrap_or(Duration::ZERO);
+                self.renew_lease(**executor_id, now, lease_ttl.max(told))
+            })
             .count()
     }
 
@@ -1227,6 +1246,44 @@ mod tests {
         assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(0)));
 
         assert!(!shard_state.renew_lease(executor(9), later, TTL));
+    }
+
+    /// A shard manager coming back with a shorter `shard_lease_duration` must not re-grant for
+    /// less than the executor was last told: the executor still holds that length on its own
+    /// clock, anchored no later than the grant, and would otherwise outlive the re-grant. The
+    /// configured length applies from the executor's next renewal. A longer one applies at once.
+    #[test]
+    fn a_regrant_is_never_shorter_than_the_lease_the_executor_was_told() {
+        // granted at t0 for 60 s
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
+        let restarted = t0() + chrono::Duration::seconds(15);
+        let shortened = std::time::Duration::from_secs(30);
+
+        let regranted =
+            shard_state.regrant_leases(&HashSet::from([executor(1)]), restarted, shortened);
+
+        assert_eq!(regranted, 1);
+        assert_eq!(
+            shard_state.executor_leases[&executor(1)].expires_at,
+            restarted + chrono::Duration::seconds(60),
+            "the re-grant must keep the length the executor was told"
+        );
+
+        // the next renewal is where the configured length takes over
+        let renewed = restarted + chrono::Duration::seconds(20);
+        assert!(shard_state.renew_lease(executor(1), renewed, shortened));
+        assert_eq!(
+            shard_state.executor_leases[&executor(1)].expires_at,
+            renewed + chrono::Duration::seconds(30)
+        );
+
+        // a longer configured length applies at once
+        let lengthened = std::time::Duration::from_secs(90);
+        shard_state.regrant_leases(&HashSet::from([executor(1)]), renewed, lengthened);
+        assert_eq!(
+            shard_state.executor_leases[&executor(1)].expires_at,
+            renewed + chrono::Duration::seconds(90)
+        );
     }
 
     #[test]

@@ -2105,10 +2105,6 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             }],
             // A lease TTL is required on the wire; one long enough that this
             // round trip does not depend on timing.
-            lease_ttl: Some(prost_types::Duration {
-                seconds: 3600,
-                nanos: 0,
-            }),
             revision: 1,
             number_of_shards: 1,
         })

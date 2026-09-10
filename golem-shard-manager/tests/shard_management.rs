@@ -541,6 +541,13 @@ async fn start_shard_management(
 ) {
     let executor_count = shard_state.executor_count();
     let number_of_shards = shard_state.number_of_shards;
+    // The fixture's leases are re-based on the configured length: the cluster under test has always
+    // run with it. A startup re-grant honours the length each executor was last told, so a fixture
+    // granted for 60s would otherwise keep a 1s test's executors alive for a minute.
+    let mut shard_state = shard_state;
+    for lease in shard_state.executor_leases.values_mut() {
+        lease.expires_at = lease.granted_at + lease_ttl;
+    }
     let persistence = TestPersistence::new(shard_state);
     let health_check = Arc::new(TestHealthCheck::all_healthy());
     let mut join_set = JoinSet::new();
@@ -1169,7 +1176,6 @@ async fn same_address_reregistration_transfers_shards_and_reconciles() {
         .collect()
     );
     assert_eq!(last_push.number_of_shards, 4);
-    assert!(last_push.expires_at > granted_at());
 
     // every persisted state along the way kept all four shards routable
     for (_, written) in persistence.writes.lock().await.iter() {

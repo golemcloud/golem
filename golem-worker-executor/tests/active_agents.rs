@@ -83,10 +83,6 @@ async fn a_push_of_zero_shards_is_refused_rather_than_applied(
                 shard_id: Some(ShardId { value: 0 }),
                 epoch: 0,
             }],
-            lease_ttl: Some(prost_types::Duration {
-                seconds: 3600,
-                nanos: 0,
-            }),
             revision: 5,
             number_of_shards: 0,
         })
@@ -156,10 +152,6 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
                 shard_id: Some(shard),
                 epoch: 0,
             }],
-            lease_ttl: Some(prost_types::Duration {
-                seconds: 3600,
-                nanos: 0,
-            }),
             revision: 5,
             number_of_shards: 1,
         })

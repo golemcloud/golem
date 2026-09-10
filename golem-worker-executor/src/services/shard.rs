@@ -14,7 +14,6 @@
 
 use crate::metrics::sharding::*;
 use crate::model::ShardAssignmentCheck;
-use chrono::{DateTime, Utc};
 use golem_common::model::{
     AgentId, ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
 };
@@ -23,6 +22,7 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::convert::identity;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use tracing::debug;
 
 /// Service for assigning shards to worker executors
@@ -32,15 +32,13 @@ pub trait ShardService: Send + Sync {
     /// `check_admission`.
     fn is_ready(&self) -> bool;
     /// Full replace from an `AssignShards` push: hold exactly `shard_epochs`,
-    /// drop everything else, and adopt the lease expiry that came with them.
-    /// Ignored whole if `revision` is older than the last delivery applied,
-    /// so a push and a renewal response that cross on the network cannot
-    /// leave the older set in place.
+    /// drop everything else. Ignored whole if `revision` is older than the last
+    /// delivery applied, so a push and a renewal reply that cross on the
+    /// network cannot leave the older set in place.
     fn assign_shards(
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<DateTime<Utc>>,
         revision: ShardLeaseRevision,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// Pure set membership. Routing decisions only — never fenced, because a
@@ -52,12 +50,14 @@ pub trait ShardService: Send + Sync {
     /// is already running.
     fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError>;
     /// Installs the first assignment, from a registration's grant. Creates the
-    /// assignment if none exists yet; gates on `revision` like the other two.
+    /// assignment if none exists yet. The set gates on `revision` like every
+    /// delivery; the lease clock always moves. `None` never expires, which only
+    /// the single-shard executor and the debugging service declare.
     fn register(
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<DateTime<Utc>>,
+        expires_at: Option<Instant>,
         revision: ShardLeaseRevision,
     ) -> ShardDeliveryOutcome;
     /// A revoke: the shards named are dropped, everything else stays. The one
@@ -70,14 +70,15 @@ pub trait ShardService: Send + Sync {
         revision: ShardLeaseRevision,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// A granted lease renewal: the shard manager's set for this executor, at
-    /// a new expiry. Normally the set that was claimed; when it is not, it is
-    /// the manager correcting a push this executor never received, and
-    /// `set_changed` tells the caller to sweep and recover agents exactly as it
-    /// would for a push. Gates on `revision` like the other two.
+    /// a new expiry anchored where the renewal was sent. Normally the set that
+    /// was claimed; when it is not, it is the manager correcting a push this
+    /// executor never received, and `set_changed` tells the caller to sweep
+    /// and recover agents exactly as it would for a push. The set gates on
+    /// `revision`; the lease clock always moves, even when the set is stale.
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<DateTime<Utc>>,
+        expires_at: Instant,
         revision: ShardLeaseRevision,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// Drops every shard and lapses the lease. Used when the shard
@@ -127,7 +128,7 @@ impl ShardServiceDefault {
 
 impl ShardService for ShardServiceDefault {
     fn is_ready(&self) -> bool {
-        let now = Utc::now();
+        let now = Instant::now();
         self.shard_assignment
             .read()
             .unwrap()
@@ -139,7 +140,6 @@ impl ShardService for ShardServiceDefault {
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<DateTime<Utc>>,
         revision: ShardLeaseRevision,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
@@ -151,12 +151,7 @@ impl ShardService for ShardServiceDefault {
                     shard_ids_to_assign = shard_epochs.keys().join(", "),
                     "ShardService.assign_shards"
                 );
-                let outcome = shard_assignment.set_shards(
-                    number_of_shards,
-                    shard_epochs,
-                    expires_at,
-                    revision,
-                );
+                let outcome = shard_assignment.set_shards(number_of_shards, shard_epochs, revision);
                 record_delivery(ShardDelivery::Assign, &outcome, shard_assignment.len());
                 Ok(outcome)
             }
@@ -172,7 +167,7 @@ impl ShardService for ShardServiceDefault {
     }
 
     fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
-        let now = Utc::now();
+        let now = Instant::now();
         self.with_read_shard_assignment(|shard_assignment: &ShardAssignment| {
             if shard_assignment.lease_is_live(now) {
                 shard_assignment.check_worker(agent_id)
@@ -191,7 +186,7 @@ impl ShardService for ShardServiceDefault {
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<DateTime<Utc>>,
+        expires_at: Option<Instant>,
         revision: ShardLeaseRevision,
     ) -> ShardDeliveryOutcome {
         self.with_write_shard_assignment(|shard_assignment| {
@@ -209,8 +204,19 @@ impl ShardService for ShardServiceDefault {
                 shard_ids_to_assign = shard_epochs.keys().join(", "),
                 "ShardService.register"
             );
-            let outcome =
-                shard_assignment.set_shards(number_of_shards, shard_epochs, expires_at, revision);
+            let outcome = match expires_at {
+                Some(expires_at) => shard_assignment.adopt_grant(
+                    Some(number_of_shards),
+                    shard_epochs,
+                    expires_at,
+                    revision,
+                ),
+                // The never-expires door, which no wire decode can open.
+                None => {
+                    shard_assignment.expires_at = None;
+                    shard_assignment.set_shards(number_of_shards, shard_epochs, revision)
+                }
+            };
             record_delivery(ShardDelivery::Register, &outcome, shard_assignment.len());
             outcome
         })
@@ -240,7 +246,7 @@ impl ShardService for ShardServiceDefault {
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<DateTime<Utc>>,
+        expires_at: Instant,
         revision: ShardLeaseRevision,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.with_write_shard_assignment(|shard_assignment| match shard_assignment {
@@ -251,7 +257,8 @@ impl ShardService for ShardServiceDefault {
                     shard_ids_renewed = shard_epochs.keys().join(", "),
                     "ShardService.update_lease"
                 );
-                let outcome = shard_assignment.update_lease(shard_epochs, expires_at, revision);
+                let outcome =
+                    shard_assignment.adopt_grant(None, shard_epochs, expires_at, revision);
                 record_delivery(ShardDelivery::Renewal, &outcome, shard_assignment.len());
                 Ok(outcome)
             }
@@ -260,7 +267,7 @@ impl ShardService for ShardServiceDefault {
     }
 
     fn clear_assignment(&self) {
-        let now = Utc::now();
+        let now = Instant::now();
         self.with_write_shard_assignment(|shard_assignment| {
             if let Some(shard_assignment) = shard_assignment {
                 debug!(
@@ -311,8 +318,8 @@ fn shard_lease_expired_error() -> WorkerExecutorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration as ChronoDuration;
     use golem_common::model::component::ComponentId;
+    use std::time::{Duration, Instant};
     use test_r::test;
     use uuid::Uuid;
 
@@ -347,7 +354,7 @@ mod tests {
 
     fn service_holding(
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<DateTime<Utc>>,
+        expires_at: Option<Instant>,
     ) -> ShardServiceDefault {
         let service = ShardServiceDefault::new();
         service.register(
@@ -359,12 +366,13 @@ mod tests {
         service
     }
 
-    fn lapsed() -> Option<DateTime<Utc>> {
-        Some(Utc::now() - ChronoDuration::seconds(1))
+    /// A lease that expires now is not live at any later check: `lease_is_live` is strict.
+    fn lapsed() -> Instant {
+        Instant::now()
     }
 
-    fn live() -> Option<DateTime<Utc>> {
-        Some(Utc::now() + ChronoDuration::seconds(60))
+    fn live() -> Instant {
+        Instant::now() + Duration::from_secs(60)
     }
 
     /// Nothing is installed until a registration: a push, a renewal or a
@@ -378,7 +386,7 @@ mod tests {
         // `ShardingNotReady` by refreshing its routing table and retrying, and answers an opaque
         // error by failing the call.
         for refused in [
-            service.assign_shards(SHARDS, &epochs([(0, 1)]), live(), ShardLeaseRevision(1)),
+            service.assign_shards(SHARDS, &epochs([(0, 1)]), ShardLeaseRevision(1)),
             service.update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(1)),
             service.revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(1)),
         ] {
@@ -400,7 +408,7 @@ mod tests {
         service.register(
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
-            live(),
+            Some(live()),
             ShardLeaseRevision(5),
         );
 
@@ -429,7 +437,7 @@ mod tests {
         service.register(
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
-            live(),
+            Some(live()),
             ShardLeaseRevision(5),
         );
 
@@ -477,7 +485,7 @@ mod tests {
         assert!(service.check_worker(&on_kept).is_ok());
 
         service
-            .assign_shards(SHARDS, &epochs([(1, 1)]), None, ShardLeaseRevision(1))
+            .assign_shards(SHARDS, &epochs([(1, 1)]), ShardLeaseRevision(1))
             .unwrap();
 
         assert_eq!(
@@ -497,7 +505,7 @@ mod tests {
     #[test]
     fn admission_is_refused_once_the_lease_has_lapsed() {
         let agent = agent_on_shard(0);
-        let service = service_holding(&epochs([(0, 3)]), live());
+        let service = service_holding(&epochs([(0, 3)]), Some(live()));
         assert!(service.is_ready());
         assert!(service.check_admission(&agent).is_ok());
 
@@ -520,7 +528,7 @@ mod tests {
     #[test]
     fn routing_checks_are_not_fenced_by_a_lapsed_lease() {
         let agent = agent_on_shard(0);
-        let service = service_holding(&epochs([(0, 3)]), lapsed());
+        let service = service_holding(&epochs([(0, 3)]), Some(lapsed()));
 
         assert!(
             service.check_worker(&agent).is_ok(),
@@ -550,7 +558,7 @@ mod tests {
     #[test]
     fn clearing_the_assignment_leaves_the_lease_lapsed() {
         let agent = agent_on_shard(0);
-        let service = service_holding(&epochs([(0, 3)]), live());
+        let service = service_holding(&epochs([(0, 3)]), Some(live()));
 
         service.clear_assignment();
 
@@ -565,5 +573,38 @@ mod tests {
             service.check_admission(&agent),
             Err(WorkerExecutorError::ShardingNotReady)
         ));
+    }
+
+    /// A renewal reply that crossed a newer push is stale about the set, not about time: it
+    /// answers this executor's own request, so its lease is adopted even though its set is not.
+    /// Refusing it would leave an executor the manager keeps renewing fenced by its own clock.
+    #[test]
+    fn a_stale_renewal_still_moves_the_lease_clock() {
+        let service = ShardServiceDefault::new();
+        service.register(
+            SHARDS,
+            &epochs([(0, 1), (1, 1)]),
+            Some(lapsed()),
+            ShardLeaseRevision(5),
+        );
+        assert!(!service.is_ready());
+
+        let outcome = service
+            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(3))
+            .expect("a registered executor can be renewed");
+
+        assert_eq!(
+            outcome,
+            ShardDeliveryOutcome::Stale {
+                delivered: ShardLeaseRevision(3),
+                applied: ShardLeaseRevision(5),
+            }
+        );
+        assert_eq!(
+            service.current_assignment().unwrap().shard_id_set(),
+            HashSet::from([ShardId::new(0), ShardId::new(1)]),
+            "the stale set is not adopted"
+        );
+        assert!(service.is_ready(), "but the lease it granted is");
     }
 }

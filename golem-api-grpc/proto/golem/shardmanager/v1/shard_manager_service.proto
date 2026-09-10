@@ -65,10 +65,12 @@ message RegisterSuccess {
   // registration: nothing is assigned yet and AssignShards delivers the
   // initial set.
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
-  // How long this executor's shard lease lasts from the moment this response
-  // is received. A duration rather than an absolute time so that the two
-  // machines' clocks are never compared: the executor anchors it to its own
-  // clock on receipt.
+  // How long this executor's shard lease lasts, measured from the moment the
+  // executor sent the request this answers. A duration rather than an absolute
+  // time so that the two machines' clocks are never compared; anchored where
+  // the request was sent so that the time this answer spent in flight comes
+  // off the executor's copy of the lease rather than being added to it. The
+  // shard manager's own copy therefore never lapses before the executor's.
   google.protobuf.Duration lease_ttl = 3;
   // The revision of the shard manager's persisted state this set was read
   // from. Every delivery of a shard set carries one - this, AssignShards and
@@ -79,7 +81,8 @@ message RegisterSuccess {
 }
 
 // An executor's shard lease: the complete set of shards it owns with the epoch
-// of each, and how long the lease lasts from receipt if it is not renewed.
+// of each, and how long the lease lasts, measured from the renewal request
+// this answers, if it is not renewed again.
 message ShardLease {
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 1;
   // See RegisterSuccess.lease_ttl.
