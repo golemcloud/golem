@@ -208,8 +208,8 @@ export const TestAgentImpl = TestAgent.implement({
       const reflected = getReflectedAgentType("Counter");
       if (!reflected) throw new Error("Counter was not discovered");
 
-      const method = reflected.method("get-value");
-      if (!method) throw new Error("Counter.get-value was not discovered");
+      const method = reflected.method("get_value");
+      if (!method) throw new Error("Counter.get_value was not discovered");
 
       const missingAgentId = reflected.agentId({
         id: `${targetName}-missing`,
@@ -219,11 +219,11 @@ export const TestAgentImpl = TestAgent.implement({
 
       const first = await reflected.client
         .get({ id: targetName })
-        .method("get-value")
+        .method("get_value")
         .invoke({});
       if (typeof first.value !== "string") {
         throw new Error(
-          "expected reflected Counter.get-value to return a string",
+          "expected reflected Counter.get_value to return a string",
         );
       }
 
@@ -235,11 +235,11 @@ export const TestAgentImpl = TestAgent.implement({
 
       const second = await concreteAgentId
         .client(byAgentId)
-        .method("get-value")
+        .method("get_value")
         .invoke({});
       if (typeof second.value !== "string") {
         throw new Error(
-          "expected rebound Counter.get-value to return a string",
+          "expected rebound Counter.get_value to return a string",
         );
       }
 
