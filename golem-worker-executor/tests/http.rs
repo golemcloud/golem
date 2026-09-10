@@ -3172,6 +3172,121 @@ async fn outgoing_http_full_response_is_replayed_without_network(
 }
 
 #[test]
+#[test_r::timeout("2m")]
+#[tracing::instrument]
+async fn outgoing_http_ignored_trailers_replayed_without_network(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    ignored_trailers_replay(last_unique_id, deps, http_tests, "get_and_ignore_trailers").await
+}
+
+#[test]
+#[test_r::timeout("2m")]
+#[tracing::instrument]
+async fn outgoing_http_cancelled_body_ignored_trailers_replayed_without_network(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    ignored_trailers_replay(
+        last_unique_id,
+        deps,
+        http_tests,
+        "get_and_cancel_body_ignoring_trailers",
+    )
+    .await
+}
+
+async fn ignored_trailers_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    http_tests: &PrecompiledComponent,
+    method: &str,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let server_requests = requests.clone();
+    let server = spawn(async move {
+        let route = Router::new().route(
+            "/full-response",
+            axum::routing::get(move || {
+                let requests = server_requests.clone();
+                async move { format!("{}-body", requests.fetch_add(1, Ordering::SeqCst)) }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, method, data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "status=200;x-resp-test=;body=0-body");
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let parents = partition_starts(&oplog, "http::types::response::consume-body");
+    assert_eq!(parents.counts(), (0, 1, 0), "{parents:?}");
+    let parent = parents.ended[0];
+    assert!(
+        !oplog.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::CompletionDelivered(params) => params.start_index == parent,
+            PublicOplogEntry::CompletionDiscarded(params) => params.start_index == parent,
+            _ => false,
+        }),
+        "the unconsumed trailers must leave a markerless parent End"
+    );
+    let end = oplog
+        .iter()
+        .position(|entry| {
+            matches!(&entry.entry,
+        PublicOplogEntry::End(params) if params.start_index == parent)
+        })
+        .unwrap();
+    assert!(
+        oplog[end + 1..]
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+    );
+    drop(executor);
+
+    // Two restarts exercise both the original markerless tail and its later settlement.
+    for _ in 0..2 {
+        let executor = start(deps, &context).await?;
+        let stored = executor
+            .invoke_and_await_agent(&component, &agent_id, "stored_full_response", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(stored, result);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        executor.check_oplog_is_queryable(&worker_id).await?;
+        drop(executor);
+    }
+    server.abort();
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn outgoing_http_contains_idempotency_key(
     last_unique_id: &LastUniqueId,

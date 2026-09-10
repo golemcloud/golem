@@ -843,7 +843,7 @@ async fn deliver_http_body_reply(
         return Ok(DemandDelivery::Abandoned);
     }
 
-    delivery.prepare_delivery().await?;
+    delivery.prepare_delivery(Some(activity)).await?;
     let (delivery, observed) = HttpBodyChunkDelivery::new(delivery);
     if let Err(reply) = demand.send(reply(delivery)) {
         // Dropping an armed delivery reserves the discard marker before waking this task.
@@ -1725,12 +1725,15 @@ where
             activity.park(trailers_tx.closed()).await;
             drop(trailers_tx);
         } else {
-            delivery.prepare_delivery().await.map_err(|error| {
-                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                    anyhow::Error::from(error),
-                    parent_trap_context,
-                ))
-            })?;
+            delivery
+                .prepare_delivery(Some(&activity))
+                .await
+                .map_err(|error| {
+                    wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                        anyhow::Error::from(error),
+                        parent_trap_context,
+                    ))
+                })?;
             trailers_delivery.arm(delivery);
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => {}
