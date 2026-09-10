@@ -1196,9 +1196,10 @@ impl OplogSweeper {
 mod tests {
     use super::*;
     use crate::model::ExecutionStatus;
+
     use crate::services::oplog::{
         BlobOplogArchiveService, CommitLevel, CompressedOplogArchiveService,
-        MultiLayerOplogService, Oplog, OplogService, PrimaryOplogService,
+        MultiLayerOplogService, Oplog, OplogArchive, OplogService, PrimaryOplogService,
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
@@ -3668,6 +3669,197 @@ mod tests {
         let second = sweeper.sweep_once(&CancellationToken::new()).await;
         assert_eq!(second.scanned(), 3);
         assert_eq!(sweeper.memo.lock().await.len(), 6);
+    }
+
+    /// A layer that reports more work below it than the stack can hold. `drop_prefix` does not
+    /// drop, so the ephemeral archive step finds the same first non-empty layer every time and
+    /// says there is more; the layer below swallows the repeated append, since a real indexed
+    /// layer would refuse the duplicate ids.
+    #[derive(Debug)]
+    struct Miscounting {
+        inner: Arc<dyn OplogArchiveService>,
+        keeps_entries: bool,
+        appends: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[async_trait]
+    impl OplogArchiveService for Miscounting {
+        async fn open(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            agent_mode: AgentMode,
+        ) -> Arc<dyn OplogArchive + Send + Sync> {
+            Arc::new(MiscountingArchive {
+                inner: self.inner.open(owned_agent_id, agent_mode).await,
+                keeps_entries: self.keeps_entries,
+                appends: self.appends.clone(),
+            })
+        }
+
+        async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+            self.inner.delete(owned_agent_id, agent_mode).await
+        }
+
+        async fn read(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            agent_mode: AgentMode,
+            idx: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.inner.read(owned_agent_id, agent_mode, idx, n).await
+        }
+
+        async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+            self.inner.exists(owned_agent_id, agent_mode).await
+        }
+
+        async fn scan_for_component(
+            &self,
+            environment_id: &EnvironmentId,
+            component_id: &ComponentId,
+            modes: Option<AgentMode>,
+            cursor: golem_common::model::ScanCursor,
+            count: u64,
+        ) -> Result<(golem_common::model::ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError>
+        {
+            self.inner
+                .scan_for_component(environment_id, component_id, modes, cursor, count)
+                .await
+        }
+
+        async fn get_last_index(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            agent_mode: AgentMode,
+        ) -> OplogIndex {
+            self.inner.get_last_index(owned_agent_id, agent_mode).await
+        }
+
+        fn scan_namespace(&self, agent_mode: AgentMode) -> Option<IndexedStorageMetaNamespace> {
+            self.inner.scan_namespace(agent_mode)
+        }
+    }
+
+    #[derive(Debug)]
+    struct MiscountingArchive {
+        inner: Arc<dyn OplogArchive + Send + Sync>,
+        keeps_entries: bool,
+        appends: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    #[async_trait]
+    impl OplogArchive for MiscountingArchive {
+        async fn read(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+            self.inner.read(idx, n).await
+        }
+
+        async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64 {
+            self.appends
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.keeps_entries {
+                self.inner.append(chunk).await
+            } else {
+                0
+            }
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            self.inner.current_oplog_index().await
+        }
+
+        async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+            if self.keeps_entries {
+                0
+            } else {
+                self.inner.drop_prefix(last_dropped_id).await
+            }
+        }
+
+        async fn length(&self) -> u64 {
+            self.inner.length().await
+        }
+
+        async fn get_last_index(&self) -> OplogIndex {
+            self.inner.get_last_index().await
+        }
+    }
+
+    /// The step bound exists for exactly one layer: one that keeps reporting more work below it.
+    /// Without the bound `archive_agent` would step forever; with it, the agent is reported as
+    /// not archived and its tracking entry stays, rather than being reported archived with its
+    /// entries still in place.
+    #[test]
+    #[timeout("1m")]
+    async fn a_layer_that_keeps_reporting_more_work_is_stopped_at_the_step_bound() {
+        let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+        let blob_storage = Arc::new(InMemoryBlobStorage::new());
+        let appends = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        // Level 1 never empties, so every step moves it again; level 2 swallows what it is
+        // handed, so the repeat lands nowhere; blob is the bottom that makes level 2 a source.
+        let sticky: Arc<dyn OplogArchiveService> = Arc::new(Miscounting {
+            inner: Arc::new(CompressedOplogArchiveService::new(
+                indexed_storage.clone(),
+                1,
+                RetryConfig::default(),
+            )),
+            keeps_entries: true,
+            appends: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        });
+        let sink: Arc<dyn OplogArchiveService> = Arc::new(Miscounting {
+            inner: Arc::new(CompressedOplogArchiveService::new(
+                indexed_storage.clone(),
+                2,
+                RetryConfig::default(),
+            )),
+            keeps_entries: false,
+            appends: appends.clone(),
+        });
+        let blob: Arc<dyn OplogArchiveService> =
+            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 0));
+        let layers = Layers {
+            oplog_service: Arc::new(MultiLayerOplogService::new(
+                Arc::new(futures::executor::block_on(PrimaryOplogService::new(
+                    indexed_storage.clone(),
+                    blob_storage.clone(),
+                    100,
+                    100,
+                    1024,
+                    RetryConfig::default(),
+                ))),
+                nev![sticky.clone(), sink.clone(), blob.clone()],
+                1000,
+                1000,
+            )),
+            archives: vec![sticky, sink, blob],
+            indexed_storage,
+        };
+        let environment_id = EnvironmentId::new();
+        let agent_id = agent("counter-1", ComponentId::new());
+        stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
+        let sweeper = build(
+            &layers,
+            manual(),
+            all_shards(),
+            environment_id,
+            HashSet::new(),
+        );
+
+        sweeper.sweep_once(&CancellationToken::new()).await;
+        let second = sweeper.sweep_once(&CancellationToken::new()).await;
+
+        assert_eq!(second.route(EPHEMERAL_L1).archive_failed, 1);
+        assert_eq!(second.archived(), 0, "moved nothing to completion");
+        assert_eq!(
+            appends.load(std::sync::atomic::Ordering::SeqCst),
+            u64::from(sweeper.max_archive_steps),
+            "one step per allowed step, and then it stopped"
+        );
+        assert_eq!(
+            sweeper.memo.lock().await.len(),
+            1,
+            "and the agent keeps its tracking entry, since it was not archived"
+        );
     }
 
     /// The bound is derived from the stack so that only a layer reporting more work than the stack
