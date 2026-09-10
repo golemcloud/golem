@@ -10,7 +10,7 @@ import {
 } from 'golem:agent/host@2.0.0';
 import { resolveRemoteAgentFallibly, type RemoteAgentHandle } from './bridge/agent';
 import { schemaValueFromWit, type SchemaValue } from './internal/schema-model';
-import type { AgentId } from './agentId';
+import type { ParsedAgentId } from './agentId';
 import { Uuid } from './uuid';
 
 export interface DynamicInvocation<T> {
@@ -19,7 +19,7 @@ export interface DynamicInvocation<T> {
 }
 
 export interface DynamicAgentClientSurface {
-  readonly agentId: AgentId;
+  readonly agentId: ParsedAgentId;
   method(name: string): DynamicAgentMethodSurface;
 }
 
@@ -31,12 +31,12 @@ export interface DynamicAgentMethodSurface {
 }
 
 export class DynamicAgentClient implements DynamicAgentClientSurface {
-  readonly agentId: AgentId;
+  readonly agentId: ParsedAgentId;
   private readonly remote: RemoteAgentHandle;
 
-  constructor(agentId: AgentId) {
+  constructor(agentId: ParsedAgentId) {
     this.agentId = agentId;
-    const [typeName, constructorValue, phantomId] = parseAgentId(agentId.agentId);
+    const [typeName, constructorValue, phantomId] = parseAgentId(agentId.value);
     this.remote = resolveRemoteAgentFallibly(
       typeName,
       schemaValueFromWit(constructorValue.value),

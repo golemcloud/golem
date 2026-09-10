@@ -24,7 +24,7 @@ steps:
       Also define a complete caller-owned `ReflectionTarget` client contract whose
       string ID uses a Standard Schema library. Construct the same target AgentId in
       two ways: first through the contract's `agentId` helper, and then explicitly
-      with `AgentId.create` and a Golem `SchemaValue` built with the SDK's `v` helpers.
+      with `ParsedAgentId.create` and a Golem `SchemaValue` built with the SDK's `v` helpers.
       Bind the contract to each ID and invoke `echo` with `"schema library"` and
       `"schema value"` respectively.
 
@@ -36,7 +36,7 @@ steps:
       `second`, `schemaIdsMatch`, `schemaLibrary`, and `schemaValue`. They must
       respectively contain whether `ReflectionTarget` appeared in the discovered
       list, the discovered type name, the reflected method name, the two reflected
-      echoed values, whether both caller-constructed AgentIds have the same agent ID
+      echoed values, whether both caller-constructed identities have the same agent ID
       string, and the two contract-call results. Make sure the project builds
       successfully.
     expectedSkills:

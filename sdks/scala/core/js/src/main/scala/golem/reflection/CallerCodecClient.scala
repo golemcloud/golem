@@ -33,7 +33,7 @@ final class AgentClientDefinition[Constructor] private (
   ): CallerCodecMethod[Input, Output] =
     CallerCodecMethod(name, input, output)
 
-  def bind(agentId: AgentId): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
+  def bind(agentId: ParsedAgentId): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
     for {
       parts <- agentId.parts
       _     <- Either.cond(
@@ -46,8 +46,7 @@ final class AgentClientDefinition[Constructor] private (
              (),
              GolemReflectError.Identity(s"Cannot bind an existing identity to ephemeral agent type '$name'")
            )
-      componentId <- Reflection.componentIdFor(name)
-      transport   <- Transport.create(componentId, name, parts.constructorValue, parts.phantomId)
+      transport <- Transport.create(name, parts.constructorValue, parts.phantomId)
     } yield new CallerCodecAgentClient(this, transport)
 }
 
@@ -67,7 +66,7 @@ final case class CallerCodecMethod[Input, Output](
 )
 
 final case class CallerCodecPhantomClient[Constructor](
-  agentId: AgentId,
+  agentId: ParsedAgentId,
   phantomId: Uuid,
   client: CallerCodecAgentClient[Constructor]
 )
@@ -89,9 +88,8 @@ final class CallerCodecClientFactory[Constructor] private[reflection] (
       val phantom = Uuid.random()
       for {
         constructor <- encodeConstructor(input)
-        componentId <- Reflection.componentIdFor(definition.name)
-        id          <- AgentId.create(componentId, definition.name, constructor, Some(phantom))
-        transport   <- Transport.create(componentId, definition.name, constructor, Some(phantom))
+        id          <- ParsedAgentId.create(definition.name, constructor, Some(phantom))
+        transport   <- Transport.create(definition.name, constructor, Some(phantom))
         client       = new CallerCodecAgentClient(definition, transport)
       } yield Right(CallerCodecPhantomClient(id, phantom, client))
     }
@@ -106,9 +104,8 @@ final class CallerCodecClientFactory[Constructor] private[reflection] (
     constructor: SchemaValue,
     phantomId: Option[Uuid]
   ): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
-    Reflection
-      .componentIdFor(definition.name)
-      .flatMap(Transport.create(_, definition.name, constructor, phantomId))
+    Transport
+      .create(definition.name, constructor, phantomId)
       .map(new CallerCodecAgentClient(definition, _))
 
   private def encodeConstructor(input: Constructor): Either[GolemReflectError, SchemaValue] =

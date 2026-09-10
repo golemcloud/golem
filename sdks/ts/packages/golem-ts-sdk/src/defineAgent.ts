@@ -21,8 +21,7 @@
 import { StandardSchemaV1 } from './schema/standardSchema';
 import { MethodSpec } from './method';
 import type { InputRecord, MethodHasHttpOf } from './method';
-import { ParsedAgentId } from './agentId';
-import { bindAgentClient, type AgentClientBinding, type AgentId } from './agentId';
+import { bindAgentClient, ParsedAgentId, type AgentClientBinding } from './agentId';
 import { Principal } from './principal';
 import { Uuid } from './uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
@@ -204,13 +203,13 @@ export interface AgentClientDefinition<
   Config extends ConfigSpec = {},
   Mode extends 'durable' | 'ephemeral' = 'durable',
 > extends AgentClientContract<Id, Methods, Config, Mode> {
-  /** Construct the full identity for an agent addressed by this definition. */
+  /** Construct the environment-scoped identity for an agent addressed by this definition. */
   readonly agentId: Mode extends 'ephemeral'
-    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
-    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId;
+    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
+    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
   /** A client factory compiled from this definition's local schemas. */
   readonly client: AgentClientFactory<Id, Methods, Mode>;
-  [bindAgentClient](agentId: AgentId): import('./client').RemoteClient<Methods, Mode>;
+  [bindAgentClient](agentId: ParsedAgentId): import('./client').RemoteClient<Methods, Mode>;
 }
 
 export interface AgentDefinition<

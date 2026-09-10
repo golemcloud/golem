@@ -15,7 +15,14 @@
 // Type-only coverage for values crossing the package's public entrypoints.
 // Checked by the package typecheck script; NOT executed by vitest.
 
-import { AgentId, ComponentId, Uuid, defineAgentClient, method } from '../dist/index.mjs';
+import {
+  ComponentId,
+  ParsedAgentId,
+  Uuid,
+  defineAgentClient,
+  method,
+  type AgentId,
+} from '../dist/index.mjs';
 import { ComponentId as ReflectionComponentId, getAgentType } from '../dist/reflection.mjs';
 import { z } from 'zod';
 import { v } from '../dist/schema.mjs';
@@ -24,12 +31,15 @@ const componentId = new ComponentId(new Uuid(1n, 2n));
 const reflectionComponentId: ReflectionComponentId = componentId;
 getAgentType('ExampleAgent')!.implementedBy satisfies ReflectionComponentId;
 reflectionComponentId satisfies ComponentId;
-const id = AgentId.create({
-  componentId,
+const id = ParsedAgentId.create({
   typeName: 'ExampleAgent',
   constructorValue: v.record([v.string('example')]),
 });
-AgentId.parse(id);
+id.parts();
+const managementId: AgentId = { componentId, agentId: id.value };
+managementId.componentId satisfies ComponentId;
+// @ts-expect-error management IDs do not provide reflection client helpers
+managementId.client;
 const contract = defineAgentClient({
   methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
 });
@@ -42,13 +52,13 @@ const exactContract = defineAgentClient({
   methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
 });
 const schemaLibraryId = exactContract.agentId({ name: 'example' });
-const schemaValueId = AgentId.create({
-  componentId: schemaLibraryId.componentId,
+const schemaValueId = ParsedAgentId.create({
   typeName: exactContract.name,
   constructorValue: v.record([v.string('example')]),
 });
 schemaLibraryId.client(exactContract).ping({ message: 'schema library' });
 schemaValueId.client(exactContract).ping({ message: 'schema value' });
+schemaValueId.value satisfies string;
 
 const ephemeralContract = defineAgentClient({
   name: 'EphemeralExampleAgent',

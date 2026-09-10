@@ -57,13 +57,13 @@ import type {
 } from 'golem:api/oplog@1.5.0';
 
 import { Uuid } from '../uuid';
-import { AccountId, EnvironmentId } from '../ids';
-import { AgentId } from '../agentId';
+import { ComponentId, AccountId, EnvironmentId } from '../ids';
+import type { AgentId } from './hostapi';
 
 // Re-export enriched types for convenience
 export { Uuid } from '../uuid';
 export { ComponentId, AccountId, EnvironmentId } from '../ids';
-export type { AgentId } from '../agentId';
+export type { AgentId } from './hostapi';
 
 // Re-export types that don't contain UUID-based types
 export type {
@@ -228,7 +228,10 @@ export type PublicOplogEntry =
 // Wrapping helpers
 
 function wrapAgentId(raw: RawAgentId): AgentId {
-  return AgentId.from(raw);
+  return {
+    componentId: ComponentId.from(raw.componentId),
+    agentId: raw.agentId,
+  };
 }
 
 function wrapPublicOplogEntry(raw: RawPublicOplogEntry): PublicOplogEntry {

@@ -1,6 +1,6 @@
 ---
 name: golem-agent-reflection-ts
-description: "Discovering and calling Golem agents through runtime reflection in TypeScript. Use when agent types or methods are selected dynamically, schemas must be inspected at runtime, or only an AgentId is available."
+description: "Discovering and calling Golem agents through runtime reflection in TypeScript. Use when agent types or methods are selected dynamically, schemas must be inspected at runtime, or only a ParsedAgentId is available."
 ---
 
 # Calling Agents with Runtime Reflection (TypeScript)
@@ -85,7 +85,7 @@ Standard Schema library:
 ```typescript
 import { z } from 'zod';
 import {
-  AgentId,
+  ParsedAgentId,
   defineAgentClient,
   method,
 } from '@golemcloud/golem-ts-sdk';
@@ -105,8 +105,7 @@ const first = await schemaLibraryId
   .echo({ message: 'from Zod' });
 
 const constructorValue = v.record([v.string('main')]);
-const schemaValueId = AgentId.create({
-  componentId: schemaLibraryId.componentId,
+const schemaValueId = ParsedAgentId.create({
   typeName: CounterContract.name,
   constructorValue,
 });
@@ -116,7 +115,7 @@ const second = await schemaValueId
 ```
 
 The first form validates and packs constructor fields through the caller's
-schema library. The explicit `AgentId.create` form is for infrastructure that
+schema library. The explicit `ParsedAgentId.create` form is for infrastructure that
 already owns a Golem `SchemaValue`; record fields must be in the target
 constructor's declared order. It does not validate that value against the
 remote constructor schema. When runtime metadata is available, prefer
@@ -131,19 +130,19 @@ and bind it fluently:
 ```typescript
 import {
   getAgentTypeByAgentId,
-  type AgentId,
+  ParsedAgentId,
 } from '@golemcloud/golem-ts-sdk';
 
-function bindExisting(agentId: AgentId) {
+function bindExisting(agentId: ParsedAgentId) {
   const reflected = getAgentTypeByAgentId(agentId);
   if (!reflected) throw new Error('Agent or registered type was not found');
   return agentId.client(reflected);
 }
 ```
 
-Lookup by `AgentId` does not create the agent. It returns `undefined` when the
+Lookup by `ParsedAgentId` does not create the agent. It returns `undefined` when the
 identity does not exist, its type cannot be resolved, or the caller cannot view
-it. `AgentId.parse` is the strict local operation when malformed identity text
+it. `agentId.parts()` is the strict local operation when malformed identity text
 must be reported instead of treated as a discovery miss. Use
 `agentId.dynamicClient()` only for lifecycle-free infrastructure that already
 holds schema-native values and intentionally invokes arbitrary method names
@@ -179,7 +178,7 @@ console.log(result.metadata.agentId, result.metadata.idempotencyKey);
 `getPhantom` is also available when the caller already holds the phantom ID.
 It does not make a final, already-invoked ephemeral agent ID reusable.
 
-Do not treat an ephemeral proxy as having a reusable final `AgentId`. A final
+Do not treat an ephemeral proxy as having a reusable final `ParsedAgentId`. A final
 ephemeral identity cannot accept another invocation or be resumed.
 
 ## Choosing the Client Surface

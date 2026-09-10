@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  AgentId,
+  ParsedAgentId,
   AgentStream,
   awaitPromise,
   createPromise,
@@ -13,7 +13,7 @@ import {
   method,
   s,
 } from "@golemcloud/golem-ts-sdk";
-import { getSelfMetadata, type PromiseId } from "golem:api/host@1.5.0";
+import { type PromiseId } from "golem:api/host@1.5.0";
 import * as process from "node:process";
 
 const EnvVar = z.object({ key: z.string(), value: z.string() });
@@ -78,8 +78,8 @@ const ReflectionDiscoveryReport = z.object({
   listed: z.boolean(),
   typeName: z.string(),
   methodName: z.string(),
-  firstValue: z.number(),
-  secondValue: z.number(),
+  firstValue: z.string(),
+  secondValue: z.string(),
   missingName: z.boolean(),
   missingAgentId: z.boolean(),
 });
@@ -177,10 +177,7 @@ export const TestAgentImpl = TestAgent.implement({
       const first = await EphemeralSingleUseAgent.client
         .newPhantom({ value: "captured" })
         .capture();
-      const finalAgentId = AgentId.from({
-        componentId: getSelfMetadata().agentId.componentId,
-        agentId: first.metadata.agentId,
-      });
+      const finalAgentId = new ParsedAgentId(first.metadata.agentId);
 
       try {
         await finalAgentId.client(EphemeralReuseContract).capture();
@@ -208,41 +205,41 @@ export const TestAgentImpl = TestAgent.implement({
     async reflectionDiscoveryTest() {
       const targetName = `reflection-${this.id}`;
       const allTypes = getAllAgentTypes();
-      const reflected = getReflectedAgentType("SimpleChildAgent");
-      if (!reflected) throw new Error("SimpleChildAgent was not discovered");
+      const reflected = getReflectedAgentType("Counter");
+      if (!reflected) throw new Error("Counter was not discovered");
 
-      const method = reflected.method("value");
-      if (!method) throw new Error("SimpleChildAgent.value was not discovered");
+      const method = reflected.method("get-value");
+      if (!method) throw new Error("Counter.get-value was not discovered");
 
       const missingAgentId = reflected.agentId({
-        name: `${targetName}-missing`,
+        id: `${targetName}-missing`,
       });
       const missingAgentIdResult =
         getAgentTypeByAgentId(missingAgentId) === undefined;
 
       const first = await reflected.client
-        .get({ name: targetName })
-        .method("value")
+        .get({ id: targetName })
+        .method("get-value")
         .invoke({});
-      if (typeof first.value !== "number") {
+      if (typeof first.value !== "string") {
         throw new Error(
-          "expected reflected SimpleChildAgent.value to return a number",
+          "expected reflected Counter.get-value to return a string",
         );
       }
 
-      const concreteAgentId = reflected.agentId({ name: targetName });
+      const concreteAgentId = reflected.agentId({ id: targetName });
       const byAgentId = getAgentTypeByAgentId(concreteAgentId);
       if (!byAgentId) {
-        throw new Error("existing SimpleChildAgent type was not resolved");
+        throw new Error("existing Counter type was not resolved");
       }
 
       const second = await concreteAgentId
         .client(byAgentId)
-        .method("value")
+        .method("get-value")
         .invoke({});
-      if (typeof second.value !== "number") {
+      if (typeof second.value !== "string") {
         throw new Error(
-          "expected rebound SimpleChildAgent.value to return a number",
+          "expected rebound Counter.get-value to return a string",
         );
       }
 
