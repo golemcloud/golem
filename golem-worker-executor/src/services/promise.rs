@@ -349,12 +349,6 @@ impl PromiseService for DefaultPromiseService {
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
 
-        // Start tracking the promise locally so poll does not need to go to storage.
-        {
-            let mut reg = self.registry.lock().await;
-            reg.get_or_insert(&promise_id);
-        };
-
         promise_id
     }
 
@@ -682,6 +676,40 @@ mod tests {
             },
             oplog_idx: OplogIndex::from_u64(1),
         }
+    }
+
+    #[test]
+    async fn create_leaves_registration_to_poll() {
+        let service = DefaultPromiseService::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            Arc::new(NoopPromiseWorkerAccess),
+        );
+        let expected_id = promise_id();
+        let id = service
+            .create(&expected_id.agent_id, expected_id.oplog_idx)
+            .await;
+
+        assert_eq!(id, expected_id);
+        assert!(service.registry.lock().await.handles.is_empty());
+
+        let payload = vec![3, 17, 42];
+        assert!(service.complete(id.clone(), payload.clone()).await.unwrap());
+        assert!(service.registry.lock().await.handles.is_empty());
+
+        let handle = service.poll(id.clone()).await.unwrap();
+        assert_eq!(handle.get().await, Some(payload));
+        let second_handle = service.poll(id.clone()).await.unwrap();
+        assert!(Arc::ptr_eq(&handle.inner, &second_handle.inner));
+
+        let weak = handle.downgrade();
+        drop(handle);
+        service.cleanup().await;
+        assert!(service.registry.lock().await.get(&id).is_some());
+
+        drop(second_handle);
+        assert!(weak.upgrade().is_none());
+        service.cleanup().await;
+        assert!(service.registry.lock().await.handles.is_empty());
     }
 
     #[test]
