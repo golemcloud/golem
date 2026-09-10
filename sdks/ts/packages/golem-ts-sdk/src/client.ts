@@ -29,8 +29,7 @@ import { v } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from './uuid';
-import { AgentId, bindAgentClient } from './agentId';
-import { getSelfMetadata } from './host/hostapi';
+import { ParsedAgentId, bindAgentClient } from './agentId';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
@@ -128,7 +127,7 @@ export type RemoteClient<
 /** A newly generated phantom client together with its reusable phantom id. */
 export interface PhantomClientDetails<Methods extends MethodsRecord> {
   readonly client: RemoteClient<Methods>;
-  readonly agentId: AgentId;
+  readonly agentId: ParsedAgentId;
   readonly phantomId: Uuid;
 }
 
@@ -414,7 +413,7 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
 function buildAgentIdBinding<Methods extends MethodsRecord>(
   def: { readonly name?: string; readonly methods: Methods },
   fallible: boolean,
-): { [bindAgentClient](agentId: AgentId): RemoteClient<Methods> } {
+): { [bindAgentClient](agentId: ParsedAgentId): RemoteClient<Methods> } {
   const methodCodecs = compileRemoteMethods(def.methods);
   return {
     [bindAgentClient](agentId) {
@@ -427,10 +426,10 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
   exactName: string | undefined,
   methodCodecs: CompiledRemoteMethod[],
   fallible: boolean,
-  agentId: AgentId,
+  agentId: ParsedAgentId,
   mode: Mode,
 ): RemoteClient<Methods, Mode> {
-  const parts = AgentId.parse(agentId);
+  const parts = agentId.parts();
   if (exactName !== undefined && exactName !== parts.typeName) {
     throw new TypeError(
       `Agent client contract '${exactName}' cannot bind agent type '${parts.typeName}'`,
@@ -438,7 +437,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
   }
   if (mode === 'ephemeral') {
     throw new TypeError(
-      `Cannot bind existing AgentId '${agentId.agentId}' to ephemeral agent type '${parts.typeName}'; use its client.newPhantom(...) factory`,
+      `Cannot bind existing ParsedAgentId '${agentId.value}' to ephemeral agent type '${parts.typeName}'; use its client.newPhantom(...) factory`,
     );
   }
   const remote = (fallible ? resolveRemoteAgentFallibly : resolveRemoteAgent)(
@@ -465,9 +464,9 @@ export function buildAgentClientSurface<
     ? EphemeralRemoteClientFactory<Id, Methods>
     : RemoteClientFactory<Id, Methods>;
   agentId: Mode extends 'ephemeral'
-    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
-    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId;
-  [bindAgentClient](agentId: AgentId): RemoteClient<Methods, Mode>;
+    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
+    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
+  [bindAgentClient](agentId: ParsedAgentId): RemoteClient<Methods, Mode>;
 } {
   // Compile the def's id + method codecs once (cached in this closure).
   const idCodecs: NamedCodec[] = Object.keys(def.id)
@@ -477,9 +476,8 @@ export function buildAgentClientSurface<
 
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
 
-  const createAgentId = (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid): AgentId =>
-    AgentId.create({
-      componentId: getSelfMetadata().agentId.componentId,
+  const createAgentId = (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid): ParsedAgentId =>
+    ParsedAgentId.create({
       typeName: def.name,
       constructorValue: encodeRecord(idCodecs, id as Record<string, unknown>),
       phantomId,
@@ -537,8 +535,8 @@ export function buildAgentClientSurface<
       ? EphemeralRemoteClientFactory<Id, Methods>
       : RemoteClientFactory<Id, Methods>,
     agentId: createAgentId as Mode extends 'ephemeral'
-      ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
-      : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId,
+      ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
+      : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId,
     [bindAgentClient](agentId) {
       return bindExistingAgent(def.name, methodCodecs, fallible, agentId, def.mode);
     },

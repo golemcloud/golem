@@ -16,7 +16,6 @@ import { makeAgentId, parseAgentId } from 'golem:agent/host@2.0.0';
 import { Uuid } from './uuid';
 import { Uuid as RawUuid } from 'golem:core/types@2.0.0';
 import { SchemaValue, schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
-import { ComponentId } from './ids';
 import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicClient';
 
 /** @internal Protocol implemented by typed contracts and reflected agent types. */
@@ -24,79 +23,21 @@ export const bindAgentClient = '__golemBindAgentClient' as const;
 
 /** @internal A value that can bind itself to an existing agent identity. */
 export interface AgentClientBinding<Client> {
-  [bindAgentClient](agentId: AgentId): Client;
+  [bindAgentClient](agentId: ParsedAgentId): Client;
 }
 
-/** Globally unique identity of a Golem agent. */
-export interface AgentId {
-  readonly componentId: ComponentId;
-  readonly agentId: string;
-  /** Bind caller-supplied codecs or a reflected agent type to this identity. */
-  client<Client>(binding: AgentClientBinding<Client>): Client;
-  /** Invoke this identity with schema values and no discovery or typed contract. */
-  dynamicClient(): DynamicAgentClientSurface;
-}
-
-/** Explicit parts used to construct an {@link AgentId}. */
-export interface AgentIdCreateOptions {
-  readonly componentId: ComponentId;
+/** Explicit parts used to construct a {@link ParsedAgentId}. */
+export interface ParsedAgentIdCreateOptions {
   readonly typeName: string;
   readonly constructorValue: SchemaValue;
   readonly phantomId?: Uuid;
 }
 
-/** Parsed semantic parts of an {@link AgentId}. */
-export interface AgentIdParts {
-  readonly componentId: ComponentId;
+/** Semantic parts of a {@link ParsedAgentId}. */
+export interface ParsedAgentIdParts {
   readonly typeName: string;
   readonly constructorValue: SchemaValue;
   readonly phantomId?: Uuid;
-}
-
-/** Construct and inspect full agent identities. */
-export const AgentId = Object.freeze({
-  from(value: {
-    readonly componentId: { readonly uuid: RawUuid };
-    readonly agentId: string;
-  }): AgentId {
-    return new AgentIdValue(ComponentId.from(value.componentId), value.agentId);
-  },
-
-  create(options: AgentIdCreateOptions): AgentId {
-    return new AgentIdValue(
-      options.componentId,
-      createAgentIdString(options.typeName, options.constructorValue, options.phantomId),
-    );
-  },
-
-  parse(value: AgentId): AgentIdParts {
-    const [typeName, typedParameters, rawPhantomId] = parseAgentId(value.agentId);
-    return {
-      componentId: value.componentId,
-      typeName,
-      constructorValue: schemaValueFromWit(typedParameters.value),
-      phantomId: rawPhantomId ? Uuid.from(rawPhantomId) : undefined,
-    };
-  },
-});
-
-class AgentIdValue implements AgentId {
-  constructor(
-    readonly componentId: ComponentId,
-    readonly agentId: string,
-  ) {}
-
-  client<Client>(binding: AgentClientBinding<Client>): Client {
-    const bind = binding[bindAgentClient];
-    if (typeof bind !== 'function') {
-      throw new TypeError('Expected an agent client contract or reflected agent type');
-    }
-    return bind.call(binding, this);
-  }
-
-  dynamicClient(): DynamicAgentClientSurface {
-    return new DynamicAgentClient(this);
-  }
 }
 
 function createAgentIdString(
@@ -128,21 +69,14 @@ export class ParsedAgentId {
   }
 
   /**
-   * Constructs a ParsedAgentId from the given agent type name, parameters and an optional phantom ID.
-   * @param agentTypeName Agent type name in kebab-case
-   * @param parameters Constructor parameter values encoded as a {@link SchemaValue} record
-   * @param phantomId Optional phantom ID
-   * @internal Use a definition's `agentId(...)` or {@link AgentId.create}.
+   * Constructs a ParsedAgentId from an agent type name, constructor value, and optional phantom ID.
+   * Prefer a definition's `agentId(...)` when a typed definition is available.
    */
-  static create(
-    agentTypeName: string,
-    parameters: SchemaValue,
-    phantomId?: RawUuid,
-  ): ParsedAgentId {
-    const normalized = phantomId ? Uuid.from(phantomId) : undefined;
-    const value = createAgentIdString(agentTypeName, parameters, normalized);
+  static create(options: ParsedAgentIdCreateOptions): ParsedAgentId {
+    const normalized = options.phantomId ? Uuid.from(options.phantomId) : undefined;
+    const value = createAgentIdString(options.typeName, options.constructorValue, normalized);
     const result = new ParsedAgentId(value);
-    result.parsedCache = [agentTypeName, parameters, normalized];
+    result.parsedCache = [options.typeName, options.constructorValue, normalized];
     return result;
   }
 
@@ -160,5 +94,25 @@ export class ParsedAgentId {
       ];
     }
     return this.parsedCache;
+  }
+
+  /** Return the semantic parts of this environment-scoped identity. */
+  parts(): ParsedAgentIdParts {
+    const [typeName, constructorValue, phantomId] = this.parsed();
+    return { typeName, constructorValue, phantomId };
+  }
+
+  /** Bind caller-supplied codecs or a reflected agent type to this identity. */
+  client<Client>(binding: AgentClientBinding<Client>): Client {
+    const bind = binding[bindAgentClient];
+    if (typeof bind !== 'function') {
+      throw new TypeError('Expected an agent client contract or reflected agent type');
+    }
+    return bind.call(binding, this);
+  }
+
+  /** Invoke this identity with schema values and no discovery or typed contract. */
+  dynamicClient(): DynamicAgentClientSurface {
+    return new DynamicAgentClient(this);
   }
 }

@@ -35,7 +35,7 @@ import {
   OplogIndex,
 } from 'golem:api/host@1.5.0';
 import { ComponentId as RawComponentId } from 'golem:core/types@2.0.0';
-import { AgentId, ParsedAgentId } from '../agentId';
+import { ParsedAgentId } from '../agentId';
 import { awaitAbortable } from '../internal/pollableUtils';
 import * as wasiEnv from 'wasi:cli/environment@0.3.0';
 import { Uuid } from '../uuid';
@@ -91,6 +91,11 @@ export { ComponentId, AccountId, EnvironmentId } from '../ids';
 /**
  * Represents a Golem agent, consisting of a component ID and the agent's string identifier.
  */
+export type AgentId = {
+  componentId: ComponentId;
+  agentId: string;
+};
+
 /**
  * Metadata about an agent.
  */
@@ -106,7 +111,10 @@ export type AgentMetadata = {
 };
 
 function wrapAgentId(raw: RawAgentId): AgentId {
-  return AgentId.from(raw);
+  return {
+    componentId: ComponentId.from(raw.componentId),
+    agentId: raw.agentId,
+  };
 }
 
 function wrapAgentMetadata(raw: RawAgentMetadata): AgentMetadata {

@@ -825,7 +825,7 @@ impl AgentHost for Context {
 
     async fn get_agent_type_by_agent_id(
         &mut self,
-        agent_id: golem_schema::schema::wit::wire::AgentId,
+        agent_id: String,
     ) -> anyhow::Result<
         Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
     > {
