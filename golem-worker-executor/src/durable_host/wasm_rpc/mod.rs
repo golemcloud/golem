@@ -14,9 +14,9 @@
 
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::{
-    BegunCallReplayOutcome, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome,
-    DurableCallSession, NotCancellable, authorize_live_permissions_at_serialized_access,
-    finish_span_in_memory, try_agent_auth_ctx_at_serialized_access,
+    BegunCall, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome, DurableCallSession,
+    NotCancellable, ResolvedCall, authorize_live_permissions_at_serialized_access,
+    finish_span_access, finish_span_in_memory, try_agent_auth_ctx_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::durable_session::{
@@ -44,7 +44,7 @@ use golem_common::base_model::agent::{AgentMode, Principal};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentId};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
-use golem_common::model::card::{AgentVerb, ScopeCard};
+use golem_common::model::card::{AgentVerb, PermissionTarget, ScopeCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{StreamInvocationIdV1, StreamSessionKeyV1};
 use golem_common::model::environment::EnvironmentId;
@@ -144,6 +144,11 @@ pub struct CancellationTokenEntry {
 struct OutboundRpcDenial {
     error: RpcError,
     activation_decision: Option<OplogIndex>,
+}
+
+enum RpcTargetAdmission {
+    Recorded,
+    LiveOnly(PermissionTarget),
 }
 
 fn scheduled_invocation_principal(owner: &OwnedAgentId) -> Principal {
@@ -508,7 +513,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             Err(err) => return Ok(Err(err)),
         };
 
-        if let Err(denial) = self
+        let admission = match self
             .authorize_and_record_rpc_target_activation(
                 &self_,
                 &prepared.logical_remote_agent_id,
@@ -516,17 +521,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )
             .await?
         {
-            if denial.activation_decision.is_some() {
-                return Ok(Err(denial.error));
+            Ok(admission) => admission,
+            Err(denial) => {
+                if denial.activation_decision.is_some() {
+                    return Ok(Err(denial.error));
+                }
+                return persist_invoke_and_await_denial(
+                    self,
+                    prepared.logical_remote_agent_id,
+                    prepared.method_name,
+                    denial.error,
+                )
+                .await;
             }
-            return persist_invoke_and_await_denial(
-                self,
-                prepared.logical_remote_agent_id,
-                prepared.method_name,
-                denial.error,
-            )
-            .await;
-        }
+        };
         self.record_outbound_rpc_call()?;
 
         if prepared.is_streaming() {
@@ -538,14 +546,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
-            let begun = if begun.is_live() {
-                BegunCallReplayOutcome::ContinueLive(begun)
-            } else {
-                begun.start_replay_or_continue_live(self).await?
-            };
-            let mut handle = match begun {
-                BegunCallReplayOutcome::Claimed(handle) => handle,
-                BegunCallReplayOutcome::ContinueLive(begun) => {
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Replay(handle) => handle,
+                ResolvedCall::Live(begun) => {
+                    if let RpcTargetAdmission::LiveOnly(target) = &admission
+                        && let Err(error) = self.authorize_live_permission(target).await?
+                    {
+                        return persist_invoke_and_await_denial_from_begun(
+                            self,
+                            begun,
+                            prepared.logical_remote_agent_id,
+                            prepared.method_name,
+                            RpcError::Denied(error.to_string()),
+                        )
+                        .await;
+                    }
                     let request_prepared = prepared.clone();
                     let request_parent_key = parent_key.clone();
                     let request_scope_card = scope_card.clone();
@@ -724,36 +739,42 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
                 begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                 .await?;
-        let call = if begun.is_live() {
-            Either::Left(begun)
-        } else {
-            let begin_index = begun.begin_index();
-            match begun.start_replay_or_continue_live(self).await? {
-                BegunCallReplayOutcome::Claimed(handle) => match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(persisted) => {
-                        let idempotency_key = self.derive_idempotency_key(begin_index);
-                        let remote_agent_id = invocation_target_agent_id(
-                            &prepared.logical_remote_agent_id,
-                            prepared.ephemeral_logical_agent_id.as_ref(),
-                            &idempotency_key,
-                        )?;
-                        let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-                        return match persisted.result {
-                            Ok(value) => Ok(Ok(InvocationResultWithMetadata {
-                                metadata,
-                                result: schema_value_to_wire_output(&value, self)?,
-                            })),
-                            Err(err) => Ok(Err(InternalRpcError::from(err).into())),
-                        };
-                    }
-                    CallReplayOutcome::Incomplete(live) => Either::Right(live),
-                },
-                BegunCallReplayOutcome::ContinueLive(begun) => Either::Left(begun),
+        let begin_index = begun.begin_index();
+        let call = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                if let RpcTargetAdmission::LiveOnly(target) = &admission
+                    && let Err(error) = self.authorize_live_permission(target).await?
+                {
+                    return persist_invoke_and_await_denial_from_begun(
+                        self,
+                        begun,
+                        prepared.logical_remote_agent_id,
+                        prepared.method_name,
+                        RpcError::Denied(error.to_string()),
+                    )
+                    .await;
+                }
+                Either::Left(begun)
             }
-        };
-        let begin_index = match &call {
-            Either::Left(begun) => begun.begin_index(),
-            Either::Right(handle) => handle.begin_index(),
+            ResolvedCall::Replay(handle) => match handle.replay(self).await? {
+                CallReplayOutcome::Replayed(persisted) => {
+                    let idempotency_key = self.derive_idempotency_key(begin_index);
+                    let remote_agent_id = invocation_target_agent_id(
+                        &prepared.logical_remote_agent_id,
+                        prepared.ephemeral_logical_agent_id.as_ref(),
+                        &idempotency_key,
+                    )?;
+                    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
+                    return match persisted.result {
+                        Ok(value) => Ok(Ok(InvocationResultWithMetadata {
+                            metadata,
+                            result: schema_value_to_wire_output(&value, self)?,
+                        })),
+                        Err(err) => Ok(Err(InternalRpcError::from(err).into())),
+                    };
+                }
+                CallReplayOutcome::Incomplete(live) => Either::Right(live),
+            },
         };
 
         let idempotency_key = self.derive_idempotency_key(begin_index);
@@ -828,7 +849,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             Err(err) => return Ok(Err(err)),
         };
 
-        if let Err(denial) = self
+        let admission = match self
             .authorize_and_record_rpc_target_activation(
                 &self_,
                 &prepared.logical_remote_agent_id,
@@ -836,36 +857,46 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )
             .await?
         {
-            if denial.activation_decision.is_some() {
-                return Ok(Err(denial.error));
+            Ok(admission) => admission,
+            Err(denial) => {
+                if denial.activation_decision.is_some() {
+                    return Ok(Err(denial.error));
+                }
+                return persist_invoke_denial(
+                    self,
+                    prepared.logical_remote_agent_id,
+                    prepared.method_name,
+                    denial.error,
+                )
+                .await;
             }
-            return persist_invoke_denial(
-                self,
-                prepared.logical_remote_agent_id,
-                prepared.method_name,
-                denial.error,
-            )
-            .await;
-        }
+        };
         self.record_outbound_rpc_call()?;
 
-        let call = if self.state.is_live() {
-            Either::Left(
-                DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
-                    self,
-                    DurableFunctionType::WriteRemote,
-                )
-                .await?,
+        let begun =
+            DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
+                self,
+                DurableFunctionType::WriteRemote,
             )
-        } else {
-            let begun =
-                DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
-                    self,
-                    DurableFunctionType::WriteRemote,
-                )
-                .await?;
-            let begin_index = begun.begin_index();
-            match begun.start_replay(self).await?.replay(self).await? {
+            .await?;
+        let begin_index = begun.begin_index();
+        let call = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                if let RpcTargetAdmission::LiveOnly(target) = &admission
+                    && let Err(error) = self.authorize_live_permission(target).await?
+                {
+                    return persist_invoke_denial_from_begun(
+                        self,
+                        begun,
+                        prepared.logical_remote_agent_id,
+                        prepared.method_name,
+                        RpcError::Denied(error.to_string()),
+                    )
+                    .await;
+                }
+                Either::Left(begun)
+            }
+            ResolvedCall::Replay(handle) => match handle.replay(self).await? {
                 CallReplayOutcome::Replayed(result) => {
                     let idempotency_key = self.derive_idempotency_key(begin_index);
                     let remote_agent_id = invocation_target_agent_id(
@@ -879,11 +910,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     };
                 }
                 CallReplayOutcome::Incomplete(live) => Either::Right(live),
-            }
-        };
-        let begin_index = match &call {
-            Either::Left(begun) => begun.begin_index(),
-            Either::Right(handle) => handle.begin_index(),
+            },
         };
 
         let idempotency_key = self.derive_idempotency_key(begin_index);
@@ -1024,7 +1051,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let method = find_agent_method(&remote_agent_type, &method_name)?;
         let streaming = remote_method_uses_streams(&remote_method_streams, &method.name)?;
 
-        if let Err(denial) = self
+        let admission = match self
             .authorize_and_record_rpc_target_activation(
                 &this,
                 &logical_remote_agent_id,
@@ -1032,26 +1059,29 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )
             .await?
         {
-            if let Some(begin_index) = denial.activation_decision {
-                return bake_recorded_async_invoke_denial(
+            Ok(admission) => admission,
+            Err(denial) => {
+                if let Some(begin_index) = denial.activation_decision {
+                    return bake_recorded_async_invoke_denial(
+                        self,
+                        &this,
+                        &logical_remote_agent_id,
+                        &method_name,
+                        denial.error,
+                        begin_index,
+                    )
+                    .await;
+                }
+                return persist_async_invoke_denial(
                     self,
                     &this,
-                    &logical_remote_agent_id,
-                    &method_name,
+                    logical_remote_agent_id,
+                    method_name,
                     denial.error,
-                    begin_index,
                 )
                 .await;
             }
-            return persist_async_invoke_denial(
-                self,
-                &this,
-                logical_remote_agent_id,
-                method_name,
-                denial.error,
-            )
-            .await;
-        }
+        };
         self.record_outbound_rpc_call()?;
 
         if streaming {
@@ -1063,36 +1093,50 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
-            let request_logical_remote_agent_id = logical_remote_agent_id.clone();
-            let request_ephemeral_logical_agent_id = ephemeral_logical_agent_id.clone();
-            let request_parent_key = parent_key.clone();
-            let request_method_name = method_name.clone();
-            let request_input = strip_streams(input_value.clone());
-            let request_scope_card = scope_card.clone();
-            let mut handle = if begun.is_live() {
-                begun
-                    .start_live_with_index(self, move |start_index| {
-                        let idempotency_key =
-                            IdempotencyKey::derived(&request_parent_key, start_index);
-                        let remote_agent_id = invocation_target_agent_id(
-                            &request_logical_remote_agent_id,
-                            request_ephemeral_logical_agent_id.as_ref(),
-                            &idempotency_key,
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    if let RpcTargetAdmission::LiveOnly(target) = &admission
+                        && let Err(error) = self.authorize_live_permission(target).await?
+                    {
+                        return persist_async_invoke_denial_from_begun(
+                            self,
+                            begun,
+                            &this,
+                            logical_remote_agent_id,
+                            method_name,
+                            RpcError::Denied(error.to_string()),
                         )
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                        Ok(HostRequestGolemRpcInvoke {
-                            remote_agent_id: remote_agent_id.agent_id(),
-                            idempotency_key,
-                            method_name: request_method_name,
-                            input: request_input,
-                            remote_agent_type: None,
-                            remote_agent_parameters: None,
-                            scope_card: request_scope_card,
+                        .await;
+                    }
+                    let request_logical_remote_agent_id = logical_remote_agent_id.clone();
+                    let request_ephemeral_logical_agent_id = ephemeral_logical_agent_id.clone();
+                    let request_parent_key = parent_key.clone();
+                    let request_method_name = method_name.clone();
+                    let request_input = strip_streams(input_value.clone());
+                    let request_scope_card = scope_card.clone();
+                    begun
+                        .start_live_with_index(self, move |start_index| {
+                            let idempotency_key =
+                                IdempotencyKey::derived(&request_parent_key, start_index);
+                            let remote_agent_id = invocation_target_agent_id(
+                                &request_logical_remote_agent_id,
+                                request_ephemeral_logical_agent_id.as_ref(),
+                                &idempotency_key,
+                            )
+                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                            Ok(HostRequestGolemRpcInvoke {
+                                remote_agent_id: remote_agent_id.agent_id(),
+                                idempotency_key,
+                                method_name: request_method_name,
+                                input: request_input,
+                                remote_agent_type: None,
+                                remote_agent_parameters: None,
+                                scope_card: request_scope_card,
+                            })
                         })
-                    })
-                    .await?
-            } else {
-                begun.start_replay(self).await?
+                        .await?
+                }
+                ResolvedCall::Replay(handle) => handle,
             };
             let idempotency_key = IdempotencyKey::derived(&parent_key, handle.start_index());
             let remote_agent_id = invocation_target_agent_id(
@@ -1236,17 +1280,27 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // the begin index equals the host-call `Start` index; otherwise `begin` opens the durable
         // scope that the terminal later closes. The read-only side-effect guard was already applied
         // at the top of this function and is re-applied by `begin`.
-        let call = if self.state.is_live() {
-            Either::Left(
-                DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
-                    begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
-                    .await?,
-            )
-        } else {
-            let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
-                begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
-                .await?;
-            Either::Right(begun.start_replay(self).await?)
+        let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
+            begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
+            .await?;
+        let call = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                if let RpcTargetAdmission::LiveOnly(target) = &admission
+                    && let Err(error) = self.authorize_live_permission(target).await?
+                {
+                    return persist_async_invoke_denial_from_begun(
+                        self,
+                        begun,
+                        &this,
+                        logical_remote_agent_id,
+                        method_name,
+                        RpcError::Denied(error.to_string()),
+                    )
+                    .await;
+                }
+                Either::Left(begun)
+            }
+            ResolvedCall::Replay(handle) => Either::Right(handle),
         };
         let begin_index = match &call {
             Either::Left(begun) => begun.begin_index(),
@@ -1532,7 +1586,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rpc_resource: &Resource<WasmRpcEntry>,
         remote_agent_id: &OwnedAgentId,
         method_name: &str,
-    ) -> anyhow::Result<Result<(), OutboundRpcDenial>> {
+    ) -> anyhow::Result<Result<RpcTargetAdmission, OutboundRpcDenial>> {
         let target =
             self.outbound_agent_method_target(rpc_resource, remote_agent_id, method_name)?;
         let deferred_durable = {
@@ -1549,15 +1603,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         if !deferred_durable {
-            if self.state.is_live()
-                && let Err(error) = self.authorize_live_permission(&target).await?
-            {
-                return Ok(Err(OutboundRpcDenial {
-                    error: RpcError::Denied(error.to_string()),
-                    activation_decision: None,
-                }));
-            }
-            return Ok(Ok(()));
+            return Ok(Ok(RpcTargetAdmission::LiveOnly(target)));
         }
 
         let begun =
@@ -1570,31 +1616,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut handle;
         let decision;
 
-        if begun.is_live() {
-            decision = begun
-                .agent_auth_ctx()
-                .authorize_permission(&target)
-                .map_err(|error| SerializableRpcError::Denied {
-                    details: error.to_string(),
-                });
-            handle = begun
-                .start_live(
-                    self,
-                    HostRequestGolemRpcActivate {
-                        remote_agent_id: remote_agent_id.agent_id(),
-                        method_name: method_name.to_string(),
-                        decision: decision.clone(),
-                    },
-                )
-                .await?;
-        } else {
-            handle = begun.start_replay(self).await?;
-            match handle.replay(self).await? {
+        match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                decision = begun
+                    .agent_auth_ctx()
+                    .authorize_permission(&target)
+                    .map_err(|error| SerializableRpcError::Denied {
+                        details: error.to_string(),
+                    });
+                handle = begun
+                    .start_live(
+                        self,
+                        HostRequestGolemRpcActivate {
+                            remote_agent_id: remote_agent_id.agent_id(),
+                            method_name: method_name.to_string(),
+                            decision: decision.clone(),
+                        },
+                    )
+                    .await?;
+            }
+            ResolvedCall::Replay(replay) => match replay.replay(self).await? {
                 CallReplayOutcome::Replayed(response) => {
                     return match response.result {
                         Ok(target_fingerprint) => {
                             set_rpc_target_replay_pending(self, rpc_resource, target_fingerprint)?;
-                            Ok(Ok(()))
+                            Ok(Ok(RpcTargetAdmission::Recorded))
                         }
                         Err(error) => Ok(Err(OutboundRpcDenial {
                             error: InternalRpcError::from(error).into(),
@@ -1609,7 +1655,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     decision = recorded.decision;
                     handle = live;
                 }
-            }
+            },
         }
 
         if let Err(error) = decision {
@@ -1692,7 +1738,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             env,
             config,
         };
-        Ok(Ok(()))
+        Ok(Ok(RpcTargetAdmission::Recorded))
     }
 
     fn record_outbound_rpc_call(&mut self) -> anyhow::Result<()> {
@@ -1791,7 +1837,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )))
             })?;
 
-        if let Err(denial) = self
+        let admission = match self
             .authorize_and_record_rpc_target_activation(
                 &this,
                 &logical_remote_agent_id,
@@ -1799,31 +1845,44 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await?
         {
-            if denial.activation_decision.is_some() {
-                return Ok(Err(denial.error));
+            Ok(admission) => admission,
+            Err(denial) => {
+                if denial.activation_decision.is_some() {
+                    return Ok(Err(denial.error));
+                }
+                return persist_schedule_denial(
+                    self,
+                    logical_remote_agent_id,
+                    datetime,
+                    method_name,
+                    denial.error,
+                )
+                .await;
             }
-            return persist_schedule_denial(
-                self,
-                logical_remote_agent_id,
-                datetime,
-                method_name,
-                denial.error,
-            )
-            .await;
-        }
+        };
 
-        let call = if self.state.is_live() {
-            Either::Left(
-                DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
-                    begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
-                    .await?,
-            )
-        } else {
-            let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
-                begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
-                .await?;
-            let begin_index = begun.begin_index();
-            match begun.start_replay(self).await?.replay(self).await? {
+        let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
+            begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
+            .await?;
+        let begin_index = begun.begin_index();
+        let call = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                if let RpcTargetAdmission::LiveOnly(target) = &admission
+                    && let Err(error) = self.authorize_live_permission(target).await?
+                {
+                    return persist_schedule_denial_from_begun(
+                        self,
+                        begun,
+                        logical_remote_agent_id,
+                        datetime,
+                        method_name,
+                        RpcError::Denied(error.to_string()),
+                    )
+                    .await;
+                }
+                Either::Left(begun)
+            }
+            ResolvedCall::Replay(handle) => match handle.replay(self).await? {
                 CallReplayOutcome::Replayed(result) => {
                     let schedule_id = match result.result {
                         Ok(schedule_id) => schedule_id,
@@ -1853,11 +1912,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .map_err(Into::into);
                 }
                 CallReplayOutcome::Incomplete(live) => Either::Right(live),
-            }
-        };
-        let begin_index = match &call {
-            Either::Left(begun) => begun.begin_index(),
-            Either::Right(handle) => handle.begin_index(),
+            },
         };
 
         // The persisted request embeds an idempotency key derived from the durable-scope begin
@@ -2040,12 +2095,23 @@ async fn persist_invoke_and_await_denial<Ctx: WorkerCtx>(
     method_name: String,
     error: RpcError,
 ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
-    let details = rpc_denied_details(error);
     let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::begin(
         ctx,
         DurableFunctionType::WriteRemote,
     )
     .await?;
+    persist_invoke_and_await_denial_from_begun(ctx, begun, remote_agent_id, method_name, error)
+        .await
+}
+
+async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
+    remote_agent_id: OwnedAgentId,
+    method_name: String,
+    error: RpcError,
+) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
+    let details = rpc_denied_details(error);
     let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
     let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
     begun
@@ -2069,12 +2135,22 @@ async fn persist_invoke_denial<Ctx: WorkerCtx>(
     method_name: String,
     error: RpcError,
 ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-    let details = rpc_denied_details(error);
     let begun = DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin(
         ctx,
         DurableFunctionType::WriteRemote,
     )
     .await?;
+    persist_invoke_denial_from_begun(ctx, begun, remote_agent_id, method_name, error).await
+}
+
+async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    begun: BegunCall<GolemRpcWasmRpcInvoke, NotCancellable>,
+    remote_agent_id: OwnedAgentId,
+    method_name: String,
+    error: RpcError,
+) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
+    let details = rpc_denied_details(error);
     let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
     let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
     begun
@@ -2099,6 +2175,30 @@ async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
     method_name: String,
     error: RpcError,
 ) -> anyhow::Result<AsyncInvocationWithMetadata> {
+    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::begin(
+        ctx,
+        DurableFunctionType::WriteRemote,
+    )
+    .await?;
+    persist_async_invoke_denial_from_begun(
+        ctx,
+        begun,
+        resource,
+        logical_remote_agent_id,
+        method_name,
+        error,
+    )
+    .await
+}
+
+async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    begun: BegunCall<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>,
+    resource: &Resource<WasmRpcEntry>,
+    logical_remote_agent_id: OwnedAgentId,
+    method_name: String,
+    error: RpcError,
+) -> anyhow::Result<AsyncInvocationWithMetadata> {
     let details = rpc_denied_details(error);
     let (ephemeral_logical_agent_id, connection_span_id) = {
         let payload = ctx
@@ -2112,11 +2212,6 @@ async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
             payload.span_id.clone(),
         )
     };
-    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::begin(
-        ctx,
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
     let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
     let remote_agent_id = invocation_target_agent_id(
         &logical_remote_agent_id,
@@ -2209,12 +2304,24 @@ async fn persist_schedule_denial<Ctx: WorkerCtx>(
     method_name: String,
     error: RpcError,
 ) -> anyhow::Result<Result<Resource<CancellationToken>, RpcError>> {
-    let details = rpc_denied_details(error);
     let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::begin(
         ctx,
         DurableFunctionType::WriteRemote,
     )
     .await?;
+    persist_schedule_denial_from_begun(ctx, begun, remote_agent_id, datetime, method_name, error)
+        .await
+}
+
+async fn persist_schedule_denial_from_begun<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    begun: BegunCall<GolemRpcWasmRpcScheduleInvocation, NotCancellable>,
+    remote_agent_id: OwnedAgentId,
+    datetime: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
+    method_name: String,
+    error: RpcError,
+) -> anyhow::Result<Result<Resource<CancellationToken>, RpcError>> {
+    let details = rpc_denied_details(error);
     let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
     let request = HostRequestGolemRpcScheduledInvocation {
         remote_agent_id: remote_agent_id.agent_id(),
@@ -2776,50 +2883,6 @@ fn future_invoke_task_result_to_get_result(
     }
 }
 
-async fn finish_span_access<T, Ctx: WorkerCtx>(
-    accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
-    span_id: &SpanId,
-) -> Result<(), WorkerExecutorError> {
-    let (is_live, worker, replay_state, parent_start_index) = accessor.with(|mut access| {
-        let ctx = access.get();
-        (
-            ctx.state.is_live(),
-            ctx.public_state.worker(),
-            ctx.state.replay_state.clone(),
-            ctx.entity_parent_start_index(),
-        )
-    });
-
-    if is_live {
-        worker
-            .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
-            .await;
-    } else if !is_live {
-        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
-    }
-
-    accessor.with(|mut access| {
-        let ctx = access.get();
-        if &ctx.state.current_span_id == span_id {
-            let span = ctx.state.invocation_context.get(span_id).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "span {span_id} missing during finish_span replay: {err}"
-                ))
-            })?;
-            ctx.state.current_span_id = span
-                .parent()
-                .map(|p| p.span_id().clone())
-                .unwrap_or_else(|| ctx.state.invocation_context.root.span_id().clone());
-        }
-        let _ = ctx
-            .state
-            .invocation_context
-            .finish_span(span_id)
-            .map_err(WorkerExecutorError::runtime);
-        Ok(())
-    })
-}
-
 /// Terminal path for a live in-flight `future-invoke-result.get` whose shared cancel token was
 /// triggered by a concurrent `future-invoke-result::cancel`. The caller has already dropped the
 /// background task (aborting the in-flight RPC). This best-effort cancels the remote invocation,
@@ -2871,7 +2934,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
         )
         .await
         .map_err(anyhow::Error::from)?;
-    finish_span_access(accessor, span_id).await?;
+    finish_span_access(accessor, accessor.getter(), span_id).await?;
     accessor.with(|mut access| {
         let ctx = access.get();
         let entry = ctx
@@ -3016,7 +3079,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 finish_span,
             } => {
                 if finish_span {
-                    finish_span_access(accessor, &span_id).await?;
+                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
                 }
                 result
             }
@@ -3220,7 +3283,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     // mark the resource consumed — then park: never return the response, so the
                     // deterministic guest drops this future at the same point it did live (its
                     // resource `drop` sees no open handle and writes nothing durable).
-                    finish_span_access(accessor, &span_id).await?;
+                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
                     accessor.with(|mut access| {
                         let ctx = access.get();
                         let entry = ctx
@@ -3280,7 +3343,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     // Replay of a delivered completion, or a live unpersisted (snapshotting)
                     // call: the original span handling applies — replay consumes the positional
                     // `FinishSpan`, an unpersisted live call appends it here.
-                    finish_span_access(accessor, &span_id).await?;
+                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
                     accessor.with(|mut access| {
                         let ctx = access.get();
                         let entry = ctx
@@ -3360,10 +3423,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     .cancel_access(accessor, accessor.getter(), None)
                     .await
                     .map_err(anyhow::Error::from)?;
-                finish_span_access(accessor, &span_id).await?;
+                finish_span_access(accessor, accessor.getter(), &span_id).await?;
             }
             DropPlan::FinishSpan { span_id } => {
-                finish_span_access(accessor, &span_id).await?;
+                finish_span_access(accessor, accessor.getter(), &span_id).await?;
             }
             DropPlan::Nothing => {}
         }

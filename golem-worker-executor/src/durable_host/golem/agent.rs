@@ -15,7 +15,9 @@
 use crate::durable_host::authorization::targets::{
     agent_method_target, agent_owner, config_segments_target,
 };
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::secret_hold_target_for_path;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
@@ -652,35 +654,41 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     })
                 })
         });
-        let is_live = self.state.is_live();
-        let denied = if is_live {
-            let targets = config_segments_target(agent_owner(self), &path)
-                .map_err(|_| ())
-                .and_then(|target| {
-                    let mut targets = vec![target];
-                    if is_secret_config {
-                        targets.push(secret_hold_target_for_path(self, &path).map_err(|_| ())?);
-                    }
-                    Ok(targets)
-                });
-            match targets {
-                Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
-                Err(_) => true,
-            }
-        } else {
-            false
-        };
-
-        let uses_resolver = is_secret_config;
-        let handle = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::start(
+        let begun = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::begin(
             self,
-            HostRequestGolemAgentGetConfigValue {
-                path: path.clone(),
-                expected_type: expected_graph.clone(),
-            },
             DurableFunctionType::ReadRemote,
         )
         .await?;
+        let (handle, denied) = match begun.resolve(self).await? {
+            ResolvedCall::Replay(handle) => (handle, false),
+            ResolvedCall::Live(begun) => {
+                let targets = config_segments_target(agent_owner(self), &path)
+                    .map_err(|_| ())
+                    .and_then(|target| {
+                        let mut targets = vec![target];
+                        if is_secret_config {
+                            targets.push(secret_hold_target_for_path(self, &path).map_err(|_| ())?);
+                        }
+                        Ok(targets)
+                    });
+                let denied = match targets {
+                    Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
+                    Err(_) => true,
+                };
+                let handle = begun
+                    .start_live(
+                        self,
+                        HostRequestGolemAgentGetConfigValue {
+                            path: path.clone(),
+                            expected_type: expected_graph.clone(),
+                        },
+                    )
+                    .await?;
+                (handle, denied)
+            }
+        };
+
+        let uses_resolver = is_secret_config;
         let response = handle
             .run(self, async move |ctx| {
                 if denied {
