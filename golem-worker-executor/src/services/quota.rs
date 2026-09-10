@@ -1873,20 +1873,15 @@ mod tests {
         let mock = MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 100)));
         let svc = make_service(mock);
 
-        // expected_use=100 → credit_rate=10/ms, max_credit=10_000
+        // Start at max_credit=10_000 so elapsed time cannot add credit before the debit.
         let mut interest = svc
-            .acquire(test_env_id(), test_resource_name(), 100, 500, None)
+            .acquire(test_env_id(), test_resource_name(), 100, 10_000, None)
             .await;
-
-        // Record credit before reserve.
-        let credit_before = interest.current_credit();
 
         let result = svc.try_reserve(&mut interest, 30).await;
         assert_matches!(result, ReserveResult::Ok(_));
 
-        // Credit should have been debited by 30.
-        // (time may have ticked slightly, so we check the snapshot value)
-        assert_eq!(interest.last_credit_value, credit_before - 30);
+        assert_eq!(interest.last_credit_value, 9_970);
     }
 
     #[test]
