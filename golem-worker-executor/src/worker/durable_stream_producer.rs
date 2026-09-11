@@ -27,10 +27,12 @@ type LoadResult = Result<Arc<DurableStreamProducer>, DurableStreamProducerError>
 #[derive(Default)]
 pub(super) struct DurableStreamProducerSlot {
     state: Mutex<SlotState>,
+    responses_changed: tokio::sync::Notify,
 }
 
 #[derive(Default)]
 struct SlotState {
+    responses: usize,
     producer: Option<Arc<DurableStreamProducer>>,
     loading: Option<watch::Receiver<Option<LoadResult>>>,
     failure: Option<DurableStreamProducerError>,
@@ -38,7 +40,50 @@ struct SlotState {
     retirement: Option<watch::Receiver<Option<Result<(), DurableStreamProducerError>>>>,
 }
 
+/// Keeps normal ephemeral archival behind the response and all of its stream readers.
+/// Explicit owner retirement and executor shutdown do not wait for these leases.
+pub(crate) struct EphemeralResponseLease {
+    slot: Arc<DurableStreamProducerSlot>,
+}
+
+impl Drop for EphemeralResponseLease {
+    fn drop(&mut self) {
+        self.slot.state.lock().unwrap().responses -= 1;
+        self.slot.responses_changed.notify_waiters();
+    }
+}
+
 impl DurableStreamProducerSlot {
+    pub(super) fn retain_response(
+        self: &Arc<Self>,
+    ) -> Result<Arc<EphemeralResponseLease>, DurableStreamProducerError> {
+        let mut state = self.state.lock().unwrap();
+        if state.retired {
+            return Err(DurableStreamProducerError::RecoveryRequired);
+        }
+        state.responses += 1;
+        Ok(Arc::new(EphemeralResponseLease { slot: self.clone() }))
+    }
+
+    pub(super) async fn wait_for_responses_and_fence(&self) {
+        loop {
+            let changed = self.responses_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let mut state = self.state.lock().unwrap();
+                if state.responses == 0 || state.retired {
+                    state.retired = true;
+                    if let Some(producer) = &state.producer {
+                        producer.poison();
+                    }
+                    return;
+                }
+            }
+            changed.await;
+        }
+    }
+
     pub(super) fn is_retired(&self) -> bool {
         self.state.lock().unwrap().retired
     }
@@ -49,6 +94,7 @@ impl DurableStreamProducerSlot {
         if let Some(producer) = &state.producer {
             producer.poison();
         }
+        self.responses_changed.notify_waiters();
     }
 
     pub(super) fn retire(
@@ -73,6 +119,7 @@ impl DurableStreamProducerSlot {
         let retirement = {
             let mut state = self.state.lock().unwrap();
             state.retired = true;
+            self.responses_changed.notify_waiters();
             if let Some(producer) = &state.producer {
                 producer.poison();
             }
@@ -118,6 +165,9 @@ impl DurableStreamProducerSlot {
 
     pub(super) fn try_retire_quiescent(&self) -> bool {
         let mut state = self.state.lock().unwrap();
+        if state.responses != 0 {
+            return false;
+        }
         if state.retired {
             return state
                 .retirement
@@ -253,6 +303,64 @@ mod tests {
 
     fn unused_commit() -> DurableStreamCommit {
         Arc::new(|_| Box::pin(async { panic!("healthy or initial load must not recovery-flush") }))
+    }
+
+    #[test]
+    async fn ephemeral_archive_waits_for_every_response_reader() {
+        let slot = Arc::new(DurableStreamProducerSlot::default());
+        let producer = slot.get_or_load(unused_commit(), load).await.unwrap();
+        let response = slot.retain_response().unwrap();
+        let reader = response.clone();
+        let mut archive = Box::pin(slot.wait_for_responses_and_fence());
+        assert!(futures::poll!(archive.as_mut()).is_pending());
+        assert!(!slot.try_retire_quiescent());
+        producer.ensure_healthy().unwrap();
+        drop(response);
+        assert!(futures::poll!(archive.as_mut()).is_pending());
+        let second_response = slot.retain_response().unwrap();
+        drop(reader);
+        assert!(futures::poll!(archive.as_mut()).is_pending());
+        drop(second_response);
+        archive.await;
+        assert!(producer.ensure_healthy().is_err());
+        assert!(slot.retain_response().is_err());
+    }
+
+    #[test]
+    async fn explicit_retirement_does_not_wait_for_ephemeral_responses() {
+        let slot = Arc::new(DurableStreamProducerSlot::default());
+        let producer = slot.get_or_load(unused_commit(), load).await.unwrap();
+        let _response = slot.retain_response().unwrap();
+        let mut archive = Box::pin(slot.wait_for_responses_and_fence());
+        assert!(futures::poll!(archive.as_mut()).is_pending());
+        slot.fence();
+        archive.await;
+        assert!(producer.ensure_healthy().is_err());
+        assert!(slot.retain_response().is_err());
+        slot.shutdown().await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn executor_shutdown_drains_deferred_ephemeral_archive() {
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let loops = crate::services::active_agents::InvocationLoops::new(shutdown.clone());
+        let slot = Arc::new(DurableStreamProducerSlot::default());
+        let producer = slot.get_or_load(unused_commit(), load).await.unwrap();
+        let _response = slot.retain_response().unwrap();
+        let archive_slot = slot.clone();
+        let shutdown_slot = slot.clone();
+        loops.spawn(
+            async move { archive_slot.wait_for_responses_and_fence().await },
+            move || {
+                let drain = shutdown_slot.shutdown();
+                Box::pin(async move { drain.await.unwrap() })
+            },
+        );
+        shutdown.cancel();
+        loops.wait_for_exit().await;
+        assert!(producer.ensure_healthy().is_err());
+        assert!(slot.retain_response().is_err());
     }
 
     #[test]

@@ -104,6 +104,7 @@ pub(crate) struct DurableSessionStreams {
     attachment_attempt_id: Option<AttemptId>,
     recovered_mappings_through: Arc<Mutex<OplogIndex>>,
     control_metadata: Arc<Mutex<SessionControlMetadata>>,
+    response_lease: Option<Arc<crate::worker::EphemeralResponseLease>>,
 }
 
 #[derive(Clone, Default, desert_rust::BinaryCodec)]
@@ -736,7 +737,20 @@ impl DurableSessionStreams {
             attachment_attempt_id: None,
             recovered_mappings_through: Arc::new(Mutex::new(OplogIndex::NONE)),
             control_metadata: Arc::new(Mutex::new(SessionControlMetadata::default())),
+            response_lease: None,
         }
+    }
+
+    pub(crate) fn with_response_lease(
+        mut self,
+        lease: Option<Arc<crate::worker::EphemeralResponseLease>>,
+    ) -> Self {
+        self.response_lease = lease;
+        self
+    }
+
+    pub(crate) fn response_lease(&self) -> Option<Arc<crate::worker::EphemeralResponseLease>> {
+        self.response_lease.clone()
     }
 
     pub(crate) fn with_attachment(mut self, epoch: u64, attempt_id: AttemptId) -> Self {

@@ -877,9 +877,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     fn archive_ephemeral_oplog(&self) {
         let worker = self.parent.clone();
-        worker.durable_stream_producer.fence();
-        let forwarding = worker.fence_oplog_forwarding();
-        tokio::spawn(async move {
+        let shutdown_worker = worker.clone();
+        let invocation_loops = worker.active_agents().invocation_loops();
+        invocation_loops.spawn(async move {
+            worker.durable_stream_producer.wait_for_responses_and_fence().await;
+            let forwarding = worker.fence_oplog_forwarding();
             let mut cleanup = worker.owner_cleanup.lock().await;
             if *cleanup != super::OwnerCleanupState::PreRemoval
                 || !worker.is_current_cached_owner().await
@@ -924,6 +926,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             if let Err(error) = result {
                 tracing::error!(agent_id = %worker.agent_id(), error = %error, "Failed to retire ephemeral worker before archival");
             }
+        }, move || {
+            let retirement = shutdown_worker.durable_stream_producer.shutdown();
+            Box::pin(async move {
+                retirement.await.expect("Failed to drain ephemeral streams during executor shutdown");
+            })
         });
     }
 

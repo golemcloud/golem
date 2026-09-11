@@ -15,6 +15,7 @@
 pub mod agent_config;
 pub mod cut_point;
 mod durable_stream_producer;
+pub(crate) use durable_stream_producer::EphemeralResponseLease;
 mod durable_stream_slots;
 pub mod entity_invocation;
 pub mod entity_slot;
@@ -3989,6 +3990,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         producer: Arc<DurableStreamProducer>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
+        let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
+            Some(
+                self.durable_stream_producer
+                    .retain_response()
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         if self.owner_retirement_requested.is_cancelled() {
             return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
         }
@@ -4220,7 +4230,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             request.input_schema,
             prepared.attempt.invocation.target_component_revision,
             request.input_element_types,
-        );
+        )
+        .with_response_lease(response_lease);
         for mapping in foreign_mappings {
             if streams
                 .has_journaled_consumer_terminal(mapping)
@@ -4337,9 +4348,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             golem_common::model::durable_stream::StreamResumeOperationV1::Resume => "resume",
             golem_common::model::durable_stream::StreamResumeOperationV1::Takeover => "takeover",
         };
+        let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
+            Some(
+                self.durable_stream_producer
+                    .retain_response()
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         let result = self
             .resume_durable_streaming_invocation_unmetered(attempt)
-            .await;
+            .await
+            .map(|mut acceptance| {
+                acceptance.streams = acceptance.streams.with_response_lease(response_lease);
+                acceptance
+            });
         match &result {
             Ok(acceptance) => crate::metrics::durable_stream::record_attempt(
                 operation,
