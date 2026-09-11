@@ -16,36 +16,7 @@ use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashSet;
-use syn::parse::{Parse, ParseStream};
-use syn::{FnArg, Ident, ItemTrait, LitStr, Pat, ReturnType, Token, TraitItem, Type};
-
-struct AgentClientArgs {
-    type_name: Option<LitStr>,
-}
-
-impl Parse for AgentClientArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.is_empty() {
-            return Ok(Self { type_name: None });
-        }
-
-        let name: Ident = input.parse()?;
-        if name != "type_name" {
-            return Err(syn::Error::new(
-                name.span(),
-                "expected `type_name = \"...\"`",
-            ));
-        }
-        input.parse::<Token![=]>()?;
-        let type_name = input.parse()?;
-        if !input.is_empty() {
-            return Err(input.error("unexpected agent_client attribute argument"));
-        }
-        Ok(Self {
-            type_name: Some(type_name),
-        })
-    }
-}
+use syn::{FnArg, Ident, ItemTrait, LitStr, Pat, ReturnType, TraitItem, Type};
 
 pub fn agent_client_impl(attr: TokenStream, item: TokenStream, golem_rust: &Ident) -> TokenStream {
     match expand(attr, item, golem_rust) {
@@ -59,7 +30,12 @@ fn expand(
     item: TokenStream,
     golem_rust: &Ident,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    let args = syn::parse::<AgentClientArgs>(attr)?;
+    if !attr.is_empty() {
+        return Err(syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(attr),
+            "agent_client does not accept arguments",
+        ));
+    }
     let item_trait = syn::parse::<ItemTrait>(item)?;
     if !item_trait.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -71,9 +47,6 @@ fn expand(
     let trait_ident = &item_trait.ident;
     let client_ident = format_ident!("{}Client", trait_ident);
     let visibility = &item_trait.vis;
-    let remote_type_name = args
-        .type_name
-        .unwrap_or_else(|| LitStr::new(&trait_ident.to_string(), trait_ident.span()));
     let method_names = item_trait
         .items
         .iter()
@@ -260,8 +233,7 @@ fn expand(
             pub fn client_definition()
                 -> Result<#golem_rust::AgentClientDefinition, #golem_rust::GolemReflectError>
             {
-                let builder = #golem_rust::AgentClientDefinition::builder()
-                    .type_name(#remote_type_name);
+                let builder = #golem_rust::AgentClientDefinition::builder();
                 #(#definition_steps)*
                 Ok(builder.build())
             }

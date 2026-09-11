@@ -1296,7 +1296,6 @@ mod tests {
             .expect("unit method schema")
             .build();
 
-        assert!(definition.type_name.is_none());
         assert_eq!(definition.methods.len(), 2);
         assert_eq!(definition.methods[0].name, "lookup");
         assert_eq!(definition.methods[1].name, "invalidate");
@@ -1313,16 +1312,10 @@ pub struct AgentClientMethodDefinition {
 
 #[derive(Clone, Debug, Default)]
 pub struct AgentClientDefinitionBuilder {
-    type_name: Option<String>,
     methods: Vec<AgentClientMethodDefinition>,
 }
 
 impl AgentClientDefinitionBuilder {
-    pub fn type_name(mut self, type_name: impl Into<String>) -> Self {
-        self.type_name = Some(type_name.into());
-        self
-    }
-
     pub fn method<I, O>(mut self, name: impl Into<String>) -> Result<Self, GolemReflectError>
     where
         I: crate::IntoSchema,
@@ -1356,7 +1349,6 @@ impl AgentClientDefinitionBuilder {
 
     pub fn build(self) -> AgentClientDefinition {
         AgentClientDefinition {
-            type_name: self.type_name,
             methods: self.methods.into(),
         }
     }
@@ -1364,7 +1356,6 @@ impl AgentClientDefinitionBuilder {
 
 #[derive(Clone, Debug)]
 pub struct AgentClientDefinition {
-    type_name: Option<String>,
     methods: Arc<[AgentClientMethodDefinition]>,
 }
 
@@ -1375,14 +1366,6 @@ impl AgentClientDefinition {
 
     pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
         let parts = agent_id.parts()?;
-        if let Some(expected) = &self.type_name
-            && expected != &parts.type_name
-        {
-            return Err(GolemReflectError::InvalidType(format!(
-                "client contract expects `{expected}`, identity is `{}`",
-                parts.type_name
-            )));
-        }
         let transport = RpcTransport::create(
             parts.type_name,
             parts.constructor_value,
@@ -1415,11 +1398,7 @@ impl TypedAgentClient {
             .find(|method| method.name == name)
             .cloned()
             .ok_or_else(|| GolemReflectError::MethodNotFound {
-                agent_type: self
-                    .definition
-                    .type_name
-                    .clone()
-                    .unwrap_or_else(|| "<caller contract>".to_string()),
+                agent_type: "<caller contract>".to_string(),
                 method: name.to_string(),
             })?;
         Ok(TypedAgentMethod {
