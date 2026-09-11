@@ -142,6 +142,7 @@ impl UnmanagedProvisioning {
             FileCopyMode::Buffered,
             QuotaAuthority::Unsupported,
             NativeNameModeSource::NativeDetection,
+            None,
         ));
         if let Err(error) = verify_fresh_directory(filesystem.root()).await {
             return Err(

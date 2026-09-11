@@ -703,6 +703,21 @@ run_privileged_test \
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::managed_xfs_capture_tree_shares_extents_and_charges_no_agent_quota
+
+run_privileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::managed_xfs_write_after_capture_consumes_one_cow_extent
+
+run_privileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::managed_xfs_seed_tree_charges_the_project_and_fails_on_an_existing_path
+
+run_privileged_test \
+  lib \
+  "${lib_test_binary}" \
   services::agent_filesystem::lifecycle::tests::managed_xfs_allocated_bytes_flow_through_resource_billing
 
 run_privileged_test \
