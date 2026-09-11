@@ -776,18 +776,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let (handle, denied) = match begun.resolve(self).await? {
             ResolvedCall::Replay(handle) => (handle, false),
             ResolvedCall::Live(begun) => {
-                let targets = config_segments_target(agent_owner(self), &path)
-                    .map_err(|_| ())
-                    .and_then(|target| {
-                        let mut targets = vec![target];
-                        if is_secret_config {
-                            targets.push(secret_hold_target_for_path(self, &path).map_err(|_| ())?);
-                        }
-                        Ok(targets)
-                    });
-                let denied = match targets {
-                    Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
-                    Err(_) => true,
+                // Snapshot loading executes unpersisted calls without publishing live execution.
+                // Normal tail continuation has already published liveness during resolution.
+                let denied = if self.state.is_live() {
+                    let targets = config_segments_target(agent_owner(self), &path)
+                        .map_err(|_| ())
+                        .and_then(|target| {
+                            let mut targets = vec![target];
+                            if is_secret_config {
+                                targets.push(
+                                    secret_hold_target_for_path(self, &path).map_err(|_| ())?,
+                                );
+                            }
+                            Ok(targets)
+                        });
+                    match targets {
+                        Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
+                        Err(_) => true,
+                    }
+                } else {
+                    false
                 };
                 let handle = begun
                     .start_live(
