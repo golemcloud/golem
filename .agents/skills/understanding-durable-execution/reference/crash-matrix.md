@@ -37,7 +37,7 @@ which durable fact makes that safe.
 | After caller `Start`, before target accepted | `Start` | Re-dispatch with same key (`MayExist`); target sees it as new and executes once | Same key |
 | After target accepted, before caller `End` | `Start` | Re-dispatch with same key; target's `lookup_invocation_result` attaches to the existing invocation/result | Target `PendingAgentInvocation` |
 | After caller `End` | `Start`, `End` | Recorded response returned; no dispatch | `End` payload |
-| Atomic-region rollback around the call | `Jump` + re-executed `Start` | Same logical counter → same key → target dedupes (non-streaming path; the streaming path keys from the physical index, see SKILL RPC section) | `next_idempotency_key_oplog_index` |
+| Atomic-region rollback around the call | `Jump` + re-executed `Start` | Streaming and non-streaming calls reuse the logical counter's key; the target reuses its invocation/result. Streaming descriptors retain semantic configuration, not retry tracing or environment-map ordering. | `next_idempotency_key_oplog_index`, target invocation/session identity |
 
 | Crash window (target) | Target behaviour | Durable fact |
 |---|---|---|

@@ -279,11 +279,11 @@ executor restart, an old key returns the recorded result without re-running the 
    `IdempotencyKey::derived(current_key, current_idempotency_key_oplog_index(begin_index))`. Inside
    an atomic region the index is the outermost region's *logical* counter
    (`next_idempotency_key_oplog_index`), not the physical index, because a rollback re-executes
-   the region at new physical positions and must not mint a new key. The streaming RPC path
-   (`prepared.is_streaming()` in `wasm_rpc/mod.rs`) instead derives
-   `IdempotencyKey::derived(&parent_key, handle.start_index())` from the physical index — a
-   discrepancy with the non-streaming path worth investigating before relying on streaming RPC
-   keys inside atomic regions.
+   the region at new physical positions and must not mint a new key. Both streaming entry points
+   reserve this logical key once on live and replay paths and reuse it for request persistence
+   and dispatch metadata. Outside atomic regions, streaming RPC uses the exact physical `Start`
+   index to distinguish concurrent calls. Its session descriptor excludes retry tracing and
+   canonicalizes environment ordering while retaining execution-relevant configuration.
 3. Caller state that the target may depend on is committed before the first dispatch.
 4. The target persists `PendingAgentInvocation` (durable acceptance) and later
    `AgentInvocationFinished`; same-key arrivals attach to that one invocation/result.
@@ -372,8 +372,8 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   (`validate_forwarded_mapping`, `CorruptHistory`).
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
-  Streaming keys derive from the physical `Start` index (see RPC section). Terminals are
-  finalized exactly once; a protocol terminal fences later guest terminals.
+  Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
+  later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
