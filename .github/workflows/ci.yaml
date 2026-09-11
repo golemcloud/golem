@@ -361,6 +361,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
+      - merge-test-components
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -475,6 +476,11 @@ jobs:
           mkdir -pv target/dev-release-ci
           cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
           chmod +x target/dev-release-ci/*
+
+      - uses: ./.github/actions/restore-test-components
+        if: matrix.group.shard == 'deploy'
+        with:
+          run-id: ${{ github.run_id }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:

@@ -4498,6 +4498,7 @@ dependencies = [
  "http-body-util",
  "humantime-serde",
  "hyper 1.11.0",
+ "hyper-util",
  "include_dir",
  "indexmap 2.14.0",
  "mime",

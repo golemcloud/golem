@@ -32,6 +32,9 @@ use golem_api_grpc::proto::golem::worker::invocation_request;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    CreateStreamSessionSuccess, ReadStreamSlotRequest, ReadStreamSlotSuccess,
+};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
@@ -1791,6 +1794,44 @@ impl WorkerService {
         self.worker_client
             .invoke_agent_session(&agent_id, Box::pin(request))
             .await
+    }
+
+    pub async fn create_stream_session(
+        &self,
+        agent_id: &AgentId,
+        request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("create authorized Durable Streams session")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client
+            .create_stream_session(agent_id, request)
+            .await
+    }
+
+    pub async fn read_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("access authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client.read_stream_slot(agent_id, request).await
     }
 
     pub async fn invoke_public_agent_session_v1(

@@ -18,6 +18,8 @@ use std::fmt::{Debug, Formatter};
 pub struct HttpTestContext {
     pub user: TestUserContext<EnvBasedTestDependencies>,
     pub env_id: EnvironmentId,
+    pub application_name: String,
+    pub environment_name: String,
     pub deployment_revision: DeploymentRevision,
     pub client: reqwest::Client,
     pub base_url: Url,
@@ -55,7 +57,7 @@ pub async fn make_test_context_with_openapi_endpoint(
 ) -> anyhow::Result<HttpTestContext> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
-    let (_, env) = user
+    let (application, env) = user
         .app_and_env_custom(&EnvironmentOptions {
             security_overrides: true,
             version_check: false,
@@ -108,6 +110,8 @@ pub async fn make_test_context_with_openapi_endpoint(
         base_url,
         user,
         env_id: env.id,
+        application_name: application.name.0,
+        environment_name: env.name.0,
         deployment_revision: deployment.revision,
         host_header,
     })

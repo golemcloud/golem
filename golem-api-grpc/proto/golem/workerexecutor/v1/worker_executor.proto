@@ -550,6 +550,8 @@ message ReadStreamSlotRequest {
   uint32 max_items = 7;
   uint64 max_bytes = 8;
   uint64 wait_millis = 9;
+  // Restricts the session to the method authorized by the HTTP route.
+  string expected_method = 10;
 }
 
 message StreamSlotItem {
@@ -572,6 +574,10 @@ message ReadStreamSlotSuccess {
   string content_type = 6;
   bool up_to_date = 7;
   bytes head_offset = 8;
+  // Opaque identity scoped to the durable session and underlying stream incarnation.
+  string stream_identity = 9;
+  // Names from the invocation's pinned schema, including input and output slots.
+  repeated string slots = 10;
 }
 
 message ReadStreamSlotResponse {

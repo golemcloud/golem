@@ -75,6 +75,7 @@ tokio::task_local! {
 struct ProducerMutationScope {
     producer: Arc<DurableStreamProducer>,
     commit_tails: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    session_records_changed: AtomicBool,
     publications: std::sync::Mutex<Vec<PublicationReceipt>>,
     remote_cancellations: std::sync::Mutex<
         Vec<futures::future::BoxFuture<'static, Result<(), DurableStreamProducerError>>>,
@@ -1907,6 +1908,7 @@ impl DurableStreamProducer {
         let scope = Arc::new(ProducerMutationScope {
             producer: producer.clone(),
             commit_tails: std::sync::Mutex::new(Vec::new()),
+            session_records_changed: AtomicBool::new(false),
             publications: std::sync::Mutex::new(Vec::new()),
             remote_cancellations: std::sync::Mutex::new(Vec::new()),
             _operation: permit,
@@ -1953,6 +1955,11 @@ impl DurableStreamProducer {
                             ))
                             .into());
                         }
+                    }
+                    // Slot readers use published worker status, which is folded after the
+                    // durability receipt but before the commit callback completes.
+                    if scope.session_records_changed.load(Ordering::Acquire) {
+                        producer.session_records_changed.notify_waiters();
                     }
                     // Storage quiescence excludes live fanout. The separate count/byte
                     // reservations still bound normal publications until delivery completes.
@@ -2961,7 +2968,19 @@ impl DurableStreamProducer {
     }
 
     pub(crate) fn notify_session_records_changed(&self) {
-        self.session_records_changed.notify_waiters();
+        let deferred = MUTATION_SCOPE
+            .try_with(|scope| {
+                if std::ptr::eq(scope.producer.as_ref(), self) {
+                    scope.session_records_changed.store(true, Ordering::Release);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        if !deferred {
+            self.session_records_changed.notify_waiters();
+        }
     }
 
     #[tracing::instrument(name = "durable_stream.register", skip_all)]
@@ -3679,39 +3698,34 @@ impl DurableStreamProducer {
         if request.max_bytes == 0 {
             return Err(DurableStreamProducerError::InvalidValueBatch);
         }
-        if request.after > head {
-            return Ok(StreamHandleReadResultV1 {
-                events: Vec::new(),
-                next_offset: request.after,
-                head_offset: head,
-                closed,
-                cancelled,
-            });
-        }
-        let mut events = if head.is_some() {
+        let mut events = if head.is_some() && request.after <= head {
             self.read_segment(&request.handle, request.after, head)
                 .await?
         } else {
             Vec::new()
         };
         if events.is_empty() && !closed && request.wait_millis > 0 {
-            let mut reader = self.catch_up(request.handle.clone(), request.after).await?;
-            if let Ok(event) = tokio::time::timeout(
-                std::time::Duration::from_millis(request.wait_millis.min(30_000)),
-                reader.next(),
-            )
-            .await
-            {
-                event?;
+            let bus = self.stream_bus(request.handle.stream_id).await?;
+            let deadline = tokio::time::Instant::now()
+                + std::time::Duration::from_millis(request.wait_millis.min(30_000));
+            loop {
+                let changed = bus.high_water_changed();
+                bus.ensure_available()?;
+                (head, closed, cancelled) = self.stream_head(&request.handle).await?;
+                events = if head.is_some() && request.after <= head {
+                    self.read_segment(&request.handle, request.after, head)
+                        .await?
+                } else {
+                    Vec::new()
+                };
+                bus.ensure_available()?;
+                if !events.is_empty() || closed || tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                if let Ok(result) = tokio::time::timeout_at(deadline, changed).await {
+                    result?;
+                }
             }
-            drop(reader);
-            (head, closed, cancelled) = self.stream_head(&request.handle).await?;
-            events = if head.is_some() {
-                self.read_segment(&request.handle, request.after, head)
-                    .await?
-            } else {
-                Vec::new()
-            };
         }
         let max_items = (request.max_items as usize).min(STREAM_SEGMENT_MAX_EVENTS);
         let max_bytes = request.max_bytes.min(STREAM_SEGMENT_TARGET_BYTES as u64);
@@ -3738,8 +3752,8 @@ impl DurableStreamProducer {
             events,
             next_offset,
             head_offset: head,
-            closed: closed && next_offset == head,
-            cancelled: cancelled && next_offset == head,
+            closed,
+            cancelled,
         })
     }
 
@@ -5532,6 +5546,7 @@ impl DurableStreamProducer {
         let bus = self.bus(stream_id)?;
         if !replayed {
             self.retain_committed_events(&events);
+            bus.notify_committed();
         }
         if events.len() == 1 && events[0].is_terminal() {
             let event = events.into_iter().next().unwrap();
@@ -10170,6 +10185,105 @@ pub(crate) mod tests {
 
     #[test]
     #[test_r::timeout("30s")]
+    async fn closed_export_reports_terminal_state_before_final_page() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+        let identity = identity();
+        let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let offsets = live
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![3, 9, 17, 41]),
+            )
+            .await
+            .unwrap()
+            .value;
+        live.end(handle.stream_id, 4, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        let read = live
+            .read_by_handle(StreamHandleReadRequestV1 {
+                handle,
+                after: None,
+                max_items: 2,
+                max_bytes: 10,
+                wait_millis: 0,
+            })
+            .await
+            .unwrap();
+        assert!(read.closed);
+        assert!(!read.cancelled);
+        assert_eq!(read.events.len(), 2);
+        assert_eq!(read.next_offset, Some(offsets[1]));
+        assert!(read.next_offset < read.head_offset);
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn blocked_terminal_publication_wakes_export_reader_after_durable_commit() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+        let identity = identity();
+        let live = producer(Arc::new(TestOplog::default()), &identity, Some(1)).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let bus = live.stream_bus(handle.stream_id).await.unwrap();
+        let mut reader = bus.subscribe().await.unwrap();
+        let offset = live
+            .write_items(handle.stream_id, 0, StreamItemsPayloadV1::PackedU8(vec![3]))
+            .await
+            .unwrap()
+            .value[0];
+
+        let export = live.read_by_handle(StreamHandleReadRequestV1 {
+            handle: handle.clone(),
+            after: Some(offset),
+            max_items: 2,
+            max_bytes: 10,
+            wait_millis: 5_000,
+        });
+        tokio::pin!(export);
+        assert!(futures::poll!(&mut export).is_pending());
+
+        let terminal = tokio::spawn({
+            let live = live.clone();
+            async move { live.end(handle.stream_id, 1, StreamEndResultV1::Ok).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let (_, closed, _) = live.stream_head(&handle).await.unwrap();
+                if closed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("terminal commit did not finish");
+        assert!(
+            !terminal.is_finished(),
+            "publication must remain backpressured"
+        );
+
+        let read = tokio::time::timeout(std::time::Duration::from_millis(100), export)
+            .await
+            .expect("durably committed terminal must wake the export reader")
+            .unwrap();
+        assert!(read.closed);
+        assert_eq!(read.events.len(), 1);
+        reader.recv().await.unwrap();
+        terminal.await.unwrap().unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
     async fn unattached_slot_reads_paginate_and_wake_both_readers() {
         use golem_common::model::durable_stream::StreamHandleReadRequestV1;
         let identity = identity();
@@ -10257,11 +10371,20 @@ pub(crate) mod tests {
             wait_millis: 5_000,
             ..request.clone()
         };
+        let bus = live.stream_bus(handle.stream_id).await.unwrap();
+        let mut attached_readers = Vec::new();
+        for _ in 0..golem_common::base_model::durable_stream::MAX_LIVE_READERS_PER_STREAM {
+            attached_readers.push(bus.subscribe().await.unwrap());
+        }
         let left = live.read_by_handle(wait.clone());
         let right = live.read_by_handle(wait);
         tokio::pin!(left, right);
         assert!(futures::poll!(&mut left).is_pending());
         assert!(futures::poll!(&mut right).is_pending());
+        assert!(matches!(
+            bus.subscribe().await,
+            Err(super::DurableLiveStreamBusError::ReaderLimit)
+        ));
         let next = live
             .write_items(
                 handle.stream_id,
@@ -10299,6 +10422,49 @@ pub(crate) mod tests {
             .unwrap();
         assert!(result.events.is_empty());
         assert_eq!(result.next_offset, Some(beyond));
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn future_cursor_live_reads_wait_for_deadline_or_closure() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+        let identity = identity();
+        let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let request = StreamHandleReadRequestV1 {
+            handle: handle.clone(),
+            after: Some(StreamOffsetV1::new(OplogIndex::from_u64(999), 0)),
+            max_items: 10,
+            max_bytes: 100,
+            wait_millis: 100,
+        };
+        let started = tokio::time::Instant::now();
+        let timed_out = live.read_by_handle(request.clone()).await.unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(timed_out.events.is_empty());
+        assert_eq!(timed_out.next_offset, request.after);
+        assert!(!timed_out.closed);
+
+        let mut waiting = Box::pin(live.read_by_handle(StreamHandleReadRequestV1 {
+            wait_millis: 5_000,
+            ..request.clone()
+        }));
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        live.write_items(handle.stream_id, 0, StreamItemsPayloadV1::PackedU8(vec![7]))
+            .await
+            .unwrap();
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        live.end(handle.stream_id, 1, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        let closed = waiting.await.unwrap();
+        assert!(closed.closed);
+        assert!(closed.events.is_empty());
+        assert_eq!(closed.next_offset, request.after);
     }
 
     #[test]
@@ -12185,6 +12351,62 @@ pub(crate) mod tests {
             );
             live.ensure_healthy().unwrap();
         }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn session_notification_waits_for_status_fold_after_caller_cancellation() {
+        let identity = identity();
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(()).unwrap();
+                    release.notified().await;
+                    folded.store(true, Ordering::Release);
+                })
+            }
+        });
+        let live = DurableStreamProducer::load_with_commit(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let mut notification = Box::pin(live.session_records_changed().notified());
+        notification.as_mut().enable();
+        let (requested, ready) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_owned(0, move |owner| async move {
+                    owner.commit().await;
+                    owner.finish_durable_effect();
+                    owner.notify_session_records_changed();
+                    requested.send(()).unwrap();
+                    Ok::<(), DurableStreamProducerError>(())
+                })
+                .await
+            }
+        });
+        ready.await.unwrap();
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+        assert!(!folded.load(Ordering::Acquire));
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        release.notify_one();
+        notification.await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
     }
 
     #[test]

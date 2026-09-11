@@ -223,6 +223,7 @@ message RouteBehaviour {
     CompiledInputSchema method_input = 12;
     golem.component.AgentMode agent_mode = 13;
     AgentRouteMode route_mode = 14;
+    uint32 base_path_variables = 15;
   }
 
   enum AgentRouteMode {

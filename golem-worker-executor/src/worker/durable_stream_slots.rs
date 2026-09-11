@@ -38,6 +38,8 @@ use prost::Message;
 
 struct Slot {
     session: StreamSessionKeyV1,
+    name: String,
+    slots: Vec<String>,
     graph: SchemaGraph,
     writable: bool,
     bytes: bool,
@@ -70,14 +72,13 @@ fn slot_schema(
         .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .enumerate()
     {
-        if field.name == name {
-            return match resolve(&field.schema)? {
-                SchemaType::Stream {
-                    inner: Some(element),
-                    ..
-                } => Ok(Some(((**element).clone(), Some(index), true, true))),
-                _ => Ok(None),
-            };
+        if field.name == name
+            && let SchemaType::Stream {
+                inner: Some(element),
+                ..
+            } = resolve(&field.schema)?
+        {
+            return Ok(Some(((**element).clone(), Some(index), true, true)));
         }
     }
     let OutputSchema::Single(output) = &method.output_schema else {
@@ -153,6 +154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         session: &str,
         name: &str,
+        expected_method: Option<&str>,
     ) -> Result<Option<Slot>, WorkerExecutorError> {
         validate_durable_stream_session_id(session)
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -173,6 +175,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
         let descriptor = &prepared.attempt.invocation;
+        if expected_method.is_some_and(|expected| expected != descriptor.method_name) {
+            return Ok(None);
+        }
         let component = self
             .component_service()
             .get_metadata(
@@ -191,6 +196,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .find(|method| method.name == descriptor.method_name)
             .ok_or_else(|| WorkerExecutorError::runtime("persisted agent method is missing"))?;
+        let mut candidates = method
+            .input_schema
+            .fields()
+            .iter()
+            .map(|field| field.name.clone())
+            .collect::<Vec<_>>();
+        candidates.push("$result".into());
+        if let OutputSchema::Single(output) = &method.output_schema
+            && let SchemaType::Record { fields, .. } = agent
+                .schema
+                .resolve_ref(output)
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        {
+            candidates.extend(fields.iter().map(|field| field.name.clone()));
+        }
+        let mut slots = Vec::new();
+        for candidate in candidates {
+            if !slots.contains(&candidate)
+                && slot_schema(&agent.schema, method, &candidate)?.is_some()
+            {
+                slots.push(candidate);
+            }
+        }
+        let name = if name.is_empty() {
+            let Some(name) = slots.first() else {
+                return Ok(None);
+            };
+            name.as_str()
+        } else {
+            name
+        };
         let Some((element, field, writable, is_stream)) = slot_schema(&agent.schema, method, name)?
         else {
             return Ok(None);
@@ -237,6 +273,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ) && is_stream;
         Ok(Some(Slot {
             session: prepared.attempt.session_key,
+            name: name.to_owned(),
+            slots,
             graph: SchemaGraph {
                 defs: agent.schema.defs.clone(),
                 root: element,
@@ -251,6 +289,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         request: ReadStreamSlotRequest,
     ) -> Result<Option<ReadStreamSlotSuccess>, DurableStreamReadError<WorkerExecutorError>> {
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(request.wait_millis.min(30_000));
         let after = if request.from_offset.is_empty() {
             None
         } else {
@@ -265,35 +305,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let producer = self.load_durable_stream_producer().await.map_err(|error| {
             DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
         })?;
-        let notified = producer.session_records_changed().notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        let Some(mut slot) = producer
-            .with_metadata_activity(self.resolve_stream_slot(&request.session, &request.slot))
-            .await
-            .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
-            })??
-        else {
-            return Ok(None);
-        };
-        if matches!(slot.source, SlotSource::Pending { finished: false })
-            && request.max_items > 0
-            && request.wait_millis > 0
-        {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_millis(request.wait_millis.min(30_000)),
-                notified,
-            )
-            .await;
-            slot = producer
-                .with_metadata_activity(self.resolve_stream_slot(&request.session, &request.slot))
+        let slot = loop {
+            let notified = producer.session_records_changed().notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let Some(slot) = producer
+                .with_metadata_activity(self.resolve_stream_slot(
+                    &request.session,
+                    &request.slot,
+                    Some(&request.expected_method),
+                ))
                 .await
                 .map_err(|error| {
                     DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
                 })??
-                .ok_or_else(|| WorkerExecutorError::runtime("session disappeared during read"))?;
-        }
+            else {
+                return Ok(None);
+            };
+            if !matches!(slot.source, SlotSource::Pending { finished: false })
+                || request.max_items == 0
+                || tokio::time::Instant::now() >= deadline
+            {
+                break slot;
+            }
+            let _ = tokio::time::timeout_at(deadline, notified).await;
+        };
+        let stream_id = match &slot.source {
+            SlotSource::Stream(handle) => Some(handle.stream_id),
+            SlotSource::Value(..) | SlotSource::Pending { .. } => None,
+        };
+        let identity = golem_common::serialization::serialize(&(
+            slot.session.clone(),
+            slot.name.clone(),
+            stream_id,
+        ))
+        .map_err(WorkerExecutorError::runtime)?;
         let mut response = ReadStreamSlotSuccess {
             items: Vec::new(),
             next_offset: request.from_offset.clone(),
@@ -308,6 +354,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .into(),
             up_to_date: true,
             head_offset: Vec::new(),
+            stream_identity: blake3::hash(&identity).to_hex().to_string(),
+            slots: slot.slots,
         };
         match slot.source {
             SlotSource::Stream(handle) => {
@@ -316,7 +364,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     after,
                     max_items: request.max_items,
                     max_bytes: request.max_bytes,
-                    wait_millis: request.wait_millis,
+                    wait_millis: deadline
+                        .saturating_duration_since(tokio::time::Instant::now())
+                        .as_millis() as u64,
                 };
                 let bytes = self
                     .rpc()
@@ -397,7 +447,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let empty = || golem_api_grpc::proto::golem::common::Empty {};
         let producer = self.durable_stream_producer().await?;
         let Some(slot) = producer
-            .with_metadata_activity(self.resolve_stream_slot(&request.session, &request.slot))
+            .with_metadata_activity(self.resolve_stream_slot(&request.session, &request.slot, None))
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??
         else {
@@ -514,6 +564,14 @@ mod tests {
             slot_schema(&graph, &method, "input").unwrap(),
             Some((SchemaType::string(), Some(1), true, true))
         );
+        assert_eq!(
+            slot_schema(&graph, &method, "bytes").unwrap(),
+            Some((SchemaType::u8(), Some(1), false, true))
+        );
+        method.input_schema = InputSchema::parameters(vec![NamedField::user_supplied(
+            "bytes",
+            SchemaType::string(),
+        )]);
         assert_eq!(
             slot_schema(&graph, &method, "bytes").unwrap(),
             Some((SchemaType::u8(), Some(1), false, true))

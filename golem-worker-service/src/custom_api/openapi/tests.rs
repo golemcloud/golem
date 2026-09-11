@@ -277,6 +277,7 @@ fn call_agent_route(
         body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
             route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
+            base_path_variables: 0,
             component_id: ComponentId::new(),
             component_revision: ComponentRevision::INITIAL,
             agent_type: agent_type_name("TestAgent"),

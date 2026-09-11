@@ -56,9 +56,9 @@ use std::collections::{HashMap, HashSet};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-type PublicInvocationSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+pub(crate) type PublicInvocationSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
-async fn connect_public_invocation_socket(
+pub(crate) async fn connect_public_invocation_socket(
     deps: &EnvBasedTestDependencies,
     token: Option<&TokenSecret>,
 ) -> Result<PublicInvocationSocket, WebSocketError> {
@@ -106,7 +106,7 @@ async fn connect_public_invocation_socket_with_subprotocol(
     Ok(socket)
 }
 
-async fn send_public_request(
+pub(crate) async fn send_public_request(
     socket: &mut PublicInvocationSocket,
     request: &PublicClientMessage,
 ) -> anyhow::Result<()> {
@@ -116,7 +116,7 @@ async fn send_public_request(
     Ok(())
 }
 
-async fn receive_public_response(
+pub(crate) async fn receive_public_response(
     socket: &mut PublicInvocationSocket,
 ) -> anyhow::Result<PublicServerMessage> {
     loop {

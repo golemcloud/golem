@@ -36,10 +36,12 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeactivatePluginRequest, DeliverCardTransferRequest,
-    DurableStreamAttachmentControlRequest, DurableStreamSegmentReadRequest, ForkWorkerRequest,
-    InterruptWorkerRequest, ProcessOplogEntriesRequest, ResolveRevertLastInvocationsRequest,
-    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    CreateStreamSessionSuccess, CreateWorkerRequest, DeactivatePluginRequest,
+    DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
+    DurableStreamSegmentReadRequest, ForkWorkerRequest, InterruptWorkerRequest,
+    ProcessOplogEntriesRequest, ReadStreamSlotRequest, ReadStreamSlotSuccess,
+    ResolveRevertLastInvocationsRequest, ResumeWorkerRequest, RevertWorkerRequest,
+    SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -490,6 +492,26 @@ pub trait WorkerClient: Send + Sync {
     ) -> WorkerResult<InvocationResponseStream> {
         Err(WorkerServiceError::Internal(
             "invocation sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn create_stream_session(
+        &self,
+        _agent_id: &AgentId,
+        _request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        Err(WorkerServiceError::Internal(
+            "durable stream sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn read_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        Err(WorkerServiceError::Internal(
+            "durable stream slot reads are not supported by this worker client".to_string(),
         ))
     }
 
@@ -1712,6 +1734,83 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
             .await?;
         Ok(canceled)
+    }
+
+    async fn create_stream_session(
+        &self,
+        agent_id: &AgentId,
+        request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        self.call_worker_executor(
+            agent_id.clone(),
+            "create_stream_session",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.create_stream_session(request.clone()))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::CreateStreamSessionResponse {
+                    result: Some(
+                        workerexecutor::v1::create_stream_session_response::Result::Success(
+                            success,
+                        ),
+                    ),
+                } => Ok(success),
+                workerexecutor::v1::CreateStreamSessionResponse {
+                    result: Some(
+                        workerexecutor::v1::create_stream_session_response::Result::Failure(error),
+                    ),
+                } => Err(error.into()),
+                workerexecutor::v1::CreateStreamSessionResponse { .. } => {
+                    Err("Empty create stream session response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn read_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        self.call_worker_executor(
+            agent_id.clone(),
+            "read_stream_slot",
+            move |worker_executor_client| {
+                let request = request.clone();
+                Box::pin(async move {
+                    let mut responses = worker_executor_client
+                        .read_stream_slot(request)
+                        .await?
+                        .into_inner();
+                    responses
+                        .message()
+                        .await?
+                        .ok_or_else(|| Status::internal("Empty read stream slot response stream"))
+                })
+            },
+            |response| match response {
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::Success(
+                        success,
+                    )),
+                } => Ok(Some(success)),
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::Failure(
+                        error,
+                    )),
+                } => Err(error.into()),
+                workerexecutor::v1::ReadStreamSlotResponse {
+                    result: Some(workerexecutor::v1::read_stream_slot_response::Result::NotFound(_)),
+                } => Ok(None),
+                workerexecutor::v1::ReadStreamSlotResponse { .. } => {
+                    Err("Empty read stream slot response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn invoke_agent(

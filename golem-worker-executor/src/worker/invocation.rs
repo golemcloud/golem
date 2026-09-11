@@ -688,7 +688,7 @@ pub(crate) fn rearm_fuel_check<T>(store: &mut StoreContextMut<'_, T>) {
 
 /// Builds an [`InvokeResult`] from a wasmtime trap (guest panic, interrupt,
 /// exit, or runtime error) raised by a typed export call.
-async fn invoke_result_from_trap<Ctx: WorkerCtx>(
+pub(crate) async fn invoke_result_from_trap<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     consumed_fuel: u64,
     err: wasmtime::Error,

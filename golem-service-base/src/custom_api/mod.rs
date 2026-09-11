@@ -341,6 +341,8 @@ pub enum RouteBehaviour {
 #[desert(evolution())]
 pub struct CallAgentBehaviour {
     pub route_mode: AgentRouteMode,
+    /// Number of captured variables in the declared base path, excluding DS session and slot.
+    pub base_path_variables: u32,
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,

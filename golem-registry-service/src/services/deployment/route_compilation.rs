@@ -218,6 +218,15 @@ pub fn add_agent_method_http_routes(
                 body,
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode,
+                    base_path_variables: path_segments
+                        .iter()
+                        .filter(|segment| {
+                            matches!(
+                                segment,
+                                PathSegment::Variable { .. } | PathSegment::CatchAll { .. }
+                            )
+                        })
+                        .count() as u32,
                     component_id: implementer.component_id,
                     component_revision: implementer.component_revision,
                     agent_type: agent.type_name.clone(),
@@ -441,9 +450,23 @@ fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTr
     let mut headers = BTreeSet::new();
 
     if let RouteBehaviour::CallAgent(CallAgentBehaviour {
-        method_parameters, ..
+        method_parameters,
+        route_mode,
+        ..
     }) = &compiled_route.behaviour
     {
+        if *route_mode == AgentRouteMode::DurableStreams {
+            headers.extend(
+                [
+                    "content-type",
+                    "if-none-match",
+                    "stream-ttl",
+                    "stream-expires-at",
+                    "stream-forked-from",
+                ]
+                .map(str::to_owned),
+            );
+        }
         headers.extend(
             method_parameters
                 .iter()
@@ -1061,6 +1084,48 @@ mod tests {
     }
 
     #[test]
+    fn durable_stream_base_capture_count_survives_route_family_and_serialization() {
+        use golem_common::model::agent::{PathSegment as AgentPathSegment, PathVariable};
+        let mut agent = test_agent(AgentMode::Durable, false);
+        agent.methods[0].output_schema =
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::string()))));
+        agent.http_mount.as_mut().unwrap().path_prefix = vec![
+            AgentPathSegment::PathVariable(PathVariable {
+                variable_name: "tenant".into(),
+            }),
+            AgentPathSegment::Literal(LiteralSegment {
+                value: "invocations".into(),
+            }),
+            AgentPathSegment::PathVariable(PathVariable {
+                variable_name: "session".into(),
+            }),
+        ];
+        let (routes, errors) = compile_test_routes(&agent);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(routes.len(), 10);
+        for route in routes {
+            assert_eq!(
+                collect_allowed_request_headers(&route),
+                BTreeSet::from([
+                    "content-type".into(),
+                    "if-none-match".into(),
+                    "stream-ttl".into(),
+                    "stream-expires-at".into(),
+                    "stream-forked-from".into(),
+                ])
+            );
+            let bytes = desert_rust::serialize(&route, Vec::new()).unwrap();
+            let restored: UnboundCompiledRoute = desert_rust::deserialize(&bytes).unwrap();
+            let proto: golem_api_grpc::proto::golem::customapi::RouteBehaviour =
+                restored.behaviour.into();
+            let RouteBehaviour::CallAgent(call) = RouteBehaviour::try_from(proto).unwrap() else {
+                panic!()
+            };
+            assert_eq!(call.base_path_variables, 2);
+        }
+    }
+
+    #[test]
     fn durable_stream_invalid_slot_reports_method_and_slot() {
         for name in ["invocations", "$result", "__ds"] {
             let mut agent = test_agent(AgentMode::Durable, false);
@@ -1211,6 +1276,7 @@ mod tests {
                 body: RequestBodySchema::Unused,
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Rest,
+                    base_path_variables: 0,
                     component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
@@ -1249,6 +1315,7 @@ mod tests {
                 },
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Rest,
+                    base_path_variables: 0,
                     component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                     component_revision:
                         golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),

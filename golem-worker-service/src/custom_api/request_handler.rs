@@ -14,6 +14,7 @@
 
 use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
+use super::durable_streams::DurableStreamsHandler;
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
 use super::oidc::handler::OidcHandler;
@@ -35,6 +36,7 @@ use tracing::{Instrument, debug};
 pub struct RequestHandler {
     route_resolver: Arc<RouteResolver>,
     call_agent_handler: Arc<CallAgentHandler>,
+    durable_streams_handler: Arc<DurableStreamsHandler>,
     oidc_handler: Arc<OidcHandler>,
     webhook_callback_handler: Arc<WebhookCallbackHandler>,
 }
@@ -44,12 +46,14 @@ impl RequestHandler {
     pub fn new(
         route_resolver: Arc<RouteResolver>,
         call_agent_handler: Arc<CallAgentHandler>,
+        durable_streams_handler: Arc<DurableStreamsHandler>,
         oidc_handler: Arc<OidcHandler>,
         webhook_callback_handler: Arc<WebhookCallbackHandler>,
     ) -> Self {
         Self {
             route_resolver,
             call_agent_handler,
+            durable_streams_handler,
             oidc_handler,
             webhook_callback_handler,
         }
@@ -113,7 +117,10 @@ impl RequestHandler {
                 if behaviour.route_mode
                     == golem_service_base::custom_api::AgentRouteMode::DurableStreams =>
             {
-                Ok(super::durable_streams::handle_request())
+                self.durable_streams_handler
+                    .handle(request, resolved_route, behaviour)
+                    .await
+                    .or_else(super::durable_streams::error_response)
             }
             RichRouteBehaviour::CallAgent(behaviour) => {
                 self.call_agent_handler
@@ -167,6 +174,14 @@ fn route_execution_result_to_response(
 
     match result.body {
         ResponseBody::NoBody => Ok(response_builder.finish()),
+
+        ResponseBody::PoemBody { body, content_type } => {
+            let response = response_builder.body(body);
+            Ok(match content_type {
+                Some(content_type) => response.set_content_type(content_type),
+                None => response,
+            })
+        }
 
         ResponseBody::ComponentModelJsonBody { body } => {
             let body = poem::Body::from_json(
@@ -355,6 +370,7 @@ mod tests {
                 },
                 behavior: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::DurableStreams,
+                    base_path_variables: 0,
                     component_id: ComponentId::new(),
                     component_revision: ComponentRevision::INITIAL,
                     agent_type: AgentTypeName("oracle-agent".to_string()),
@@ -421,6 +437,11 @@ mod tests {
         RequestHandler::new(
             route_resolver,
             Arc::new(CallAgentHandler::new(worker_service.clone())),
+            Arc::new(DurableStreamsHandler::new(
+                worker_service.clone(),
+                Arc::new(CallAgentHandler::new(worker_service.clone())),
+                &crate::config::DurableStreamsConfig::default(),
+            )),
             Arc::new(OidcHandler::new(
                 Arc::new(UnusedSessionStore),
                 Arc::new(DefaultIdentityProvider),
@@ -452,7 +473,11 @@ mod tests {
             .handle_request(request("not-json", true, false))
             .await
             .expect("durable-stream dispatch must not parse the REST body");
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            response.headers().get(http::header::ALLOW),
+            Some(&"PUT, HEAD, GET".parse().unwrap())
+        );
 
         let response = handler
             .handle_request(request("not-json", false, false))
@@ -464,7 +489,7 @@ mod tests {
             .handle_request(request("not-json", true, true))
             .await
             .expect("valid session reaches durable-stream dispatch");
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(
             response
                 .headers()

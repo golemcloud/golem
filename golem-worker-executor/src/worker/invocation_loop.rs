@@ -25,7 +25,7 @@ use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, clos
 use crate::services::{HasActiveAgents, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
-    lower_invocation,
+    invoke_result_from_trap, lower_invocation,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -71,8 +71,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
 use uuid::Uuid;
-use wasmtime::Store;
 use wasmtime::component::Instance;
+use wasmtime::{AsContextMut, Store};
 
 /// Span for one bounded phase of a worker's lifecycle.
 ///
@@ -2221,11 +2221,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                     .await;
                             }
                             Err(error) => {
+                                let result = invoke_result_from_trap(
+                                    &mut self.store.as_context_mut(),
+                                    consumed_fuel,
+                                    error,
+                                )
+                                .await;
                                 return self
                                     .agent_invocation_failed(
                                         &display_name,
                                         &invocation_idempotency_key,
-                                        Err(WorkerExecutorError::runtime(error.to_string())),
+                                        Ok(result),
                                     )
                                     .await;
                             }

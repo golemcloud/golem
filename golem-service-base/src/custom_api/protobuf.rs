@@ -173,6 +173,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
 
         match value.kind.ok_or("RouteBehaviour.kind missing")? {
             Kind::CallAgent(call_agent) => Ok(RouteBehaviour::CallAgent(CallAgentBehaviour {
+                base_path_variables: call_agent.base_path_variables,
                 route_mode: match proto::golem::customapi::route_behaviour::AgentRouteMode::try_from(
                     call_agent.route_mode,
                 ) {
@@ -281,6 +282,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
         match value {
             RouteBehaviour::CallAgent(CallAgentBehaviour {
                 route_mode,
+                base_path_variables,
                 component_id,
                 component_revision,
                 agent_type,
@@ -297,6 +299,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
             }) => Self {
                 kind: Some(Kind::CallAgent(
                     proto::golem::customapi::route_behaviour::CallAgent {
+                        base_path_variables,
                         route_mode: match route_mode {
                             AgentRouteMode::Rest => proto::golem::customapi::route_behaviour::AgentRouteMode::Rest as i32,
                             AgentRouteMode::DurableStreams => proto::golem::customapi::route_behaviour::AgentRouteMode::DurableStreams as i32,

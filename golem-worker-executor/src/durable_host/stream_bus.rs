@@ -142,6 +142,7 @@ pub(crate) struct DurableLiveStreamBus<T> {
     state: Mutex<DurableLiveStreamBusState<T>>,
     publication_order: std::sync::Mutex<PublicationOrder>,
     publication_progress: Arc<OnceLock<Arc<Notify>>>,
+    high_water_changed: Notify,
     retired: CancellationToken,
 }
 
@@ -156,6 +157,20 @@ impl<T: Clone> DurableLiveStreamBus<T> {
         } else {
             Ok(())
         }
+    }
+
+    /// Arms a broadcast observation before the caller rechecks durable history. Unlike a queued
+    /// subscription, observing progress does not consume reader capacity or backpressure writes.
+    pub(crate) fn high_water_changed(
+        &self,
+    ) -> impl Future<Output = Result<(), DurableLiveStreamBusError>> + '_ {
+        let notified = self.high_water_changed.notified();
+        async move { self.while_available(notified).await }
+    }
+
+    /// The producer calls this after updating its committed index, before queued delivery.
+    pub(crate) fn notify_committed(&self) {
+        self.high_water_changed.notify_waiters();
     }
 
     async fn while_available<F: Future>(
@@ -206,6 +221,7 @@ impl<T: Clone> DurableLiveStreamBus<T> {
             }),
             publication_order: std::sync::Mutex::new(PublicationOrder::default()),
             publication_progress: Arc::new(OnceLock::new()),
+            high_water_changed: Notify::new(),
             retired: CancellationToken::new(),
         })
     }
@@ -257,6 +273,7 @@ impl<T: Clone> DurableLiveStreamBus<T> {
             return Err(DurableLiveStreamBusError::NonIncreasingOffset);
         }
         state.high_water = Some(event.offset);
+        self.high_water_changed.notify_waiters();
 
         let readers = state
             .readers
@@ -290,6 +307,7 @@ impl<T: Clone> DurableLiveStreamBus<T> {
             .is_none_or(|high_water| event.offset > high_water)
         {
             state.high_water = Some(event.offset);
+            self.high_water_changed.notify_waiters();
         }
 
         let readers = state
@@ -448,6 +466,7 @@ impl<T: Clone + Send + 'static> DurableLiveStreamBus<T> {
         }
         if state.high_water.is_none_or(|head| offset > head) {
             state.high_water = Some(offset);
+            self.high_water_changed.notify_waiters();
         }
         for permit in permits {
             permit.send(event.clone());
@@ -1152,6 +1171,80 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(subscription.recv().await.unwrap().offset, second);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn publication_observers_do_not_consume_reader_capacity_or_wait_for_backpressure() {
+        let bus = DurableLiveStreamBus::with_reader_limit(1, 1).unwrap();
+        let mut reader = bus.subscribe().await.unwrap();
+        let first = bus.high_water_changed();
+        let second = bus.high_water_changed();
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset: StreamOffsetV1::new(OplogIndex::from_u64(10), 0),
+            payload: 1,
+        })
+        .await
+        .unwrap();
+        // Both observations were created before publication but not polled until afterward.
+        assert_eq!(first.await, Ok(()));
+        assert_eq!(second.await, Ok(()));
+        assert!(matches!(
+            bus.subscribe().await,
+            Err(DurableLiveStreamBusError::ReaderLimit)
+        ));
+
+        let changed = bus.high_water_changed();
+        let blocked = bus.publish_committed(DurableLiveStreamEvent {
+            offset: StreamOffsetV1::new(OplogIndex::from_u64(11), 0),
+            payload: 2,
+        });
+        tokio::pin!(blocked);
+        assert!(futures::poll!(&mut blocked).is_pending());
+        assert_eq!(changed.await, Ok(()));
+        assert!(futures::poll!(&mut blocked).is_pending());
+        assert_eq!(reader.recv().await.unwrap().payload, 1);
+        assert_eq!(blocked.await, Ok(()));
+
+        let changed = bus.high_water_changed();
+        tokio::pin!(changed);
+        assert!(futures::poll!(&mut changed).is_pending());
+        bus.retire();
+        assert_eq!(changed.await, Err(DurableLiveStreamBusError::Retired));
+        assert_eq!(
+            bus.high_water_changed().await,
+            Err(DurableLiveStreamBusError::Retired)
+        );
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn publication_observers_wake_for_advancing_replay_and_deferred_terminal() {
+        let bus = DurableLiveStreamBus::new(1).unwrap();
+        let event = DurableLiveStreamEvent {
+            offset: StreamOffsetV1::new(OplogIndex::from_u64(20), 0),
+            payload: 7,
+        };
+        let changed = bus.high_water_changed();
+        bus.republish_committed(event.clone()).await.unwrap();
+        assert_eq!(changed.await, Ok(()));
+        let changed = bus.high_water_changed();
+        bus.republish_committed(event).await.unwrap();
+        tokio::pin!(changed);
+        assert!(futures::poll!(&mut changed).is_pending());
+        let end = StreamOffsetV1::new(OplogIndex::from_u64(21), 0);
+        let receipt = bus
+            .defer_terminal(end, false, Arc::new(Notify::new()))
+            .unwrap();
+        assert!(
+            bus.try_publish_deferred_terminal(DurableLiveStreamEvent {
+                offset: end,
+                payload: 9,
+            })
+            .unwrap()
+        );
+        assert_eq!(changed.await, Ok(()));
+        assert_eq!(receipt.await.unwrap(), Ok(()));
     }
 
     #[test]

@@ -268,7 +268,7 @@ impl CallAgentHandler {
         }
     }
 
-    fn build_agent_id(
+    pub(super) fn build_agent_id(
         &self,
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
@@ -316,7 +316,7 @@ impl CallAgentHandler {
         })
     }
 
-    fn resolve_method_arguments(
+    pub(super) fn resolve_method_arguments(
         &self,
         resolved_route: &ResolvedRouteEntry,
         request: &RichRequest,
@@ -555,7 +555,9 @@ fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
     }
 }
 
-fn principal_from_request(request: &RichRequest) -> Result<Principal, RequestHandlerError> {
+pub(super) fn principal_from_request(
+    request: &RichRequest,
+) -> Result<Principal, RequestHandlerError> {
     match request.authenticated_session() {
         Some(session) => Ok(Principal::Oidc(OidcPrincipal {
             sub: session.subject.clone(),

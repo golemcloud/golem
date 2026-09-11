@@ -720,10 +720,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .map_err(WorkerExecutorError::invalid_request)?;
         let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&id)?;
-        let worker = self
-            .get_or_create_pending_for_lookup(&request)
-            .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(id.agent_id()))?;
+        let worker = match self.get_or_create_pending_for_lookup(&request).await? {
+            Some(worker) => worker,
+            None => {
+                self.get_or_create_pending_with_freshness(
+                    &request,
+                    InvocationFreshnessDisposition::MayExist,
+                )
+                .await?
+            }
+        };
         let producer = worker.durable_stream_producer().await?;
         let pinned = producer
             .with_metadata_activity(worker.prepared_stream_session(&key))
