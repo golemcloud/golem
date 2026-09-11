@@ -1,0 +1,5 @@
+error: agent_client does not accept arguments
+ --> tests/ui/fail/reflected_agent_client_arguments.rs:3:16
+  |
+3 | #[agent_client(type_name = "SearchAgent")]
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^

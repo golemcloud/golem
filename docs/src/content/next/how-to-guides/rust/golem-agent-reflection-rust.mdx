@@ -78,7 +78,7 @@ the schema authority:
 ```rust
 use golem_rust::{ParsedAgentId, agent_client};
 
-#[agent_client(type_name = "CounterAgent")]
+#[agent_client]
 trait CounterContract {
     fn add(&self, by: u32) -> u32;
     fn reset(&self);
@@ -89,11 +89,11 @@ fn bind(agent_id: &ParsedAgentId) -> Result<CounterContractClient, golem_rust::G
 }
 ```
 
-Binding addresses the type by its environment-unique name, while the trait's
-codecs remain the schema authority. Generated named methods are awaited calls.
+Binding addresses the type encoded by the agent ID, while the trait's codecs
+remain the schema authority. Generated named methods are awaited calls.
 The client also generates
-`trigger_<method>`, `pending_<method>`, and `schedule_<method>`. Binding checks
-the agent type name but does not discover the remote schema or lifecycle.
+`trigger_<method>`, `pending_<method>`, and `schedule_<method>`. Binding does not
+discover the remote schema or lifecycle.
 
 ## Construct and Bind Agent IDs
 

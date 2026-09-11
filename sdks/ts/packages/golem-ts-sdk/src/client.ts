@@ -184,8 +184,8 @@ export type AgentClientSpec<
 } & (Mode extends 'ephemeral' ? { readonly mode: 'ephemeral' } : { readonly mode?: 'durable' });
 
 export interface AgentClientBindingSpec<Methods extends MethodsRecord> {
-  readonly name?: string;
   readonly methods: Methods;
+  readonly name?: never;
   readonly id?: never;
   readonly config?: never;
   readonly mode?: never;
@@ -244,14 +244,18 @@ function defineAgentClientImpl(spec: {
       };
     return Object.freeze({ ...exact, ...buildAgentClientSurface(exact, true) });
   }
-  if (spec.id !== undefined || spec.config !== undefined || spec.mode !== undefined) {
+  if (
+    spec.name !== undefined ||
+    spec.id !== undefined ||
+    spec.config !== undefined ||
+    spec.mode !== undefined
+  ) {
     throw new TypeError(
-      'Agent ID binding contracts may only define methods and an optional name; id, config, and mode require a complete exact name + id definition',
+      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
     );
   }
   const binding = buildAgentIdBinding(spec, true);
   return Object.freeze({
-    ...(spec.name === undefined ? {} : { name: spec.name }),
     methods: spec.methods,
     ...binding,
   });
@@ -413,13 +417,13 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
 }
 
 function buildAgentIdBinding<Methods extends MethodsRecord>(
-  def: { readonly name?: string; readonly methods: Methods },
+  def: { readonly methods: Methods },
   fallible: boolean,
 ): { [bindAgentClient](agentId: ParsedAgentId): RemoteClient<Methods> } {
   const methodCodecs = compileRemoteMethods(def.methods);
   return {
     [bindAgentClient](agentId) {
-      return bindExistingAgent(def.name, methodCodecs, fallible, agentId, 'durable');
+      return bindExistingAgent(undefined, methodCodecs, fallible, agentId, 'durable');
     },
   };
 }
