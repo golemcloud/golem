@@ -79,11 +79,6 @@ final class SnapshotCounterImpl(@unused private val name: String) extends Snapsh
   def saveSnapshot(): Future[Array[Byte]] =
     Future.successful(encodeU32(value))
 
-  def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
-    Future.successful {
-      value = decodeU32(bytes)
-    }
-
   override def increment(): Future[Int] =
     Future.successful {
       value += 1
@@ -97,6 +92,18 @@ final class SnapshotCounterImpl(@unused private val name: String) extends Snapsh
       ((i >>> 8) & 0xff).toByte,
       (i & 0xff).toByte
     )
+
+}
+
+object SnapshotCounterImpl {
+  def loadSnapshot(
+    bytes: Array[Byte],
+    context: golem.runtime.SnapshotRestoreContext
+  ): Future[SnapshotCounterImpl] = Future.successful {
+    val instance = new SnapshotCounterImpl(context.identity[String](0))
+    instance.value = decodeU32(bytes)
+    instance
+  }
 
   private def decodeU32(bytes: Array[Byte]): Int =
     ((bytes(0) & 0xff) << 24) |
@@ -115,14 +122,24 @@ final class AutoSnapshotCounterImpl(@unused private val name: String)
     extends AutoSnapshotCounter
     with Snapshotted[SnapshotCounterState] {
 
-  var state: SnapshotCounterState                                 = SnapshotCounterState(0)
-  val stateSchema: zio.blocks.schema.Schema[SnapshotCounterState] = SnapshotCounterState.schema
+  var state: SnapshotCounterState = SnapshotCounterState(0)
 
   override def increment(): Future[Int] =
     Future.successful {
       state = state.copy(value = state.value + 1)
       state.value
     }
+}
+
+object AutoSnapshotCounterImpl {
+  def loadSnapshot(
+    state: SnapshotCounterState,
+    context: golem.runtime.SnapshotRestoreContext
+  ): Future[AutoSnapshotCounterImpl] = Future.successful {
+    val instance = new AutoSnapshotCounterImpl(context.identity[String](0))
+    instance.state = state
+    instance
+  }
 }
 
 @agentImplementation()
