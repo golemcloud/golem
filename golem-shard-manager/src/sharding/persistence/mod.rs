@@ -71,6 +71,15 @@ pub trait RoutingTablePersistence: Send + Sync {
         shard_state: &ShardLeaseState,
         prev_revision: ExternalRevision,
     ) -> Result<ExternalRevision, ShardManagerError>;
+
+    /// Drops stored history that nothing will read again, behind `latest`, the revision the
+    /// state was last stored at. The state is rewritten on every lease renewal, so a backend
+    /// that keeps every version - etcd - grows without bound unless something compacts it.
+    /// Called by the leader after each pass of its loop; a failure is logged, never fail-stop,
+    /// because the state itself is intact. Backends that overwrite in place have nothing to do.
+    async fn compact(&self, _latest: ExternalRevision) -> Result<(), ShardManagerError> {
+        Ok(())
+    }
 }
 
 /// Decodes a persisted state blob and refuses to load one that violates the state invariants.

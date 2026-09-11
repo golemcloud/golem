@@ -13,12 +13,16 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+};
 use golem_common::model::OwnedAgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,6 +46,162 @@ async fn wait_until(message: &str, mut condition: impl AsyncFnMut() -> bool) -> 
     })
     .await
     .map_err(|_| anyhow::anyhow!("timed out waiting for {message}"))
+}
+
+/// `ShardId::from_agent_id` divides by the shard count, so a push carrying zero would abort this
+/// executor on its next routing decision rather than fail the call. Refused at the door, and the
+/// set it already holds is left alone.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_push_of_zero_shards_is_refused_rather_than_applied(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let parsed_agent_id = agent_id!("Clock", "zero-shard-push");
+    let agent_id = executor
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+
+    let mut client = executor.client.clone();
+    let refused = client
+        .assign_shards(AssignShardsRequest {
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 0,
+            }],
+            revision: 5,
+            number_of_shards: 0,
+        })
+        .await?
+        .into_inner();
+    assert!(
+        !matches!(
+            refused.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "a push naming zero shards must be refused, not applied"
+    );
+
+    // The executor is still serving the set it had: the refusal happened before anything was
+    // installed, so its routing hash never sees a zero to divide by.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(executor.worker_is_loaded(&owned_agent_id).await);
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+
+    drop(client);
+    drop(executor);
+    Ok(())
+}
+
+/// A revoke read from a state older than the last delivery this executor applied must be dropped
+/// whole - not merely ignored for bookkeeping, but *without sweeping*. The sweep is the part with
+/// teeth: it restarts every agent whose shard has gone, so a stale revoke that still swept would
+/// interrupt agents on a shard this executor legitimately owns.
+///
+/// Driven over the wire because the guard lives in the gRPC handler, which cannot be constructed
+/// in a unit test: its `WorkerCtx` and `HasAll` bounds are satisfied only by the production
+/// bootstrap.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let parsed_agent_id = agent_id!("Clock", "stale-revoke-owner");
+    let agent_id = executor
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    assert!(executor.worker_is_loaded(&owned_agent_id).await);
+
+    // The single-shard bootstrap owns shard 0, so this agent is on it.
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            revision: 5,
+            number_of_shards: 1,
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        assigned.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
+
+    // A revoke from before that push. It is answered `Success` - the shard is already where the
+    // manager wants it - but it must change nothing.
+    let stale = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 3,
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        stale.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        executor.worker_is_loaded(&owned_agent_id).await,
+        "a revoke older than the last applied delivery must not sweep the agents of a shard this \
+         executor still owns"
+    );
+
+    // ...whereas one at the applied revision does take the shard, and the sweep runs.
+    let current = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 5,
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        current.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    wait_until("the revoked shard's agent to be swept", || async {
+        !executor.worker_is_loaded(&owned_agent_id).await
+    })
+    .await?;
+
+    drop(client);
+    drop(executor);
+    Ok(())
 }
 
 #[test]

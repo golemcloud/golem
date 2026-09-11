@@ -2492,6 +2492,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn golem_worker_executor::services::shard_manager::ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -2639,6 +2641,8 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn golem_worker_executor::services::shard_manager::ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
