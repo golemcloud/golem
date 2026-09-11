@@ -415,7 +415,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let agent_mode = deps
             .worker_service()
             .get_agent_mode(owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
 
         let oplog_service = deps.oplog_service();

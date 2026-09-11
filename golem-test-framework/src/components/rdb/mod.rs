@@ -69,6 +69,7 @@ impl DbInfo {
                     password: pg.password.clone(),
                     max_connections: 10,
                     schema: Some(service_namespace.to_string()),
+                    acquire_timeout: None,
                 })
             }
             DbInfo::Mysql(_) => {

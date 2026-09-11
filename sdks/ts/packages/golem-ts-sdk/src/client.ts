@@ -25,7 +25,7 @@ import type {
   InvocationMetadata,
   CancelableScheduledInvocationReceipt,
 } from 'golem:agent/host@2.0.0';
-import { v } from './internal/schema-model';
+import { encodeChild, v, withIsolatedCapabilityAdoptionTransaction } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from './uuid';
@@ -159,7 +159,9 @@ interface CompiledRemoteMethod {
 
 /** Encode a method/constructor input record (positional, declaration order). */
 function encodeRecord(codecs: NamedCodec[], input: Record<string, unknown>) {
-  return v.record(codecs.map((c) => c.codec.toValue(input[c.name])));
+  return withIsolatedCapabilityAdoptionTransaction(() =>
+    v.record(codecs.map((c) => encodeChild(c.codec, input[c.name]))),
+  );
 }
 
 function assertValueMatchesType(value: SchemaValue, type: SchemaType, graph: SchemaGraph): void {

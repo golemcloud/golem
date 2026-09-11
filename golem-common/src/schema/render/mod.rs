@@ -30,13 +30,21 @@ pub mod walker;
 #[cfg(test)]
 mod tests;
 
-pub use cli_text::{type_to_cli_text, value_to_cli_text, value_to_cli_text_unredacted};
+pub use cli_text::{
+    type_to_cli_text, value_to_cli_text, value_to_cli_text_unredacted,
+    value_to_cli_text_with_secret_metadata,
+};
 pub use docs::graph_to_markdown;
 pub use error::RenderError;
 pub use json_schema::{
     JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema, to_json_schema,
     to_json_schema_with_config,
 };
-pub use json_value::{from_json_value, to_json_value, to_json_value_redacted};
-pub use openapi::to_openapi_components;
+pub use json_value::{
+    from_json_value, from_untrusted_json_value, to_json_value, to_json_value_redacted,
+};
+pub use openapi::{
+    to_external_input_openapi_components, to_external_output_openapi_components,
+    to_openapi_components,
+};
 pub use walker::{SchemaWalker, WalkerError, resolve_ref, walk};

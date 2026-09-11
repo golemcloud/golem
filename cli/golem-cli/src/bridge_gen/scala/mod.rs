@@ -48,7 +48,7 @@ use crate::bridge_gen::scala::scala_writer::ScalaWriter;
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, projected_input_schema_graph,
-    projected_schema_graph,
+    projected_schema_graph, validate_host_managed_agent_bridge_policy,
 };
 use crate::fs;
 use crate::sdk_overrides::sdk_overrides;
@@ -483,6 +483,7 @@ impl ScalaBridgeGenerator {
         mode: ScalaBridgeMode,
         extra_reserved_names: impl IntoIterator<Item = String>,
     ) -> anyhow::Result<Self> {
+        validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type.source_language.eq_ignore_ascii_case("scala");
         let runtime_config = ScalaRuntimeConfig::new(mode);
 
@@ -2860,6 +2861,15 @@ impl ScalaBridgeGenerator {
             ),
             SchemaType::Datetime { .. } => format!("{SV}.DatetimeValue({val_expr}.toString)"),
             SchemaType::Duration { .. } => format!("{SV}.DurationValue({val_expr})"),
+            SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.SecretValue({val_expr})")
+            }
+            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.QuotaTokenHandle({val_expr}.handle)")
+            }
+            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.PermissionCardHandle({val_expr})")
+            }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
@@ -3017,6 +3027,17 @@ impl ScalaBridgeGenerator {
             SchemaType::Url { .. } => format!("{CODEC}.asUrl({val_expr})"),
             SchemaType::Datetime { .. } => format!("{CODEC}.asDatetime({val_expr})"),
             SchemaType::Duration { .. } => format!("{CODEC}.asDuration({val_expr})"),
+            SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
+                "{val_expr} match {{ case {GUEST_SV}.SecretValue(handle) => handle; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected secret value, got $other\") }}"
+            ),
+            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
+                "{val_expr} match {{ case {GUEST_SV}.QuotaTokenHandle(handle) => new _root_.golem.host.QuotaApi.QuotaToken(handle); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected quota-token handle, got $other\") }}"
+            ),
+            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!(
+                    "{val_expr} match {{ case {GUEST_SV}.PermissionCardHandle(handle) => handle; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected permission-card handle, got $other\") }}"
+                )
+            }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
             | SchemaType::Enum { .. }
@@ -3231,6 +3252,15 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
             SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
+            SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                Ok("_root_.golem.schema.GuestSecretHandle".to_string())
+            }
+            SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                Ok("_root_.golem.host.QuotaApi.QuotaToken".to_string())
+            }
+            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                Ok("_root_.golem.schema.GuestPermissionCardHandle".to_string())
+            }
             // Named composites should already have been resolved to their name
             // above; reaching here means the walker did not register one.
             SchemaType::Record { .. }

@@ -98,6 +98,7 @@ pub(crate) struct DurableSessionStreams {
     session_lock: Arc<Mutex<()>>,
     attachment_epoch: u64,
     attachment_attempt_id: Option<AttemptId>,
+    entity_parent_start_index: Option<OplogIndex>,
     recovered_mappings_through: Arc<Mutex<OplogIndex>>,
     control_metadata: Arc<Mutex<SessionControlMetadata>>,
 }
@@ -730,6 +731,7 @@ impl DurableSessionStreams {
             session_lock,
             attachment_epoch: 1,
             attachment_attempt_id: None,
+            entity_parent_start_index: None,
             recovered_mappings_through: Arc::new(Mutex::new(OplogIndex::NONE)),
             control_metadata: Arc::new(Mutex::new(SessionControlMetadata::default())),
         }
@@ -748,6 +750,14 @@ impl DurableSessionStreams {
     ) -> Self {
         self.recovered_mappings_through = Arc::new(Mutex::new(OplogIndex::NONE));
         self.consumer_invocation = consumer_invocation;
+        self
+    }
+
+    pub(crate) fn with_entity_parent_start_index(
+        mut self,
+        entity_parent_start_index: Option<OplogIndex>,
+    ) -> Self {
+        self.entity_parent_start_index = entity_parent_start_index;
         self
     }
 
@@ -1002,7 +1012,10 @@ impl DurableSessionStreams {
         }
         let result = self
             .producer
-            .append_session_record(StreamSessionRecordV1::ResumeAttempt(record))
+            .append_session_record_attributed(
+                self.entity_parent_start_index,
+                StreamSessionRecordV1::ResumeAttempt(record),
+            )
             .await
             .map_err(|error| error.to_string());
         if result.is_ok() {
@@ -1046,14 +1059,14 @@ impl DurableSessionStreams {
 
     pub(crate) async fn append_record(&self, record: StreamSessionRecordV1) {
         self.producer
-            .append_session_record(record)
+            .append_session_record_attributed(self.entity_parent_start_index, record)
             .await
             .expect("internally generated durable session record is valid");
     }
 
     async fn try_append_record(&self, record: StreamSessionRecordV1) -> Result<(), String> {
         self.producer
-            .append_session_record(record)
+            .append_session_record_attributed(self.entity_parent_start_index, record)
             .await
             .map_err(|error| error.to_string())
     }
@@ -1844,6 +1857,7 @@ impl DurableSessionStreams {
                     nested_element_types
                         .push((nested_transport_id, element.unwrap_or_else(SchemaType::u8)));
                     nested_requests.push(ProducerRegistrationRequestV1 {
+                        entity_parent_start_index: self.entity_parent_start_index,
                         coordinate,
                         source_invocation: self.session_key.clone(),
                         component_revision: input_schema.component_revision,
@@ -2226,6 +2240,7 @@ impl DurableSessionStreams {
                 handle
             } else {
                 let request = ProducerRegistrationRequestV1 {
+                    entity_parent_start_index: self.entity_parent_start_index,
                     coordinate: StreamRegistrationCoordinateV1::Root {
                         invocation_id: self.session_key.clone(),
                         root_kind: StreamRootKindV1::MethodInput,
@@ -2374,6 +2389,7 @@ impl DurableSessionStreams {
             .iter()
             .filter(|pending| pending.forwarded_handle.is_none())
             .map(|pending| ProducerRegistrationRequestV1 {
+                entity_parent_start_index: self.entity_parent_start_index,
                 coordinate: StreamRegistrationCoordinateV1::Root {
                     invocation_id: self.session_key.clone(),
                     root_kind: StreamRootKindV1::MethodResult,
@@ -2457,7 +2473,12 @@ impl DurableSessionStreams {
             .collect::<Vec<_>>();
         let (owned_handles, _) = self
             .producer
-            .register_result_streams(self.session_key.clone(), result_bytes, outputs)
+            .register_result_streams(
+                self.session_key.clone(),
+                result_bytes,
+                outputs,
+                self.entity_parent_start_index,
+            )
             .await
             .map_err(|error| error.to_string())?;
         self.producer.notify_session_records_changed();
@@ -2883,6 +2904,7 @@ impl DurableSessionStreams {
                                 forwarded_handle,
                                 element_type: nested_element.unwrap_or_else(SchemaType::u8),
                                 registration: ProducerRegistrationRequestV1 {
+                                    entity_parent_start_index: self.entity_parent_start_index,
                                     coordinate: StreamRegistrationCoordinateV1::Nested {
                                         parent_stream_id: handle.stream_id,
                                         parent_producer_sequence: event.offset,
@@ -3063,7 +3085,12 @@ impl DurableSessionStreams {
         self.validate_topology_complete().await?;
         drop(session_guard);
         self.producer
-            .finish_session(self.session_key.clone(), result, input_cancel_reason)
+            .finish_session(
+                self.session_key.clone(),
+                self.entity_parent_start_index,
+                result,
+                input_cancel_reason,
+            )
             .await
             .map_err(|error| error.to_string())
     }
@@ -8991,6 +9018,7 @@ mod tests {
         let index = oplog
             .add(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::CallerAttempt(
                     StreamCallerAttemptRecordV1 {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -9133,6 +9161,7 @@ mod tests {
         let index = oplog
             .add(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::Finished(
                     StreamSessionFinishedRecordV1 {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
