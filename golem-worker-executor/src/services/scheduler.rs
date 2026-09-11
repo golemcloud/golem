@@ -825,6 +825,9 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
+    // Resume scheduling tests share a process-global histogram with exact-count assertions.
+    static RESUME_METRIC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     struct SchedulerWorkerAccessMock;
 
     #[async_trait]
@@ -1510,6 +1513,7 @@ mod tests {
 
     #[test]
     async fn schedule_size_is_observed_once_for_duplicates_and_terminal_failures() {
+        let _metric_guard = RESUME_METRIC_LOCK.lock().await;
         let action = ScheduledAction::Resume {
             agent_created_by: AccountId::new(),
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("metric")),
@@ -1864,6 +1868,7 @@ mod tests {
     /// failed must leave the action in place to be claimed again.
     #[test]
     async fn failed_resume_is_not_acknowledged() {
+        let _metric_guard = RESUME_METRIC_LOCK.lock().await;
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let attempts = Arc::new(AtomicUsize::new(0));
         let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
@@ -1895,6 +1900,7 @@ mod tests {
     /// The counterpart: a resume that did activate its worker is acknowledged and gone.
     #[test]
     async fn successful_resume_is_acknowledged() {
+        let _metric_guard = RESUME_METRIC_LOCK.lock().await;
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let svc =
             create_scheduler_with_worker_access(storage.clone(), create_worker_access_mock()).await;
