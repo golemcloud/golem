@@ -83,7 +83,9 @@ async fn granted_domain_view_works_without_environment_view(
     let owner_client = deps.registry_service().client(&owner.token).await;
     let (app, env) = owner.app_and_env().await?;
 
-    let domain = Domain("test1.golem.cloud".to_string());
+    // Domain registration is globally unique, so this must not collide with any other test's
+    // domain (see register_and_fetch_domain and the other_users_* tests).
+    let domain = Domain("test6.golem.cloud".to_string());
     let domain_registration = owner_client
         .create_domain_registration(
             &env.id.0,
