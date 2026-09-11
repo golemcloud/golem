@@ -19,6 +19,9 @@ use golem_client::api::{
     RegistryServiceListEnvironmentDomainRegistrationsError,
 };
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::assert_eq;
@@ -67,6 +70,72 @@ async fn register_and_fetch_domain(deps: &EnvBasedTestDependencies) -> anyhow::R
             .await?;
         assert_eq!(result.values, vec![domain_registration]);
     }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn granted_domain_view_works_without_environment_view(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let owner_client = deps.registry_service().client(&owner.token).await;
+    let (app, env) = owner.app_and_env().await?;
+
+    let domain = Domain("test1.golem.cloud".to_string());
+    let domain_registration = owner_client
+        .create_domain_registration(
+            &env.id.0,
+            &DomainRegistrationCreation {
+                domain: domain.clone(),
+            },
+        )
+        .await?;
+
+    let grantee = deps.user().await?;
+    let grantee_client = deps.registry_service().client(&grantee.token).await;
+
+    // Before any grant the by-domain lookup is not visible to the grantee.
+    let before = grantee_client
+        .get_environment_domain_registration(&env.id.0, &domain.0)
+        .await;
+    assert!(matches!(
+        before,
+        Err(golem_client::Error::Item(
+            RegistryServiceGetEnvironmentDomainRegistrationError::Error404(_)
+        ))
+    ));
+
+    // Grant view on this ONE domain registration only — no environment-view permission.
+    owner_client
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: grantee.account_email.clone(),
+                name: PermissionShareName("domain-view".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![format!(
+                        "environment.domain-registration({}/{}/{}) @ {} : view : {}",
+                        owner.account_email.as_str(),
+                        app.name.0,
+                        env.name.0,
+                        grantee.account_email.as_str(),
+                        domain.0,
+                    )],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
+        .await?;
+
+    // With only the resource grant the by-domain lookup now succeeds, matching the by-id lookup.
+    let fetched = grantee_client
+        .get_environment_domain_registration(&env.id.0, &domain.0)
+        .await?;
+    assert_eq!(fetched, domain_registration);
 
     Ok(())
 }

@@ -19,6 +19,9 @@ use golem_common::base_model::retry_policy::{
 };
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::retry_policy::{
     RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
 };
@@ -140,6 +143,72 @@ async fn create_and_get_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow:
         let all = client.list_environment_retry_policies(&env.id.0).await?;
         assert!(all.values.contains(&created));
     }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn granted_retry_policy_view_works_without_environment_view(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let owner_client = deps.registry_service().client(&owner.token).await;
+    let (app, env) = owner.app_and_env().await?;
+
+    let creation = RetryPolicyCreation {
+        name: "test-policy".to_string(),
+        priority: 10,
+        predicate: simple_predicate(),
+        policy: simple_policy(),
+    };
+    let created = owner_client
+        .create_retry_policy(&env.id.0, &creation)
+        .await?;
+
+    let grantee = deps.user().await?;
+    let grantee_client = deps.registry_service().client(&grantee.token).await;
+
+    // Before any grant the by-name lookup is not visible to the grantee.
+    let before = grantee_client
+        .get_environment_retry_policy(&env.id.0, &created.name)
+        .await;
+    assert!(matches!(
+        before,
+        Err(golem_client::Error::Item(
+            RegistryServiceGetEnvironmentRetryPolicyError::Error404(_)
+        ))
+    ));
+
+    // Grant view on this ONE retry policy only — no environment-view permission.
+    owner_client
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: grantee.account_email.clone(),
+                name: PermissionShareName("retry-policy-view".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![format!(
+                        "environment.retry-policy({}/{}/{}) @ {} : view : {}",
+                        owner.account_email.as_str(),
+                        app.name.0,
+                        env.name.0,
+                        grantee.account_email.as_str(),
+                        created.name,
+                    )],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
+        .await?;
+
+    // With only the resource grant the by-name lookup now succeeds, matching the by-id lookup.
+    let fetched = grantee_client
+        .get_environment_retry_policy(&env.id.0, &created.name)
+        .await?;
+    assert_eq!(fetched, created);
 
     Ok(())
 }
