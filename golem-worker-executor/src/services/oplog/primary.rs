@@ -760,6 +760,22 @@ impl OplogService for PrimaryOplogService {
             let is = self.indexed_storage.clone();
             let agent_id = owned_agent_id.agent_id();
             let key = Self::oplog_key(&owned_agent_id.agent_id);
+            // The epoch record goes before the entries: a writer still holding this oplog open is
+            // then refused by the absent record, instead of appending entries back into an oplog
+            // that is being removed.
+            retry_storage_op(&self.retry_config, "delete_oplog_metadata", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                    agent_mode,
+                };
+                let key = key.clone();
+                async move {
+                    is.delete_oplog_metadata("oplog", "delete_oplog_metadata", ns, &key)
+                        .await
+                }
+            })
+            .await;
             retry_storage_op(&self.retry_config, "delete", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {

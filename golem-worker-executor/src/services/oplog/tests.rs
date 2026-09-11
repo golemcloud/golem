@@ -7177,6 +7177,60 @@ async fn an_oplog_opened_without_an_epoch_asserts_nothing(_tracing: &Tracing) {
 }
 
 #[test]
+async fn deleting_an_oplog_fences_a_writer_that_still_holds_it(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let service = fencing_oplog_service(&tempdir, "deleted").await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "deleted".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    let oplog = service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(7)),
+        )
+        .await;
+    oplog.add(OplogEntry::suspend().rounded()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    service.delete(&owned_agent_id, AgentMode::Durable).await;
+
+    // The handle outlives the delete, as a zombie executor's would. Its epoch is still the one
+    // the record held, so only the record's absence can refuse it - an entry landing here would
+    // bring back an oplog that was deleted.
+    let write = async {
+        oplog.add(OplogEntry::exited().rounded()).await?;
+        oplog.commit(CommitLevel::Always).await?;
+        Ok::<_, OplogError>(())
+    }
+    .await;
+    match write {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.agent_id, agent_id);
+            assert_eq!(fence.expected_epoch, golem_common::model::ShardEpoch(7));
+            assert_eq!(
+                fence.actual_epoch, None,
+                "the record must be gone, not moved to another epoch"
+            );
+        }
+        other => panic!("expected the write to be fenced, got {other:?}"),
+    }
+    assert!(
+        !service.exists(&owned_agent_id, AgentMode::Durable).await,
+        "the refused write must not have brought the deleted oplog back"
+    );
+}
+
+#[test]
 async fn an_executor_that_loses_the_shard_mid_flight_is_refused_at_its_next_write(
     _tracing: &Tracing,
 ) {
