@@ -5074,7 +5074,12 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             key.session_key.callee_environment_id,
             &key.session_key.callee,
         );
-        let Some(session_mode) = self.worker_service.get_agent_mode(&session_owner).await else {
+        let Some(session_mode) = self
+            .worker_service
+            .get_agent_mode(&session_owner)
+            .await
+            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+        else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
         if session_mode != AgentMode::Durable {
@@ -5153,7 +5158,12 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         }
 
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
-        let Some(agent_mode) = self.worker_service.get_agent_mode(&consumer).await else {
+        let Some(agent_mode) = self
+            .worker_service
+            .get_agent_mode(&consumer)
+            .await
+            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+        else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
         if key.consumer_invocation.callee_environment_id != key.consumer_environment_id
@@ -5218,7 +5228,12 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         key: &StreamAttachmentKeyV1,
     ) -> Result<Option<ConsumerJournalInspection>, DurableStreamProducerError> {
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
-        let Some(metadata) = self.worker_service.get(&consumer).await else {
+        let Some(metadata) = self
+            .worker_service
+            .get(&consumer)
+            .await
+            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+        else {
             return Ok(None);
         };
         if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint
@@ -5315,7 +5330,12 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         key: &StreamAttachmentKeyV1,
     ) -> Result<Option<ConsumerJournalSummary>, DurableStreamProducerError> {
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
-        let Some(metadata) = self.worker_service.get(&consumer).await else {
+        let Some(metadata) = self
+            .worker_service
+            .get(&consumer)
+            .await
+            .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
+        else {
             return Ok(None);
         };
         if metadata.initial_worker_metadata.fingerprint != key.expected_consumer_fingerprint

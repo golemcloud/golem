@@ -98,6 +98,7 @@ use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
+use crate::storage::keyvalue::retrying::RetryingKeyValueStorage;
 use crate::storage::scheduler::SchedulerStorage;
 use crate::storage::scheduler::memory::InMemorySchedulerStorage;
 use crate::storage::scheduler::postgres::PostgresSchedulerStorage;
@@ -109,7 +110,6 @@ use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
@@ -277,6 +277,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
     fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {
         Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api))
+    }
+
+    /// Wraps the key-value storage every service is built on, after the retry decorator has been
+    /// applied. The default is the identity. The in-process test harness uses it to inject
+    /// storage failures above the retry budget, standing in for an outage that outlived it.
+    fn wrap_key_value_storage(
+        &self,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        key_value_storage
     }
 
     fn create_key_value_service(
@@ -580,12 +590,9 @@ pub async fn create_worker_executor_impl<
             (Some(pool), None, key_value_storage)
         }
         KeyValueStorageConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(
-                postgres,
-                golem_config.key_value_storage_retry.clone(),
-            )
-            .await
-            .map_err(|err| anyhow!(err))?;
+            let kv = PostgresKeyValueStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
             join_set.spawn(async move { kv_metrics.run_metrics_loop("key_value_storage").await });
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
@@ -595,7 +602,6 @@ pub async fn create_worker_executor_impl<
             let (cache_redis, cache_sqlite, cache_storage) = build_inner_key_value_storage(
                 &namespace_routed.cache,
                 "key_value_storage_cache",
-                golem_config.key_value_storage_retry.clone(),
                 join_set,
             )
             .await?;
@@ -603,7 +609,6 @@ pub async fn create_worker_executor_impl<
                 build_inner_key_value_storage(
                     &namespace_routed.persistent,
                     "key_value_storage_persistent",
-                    golem_config.key_value_storage_retry.clone(),
                     join_set,
                 )
                 .await?;
@@ -622,12 +627,9 @@ pub async fn create_worker_executor_impl<
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
         KeyValueStorageConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(
-                sqlite,
-                golem_config.key_value_storage_retry.clone(),
-            )
-            .await
-            .map_err(|err| anyhow!(err))?;
+            let storage = SqliteKeyValueStorage::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             (None, Some(pool), key_value_storage)
@@ -638,11 +640,18 @@ pub async fn create_worker_executor_impl<
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
-                    golem_config.key_value_storage_retry.clone(),
                 ));
             (None, None, key_value_storage)
         }
     };
+
+    // Applied outermost, above the namespace router, so every backend - and every namespace - gets
+    // the identical retry policy for transient failures.
+    let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = bootstrap
+        .wrap_key_value_storage(Arc::new(RetryingKeyValueStorage::new(
+            key_value_storage,
+            golem_config.key_value_storage_retry.clone(),
+        )));
 
     let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
 
@@ -1227,7 +1236,6 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 async fn build_inner_key_value_storage(
     config: &KeyValueStorageInnerConfig,
     svc_name: &'static str,
-    retry_config: RetryConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -1247,7 +1255,7 @@ async fn build_inner_key_value_storage(
             Ok((Some(pool), None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(postgres, retry_config)
+            let kv = PostgresKeyValueStorage::configured(postgres)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
@@ -1261,7 +1269,7 @@ async fn build_inner_key_value_storage(
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(sqlite, retry_config)
+            let storage = SqliteKeyValueStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
@@ -1274,7 +1282,6 @@ async fn build_inner_key_value_storage(
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
-                    retry_config,
                 ));
             Ok((None, None, key_value_storage))
         }

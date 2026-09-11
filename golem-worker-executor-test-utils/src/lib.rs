@@ -816,6 +816,24 @@ impl TestWorkerExecutor {
         }
     }
 
+    /// Drops an unloaded worker's shell from `ActiveAgents`, as the idle-expiry sweep would once
+    /// its TTL passed, so the next activation has to rebuild the worker from storage.
+    pub async fn retire_unloaded_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<()> {
+        let active_agents = self
+            .additional_test_deps
+            .active_agents
+            .get()
+            .ok_or_else(|| anyhow!("ActiveAgents has not been created"))?;
+        if self.worker_is_loaded(owned_agent_id).await {
+            return Err(anyhow!("worker {owned_agent_id} is still loaded"));
+        }
+        active_agents.remove(owned_agent_id).await;
+        Ok(())
+    }
+
     pub async fn stop_worker_if_idle(&self, owned_agent_id: &OwnedAgentId) -> anyhow::Result<bool> {
         let worker = self
             .additional_test_deps
@@ -1426,6 +1444,9 @@ pub async fn start_with_redis_oplog_config(
 type ConfigureFn = dyn Fn(&mut GolemConfig) + Send + Sync;
 type WrapKeyValueServiceFn =
     dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
+type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> Arc<dyn KeyValueStorage + Send + Sync>
+    + Send
+    + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
@@ -1438,6 +1459,10 @@ type WrapShardServiceFn = dyn Fn(Arc<dyn ShardService>) -> Arc<dyn ShardService>
 pub struct TestExecutorOverrides {
     pub configure: Option<Arc<ConfigureFn>>,
     pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
+    /// Wraps the key-value *storage* every executor service is built on, above the retry
+    /// decorator, so injected failures reach the services as an outage that outlived the retry
+    /// budget would.
+    pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
     /// Wraps the executor's `ShardService`, so a test can observe or fake which
@@ -2571,6 +2596,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             create()
         } else {
             Arc::new(NoOpDirectInvocationAuthService)
+        }
+    }
+
+    fn wrap_key_value_storage(
+        &self,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        if let Some(wrap) = &self.overrides.wrap_key_value_storage {
+            wrap(key_value_storage)
+        } else {
+            key_value_storage
         }
     }
 
@@ -5059,7 +5095,7 @@ impl KeyValueService for FailingKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<()> {
         self.inner.delete_many(environment_id, bucket, keys).await
     }
@@ -5102,7 +5138,7 @@ impl KeyValueService for FailingKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
         self.inner.get_many(environment_id, bucket, keys).await
     }
@@ -5131,7 +5167,7 @@ impl KeyValueService for FailingKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
+        key_values: Arc<[(String, Vec<u8>)]>,
     ) -> anyhow::Result<()> {
         self.inner
             .set_many(environment_id, bucket, key_values)

@@ -1749,6 +1749,141 @@ async fn interruption(
     Ok(())
 }
 
+/// Shard-assignment recovery must not acknowledge an assignment whose activations failed.
+///
+/// Recovery reads each running worker's record twice: once to enumerate the shard, once more
+/// when the worker is activated. This fails the second read only, so enumeration succeeds and
+/// activation does not. The assignment must fail - the shard manager retries a failed one,
+/// whereas a worker skipped here would stay stopped, unrecorded, until an unrelated invocation
+/// happened to arrive - and the retry, once storage is back, must restart the worker.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+    };
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "recovery-activation-fails");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // A long invocation keeps the worker Running, which is what puts it in the recovery index.
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_for", data_value!(60.0f64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
+    // The unloaded shell would otherwise still be cached, and activation would reuse it without
+    // reading storage. Retire it as the idle-expiry sweep would, which is also the shape of an
+    // executor restart: recovery then has to rebuild the worker from its record.
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+
+    // Enumeration reads the worker's record once; activation reads it again. Fail the second.
+    faults.fail_after(
+        "read_cached_agent_mode",
+        1,
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    let failure = match assigned.result {
+        Some(assign_shards_response::Result::Failure(failure)) => format!("{failure:?}"),
+        other => panic!("an assignment whose activation failed was acknowledged: {other:?}"),
+    };
+    assert!(
+        failure.contains("failed to restart") && failure.contains("injected"),
+        "the assignment failed for a different reason: {failure}"
+    );
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+    // Storage is back: the retried assignment restarts the worker.
+    faults.clear();
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    assert!(
+        matches!(
+            assigned.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "{:?}",
+        assigned.result
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker was not restarted by the retried assignment"))?;
+
+    drop(client);
+    drop(executor);
+    Ok(())
+}
+
 /// A guest invocation exceeding the configured `limits.max_invocation_duration` is aborted and
 /// fails like a trap: no invocation-finished marker is written and normal retry handling
 /// applies. With a single-attempt retry policy the worker ends up `Failed` and the awaiting

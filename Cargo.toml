@@ -115,7 +115,7 @@ fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 fmt = "0.1.0"
 flate2 = "1.1.0"
-fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", "enable-rustls-ring"] }
+fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", "enable-rustls-ring", "custom-reconnect-errors"] }
 fs-set-times = "0.20.3"
 fs_extra = "1.3.0"
 futures = "0.3.31"

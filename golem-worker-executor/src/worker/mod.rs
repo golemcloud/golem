@@ -902,34 +902,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_latest_metadata<T: HasAll<Ctx>>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Option<AgentMetadata> {
+    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-            Some(worker.get_latest_worker_metadata().await)
+            Ok(Some(worker.get_latest_worker_metadata().await))
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = deps.worker_service().get(owned_agent_id).await
+        }) = deps.worker_service().get(owned_agent_id).await?
         {
             // update with latest data from oplog
             let agent_mode = initial_worker_metadata.agent_mode;
-            let last_known_status = calculate_last_known_status_with_checkpoint(
+            // `Ok(None)` means the oplog is gone - a delete raced this read - and the agent is
+            // reported as absent. A status that cannot be *recomputed* is a different thing and
+            // is propagated: every caller treats absence as "not here", and reporting a storage
+            // outage that way turns it into a not-found, or into validation against the deployed
+            // component revision for an agent that is pinned to an older one.
+            let Some(last_known_status) = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
                 agent_mode,
                 last_known_status,
             )
             .await
-            .map_err(|error| {
-                tracing::error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status");
-                error
-            })
-            .ok()??;
+            .map_err(WorkerExecutorError::runtime)?
+            else {
+                return Ok(None);
+            };
 
             initial_worker_metadata.last_known_status = last_known_status;
 
-            Some(initial_worker_metadata)
+            Ok(Some(initial_worker_metadata))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -6162,7 +6166,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 None
             } else {
                 // Note: this also checks the oplog for the existence of the create entry.
-                this.worker_service().get(owned_agent_id).await
+                this.worker_service().get(owned_agent_id).await?
             };
 
         match existing_worker_metadata {
@@ -6424,7 +6428,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_status_value = initial_status.load_full().as_ref().clone();
                 this.worker_service()
                     .update_cached_status(owned_agent_id, None, initial_status_value.clone())
-                    .await;
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,

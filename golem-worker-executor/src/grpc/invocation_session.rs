@@ -542,7 +542,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
                         None
                     } else {
-                        Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+                        Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
                     };
                 let component_revision = existing_metadata.as_ref().map(|metadata| {
                     let status = &metadata.last_known_status;
