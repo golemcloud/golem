@@ -2410,6 +2410,59 @@ mod test {
         run_test_case(test_case).await;
     }
 
+    /// Two snapshot-based updates that both succeed: the first update's region
+    /// has to stay folded into the skipped regions while the second one's
+    /// override sits on top of it.
+    #[test]
+    async fn two_successful_manual_updates() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update1 = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+        let update2 = UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(3).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+        };
+
+        let test_case = TestCase::builder(1)
+            .agent_invocation_started("a", vec![], k1.clone())
+            .host_call(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_typed_schema_value().unwrap()),
+                DurableFunctionType::ReadLocal,
+            )
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k1,
+                ComponentRevision::INITIAL,
+            )
+            .pending_update(&update1, |_| {})
+            .successful_update(update1, 1000, &HashSet::new())
+            // The suffix the second update has to replay.
+            .agent_invocation_started("c", vec![], k2.clone())
+            .host_call(
+                "d",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(2.into_typed_schema_value().unwrap()),
+                DurableFunctionType::ReadLocal,
+            )
+            .agent_invocation_finished(
+                AgentInvocationResult::AgentInitialization,
+                k2,
+                ComponentRevision::new(2).unwrap(),
+            )
+            .pending_update(&update2, |_| {})
+            .successful_update(update2, 2000, &HashSet::new())
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
     #[test]
     async fn multiple_reverts() {
         let k1 = IdempotencyKey::fresh();

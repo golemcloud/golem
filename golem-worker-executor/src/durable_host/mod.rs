@@ -150,7 +150,7 @@ use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
     OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
@@ -806,8 +806,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         debug!(
-            "Worker {} initialized with deleted regions {}",
-            owned_agent_id.agent_id, worker_config.deleted_regions
+            "Worker {} initialized with skipped regions {}",
+            owned_agent_id.agent_id, worker_config.skipped_regions
         );
 
         debug!(
@@ -924,22 +924,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let deleted_regions = if let Some(snapshot_idx) = worker_config.last_snapshot_index {
-            let mut regions = worker_config.deleted_regions.clone();
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            regions.set_override(snapshot_skip);
-            regions
-        } else {
-            worker_config.deleted_regions.clone()
-        };
+        // `skipped_regions` already carries the snapshot baseline: the status reducer opens
+        // an override at a snapshot-based `PendingUpdate` and folds it into the regions
+        // proper on `SuccessfulUpdate`. `last_snapshot_index` is kept only for reading the
+        // snapshot payload back.
         let replay_state = match &runtime {
             OwnerRuntime::Agent => {
                 owner_execution
-                    .begin_replay_generation(deleted_regions, worker_config.last_snapshot_index)
+                    .begin_replay_generation(
+                        worker_config.skipped_regions.clone(),
+                        worker_config.last_snapshot_index,
+                    )
                     .await?
             }
             OwnerRuntime::Entity(_) => owner_execution.replay().await?,
@@ -3712,25 +3707,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => (payload, mime_type),
             _ => {
-                let error = format!(
-                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                return Self::snapshot_unreadable(
+                    store,
+                    snapshot_index,
+                    snapshot_source,
+                    format!(
+                        "Expected Snapshot entry at oplog index {snapshot_index}, found different entry"
+                    ),
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
-                }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after invalid snapshot entry: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
             }
         };
 
@@ -3744,25 +3728,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             Ok(data) => data,
             Err(err) => {
-                let error = format!(
-                    "Failed to download snapshot payload: {err}; falling back to full replay"
+                return Self::snapshot_unreadable(
+                    store,
+                    snapshot_index,
+                    snapshot_source,
+                    format!("Failed to download snapshot payload: {err}"),
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
-                }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after snapshot download failure: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
             }
         };
 
@@ -3950,26 +3921,33 @@ enum SnapshotRecoveryResult {
     Success,
     NotAttempted,
     Failed,
+    /// The manual-update snapshot the replay baseline is built on could not be read. The oplog
+    /// before that update was recorded against a build the current one is incompatible with, so
+    /// there is no full replay to fall back to: the start attempt fails and the next one reads
+    /// the snapshot again.
+    BaselineUnavailable(WorkerExecutorError),
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn restart_replay_without_snapshot(&mut self) -> Result<(), WorkerExecutorError> {
-        self.state.replay_state.drop_override_and_restart().await?;
-
-        self.state.agent_wallet_cards = match self.state.agent_id.as_ref() {
-            Some(agent_id) => {
-                let card = agent_initial_card_from_component_metadata(
-                    &self.state.component_metadata,
-                    agent_id,
-                )?;
-                BTreeMap::from([(card.card_id(), card)])
-            }
-            None => BTreeMap::new(),
-        };
-        self.state.wallet_generation = 0;
-        self.rederive_agent_effective_surface_from_wallet();
-
-        Ok(())
+    /// Reports a snapshot whose oplog entry or payload could not be read. An automatic snapshot
+    /// is an optimisation over a replayable oplog, so the worker is recreated for a full replay;
+    /// a manual-update one is the only usable baseline, so the start fails instead.
+    fn snapshot_unreadable(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        snapshot_index: OplogIndex,
+        snapshot_source: Option<SnapshotSource>,
+        error: String,
+    ) -> SnapshotRecoveryResult {
+        if snapshot_source == Some(SnapshotSource::Automatic) {
+            let error = format!("{error}; falling back to full replay");
+            warn!("{error}");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+            SnapshotRecoveryResult::Failed
+        } else {
+            warn!("{error}; the manual-update baseline cannot be replayed without its snapshot");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error.clone()));
+            SnapshotRecoveryResult::BaselineUnavailable(WorkerExecutorError::runtime(error))
+        }
     }
 
     /// Activity tracker for Golem-spawned store background tasks; see
@@ -5881,13 +5859,21 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             target_revision, ..
                         } => {
                             let replay_result = async {
-                                if let SnapshotRecoveryResult::Failed =
-                                    Self::try_load_snapshot(store, instance).await
-                                {
-                                    return Err(WorkerExecutorError::failed_to_resume_worker(
-                                        agent_id.clone(),
-                                        WorkerExecutorError::runtime("loading snapshot failed"),
-                                    ));
+                                match Self::try_load_snapshot(store, instance).await {
+                                    SnapshotRecoveryResult::Success
+                                    | SnapshotRecoveryResult::NotAttempted => {}
+                                    SnapshotRecoveryResult::Failed => {
+                                        return Err(WorkerExecutorError::failed_to_resume_worker(
+                                            agent_id.clone(),
+                                            WorkerExecutorError::runtime("loading snapshot failed"),
+                                        ));
+                                    }
+                                    SnapshotRecoveryResult::BaselineUnavailable(error) => {
+                                        return Err(WorkerExecutorError::failed_to_resume_worker(
+                                            agent_id.clone(),
+                                            error,
+                                        ));
+                                    }
                                 };
                                 // automatic update will be succeeded as part of the replay.
                                 let result = Self::resume_replay(store, instance, false).await?;
@@ -5957,6 +5943,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .store(true, Ordering::Release);
                         Ok(Some(RetryDecision::Immediate))
                     }
+                    SnapshotRecoveryResult::BaselineUnavailable(error) => Err(error),
                 },
             }
         };
