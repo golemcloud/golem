@@ -16,7 +16,7 @@ use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use golem_common::model::Page;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::plugin_registration::{
     PluginRegistrationCreation, PluginRegistrationDto, PluginRegistrationId,
 };
@@ -175,6 +175,63 @@ impl PluginRegistrationsApi {
         Ok(Json(
             self.plugin_registration_service
                 .get_account_plugin(account_id, &plugin_name, &plugin_version, &auth)
+                .await?
+                .into(),
+        ))
+    }
+
+    /// Get an account plugin by the owner account's email, name and version.
+    ///
+    /// Authorizes on the plugin permission alone — the same as the account-id form — resolving
+    /// the owner account from the email without an `AccountVerb::View` check, so the email and id
+    /// account scopes behave identically under granular sharing.
+    #[oai(
+        path = "/accounts/by-email/:account_email/plugins/:plugin_name/:plugin_version",
+        method = "get",
+        operation_id = "get_account_plugin_by_email",
+        tag = ApiTags::Account
+    )]
+    async fn get_account_plugin_by_email(
+        &self,
+        account_email: Path<AccountEmail>,
+        plugin_name: Path<String>,
+        plugin_version: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<PluginRegistrationDto>> {
+        let record = recorded_http_api_request!(
+            "get_account_plugin_by_email",
+            account_email = account_email.0.to_string(),
+            plugin_name = plugin_name.0.clone(),
+            plugin_version = plugin_version.0.clone()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_account_plugin_by_email_internal(
+                account_email.0,
+                plugin_name.0,
+                plugin_version.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_account_plugin_by_email_internal(
+        &self,
+        account_email: AccountEmail,
+        plugin_name: String,
+        plugin_version: String,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<PluginRegistrationDto>> {
+        Ok(Json(
+            self.plugin_registration_service
+                .get_account_plugin_by_email(
+                    account_email.as_str(),
+                    &plugin_name,
+                    &plugin_version,
+                    &auth,
+                )
                 .await?
                 .into(),
         ))

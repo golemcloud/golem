@@ -10453,6 +10453,95 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/accounts/by-email/{account_email}/plugins/{plugin_name}/{plugin_version}:
+    get:
+      tags:
+      - RegistryService
+      - Plugin
+      - Account
+      summary: Get an account plugin by the owner account's email, name and version.
+      description: |-
+        Authorizes on the plugin permission alone — the same as the account-id form — resolving
+        the owner account from the email without an `AccountVerb::View` check, so the email and id
+        account scopes behave identically under granular sharing.
+      operationId: get_account_plugin_by_email
+      parameters:
+      - in: path
+        name: account_email
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: plugin_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: plugin_version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PluginRegistrationDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/plugins/{plugin_id}:
     get:
       tags:

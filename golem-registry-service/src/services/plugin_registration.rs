@@ -42,6 +42,12 @@ pub enum PluginRegistrationError {
         name: String,
         version: String,
     },
+    #[error("Registered plugin {name}/{version} not found in account {account_email}")]
+    PluginRegistrationByEmailNotFound {
+        account_email: String,
+        name: String,
+        version: String,
+    },
     #[error("Target component for oplog processor does not exist")]
     OplogProcessorComponentDoesNotExist,
     #[error("Plugin with this name and version already exists")]
@@ -59,6 +65,7 @@ impl SafeDisplay for PluginRegistrationError {
         match self {
             Self::PluginRegistrationNotFound(_) => self.to_string(),
             Self::PluginRegistrationByNameNotFound { .. } => self.to_string(),
+            Self::PluginRegistrationByEmailNotFound { .. } => self.to_string(),
             Self::OplogProcessorComponentDoesNotExist => self.to_string(),
             Self::PluginNameAndVersionAlreadyExists => self.to_string(),
             Self::ParentAccountNotFound(_) => self.to_string(),
@@ -231,6 +238,48 @@ impl PluginRegistrationService {
         authorize_account_plugin_permission(
             auth,
             &account_email,
+            AccountPluginVerb::View,
+            AccountPluginResourcePattern::Name(AccountPluginName(name.to_string())),
+        )
+        .map_err(|_| not_found())?;
+
+        Ok(plugin)
+    }
+
+    /// Like [`Self::get_account_plugin`], but keyed by the owner account's email.
+    ///
+    /// Resolves the email to an account id **without** requiring `AccountVerb::View` (the
+    /// plugin grant alone decides access), so the `--account <email>` CLI form behaves like
+    /// `--account-id`. Every miss — unknown email, missing plugin, or denied permission —
+    /// maps to the same not-found, so the resolved account id is never leaked.
+    pub async fn get_account_plugin_by_email(
+        &self,
+        account_email: &str,
+        name: &str,
+        version: &str,
+        auth: &AuthCtx,
+    ) -> Result<PluginRegistration, PluginRegistrationError> {
+        let not_found = || PluginRegistrationError::PluginRegistrationByEmailNotFound {
+            account_email: account_email.to_string(),
+            name: name.to_string(),
+            version: version.to_string(),
+        };
+        let account_id = self
+            .account_service
+            .resolve_account_id_by_email_unchecked(account_email)
+            .await
+            .map_err(|_| not_found())?;
+        let record = self
+            .plugin_repo
+            .get_by_name_and_version(account_id.0, name, version)
+            .await?
+            .ok_or_else(&not_found)?;
+        let owner_email = record.account_email();
+        let plugin: PluginRegistration = record.plugin.try_into()?;
+
+        authorize_account_plugin_permission(
+            auth,
+            &owner_email,
             AccountPluginVerb::View,
             AccountPluginResourcePattern::Name(AccountPluginName(name.to_string())),
         )

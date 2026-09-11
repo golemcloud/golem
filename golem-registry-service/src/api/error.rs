@@ -821,7 +821,8 @@ impl From<PluginRegistrationError> for ApiError {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
             PluginRegistrationError::PluginRegistrationNotFound(_)
-            | PluginRegistrationError::PluginRegistrationByNameNotFound { .. } => {
+            | PluginRegistrationError::PluginRegistrationByNameNotFound { .. }
+            | PluginRegistrationError::PluginRegistrationByEmailNotFound { .. } => {
                 Self::not_found(api::error_code::PLUGIN_REGISTRATION_NOT_FOUND, error)
             }
 
