@@ -1523,12 +1523,54 @@ test "parse_agents with snapshotting disabled" {
 }
 
 ///|
+test "parse_agents rejects enabled snapshotting without restoration support" {
+  for policy in ["default", "periodic(100)", "every_n(5)"] {
+    for derives in ["", " derive(ToJson)", " derive(FromJson)"] {
+      let content =
+        $|#derive.agent(snapshotting="\{policy}")
+        $|pub(all) struct Counter { value : Int }\{derives}
+        $|pub fn Counter::new() -> Counter { { value: 0 } }
+      try parse_agents([("counter.mbt", content)]) catch {
+        AgentParseError(message) =>
+          assert_eq(
+            message, "Agent 'Counter' has enabled snapshotting but must derive both ToJson and FromJson or define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
+          )
+      } noraise {
+        _ =>
+          fail(
+            "expected enabled snapshotting without restoration support to fail",
+          )
+      }
+    }
+  }
+}
+
+///|
+test "parse_agents accepts enabled snapshotting with custom saver and loader" {
+  for policy in ["default", "periodic(100)", "every_n(5)"] {
+    let content =
+      $|#derive.agent(snapshotting="\{policy}")
+      $|pub(all) struct Counter { value : Int }
+      $|pub fn Counter::new() -> Counter { { value: 0 } }
+      $|impl @agents.Snapshottable for Counter with save_snapshot(self) { b"" }
+      $|pub fn Counter::load_snapshot(_bytes : Bytes, _context : @agents.SnapshotRestoreContext) -> Result[Counter, String] {
+      $|  Ok({ value: 42 })
+      $|}
+    let agents = parse_agents([("counter.mbt", content)])
+    assert_true(agents[0].has_snapshottable)
+    assert_false(agents[0].has_json_derives)
+    let output = @formatter.impls_to_string(generate_agent_registration(agents))
+    assert_true(output.contains("load_snapshot: Some"))
+  }
+}
+
+///|
 test "parse_agents with snapshotting default" {
   let content =
     #|#derive.agent(snapshotting="default")
     #|pub(all) struct MyAgent {
     #|  value : String
-    #|}
+    #|} derive(ToJson, FromJson)
     #|
     #|pub fn MyAgent::new() -> MyAgent {
     #|  { value: "" }
@@ -1543,7 +1585,7 @@ test "parse_agents with snapshotting periodic" {
     #|#derive.agent(snapshotting="periodic(100)")
     #|pub(all) struct MyAgent {
     #|  value : String
-    #|}
+    #|} derive(ToJson, FromJson)
     #|
     #|pub fn MyAgent::new() -> MyAgent {
     #|  { value: "" }
@@ -1558,7 +1600,7 @@ test "parse_agents with snapshotting every_n" {
     #|#derive.agent(snapshotting="every_n(5)")
     #|pub(all) struct MyAgent {
     #|  value : String
-    #|}
+    #|} derive(ToJson, FromJson)
     #|
     #|pub fn MyAgent::new() -> MyAgent {
     #|  { value: "" }
@@ -1573,7 +1615,7 @@ test "parse_agents with ephemeral and snapshotting" {
     #|#derive.agent("ephemeral", snapshotting="periodic(50)")
     #|pub(all) struct MyAgent {
     #|  value : String
-    #|}
+    #|} derive(ToJson, FromJson)
     #|
     #|pub fn MyAgent::new() -> MyAgent {
     #|  { value: "" }
@@ -1589,7 +1631,7 @@ test "parse_agents with snapshotting periodic human-readable" {
     #|#derive.agent(snapshotting="periodic(10 minutes)")
     #|pub(all) struct MyAgent {
     #|  value : String
-    #|}
+    #|} derive(ToJson, FromJson)
     #|
     #|pub fn MyAgent::new() -> MyAgent {
     #|  { value: "" }
@@ -1604,7 +1646,7 @@ test "parse_agents with snapshotting periodic compound duration" {
     #|#derive.agent(snapshotting="periodic(1 hour 30 minutes)")
     #|pub(all) struct MyAgent {
     #|  value : String
-    #|}
+    #|} derive(ToJson, FromJson)
     #|
     #|pub fn MyAgent::new() -> MyAgent {
     #|  { value: "" }

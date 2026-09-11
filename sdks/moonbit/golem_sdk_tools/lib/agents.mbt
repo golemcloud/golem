@@ -1267,6 +1267,13 @@ pub fn parse_agents(
         "Agent '\{name}' must define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
       )
     }
+    let snapshotting = agent_snapshotting.get(name).unwrap_or(Disabled)
+    let has_json_derives = agent_json_derives.get(name).unwrap_or(false)
+    if !(snapshotting is Disabled) && !has_json_derives && !has_snapshot_saver {
+      raise AgentParseError(
+        "Agent '\{name}' has enabled snapshotting but must derive both ToJson and FromJson or define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
+      )
+    }
     match agent_constructors.get(name) {
       Some((params, ctor_desc, ctor_hint)) => {
         let config_type = match find_config_param(params) {
@@ -1277,14 +1284,14 @@ pub fn parse_agents(
           name,
           description,
           mode: agent_modes.get(name).unwrap_or(Durable),
-          snapshotting: agent_snapshotting.get(name).unwrap_or(Disabled),
+          snapshotting,
           constructor_params: params,
           constructor_description: ctor_desc,
           constructor_prompt_hint: ctor_hint,
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
           has_snapshottable: has_snapshot_saver,
-          has_json_derives: agent_json_derives.get(name).unwrap_or(false),
+          has_json_derives,
           fields: agent_fields.get(name).unwrap_or([]),
           http_mount: agent_mounts.get(name).unwrap_or(None),
           config_type,
