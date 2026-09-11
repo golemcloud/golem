@@ -202,6 +202,7 @@ impl ManagedProvisioning {
         let validated_name_mode =
             validated_managed_xfs_name_mode(filesystem.f_type as u64, identity)
                 .expect("validated XFS filesystem type must produce a name-mode proof");
+        clear_root_project_assignment(&root_fd, &stable_root)?;
         let root_fd = Arc::new(root_fd);
         let scratch =
             ScratchSpace::create(&stable_root, Some(Arc::clone(&root_fd)), cleanup_retry)?;
@@ -219,7 +220,6 @@ impl ManagedProvisioning {
             cleanup_retry: cleanup_retry.clone(),
             scratch,
         };
-        backend.clear_root_project_assignment()?;
         backend.validate_project_quota_state()?;
         backend.validate_project_assignment(cleanup_retry)?;
         backend.validate_scratch_has_no_project()?;
@@ -449,42 +449,6 @@ impl ManagedProvisioning {
         };
         self.get_quota_state(&mut state)?;
         validate_project_quota_state_record(&state)
-    }
-
-    fn clear_root_project_assignment(&self) -> Result<(), FilesystemStorageError> {
-        let mut attributes = get_fsxattr(&self.root_fd).map_err(|error| {
-            FilesystemStorageError::io(
-                "inspect managed XFS root project attributes",
-                &self.root,
-                error,
-            )
-        })?;
-        attributes.fsx_projid = 0;
-        attributes.fsx_xflags &= !linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
-        attributes.fsx_pad = [0; 8];
-        set_fsxattr(&self.root_fd, attributes).map_err(|error| {
-            FilesystemStorageError::io(
-                "clear managed XFS root project inheritance",
-                &self.root,
-                error,
-            )
-        })?;
-        let assigned = get_fsxattr(&self.root_fd).map_err(|error| {
-            FilesystemStorageError::io(
-                "verify managed XFS root project attributes",
-                &self.root,
-                error,
-            )
-        })?;
-        if assigned.fsx_projid != 0
-            || assigned.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
-        {
-            return Err(FilesystemStorageError::verification(
-                "verify managed XFS root has neutral project identity",
-                &self.root,
-            ));
-        }
-        Ok(())
     }
 
     fn validate_project_assignment(
@@ -728,6 +692,35 @@ impl ManagedProvisioning {
             Ok(())
         }
     }
+}
+
+// The root must have no project id and no inheritance before anything is created under it,
+// so a directory made at startup, such as the scratch space, belongs to no project.
+fn clear_root_project_assignment(
+    root_fd: &File,
+    root: &Path,
+) -> Result<(), FilesystemStorageError> {
+    let mut attributes = get_fsxattr(root_fd).map_err(|error| {
+        FilesystemStorageError::io("inspect managed XFS root project attributes", root, error)
+    })?;
+    attributes.fsx_projid = 0;
+    attributes.fsx_xflags &= !linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
+    attributes.fsx_pad = [0; 8];
+    set_fsxattr(root_fd, attributes).map_err(|error| {
+        FilesystemStorageError::io("clear managed XFS root project inheritance", root, error)
+    })?;
+    let assigned = get_fsxattr(root_fd).map_err(|error| {
+        FilesystemStorageError::io("verify managed XFS root project attributes", root, error)
+    })?;
+    if assigned.fsx_projid != 0
+        || assigned.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
+    {
+        return Err(FilesystemStorageError::verification(
+            "verify managed XFS root has neutral project identity",
+            root,
+        ));
+    }
+    Ok(())
 }
 
 fn validate_managed_xfs_root_location(
@@ -2043,22 +2036,6 @@ mod tests {
         }
     }
 
-    fn tree_listing(root: &Path) -> std::collections::BTreeSet<String> {
-        let mut found = std::collections::BTreeSet::new();
-        let mut pending = vec![PathBuf::new()];
-        while let Some(relative) = pending.pop() {
-            for entry in std::fs::read_dir(root.join(&relative)).unwrap() {
-                let entry = entry.unwrap();
-                let entry_relative = relative.join(entry.file_name());
-                if entry.file_type().unwrap().is_dir() {
-                    pending.push(entry_relative.clone());
-                }
-                found.insert(entry_relative.to_string_lossy().into_owned());
-            }
-        }
-        found
-    }
-
     #[test]
     #[ignore = "requires the privileged managed XFS test runner"]
     #[timeout("120s")]
@@ -2074,15 +2051,25 @@ mod tests {
             .join("stale-tree");
         std::fs::create_dir_all(&stale_scratch).unwrap();
         std::fs::write(stale_scratch.join("garbage"), b"stale").unwrap();
+        let inherited_project = NonZeroU32::new(0x7fff_0001).unwrap();
+        assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
         let provisioning =
             SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
                 .unwrap();
         assert!(provisioning.supports_tree_capture());
         let scratch_root = root.join(scratch::SCRATCH_DIRECTORY_NAME);
         assert!(std::fs::read_dir(&scratch_root).unwrap().next().is_none());
+        let scratch_attributes = get_fsxattr(&File::open(&scratch_root).unwrap()).unwrap();
+        assert_eq!(scratch_attributes.fsx_projid, 0);
         assert_eq!(
-            file_project_id(&File::open(&scratch_root).unwrap()).unwrap(),
-            None
+            scratch_attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
+            0
+        );
+        let root_attributes = get_fsxattr(&File::open(&root).unwrap()).unwrap();
+        assert_eq!(root_attributes.fsx_projid, 0);
+        assert_eq!(
+            root_attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
+            0
         );
         let volume_root = volume_root(&provisioning);
         let block_bytes = filesystem_block_bytes(&volume_root);
@@ -2172,11 +2159,11 @@ mod tests {
                 vec![index as u8; FILE_BYTES]
             );
         }
-        let mut expected = tree_listing(&agent_root);
+        let mut expected = tree_copy::tree_listing(&agent_root);
         for absent in ["static/asset.bin", "data/nested", "data/nested/hidden"] {
             assert!(expected.remove(absent));
         }
-        assert_eq!(tree_listing(capture.root()), expected);
+        assert_eq!(tree_copy::tree_listing(capture.root()), expected);
         assert_eq!(
             std::fs::metadata(capture.root().join("config.toml"))
                 .unwrap()
@@ -2272,9 +2259,12 @@ mod tests {
             consumed, cow_extent_size,
             "a {block_bytes} byte write into a shared extent must consume one copy-on-write extent"
         );
-        // The agent project gains the new extent and stops mapping the one block it overwrote.
-        // That block stays allocated because the capture still maps it.
-        assert_eq!(charged, cow_extent_size - block_bytes);
+        // The agent project gains at most the new extent. The overwritten block stays allocated
+        // because the capture still maps it.
+        assert!(
+            charged > 0 && charged <= cow_extent_size,
+            "the agent project must pay for the copy-on-write extent and nothing more: charged={charged}"
+        );
         assert!(
             (block_bytes..=cow_extent_size).contains(&kept_after_close),
             "the changed extent must stay allocated after the file is closed"

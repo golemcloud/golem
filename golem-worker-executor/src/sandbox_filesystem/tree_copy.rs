@@ -89,8 +89,16 @@ fn list_directory(
             TreeEntryKind::Symlink(read_link_contents(directory, Path::new(&name))?)
         } else if file_type.is_dir() {
             TreeEntryKind::Directory
-        } else {
+        } else if file_type.is_file() {
             TreeEntryKind::File
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "tree entry {} is not a regular file, a directory or a symlink",
+                    entry_relative.display()
+                ),
+            ));
         };
         let is_directory = kind == TreeEntryKind::Directory;
         entries.push(TreeEntry {
@@ -313,11 +321,29 @@ fn create_capability_symlink(
     ))
 }
 
+/// Lists every root-relative path under `root` through the ambient filesystem, for comparisons.
+#[cfg(test)]
+pub(super) fn tree_listing(root: &Path) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    let mut pending = vec![PathBuf::new()];
+    while let Some(relative) = pending.pop() {
+        for entry in std::fs::read_dir(root.join(&relative)).unwrap() {
+            let entry = entry.unwrap();
+            let entry_relative = relative.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                pending.push(entry_relative.clone());
+            }
+            found.insert(entry_relative.to_string_lossy().into_owned());
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cap_std::fs::PermissionsExt as _;
-    use std::collections::BTreeSet;
+    use std::os::unix::ffi::OsStringExt as _;
     use std::os::unix::fs::PermissionsExt as _;
     use std::time::{Duration, UNIX_EPOCH};
     use test_r::test;
@@ -364,22 +390,6 @@ mod tests {
                 .set_modified(time)
                 .unwrap();
         }
-    }
-
-    fn listing(root: &Path) -> BTreeSet<String> {
-        let mut found = BTreeSet::new();
-        let mut pending = vec![PathBuf::new()];
-        while let Some(relative) = pending.pop() {
-            for entry in std::fs::read_dir(root.join(&relative)).unwrap() {
-                let entry = entry.unwrap();
-                let entry_relative = relative.join(entry.file_name());
-                if entry.file_type().unwrap().is_dir() {
-                    pending.push(entry_relative.clone());
-                }
-                found.insert(entry_relative.to_string_lossy().into_owned());
-            }
-        }
-        found
     }
 
     #[test]
@@ -442,6 +452,36 @@ mod tests {
     }
 
     #[test]
+    fn listing_refuses_a_file_that_is_not_regular() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("regular"), b"contents").unwrap();
+        let fifo =
+            std::ffi::CString::new(source.path().join("pipe").into_os_string().into_vec()).unwrap();
+        // SAFETY: `fifo` is a valid NUL-terminated path that lives for the whole call.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let destination = tempfile::tempdir().unwrap();
+
+        let error = list_tree(&open(source.path()), &HashSet::new()).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("pipe"), "{error}");
+        let error = capture(
+            &open(source.path()),
+            destination.path(),
+            &HashSet::new(),
+            FileCopyMode::Buffered,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            std::fs::read_dir(destination.path())
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn listing_does_not_follow_a_symlink_to_a_directory() {
         let source = tempfile::tempdir().unwrap();
         std::fs::create_dir(source.path().join("real")).unwrap();
@@ -475,11 +515,11 @@ mod tests {
         )
         .unwrap();
 
-        let mut expected = listing(source.path());
+        let mut expected = tree_listing(source.path());
         for absent in ["static/asset.bin", "data/nested", "data/nested/note.txt"] {
             assert!(expected.remove(absent));
         }
-        assert_eq!(listing(destination.path()), expected);
+        assert_eq!(tree_listing(destination.path()), expected);
         assert_eq!(
             std::fs::read(destination.path().join("data/db.sqlite")).unwrap(),
             vec![0x5a; 12_000]
@@ -528,7 +568,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(listing(destination.path()), listing(source.path()));
+        assert_eq!(
+            tree_listing(destination.path()),
+            tree_listing(source.path())
+        );
         assert_eq!(
             std::fs::read(destination.path().join("data/nested/note.txt")).unwrap(),
             b"nested note"
