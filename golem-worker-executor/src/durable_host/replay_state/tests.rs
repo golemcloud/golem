@@ -3370,7 +3370,7 @@ async fn await_natural_tail_end_returns_once_tail_drains() {
         .unwrap();
     rs.await_resolution(handle).await.unwrap();
 
-    rs.await_natural_tail_end().await.unwrap();
+    rs.await_natural_tail_end(None).await.unwrap();
     assert!(rs.is_live());
 }
 
@@ -3396,7 +3396,7 @@ async fn await_natural_tail_end_waits_for_positionally_owned_entry() {
         .unwrap();
     rs.await_resolution(handle).await.unwrap();
 
-    let waiter = rs.await_natural_tail_end();
+    let waiter = rs.await_natural_tail_end(None);
     tokio::pin!(waiter);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
@@ -3419,7 +3419,7 @@ async fn await_natural_tail_end_propagates_delivery_failure() {
     // wake and fail a parked tail waiter instead of leaving it parked forever.
     let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
 
-    let waiter = rs.await_natural_tail_end();
+    let waiter = rs.await_natural_tail_end(None);
     tokio::pin!(waiter);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
@@ -3433,6 +3433,91 @@ async fn await_natural_tail_end_propagates_delivery_failure() {
         err.to_string().contains("test poisoning"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+async fn await_natural_tail_end_parks_only_after_owned_cursor_work() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let lock = rs.cursor.state.lock().await;
+    let mut waiter = Box::pin(rs.await_natural_tail_end(Some(&activity)));
+    assert!(futures::poll!(waiter.as_mut()).is_pending());
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "a queued cursor operation stays active"
+    );
+    drop(lock);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "only the passive progress wait parks"
+    );
+
+    // A notification does not authorize delivery, and re-entering the cursor must be active.
+    let lock = rs.cursor.state.lock().await;
+    rs.cursor.progress.notify_waiters();
+    assert!(futures::poll!(waiter.as_mut()).is_pending());
+    assert_eq!(tracker.active_count(), 1);
+    drop(lock);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(tracker.active_count(), 0);
+
+    let (_, entry) = rs.get_oplog_entry().await.unwrap();
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+    waiter.await.unwrap();
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "continuation is active before delivery"
+    );
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+async fn await_natural_tail_end_park_restores_activity_on_error_and_drop() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    for poison in [false, true] {
+        let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
+        let tracker = TailWorkTracker::new();
+        let activity = tracker.activity();
+        let mut waiter = Box::pin(rs.await_natural_tail_end(Some(&activity)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(tracker.active_count(), 0);
+        if poison {
+            rs.fail_tail_delivery(OplogIndex::from_u64(1), "parked failure");
+            assert!(
+                waiter
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("parked failure")
+            );
+        } else {
+            drop(waiter);
+        }
+        assert_eq!(tracker.active_count(), 1);
+        drop(activity);
+        assert_eq!(tracker.active_count(), 0);
+    }
 }
 
 #[test]

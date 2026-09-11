@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::tail_work::TailActivity;
 
 pub(super) type MarkerReceipt = tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>;
 
@@ -353,8 +354,13 @@ impl CompletionDelivery {
     /// token tail-gated and settles it silently, keeping the `End` markerless for the next
     /// recovery.
     ///
-    /// Live and immediate replay are no-ops.
-    pub async fn prepare_delivery(&mut self) -> Result<(), WorkerExecutorError> {
+    /// Tracked background tasks supply their activity so only the passive markerless tail wait
+    /// can park across invocation settlement. Cursor transactions and marker-bearing waits stay
+    /// active. Live and immediate replay are no-ops.
+    pub async fn prepare_delivery(
+        &mut self,
+        activity: Option<&TailActivity>,
+    ) -> Result<(), WorkerExecutorError> {
         match &self.state {
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
                 replay_state,
@@ -371,7 +377,7 @@ impl CompletionDelivery {
             }
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(live)) => {
                 let replay_state = live.marker.recorder.replay_state.clone();
-                replay_state.await_natural_tail_end().await?;
+                replay_state.await_natural_tail_end(activity).await?;
                 if let CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(
                     live,
                 )) = std::mem::replace(&mut self.state, CompletionDeliveryState::Done)
@@ -501,7 +507,7 @@ impl CompletionDelivery {
             self.state = CompletionDeliveryState::Done;
             return Ok(());
         }
-        self.prepare_delivery().await?;
+        self.prepare_delivery(None).await?;
         let replay_barrier = matches!(
             self.state,
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
