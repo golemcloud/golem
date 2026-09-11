@@ -767,7 +767,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
     assert!(!token.is_live_armed());
 
     token
-        .prepare_delivery()
+        .prepare_delivery(None)
         .await
         .expect("tail gating must succeed over a drainable tail");
     assert!(
@@ -799,7 +799,7 @@ async fn tail_gated_token_torn_after_conversion_records_discarded_marker() {
     let (oplog, _replay_state, mut token) = tail_gated_token_over_crash_tail(vec![], None).await;
     let (tx, mut rx) = mpsc::unbounded_channel();
     token
-        .prepare_delivery()
+        .prepare_delivery(None)
         .await
         .expect("tail gating must succeed over a drainable tail");
     assert!(token.is_live_armed());
@@ -838,10 +838,68 @@ async fn tail_gated_token_delivered_without_prepare_poisons_replay() {
     token.delivered();
 
     let err = replay_state
-        .await_natural_tail_end()
+        .await_natural_tail_end(None)
         .await
         .expect_err("the poisoned cursor must reject further operations");
     assert!(err.to_string().contains("tail"), "unexpected error: {err}");
+}
+
+#[test]
+async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+        vec![
+            OplogEntry::BeginAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+            OplogEntry::CompletionDelivered {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(2),
+            },
+            OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+        ],
+        None,
+    )
+    .await;
+    token.state = CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
+        replay_state: replay_state.clone(),
+        start_index: idx(2),
+        marker_index: idx(5),
+    });
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut preparation = Box::pin(token.prepare_delivery(Some(&activity)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), preparation.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "recorded delivery must not be parked"
+    );
+    let (index, _) = replay_state.get_oplog_entry().await.unwrap();
+    assert_eq!(index, idx(4));
+    preparation.await.unwrap();
+    assert_eq!(tracker.active_count(), 1);
+    assert_eq!(replay_state.last_replayed_index(), idx(5));
+    let mut next = Box::pin(replay_state.get_oplog_entry());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), next.as_mut())
+            .await
+            .is_err()
+    );
+    token.delivered();
+    assert_eq!(next.await.unwrap().0, idx(6));
+    assert_eq!(oplog.entries.lock().await.len(), 6, "replay adds no marker");
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
 }
 
 #[test]
