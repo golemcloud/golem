@@ -518,7 +518,7 @@ impl WorkerClient for RecordingWorkerClient {
         method_params: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
-        _: Option<IdempotencyKey>,
+        _: IdempotencyKey,
         _: Option<InvocationContext>,
         _: golem_common::model::agent::InvocationFreshnessDisposition,
         _: Vec<golem_common::model::worker::AgentConfigEntryDto>,
