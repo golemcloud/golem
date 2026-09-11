@@ -31,6 +31,7 @@ pub const MAX_STREAM_MAPPINGS: usize = 4096;
 pub const MAX_TOKEN_SIZE: usize = 8192;
 pub const MAX_IDEMPOTENCY_KEY_SIZE: usize = 1024;
 
+#[cfg(feature = "full")]
 pub fn new_durable_stream_session_id() -> String {
     ulid::Ulid::new().to_string()
 }
@@ -1226,11 +1227,12 @@ impl<'de> Visitor<'de> for StrictJsonVisitor {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "full")]
+    use super::new_durable_stream_session_id;
     use super::{
         BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicClientMessage, PublicErrorCode,
         PublicServerMessage, decode_binary_message, decode_client_text, decode_server_text,
-        encode_text, new_durable_stream_session_id, validate_durable_stream_session_id,
-        validate_message_size,
+        encode_text, validate_durable_stream_session_id, validate_message_size,
     };
     use serde::Deserialize;
     use test_r::test;
@@ -1367,6 +1369,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "full")]
     #[test]
     fn durable_stream_session_ids_are_ulids() {
         let first = new_durable_stream_session_id();
