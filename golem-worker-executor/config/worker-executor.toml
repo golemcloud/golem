@@ -182,6 +182,17 @@ type = "EveryNInvocation"
 [oplog.oplog_processor_snapshotting.config]
 count = 10
 
+[oplog.sweep]
+enabled = true
+interval = "1m"
+max_archives_per_tick = 256
+max_backoff_intervals = 8
+max_concurrency = 4
+max_scanned_per_tick = 4096
+max_tick_duration = "30s"
+max_tracked_agents = 100000
+page_size = 128
+
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
@@ -550,6 +561,17 @@ without_time = false
 # [oplog.oplog_processor_snapshotting.config]
 # count = 10
 # 
+# [oplog.sweep]
+# enabled = true
+# interval = "1m"
+# max_archives_per_tick = 256
+# max_backoff_intervals = 8
+# max_concurrency = 4
+# max_scanned_per_tick = 4096
+# max_tick_duration = "30s"
+# max_tracked_agents = 100000
+# page_size = 128
+# 
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -887,6 +909,17 @@ without_time = false
 # 
 # [oplog.oplog_processor_snapshotting.config]
 # count = 10
+# 
+# [oplog.sweep]
+# enabled = true
+# interval = "1m"
+# max_archives_per_tick = 256
+# max_backoff_intervals = 8
+# max_concurrency = 4
+# max_scanned_per_tick = 4096
+# max_tick_duration = "30s"
+# max_tracked_agents = 100000
+# page_size = 128
 # 
 # [public_worker_api]
 # connect_timeout = "10s"
