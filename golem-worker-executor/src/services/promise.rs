@@ -40,6 +40,7 @@ use std::collections::HashSet;
 use std::future::Future;
 #[cfg(test)]
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -55,6 +56,10 @@ pub struct PromiseHandle {
 pub struct PromiseHandleInner {
     notify: Notify,
     state: Mutex<Option<Vec<u8>>>,
+    /// Whether this handle's state reflects storage: it was completed, or a storage read found
+    /// no completion yet. A handle that is merely *registered* is not hydrated, and `poll` does
+    /// not hand it out until it is - see [`DefaultPromiseService::poll`].
+    hydrated: AtomicBool,
     /// Test-only seam: pauses after observing an incomplete promise but before
     /// awaiting notification, so a test can deterministically interleave completion.
     #[cfg(test)]
@@ -78,6 +83,7 @@ impl PromiseHandle {
             inner: Arc::new(PromiseHandleInner {
                 notify: Notify::new(),
                 state: Mutex::new(None),
+                hydrated: AtomicBool::new(false),
                 #[cfg(test)]
                 await_ready_interleave: std::sync::Mutex::new(None),
             }),
@@ -86,6 +92,14 @@ impl PromiseHandle {
 
     pub fn downgrade(&self) -> Weak<PromiseHandleInner> {
         Arc::downgrade(&self.inner)
+    }
+
+    fn is_hydrated(&self) -> bool {
+        self.inner.hydrated.load(Ordering::Acquire)
+    }
+
+    fn mark_hydrated(&self) {
+        self.inner.hydrated.store(true, Ordering::Release);
     }
 
     pub async fn is_ready(&self) -> bool {
@@ -139,6 +153,8 @@ impl PromiseHandle {
         }
         // State update and wakeup must remain atomic with respect to awaiting handles.
         *state = Some(data);
+        // A completed handle needs no storage read to be trusted.
+        self.mark_hydrated();
         self.inner.notify.notify_waiters();
         true
     }
@@ -148,7 +164,11 @@ impl PromiseHandle {
 #[async_trait]
 pub trait PromiseService: Send + Sync {
     /// poll and complete for a given promise must be called on the same
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId;
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError>;
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
@@ -191,7 +211,11 @@ impl LazyPromiseService {
 
 #[async_trait]
 impl PromiseService for LazyPromiseService {
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         self.implementation()
             .await
             .create(agent_id, oplog_idx)
@@ -291,42 +315,57 @@ impl DefaultPromiseService {
         }
     }
 
-    async fn exists(&self, promise_id: &PromiseId) -> bool {
+    async fn exists(&self, promise_id: &PromiseId) -> Result<bool, WorkerExecutorError> {
         self.key_value_storage
             .with("promise", "complete")
             .exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &get_promise_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to check if promise {promise_id} exists in storage: {err}")
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to check if promise {promise_id} exists in storage: {err}"
+                ))
             })
     }
 
-    async fn completed_data(&self, promise_id: &PromiseId) -> Option<Vec<u8>> {
-        self.key_value_storage
+    async fn completed_data(
+        &self,
+        promise_id: &PromiseId,
+    ) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
+        let state = self
+            .key_value_storage
             .with_entity("promise", "get-completed", "promise")
             .get(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &get_promise_result_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from storage: {err}"))
-            .and_then(|state| match state {
-                RedisPromiseState::Complete(data) => Some(data),
-                RedisPromiseState::Pending => None,
-            })
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get promise {promise_id} from storage: {err}"
+                ))
+            })?;
+
+        Ok(state.and_then(|state| match state {
+            RedisPromiseState::Complete(data) => Some(data),
+            RedisPromiseState::Pending => None,
+        }))
     }
 }
 
 #[async_trait]
 impl PromiseService for DefaultPromiseService {
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         let promise_id = PromiseId {
             agent_id: agent_id.clone(),
             oplog_idx,
@@ -338,45 +377,72 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: agent_id.clone(),
+                    agent_id: Arc::new(agent_id.clone()),
                 },
                 &key,
                 &RedisPromiseState::Pending,
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to set promise {promise_id} in storage: {err}"
+                ))
+            })?;
 
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
 
-        // Start tracking the promise locally so poll does not need to go to storage.
+        // Intended to start tracking the promise locally so the first poll does not need to go to
+        // storage. It does not currently achieve that, and the entry is dead before this function
+        // returns: the registry holds `Weak<PromiseHandleInner>`, `get_or_insert` hands back the
+        // only strong reference, and discarding it here drops the strong count to zero - so the
+        // `Weak` can never upgrade and `PromiseRegistry::get` always misses for this promise.
+        //
+        // The effect is limited rather than absent: the first `poll` still pays an `exists()` read
+        // against storage, but it then registers a handle it *keeps*, so later polls hit the fast
+        // path for as long as some caller holds one. Making this pre-registration work would mean
+        // giving the handle an owner with a defined lifetime, which is a design question rather
+        // than a missing line.
         {
             let mut reg = self.registry.lock().await;
             reg.get_or_insert(&promise_id);
         };
 
-        promise_id
+        Ok(promise_id)
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
-        // Fast path: check local registry first
-        if let Some(handle) = self.registry.lock().await.get(&promise_id) {
-            return Ok(handle.clone());
+        // Fast path: a registered handle whose state is known to reflect storage.
+        if let Some(handle) = self.registry.lock().await.get(&promise_id)
+            && handle.is_hydrated()
+        {
+            return Ok(handle);
         }
 
-        if !self.exists(&promise_id).await {
+        if !self.exists(&promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         }
 
+        // The handle is registered before the completion is read, so that concurrent polls share
+        // one handle and one local completion wakes them all. Until that read succeeds the handle
+        // is not hydrated, and the fast path above does not return it: a poll that raced this one
+        // and found the registered handle falls through to a read of its own. Whichever read
+        // succeeds first hydrates the shared handle. A read that fails leaves it unhydrated, so
+        // the failure is reported to that caller alone and the next poll reads storage again.
+        //
+        // Handing out the bare registered handle instead would let a caller retain one that
+        // nothing will ever hydrate: if this read then failed, every later poll would take the
+        // fast path and return that handle without a storage read, and a completion that was
+        // already durable when the read failed would never reach its waiter.
         let handle = {
             let mut reg = self.registry.lock().await;
             reg.get_or_insert(&promise_id)
         };
 
-        // Check if already completed in storage
-        if let Some(data) = self.completed_data(&promise_id).await {
+        if let Some(data) = self.completed_data(&promise_id).await? {
             let _ = handle.complete(data).await;
         }
+        handle.mark_hydrated();
 
         Ok(handle)
     }
@@ -388,7 +454,7 @@ impl PromiseService for DefaultPromiseService {
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
-        if !self.exists(&promise_id).await {
+        if !self.exists(&promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         };
 
@@ -397,13 +463,17 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to set promise {promise_id} in storage: {err}"
+                ))
+            })?;
 
         // Also wake any in-memory handle, ensuring that still running workers that wait on the pollable can continue
         let completed_data = if written {
@@ -411,7 +481,7 @@ impl PromiseService for DefaultPromiseService {
         } else {
             // A duplicate must wake waiters with the payload stored by the
             // original completion, not its own payload.
-            self.completed_data(&promise_id).await
+            self.completed_data(&promise_id).await?
         };
         let handle = {
             let mut reg = self.registry.lock().await;
@@ -530,7 +600,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = self.worker_service.get(&owned_agent_id).await
+        }) = self.worker_service.get(&owned_agent_id).await?
         {
             let status_deps = StatusDeps {
                 oplog_service: self.oplog_service.clone(),
@@ -629,7 +699,11 @@ impl PromiseServiceMock {
 #[cfg(test)]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
-    async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        _agent_id: &AgentId,
+        _oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         unimplemented!()
     }
 
@@ -652,6 +726,10 @@ impl PromiseService for PromiseServiceMock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::keyvalue::KeyValueStorageError;
+    use crate::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::base_model::component::ComponentId;
     use proptest::prelude::*;
@@ -713,12 +791,62 @@ mod tests {
             DefaultPromiseService::new(storage.clone(), Arc::new(NoopPromiseWorkerAccess));
         let service_b = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
         let id = promise_id();
-        let id = service_a.create(&id.agent_id, id.oplog_idx).await;
+        let id = service_a.create(&id.agent_id, id.oplog_idx).await.unwrap();
         let handle = service_b.poll(id.clone()).await.unwrap();
 
         assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());
         assert!(!service_b.complete(id, vec![2]).await.unwrap());
         assert_eq!(handle.get().await, Some(vec![1]));
+    }
+
+    /// A poll that finds a handle another poll has registered but not yet hydrated must read
+    /// storage itself. Otherwise, if that other poll's read then fails, the handle it retained
+    /// is one nothing will ever hydrate: every later poll takes the fast path, and a completion
+    /// that was already durable never reaches the waiter.
+    #[test]
+    async fn concurrent_poll_survives_a_failed_initial_result_read() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let faults = KeyValueStorageFaults::default();
+        let service = Arc::new(DefaultPromiseService::new(
+            Arc::new(FaultInjectingKeyValueStorage::new(
+                storage.clone(),
+                faults.clone(),
+            )),
+            Arc::new(NoopPromiseWorkerAccess),
+        ));
+        // Completes through the same storage but its own registry, so the completion is durable
+        // and nothing local has been woken - the shape of a completion from another executor.
+        let completer = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
+
+        let id = promise_id();
+        let id = service.create(&id.agent_id, id.oplog_idx).await.unwrap();
+        assert!(completer.complete(id.clone(), vec![1]).await.unwrap());
+
+        // The first poll registers the handle, then pauses in its result read, which will fail.
+        let gate = faults.gate_next(
+            "get-completed",
+            KeyValueStorageError::Transient("redis failover".to_string()),
+        );
+        let first = tokio::spawn({
+            let service = service.clone();
+            let id = id.clone();
+            async move { service.poll(id).await }
+        });
+        gate.entered().await;
+
+        // The second poll finds the registered handle. It must not stop there.
+        let second = service.poll(id.clone()).await.unwrap();
+        assert!(
+            second.is_ready().await,
+            "a poll that found an unhydrated handle returned it without reading storage"
+        );
+
+        gate.release();
+        assert!(first.await.unwrap().is_err());
+
+        // And the failure left nothing behind that a later poll would trust.
+        let third = service.poll(id).await.unwrap();
+        assert_eq!(third.get().await, Some(vec![1]));
     }
 
     #[test]

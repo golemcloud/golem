@@ -150,7 +150,7 @@ use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
     OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
@@ -806,8 +806,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         debug!(
-            "Worker {} initialized with deleted regions {}",
-            owned_agent_id.agent_id, worker_config.deleted_regions
+            "Worker {} initialized with skipped regions {}",
+            owned_agent_id.agent_id, worker_config.skipped_regions
         );
 
         debug!(
@@ -924,22 +924,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let deleted_regions = if let Some(snapshot_idx) = worker_config.last_snapshot_index {
-            let mut regions = worker_config.deleted_regions.clone();
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            regions.set_override(snapshot_skip);
-            regions
-        } else {
-            worker_config.deleted_regions.clone()
-        };
+        // `skipped_regions` already carries the snapshot baseline: the status reducer opens
+        // an override at a snapshot-based `PendingUpdate` and folds it into the regions
+        // proper on `SuccessfulUpdate`. `last_snapshot_index` is kept only for reading the
+        // snapshot payload back.
         let replay_state = match &runtime {
             OwnerRuntime::Agent => {
                 owner_execution
-                    .begin_replay_generation(deleted_regions, worker_config.last_snapshot_index)
+                    .begin_replay_generation(
+                        worker_config.skipped_regions.clone(),
+                        worker_config.last_snapshot_index,
+                    )
                     .await?
             }
             OwnerRuntime::Entity(_) => owner_execution.replay().await?,
@@ -3712,25 +3707,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => (payload, mime_type),
             _ => {
-                let error = format!(
-                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                return Self::snapshot_unreadable(
+                    store,
+                    snapshot_index,
+                    snapshot_source,
+                    format!(
+                        "Expected Snapshot entry at oplog index {snapshot_index}, found different entry"
+                    ),
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
-                }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after invalid snapshot entry: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
             }
         };
 
@@ -3744,25 +3728,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             Ok(data) => data,
             Err(err) => {
-                let error = format!(
-                    "Failed to download snapshot payload: {err}; falling back to full replay"
+                return Self::snapshot_unreadable(
+                    store,
+                    snapshot_index,
+                    snapshot_source,
+                    format!("Failed to download snapshot payload: {err}"),
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
-                }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after snapshot download failure: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
             }
         };
 
@@ -3950,26 +3921,33 @@ enum SnapshotRecoveryResult {
     Success,
     NotAttempted,
     Failed,
+    /// The manual-update snapshot the replay baseline is built on could not be read. The oplog
+    /// before that update was recorded against a build the current one is incompatible with, so
+    /// there is no full replay to fall back to: the start attempt fails and the next one reads
+    /// the snapshot again.
+    BaselineUnavailable(WorkerExecutorError),
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn restart_replay_without_snapshot(&mut self) -> Result<(), WorkerExecutorError> {
-        self.state.replay_state.drop_override_and_restart().await?;
-
-        self.state.agent_wallet_cards = match self.state.agent_id.as_ref() {
-            Some(agent_id) => {
-                let card = agent_initial_card_from_component_metadata(
-                    &self.state.component_metadata,
-                    agent_id,
-                )?;
-                BTreeMap::from([(card.card_id(), card)])
-            }
-            None => BTreeMap::new(),
-        };
-        self.state.wallet_generation = 0;
-        self.rederive_agent_effective_surface_from_wallet();
-
-        Ok(())
+    /// Reports a snapshot whose oplog entry or payload could not be read. An automatic snapshot
+    /// is an optimisation over a replayable oplog, so the worker is recreated for a full replay;
+    /// a manual-update one is the only usable baseline, so the start fails instead.
+    fn snapshot_unreadable(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        snapshot_index: OplogIndex,
+        snapshot_source: Option<SnapshotSource>,
+        error: String,
+    ) -> SnapshotRecoveryResult {
+        if snapshot_source == Some(SnapshotSource::Automatic) {
+            let error = format!("{error}; falling back to full replay");
+            warn!("{error}");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+            SnapshotRecoveryResult::Failed
+        } else {
+            warn!("{error}; the manual-update baseline cannot be replayed without its snapshot");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error.clone()));
+            SnapshotRecoveryResult::BaselineUnavailable(WorkerExecutorError::runtime(error))
+        }
     }
 
     /// Activity tracker for Golem-spawned store background tasks; see
@@ -5881,13 +5859,21 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             target_revision, ..
                         } => {
                             let replay_result = async {
-                                if let SnapshotRecoveryResult::Failed =
-                                    Self::try_load_snapshot(store, instance).await
-                                {
-                                    return Err(WorkerExecutorError::failed_to_resume_worker(
-                                        agent_id.clone(),
-                                        WorkerExecutorError::runtime("loading snapshot failed"),
-                                    ));
+                                match Self::try_load_snapshot(store, instance).await {
+                                    SnapshotRecoveryResult::Success
+                                    | SnapshotRecoveryResult::NotAttempted => {}
+                                    SnapshotRecoveryResult::Failed => {
+                                        return Err(WorkerExecutorError::failed_to_resume_worker(
+                                            agent_id.clone(),
+                                            WorkerExecutorError::runtime("loading snapshot failed"),
+                                        ));
+                                    }
+                                    SnapshotRecoveryResult::BaselineUnavailable(error) => {
+                                        return Err(WorkerExecutorError::failed_to_resume_worker(
+                                            agent_id.clone(),
+                                            error,
+                                        ));
+                                    }
                                 };
                                 // automatic update will be succeeded as part of the replay.
                                 let result = Self::resume_replay(store, instance, false).await?;
@@ -5957,6 +5943,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .store(true, Ordering::Release);
                         Ok(Some(RetryDecision::Immediate))
                     }
+                    SnapshotRecoveryResult::BaselineUnavailable(error) => Err(error),
                 },
             }
         };
@@ -5979,41 +5966,35 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-        let workers = this.worker_service().get_running_workers_in_shards().await;
+        let workers = this
+            .worker_service()
+            .get_running_workers_in_shards()
+            .await?;
 
         debug!(workers = ?workers, "Recovering running workers");
 
+        // Only a worker that is genuinely gone may be skipped; every other failure fails the
+        // assignment. See `recovered_status` for the distinction and for what failing buys.
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
             let agent_mode = worker.initial_worker_metadata.agent_mode;
-            // A running worker should always have a recoverable oplog (a `Create` entry), so a
-            // `None` here is an unexpected invariant violation (e.g. a corrupt/partially-deleted
-            // oplog). Isolate the failure to this one agent instead of aborting recovery of every
-            // other worker on this executor (which propagating would do — and would also fail
-            // executor startup or the shard-assignment RPC, since one poison worker could
-            // permanently block this executor from serving its shards).
-            let latest_worker_status = calculate_last_known_status_with_checkpoint(
-                this,
+            let Some(latest_worker_status) = recovered_status(
                 &owned_agent_id,
-                agent_mode,
-                worker.last_known_status,
-            )
-            .await;
-            let latest_worker_status = match latest_worker_status {
-                Ok(Some(status)) => status,
-                Ok(None) => {
-                    error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
-                    continue;
-                }
-                Err(error) => {
-                    error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status during shard-assignment recovery; skipping agent");
-                    continue;
-                }
+                calculate_last_known_status_with_checkpoint(
+                    this,
+                    &owned_agent_id,
+                    agent_mode,
+                    worker.last_known_status,
+                )
+                .await,
+            )?
+            else {
+                continue;
             };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            if should_restart_after_shard_assignment_change(&latest_worker_status)
-                && let Err(err) = Worker::get_or_create_running(
+            if should_restart_after_shard_assignment_change(&latest_worker_status) {
+                Worker::get_or_create_running(
                     this,
                     &owned_agent_id,
                     None,
@@ -6024,14 +6005,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     Principal::anonymous(),
                 )
                 .await
-            {
-                // Same isolation rationale: don't let one worker that fails to restart abort
-                // recovery of the rest. It will be retried on demand on its next invocation.
-                error!(
-                    agent_id = %owned_agent_id,
-                    error = %err,
-                    "Failed to restart worker during shard-assignment recovery; skipping agent"
-                );
+                .map_err(|error| {
+                    anyhow!(
+                        "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                    )
+                })?;
             }
         }
 
@@ -6403,6 +6381,45 @@ fn replace_wallet_cards(
     }
     *generation = next_generation;
     Ok(true)
+}
+
+/// What shard-assignment recovery does with one worker's computed status: `Ok(Some)` to restart
+/// it, `Ok(None)` to skip it, `Err` to fail the whole assignment.
+///
+/// The same distinction `enum_workers_at_key` draws for the scan itself:
+///
+/// - `Ok(None)` from the status computation means the oplog is gone - a delete that raced the
+///   index read. There is nothing to resume, so that one agent is skipped.
+/// - `Err` is not evidence the worker is gone. Logging it and moving on would acknowledge the
+///   assignment with the worker still stopped, and nothing would try again until an external
+///   invocation happened to arrive: a running agent stranded silently for as long as this
+///   executor owns the shard. Failing the assignment hands the retry to the caller instead. The
+///   shard manager retries a failed `assign_shards`, and at startup the process exits and the
+///   restart policy retries. Recovery is idempotent - a worker restarted on an earlier attempt is
+///   simply found running on the next - so re-running the whole scan is safe. The restart that
+///   follows a computed status is treated the same way by the caller.
+///
+/// Every storage read on this path has already had the key-value retry budget, which is sized to
+/// outlast an AWS failover, so what arrives here as `Err` is what outlived that budget. A worker
+/// that can never be restarted therefore keeps this executor from serving its shards, loudly,
+/// rather than being dropped from recovery quietly. That is the intended trade: the loud failure
+/// is visible and gets acted on, the quiet one is not. It is also the shape the oplog layers
+/// already have - a bounded storage retry, then a fatal failure - at a lower cost, since a failed
+/// assignment is one RPC rather than a process exit.
+fn recovered_status(
+    owned_agent_id: &OwnedAgentId,
+    computed: Result<Option<AgentStatusRecord>, String>,
+) -> Result<Option<AgentStatusRecord>, anyhow::Error> {
+    match computed {
+        Ok(Some(status)) => Ok(Some(status)),
+        Ok(None) => {
+            error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
+            Ok(None)
+        }
+        Err(error) => Err(anyhow!(
+            "failed to calculate the status of {owned_agent_id} during shard-assignment recovery, so it cannot be resumed: {error}"
+        )),
+    }
 }
 
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
@@ -8284,6 +8301,58 @@ mod tests {
         assert!(!should_restart_after_shard_assignment_change(&status));
     }
 
+    fn recovered_agent() -> OwnedAgentId {
+        OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "recovered".to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn shard_assignment_recovery_restarts_a_worker_whose_status_was_computed() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Running,
+            ..AgentStatusRecord::default()
+        };
+
+        let recovered = recovered_status(&recovered_agent(), Ok(Some(status))).unwrap();
+
+        assert_eq!(
+            recovered.map(|status| status.status),
+            Some(AgentStatus::Running)
+        );
+    }
+
+    /// No oplog means the index entry outlived the worker: nothing to resume, so it is skipped.
+    #[test]
+    fn shard_assignment_recovery_skips_a_worker_whose_oplog_is_gone() {
+        assert!(matches!(
+            recovered_status(&recovered_agent(), Ok(None)),
+            Ok(None)
+        ));
+    }
+
+    /// A status that could not be *computed* is not a worker that is gone. Skipping it would
+    /// acknowledge the assignment with the worker stopped and nothing recording that it should
+    /// run; failing the assignment is what gets it retried.
+    #[test]
+    fn shard_assignment_recovery_fails_on_a_status_it_cannot_compute() {
+        let error = recovered_status(
+            &recovered_agent(),
+            Err("failed to load durable stream session payload: redis failover".to_string()),
+        )
+        .expect_err("an uncomputable status was skipped rather than failing the assignment");
+
+        assert!(
+            error.to_string().contains("cannot be resumed")
+                && error.to_string().contains("redis failover"),
+            "{error}"
+        );
+    }
+
     fn open_region(regions: &mut Vec<ActiveAtomicRegion>, begin: u64) -> OplogIndex {
         let begin_index = OplogIndex::from_u64(begin);
         regions.push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
@@ -9845,7 +9914,7 @@ impl WakeupScheduler {
                 &self.owned_agent_id.agent_id,
                 self.oplog.current_oplog_index().await,
             )
-            .await;
+            .await?;
 
         let schedule_id = self
             .scheduler_service
