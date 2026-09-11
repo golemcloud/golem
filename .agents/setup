@@ -24,6 +24,7 @@ packages=(
     jq
     libssl-dev
     lld
+    openjdk-17-jdk-headless
     pkg-config
     protobuf-compiler
     redis-server
@@ -122,6 +123,31 @@ if ! cargo component --version 2>/dev/null | grep -q '0.21.1'; then
     cargo binstall --force --no-confirm --disable-telemetry cargo-component@0.21.1
 fi
 
+start_step "Install guest bridge toolchains"
+
+sbt_version="$(sed -n 's/^sbt.version=//p' sdks/scala/project/build.properties)"
+if [[ "$(sbt --script-version 2>/dev/null || true)" != "$sbt_version" ]]; then
+    sbt_archive="$(mktemp)"
+    curl -fsSL "https://github.com/sbt/sbt/releases/download/v$sbt_version/sbt-$sbt_version.tgz" \
+        -o "$sbt_archive"
+    sudo tar xzf "$sbt_archive" -C /opt
+    sudo ln -sf /opt/sbt/bin/sbt /usr/local/bin/sbt
+    rm -f "$sbt_archive"
+fi
+
+export PATH="$HOME/.moon/bin:$PATH"
+moonbit_version="$(awk -F'"' '/^[[:space:]]*MOONBIT_INSTALL_VERSION: / { print $2; exit }' .github/workflows/ci.yaml)"
+if [[ -z "$moonbit_version" ]]; then
+    echo "Failed to read MOONBIT_INSTALL_VERSION from .github/workflows/ci.yaml" >&2
+    exit 1
+fi
+if [[ "$(moonc -v 2>/dev/null || true)" != "v$moonbit_version "* ]]; then
+    moon_installer="$(mktemp)"
+    curl -fsSL https://cli.moonbitlang.com/install/unix.sh -o "$moon_installer"
+    bash "$moon_installer" "$moonbit_version"
+    rm -f "$moon_installer"
+fi
+
 profile_marker="# Golem Amp orb toolchain"
 touch "$HOME/.bash_profile"
 if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
@@ -131,6 +157,14 @@ if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
 export PATH="/opt/node24/bin:$HOME/.cargo/bin:$PATH"
 export WASI_SDK_VERSION=25
 export WASI_SDK_PATH=/opt/wasi-sdk
+EOF
+fi
+
+if ! grep -Fqx '# Golem guest bridge toolchains' "$HOME/.bash_profile"; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# Golem guest bridge toolchains
+export PATH="$HOME/.moon/bin:$PATH"
 EOF
 fi
 
