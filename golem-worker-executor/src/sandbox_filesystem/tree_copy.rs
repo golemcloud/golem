@@ -14,6 +14,7 @@
 
 use super::*;
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt as _};
+use std::ffi::{OsStr, OsString};
 use std::time::SystemTime;
 
 /// One object of a tree, listed for a copy.
@@ -74,15 +75,19 @@ fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
     {
         return (!path.as_os_str().is_empty()).then_some(path);
     }
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(component) => normalized.push(component),
-            Component::RootDir | Component::CurDir => {}
-            Component::ParentDir | Component::Prefix(_) => return None,
-        }
-    }
-    (!normalized.as_os_str().is_empty()).then_some(normalized)
+    path.components()
+        .try_fold(
+            PathBuf::new(),
+            |mut normalized, component| match component {
+                Component::Normal(component) => {
+                    normalized.push(component);
+                    Some(normalized)
+                }
+                Component::RootDir | Component::CurDir => Some(normalized),
+                Component::ParentDir | Component::Prefix(_) => None,
+            },
+        )
+        .filter(|normalized| !normalized.as_os_str().is_empty())
 }
 
 /// Lists a tree, parents before children, without the excluded root-relative paths.
@@ -93,57 +98,84 @@ pub(super) fn list_tree(
     root: &cap_std::fs::Dir,
     excluded: &TreeExclusions,
 ) -> std::io::Result<Vec<TreeEntry>> {
-    let mut entries = Vec::new();
-    list_directory(root, &PathBuf::new(), excluded, &mut entries)?;
-    Ok(entries)
+    list_directory(root, Path::new(""), excluded, Vec::new())
 }
 
+/// Adds the entries under `directory` to `listed` and gives the list back.
+///
+/// `relative` is the root-relative path of `directory`. A directory entry comes before its
+/// contents.
 fn list_directory(
     directory: &cap_std::fs::Dir,
     relative: &Path,
     excluded: &TreeExclusions,
-    entries: &mut Vec<TreeEntry>,
-) -> std::io::Result<()> {
+    listed: Vec<TreeEntry>,
+) -> std::io::Result<Vec<TreeEntry>> {
+    sorted_names(directory)?
+        .into_iter()
+        .map(|name| (relative.join(&name), name))
+        .filter(|(path, _)| !excluded.contains(path))
+        .try_fold(listed, |mut listed, (path, name)| {
+            let entry = tree_entry(directory, &name, path)?;
+            let child = match entry.kind {
+                TreeEntryKind::Directory => {
+                    Some((directory.open_dir_nofollow(&name)?, entry.relative.clone()))
+                }
+                _ => None,
+            };
+            listed.push(entry);
+            match child {
+                Some((child, child_relative)) => {
+                    list_directory(&child, &child_relative, excluded, listed)
+                }
+                None => Ok(listed),
+            }
+        })
+}
+
+/// Reads the names of the entries in a directory and sorts them.
+fn sorted_names(directory: &cap_std::fs::Dir) -> std::io::Result<Vec<OsString>> {
     let mut names = directory
         .entries()?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<Vec<_>>>()?;
     names.sort();
-    for name in names {
-        let entry_relative = relative.join(&name);
-        if excluded.contains(&entry_relative) {
-            continue;
-        }
-        let metadata = directory.symlink_metadata(&name)?;
-        let file_type = metadata.file_type();
-        let kind = if file_type.is_symlink() {
-            TreeEntryKind::Symlink(read_link_contents(directory, Path::new(&name))?)
-        } else if file_type.is_dir() {
-            TreeEntryKind::Directory
-        } else if file_type.is_file() {
-            TreeEntryKind::File
-        } else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "tree entry {} is not a regular file, a directory or a symlink",
-                    entry_relative.display()
-                ),
-            ));
-        };
-        let is_directory = kind == TreeEntryKind::Directory;
-        entries.push(TreeEntry {
-            relative: entry_relative.clone(),
-            kind,
-            permissions: metadata.permissions(),
-            modified: metadata.modified().ok().map(|time| time.into_std()),
-        });
-        if is_directory {
-            let child = directory.open_dir_nofollow(&name)?;
-            list_directory(&child, &entry_relative, excluded, entries)?;
-        }
-    }
-    Ok(())
+    Ok(names)
+}
+
+/// Reads one entry of a directory for a tree listing.
+///
+/// The entry gets `relative` as its root-relative path. A symlink is read and not followed. An
+/// object that is not a regular file, a directory or a symlink gives an `InvalidData` error that
+/// names `relative`.
+fn tree_entry(
+    directory: &cap_std::fs::Dir,
+    name: &OsStr,
+    relative: PathBuf,
+) -> std::io::Result<TreeEntry> {
+    let metadata = directory.symlink_metadata(name)?;
+    let file_type = metadata.file_type();
+    let kind = if file_type.is_symlink() {
+        TreeEntryKind::Symlink(read_link_contents(directory, Path::new(name))?)
+    } else if file_type.is_dir() {
+        TreeEntryKind::Directory
+    } else if file_type.is_file() {
+        TreeEntryKind::File
+    } else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "tree entry {} is not a regular file, a directory or a symlink",
+                relative.display()
+            ),
+        ));
+    };
+    Ok(TreeEntry {
+        relative,
+        kind,
+        permissions: metadata.permissions(),
+        modified: metadata.modified().ok().map(|time| time.into_std()),
+    })
 }
 
 /// Copies the tree under `source`, minus `excluded`, into the empty host directory `destination`.
@@ -157,46 +189,66 @@ pub(super) fn capture(
     copy_mode: FileCopyMode,
 ) -> std::io::Result<()> {
     let entries = list_tree(source, excluded)?;
-    for entry in &entries {
-        let target = destination.join(&entry.relative);
-        match &entry.kind {
-            TreeEntryKind::Directory => std::fs::create_dir(&target)?,
-            TreeEntryKind::File => {
-                let mut options = cap_std::fs::OpenOptions::new();
-                options.read(true).follow(FollowSymlinks::No);
-                let source_file = source.open_with(&entry.relative, &options)?.into_std();
-                let target_file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&target)?;
-                transfer_file(copy_mode, &source_file, &target_file)?;
-                target_file.set_permissions(host_permissions(&entry.permissions, &target_file)?)?;
-                if let Some(modified) = entry.modified {
-                    target_file.set_modified(modified)?;
-                }
+    entries
+        .iter()
+        .try_for_each(|entry| capture_entry(source, destination, entry, copy_mode))?;
+    entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.kind == TreeEntryKind::Directory)
+        .try_for_each(|entry| set_captured_directory_attributes(destination, entry))
+}
+
+/// Makes one listed entry again under the host directory `destination`.
+///
+/// A directory is made empty. A regular file is transferred with `copy_mode` and gets the
+/// permissions and the modification time of the entry. A symlink is made with the same target
+/// and gets the modification time of the entry.
+fn capture_entry(
+    source: &cap_std::fs::Dir,
+    destination: &Path,
+    entry: &TreeEntry,
+    copy_mode: FileCopyMode,
+) -> std::io::Result<()> {
+    let target = destination.join(&entry.relative);
+    match &entry.kind {
+        TreeEntryKind::Directory => std::fs::create_dir(&target),
+        TreeEntryKind::File => {
+            let mut options = cap_std::fs::OpenOptions::new();
+            options.read(true).follow(FollowSymlinks::No);
+            let source_file = source.open_with(&entry.relative, &options)?.into_std();
+            let target_file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)?;
+            transfer_file(copy_mode, &source_file, &target_file)?;
+            target_file.set_permissions(host_permissions(&entry.permissions, &target_file)?)?;
+            if let Some(modified) = entry.modified {
+                target_file.set_modified(modified)?;
             }
-            TreeEntryKind::Symlink(link_target) => {
-                create_host_symlink(link_target, &target)?;
-                if let Some(modified) = entry.modified {
-                    fs_set_times::set_symlink_times(
-                        &target,
-                        None,
-                        Some(fs_set_times::SystemTimeSpec::Absolute(modified)),
-                    )?;
-                }
+            Ok(())
+        }
+        TreeEntryKind::Symlink(link_target) => {
+            create_host_symlink(link_target, &target)?;
+            if let Some(modified) = entry.modified {
+                fs_set_times::set_symlink_times(
+                    &target,
+                    None,
+                    Some(fs_set_times::SystemTimeSpec::Absolute(modified)),
+                )?;
             }
+            Ok(())
         }
     }
-    for entry in entries.iter().rev() {
-        if entry.kind != TreeEntryKind::Directory {
-            continue;
-        }
-        let target = destination.join(&entry.relative);
-        let directory = File::open(&target)?;
-        directory.set_permissions(host_permissions(&entry.permissions, &directory)?)?;
-        if let Some(modified) = entry.modified {
-            directory.set_modified(modified)?;
-        }
+}
+
+/// Gives a directory under the host directory `destination` the permissions and the modification
+/// time of its listed entry.
+fn set_captured_directory_attributes(destination: &Path, entry: &TreeEntry) -> std::io::Result<()> {
+    let directory = File::open(destination.join(&entry.relative))?;
+    directory.set_permissions(host_permissions(&entry.permissions, &directory)?)?;
+    if let Some(modified) = entry.modified {
+        directory.set_modified(modified)?;
     }
     Ok(())
 }
@@ -216,54 +268,87 @@ pub(super) fn seed(
     let source_directory =
         cap_std::fs::Dir::open_ambient_dir(source, cap_std::ambient_authority())?;
     let entries = list_tree(&source_directory, &TreeExclusions::default())?;
-    for entry in &entries {
-        match &entry.kind {
-            TreeEntryKind::Directory => destination.create_dir(&entry.relative)?,
-            TreeEntryKind::File => {
-                copy_file_at_blocking(
-                    copy_mode,
-                    quota_authority,
-                    materialization_root,
-                    &source.join(&entry.relative),
-                    destination,
-                    &entry.relative,
-                    false,
-                )?;
-                destination.set_permissions(&entry.relative, entry.permissions.clone())?;
-                if let Some(modified) = entry.modified {
-                    cap_fs_ext::DirExt::set_times(
-                        destination,
-                        &entry.relative,
-                        None,
-                        Some(capability_time(modified)),
-                    )?;
-                }
-            }
-            TreeEntryKind::Symlink(link_target) => {
-                create_capability_symlink(destination, link_target, &entry.relative)?;
-                if let Some(modified) = entry.modified {
-                    destination.set_symlink_times(
-                        &entry.relative,
-                        None,
-                        Some(capability_time(modified)),
-                    )?;
-                }
-            }
-        }
-    }
-    for entry in entries.iter().rev() {
-        if entry.kind != TreeEntryKind::Directory {
-            continue;
-        }
-        destination.set_permissions(&entry.relative, entry.permissions.clone())?;
-        if let Some(modified) = entry.modified {
-            cap_fs_ext::DirExt::set_times(
+    entries.iter().try_for_each(|entry| {
+        seed_entry(
+            source,
+            destination,
+            entry,
+            copy_mode,
+            quota_authority,
+            materialization_root,
+        )
+    })?;
+    entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.kind == TreeEntryKind::Directory)
+        .try_for_each(|entry| set_seeded_directory_attributes(destination, entry))
+}
+
+/// Makes one listed entry again in `destination` through the capability.
+///
+/// A directory is made empty. A regular file goes through the same copy as a seeded file and gets
+/// the permissions and the modification time of the entry. A symlink is made with the same target
+/// and gets the modification time of the entry.
+fn seed_entry(
+    source: &Path,
+    destination: &cap_std::fs::Dir,
+    entry: &TreeEntry,
+    copy_mode: FileCopyMode,
+    quota_authority: QuotaAuthority,
+    materialization_root: &Path,
+) -> std::io::Result<()> {
+    match &entry.kind {
+        TreeEntryKind::Directory => destination.create_dir(&entry.relative),
+        TreeEntryKind::File => {
+            copy_file_at_blocking(
+                copy_mode,
+                quota_authority,
+                materialization_root,
+                &source.join(&entry.relative),
                 destination,
                 &entry.relative,
-                None,
-                Some(capability_time(modified)),
+                false,
             )?;
+            destination.set_permissions(&entry.relative, entry.permissions.clone())?;
+            if let Some(modified) = entry.modified {
+                cap_fs_ext::DirExt::set_times(
+                    destination,
+                    &entry.relative,
+                    None,
+                    Some(capability_time(modified)),
+                )?;
+            }
+            Ok(())
         }
+        TreeEntryKind::Symlink(link_target) => {
+            create_capability_symlink(destination, link_target, &entry.relative)?;
+            if let Some(modified) = entry.modified {
+                destination.set_symlink_times(
+                    &entry.relative,
+                    None,
+                    Some(capability_time(modified)),
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Gives a directory in `destination` the permissions and the modification time of its listed
+/// entry.
+fn set_seeded_directory_attributes(
+    destination: &cap_std::fs::Dir,
+    entry: &TreeEntry,
+) -> std::io::Result<()> {
+    destination.set_permissions(&entry.relative, entry.permissions.clone())?;
+    if let Some(modified) = entry.modified {
+        cap_fs_ext::DirExt::set_times(
+            destination,
+            &entry.relative,
+            None,
+            Some(capability_time(modified)),
+        )?;
     }
     Ok(())
 }
