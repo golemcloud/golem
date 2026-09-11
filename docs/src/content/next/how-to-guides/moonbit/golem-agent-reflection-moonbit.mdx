@@ -86,9 +86,8 @@ let result : @reflection.Invocation[AddOutput] = counter.invoke(
 
 The type name is resolved to its current implementing component in the
 environment; callers do not pin component metadata. Existing IDs can be bound
-with `CallerCodecClient::bind(agent_id, "CounterAgent")`, which strictly
-checks the parsed type name. Caller codecs remain authoritative for payload
-encoding and decoding.
+with `CallerCodecClient::bind(agent_id)`. Caller codecs remain authoritative
+for payload encoding and decoding.
 
 For trigger or scheduled caller-codec calls, pass an output type tag so the
 SDK can reject live streams in either direction:

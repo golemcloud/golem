@@ -65,7 +65,7 @@ pub(all) struct CallerCodecClient {
   reusable_identity : ParsedAgentId?
   // private fields
 }
-pub fn CallerCodecClient::bind(ParsedAgentId, String) -> Self raise ReflectError
+pub fn CallerCodecClient::bind(ParsedAgentId) -> Self raise ReflectError
 pub fn[C : @schema.IntoSchema] CallerCodecClient::create(String, C, phantom_id? : @types.Uuid?) -> Self raise ReflectError
 pub fn CallerCodecClient::drop(Self) -> Unit
 pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] CallerCodecClient::invoke(Self, String, I) -> Invocation[O]
