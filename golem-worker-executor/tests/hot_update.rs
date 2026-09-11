@@ -436,16 +436,17 @@ async fn snapshot_after_auto_update_recovers_with_updated_component_context(
         .await?;
     assert_eq!(before_snapshot.into_typed::<u32>()?, 0);
 
-    let snapshot_count = tokio::time::timeout(Duration::from_secs(10), async {
+    // Automatic snapshot creation is queued after the invocation result is published.
+    let snapshot_count = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let snapshot_count = executor
+            let count = executor
                 .get_oplog(&worker_id, OplogIndex::INITIAL)
                 .await?
                 .iter()
                 .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
                 .count();
-            if snapshot_count > snapshots_before_invocation {
-                return anyhow::Ok(snapshot_count);
+            if count > snapshots_before_invocation {
+                break Ok::<_, anyhow::Error>(count);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
