@@ -121,8 +121,12 @@ Snapshot save/load runs in snapshotting mode (`durability_is_suppressed` ==
 `snapshotting_mode`): durable calls neither append nor consume entries (`DurableCallSession` with
 `persisted: false`). Snapshot admission is governed by `SnapshotBoundaryConditions`; do not add
 parallel boundary predicates.
-Automatic snapshots are revision-scoped baselines chosen at instance creation; a failed load sets
-the resident `Worker`'s `snapshot_recovery_disabled` flag and the next instance replays fully.
+Automatic snapshots are revision-scoped baselines chosen at instance creation. A deterministic load failure or
+divergent replay suffix rejects that snapshot through its index and recreates the full instance
+context from the authoritative manual-update baseline (never from pre-migration history). The
+fingerprint-scoped `rejected_periodic_snapshot_through` watermark is persisted only after that
+fallback succeeds and before readiness is published; payload-download failures use a temporary skip for the startup attempt.
+Failure to load a manual-update snapshot is terminal and retains the underlying cause.
 
 ## Spawned store tasks
 
