@@ -33,6 +33,7 @@ mod unmanaged;
 pub(crate) use adapter::*;
 use scratch::ScratchSpace;
 pub(crate) use scratch::ScratchTree;
+pub(crate) use tree_copy::CaptureExclusions;
 
 #[cfg(target_os = "linux")]
 mod xfs;
@@ -1942,7 +1943,7 @@ mod tests {
 
         let filesystem = provisioning.create_fresh(name()).await.unwrap();
         let error = filesystem
-            .capture_tree(&HashSet::from([PathBuf::from("file")]))
+            .capture_tree(Arc::new(CaptureExclusions::new([PathBuf::from("file")])))
             .await
             .unwrap_err();
         assert!(error.capture_is_unsupported());

@@ -941,19 +941,19 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
         limits: FilesystemLimits,
     ) -> impl Future<Output = Result<InstalledLimits, FilesystemStorageError>> + Send;
 
-    /// Makes a stable copy of the tree, minus the `excluded` root-relative paths, in a new
-    /// scratch tree.
+    /// Makes a stable copy of the tree in a new scratch tree. The copy does not include the
+    /// root-relative paths in `excluded`.
     ///
-    /// The exclusion list is applied and nothing else. An excluded directory is absent together
-    /// with its contents. Directories and symlinks are made again. Permissions and modification
-    /// times are copied. On managed XFS each file is one reflink, so the cost follows the number
-    /// of files, not the bytes, and the copy adds nothing to the quota of this filesystem.
-    /// Storage without reflink gives an error for which
-    /// [`FilesystemStorageError::capture_is_unsupported`] is true.
+    /// The exclusion set is applied and nothing else. An excluded directory is absent together
+    /// with its contents. The copy uses the shared set and does not copy the paths in it.
+    /// Directories and symlinks are made again. Permissions and modification times are copied.
+    /// On managed XFS each file is one reflink, so the cost follows the number of files, not the
+    /// bytes, and the copy adds nothing to the quota of this filesystem. Storage without reflink
+    /// gives an error for which [`FilesystemStorageError::capture_is_unsupported`] is true.
     #[allow(dead_code)]
     fn capture_tree(
         &self,
-        excluded: &HashSet<PathBuf>,
+        excluded: Arc<CaptureExclusions>,
     ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send;
 
     /// Puts a scratch tree into the root of this filesystem.
@@ -1704,14 +1704,13 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
 
     fn capture_tree(
         &self,
-        excluded: &HashSet<PathBuf>,
+        excluded: Arc<CaptureExclusions>,
     ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send {
         let operation_path = self.root().to_path_buf();
         let scratch = self.scratch.clone();
         let root_directory = self.root_directory_state();
         let copy_mode = self.file_copy_mode;
         let storage_profile = self.storage_profile();
-        let excluded = excluded.clone();
         async move {
             let Some(scratch) = scratch else {
                 return Err(FilesystemStorageError::capture_unsupported(&operation_path));
@@ -2924,9 +2923,10 @@ mod scripted {
 
         fn capture_tree(
             &self,
-            excluded: &HashSet<PathBuf>,
+            excluded: Arc<CaptureExclusions>,
         ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send {
             let mut excluded = excluded
+                .paths()
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>();
@@ -3806,12 +3806,13 @@ mod tests {
         let filesystem = create_scripted(provisioning).await;
 
         let gate = control.block("capture_tree");
-        let excluded = [PathBuf::from("lib/b.txt"), PathBuf::from("a.txt")]
-            .into_iter()
-            .collect::<HashSet<_>>();
+        let excluded = Arc::new(CaptureExclusions::new([
+            PathBuf::from("lib/b.txt"),
+            PathBuf::from("a.txt"),
+        ]));
         let capture = tokio::spawn({
             let filesystem = filesystem.clone();
-            async move { filesystem.capture_tree(&excluded).await }
+            async move { filesystem.capture_tree(excluded).await }
         });
         gate.wait_started().await;
         assert!(!capture.is_finished());
@@ -3819,7 +3820,10 @@ mod tests {
         gate.wait_completed().await;
         let capture = capture.await.unwrap().unwrap();
         assert_eq!(capture.root(), captured_root);
-        let unsupported = filesystem.capture_tree(&HashSet::new()).await.unwrap_err();
+        let unsupported = filesystem
+            .capture_tree(Arc::new(CaptureExclusions::default()))
+            .await
+            .unwrap_err();
         assert!(unsupported.capture_is_unsupported());
 
         filesystem.seed_tree(&scratch_tree).await.unwrap();
@@ -3892,7 +3896,10 @@ mod tests {
         assert_eq!(escaped.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
         assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
 
-        let unsupported = filesystem.capture_tree(&HashSet::new()).await.unwrap_err();
+        let unsupported = filesystem
+            .capture_tree(Arc::new(CaptureExclusions::default()))
+            .await
+            .unwrap_err();
         assert!(unsupported.capture_is_unsupported());
 
         tree.discard().await.unwrap();

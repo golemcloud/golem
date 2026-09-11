@@ -32,25 +32,56 @@ pub(super) enum TreeEntryKind {
     Symlink(PathBuf),
 }
 
-/// Keeps the exclusions that can name an entry of a tree.
+/// The root-relative paths that a tree capture does not copy.
 ///
-/// A root-relative path keeps only its normal components. A leading root or current-directory
-/// component is dropped. A path with a parent or prefix component names no entry and is dropped.
-pub(super) fn normalize_exclusions(excluded: &HashSet<PathBuf>) -> HashSet<PathBuf> {
-    excluded
-        .iter()
-        .filter_map(|path| {
-            let mut normalized = PathBuf::new();
-            for component in path.components() {
-                match component {
-                    Component::Normal(component) => normalized.push(component),
-                    Component::RootDir | Component::CurDir => {}
-                    Component::ParentDir | Component::Prefix(_) => return None,
-                }
-            }
-            (!normalized.as_os_str().is_empty()).then_some(normalized)
-        })
-        .collect()
+/// The set does not change after it is made. A lookup compares paths by their components, so a
+/// redundant separator in a stored path does not stop a match.
+#[derive(Debug, Default)]
+pub(crate) struct CaptureExclusions {
+    paths: HashSet<PathBuf>,
+}
+
+impl CaptureExclusions {
+    /// Makes the set from root-relative paths.
+    ///
+    /// A path that has only normal components stays as it is. A leading root component and
+    /// current-directory components are removed from a path. A path with a parent or prefix
+    /// component names no entry, so the set does not keep it. The set also does not keep a path
+    /// that is empty after the removal.
+    #[allow(dead_code)]
+    pub(crate) fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            paths: paths.into_iter().filter_map(normalize_exclusion).collect(),
+        }
+    }
+
+    /// Tells whether the set holds a root-relative path.
+    fn contains(&self, relative: &Path) -> bool {
+        self.paths.contains(relative)
+    }
+
+    #[cfg(test)]
+    pub(super) fn paths(&self) -> &HashSet<PathBuf> {
+        &self.paths
+    }
+}
+
+fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
+    if path
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return (!path.as_os_str().is_empty()).then_some(path);
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(component) => normalized.push(component),
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!normalized.as_os_str().is_empty()).then_some(normalized)
 }
 
 /// Lists a tree, parents before children, without the excluded root-relative paths.
@@ -59,18 +90,17 @@ pub(super) fn normalize_exclusions(excluded: &HashSet<PathBuf>) -> HashSet<PathB
 /// Entries of one directory are in name order.
 pub(super) fn list_tree(
     root: &cap_std::fs::Dir,
-    excluded: &HashSet<PathBuf>,
+    excluded: &CaptureExclusions,
 ) -> std::io::Result<Vec<TreeEntry>> {
-    let excluded = normalize_exclusions(excluded);
     let mut entries = Vec::new();
-    list_directory(root, &PathBuf::new(), &excluded, &mut entries)?;
+    list_directory(root, &PathBuf::new(), excluded, &mut entries)?;
     Ok(entries)
 }
 
 fn list_directory(
     directory: &cap_std::fs::Dir,
     relative: &Path,
-    excluded: &HashSet<PathBuf>,
+    excluded: &CaptureExclusions,
     entries: &mut Vec<TreeEntry>,
 ) -> std::io::Result<()> {
     let mut names = directory
@@ -122,7 +152,7 @@ fn list_directory(
 pub(super) fn capture(
     source: &cap_std::fs::Dir,
     destination: &Path,
-    excluded: &HashSet<PathBuf>,
+    excluded: &CaptureExclusions,
     copy_mode: FileCopyMode,
 ) -> std::io::Result<()> {
     let entries = list_tree(source, excluded)?;
@@ -184,7 +214,7 @@ pub(super) fn seed(
 ) -> std::io::Result<()> {
     let source_directory =
         cap_std::fs::Dir::open_ambient_dir(source, cap_std::ambient_authority())?;
-    let entries = list_tree(&source_directory, &HashSet::new())?;
+    let entries = list_tree(&source_directory, &CaptureExclusions::default())?;
     for entry in &entries {
         match &entry.kind {
             TreeEntryKind::Directory => destination.create_dir(&entry.relative)?,
@@ -352,6 +382,10 @@ mod tests {
         items.iter().map(PathBuf::from).collect()
     }
 
+    fn exclusions(items: &[&str]) -> CaptureExclusions {
+        CaptureExclusions::new(items.iter().map(PathBuf::from))
+    }
+
     fn open(path: &Path) -> cap_std::fs::Dir {
         cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).unwrap()
     }
@@ -394,7 +428,7 @@ mod tests {
 
     #[test]
     fn exclusions_keep_only_paths_that_can_name_an_entry() {
-        let normalized = normalize_exclusions(&paths(&[
+        let excluded = exclusions(&[
             "/lib/data.txt",
             "./config.toml",
             "a//b",
@@ -403,9 +437,32 @@ mod tests {
             "/",
             ".",
             "",
-        ]));
+        ]);
 
-        assert_eq!(normalized, paths(&["lib/data.txt", "config.toml", "a/b"]));
+        assert_eq!(
+            excluded.paths(),
+            &paths(&["lib/data.txt", "config.toml", "a/b"])
+        );
+    }
+
+    #[test]
+    fn exclusions_keep_a_root_relative_path_as_given() {
+        let given = ["lib/data.txt", "lib//separator.txt", "directory/"];
+
+        let excluded = exclusions(&given);
+
+        let mut kept = excluded
+            .paths()
+            .iter()
+            .map(|path| path.as_os_str().to_owned())
+            .collect::<Vec<_>>();
+        kept.sort();
+        let mut expected = given.map(std::ffi::OsString::from).to_vec();
+        expected.sort();
+        assert_eq!(kept, expected);
+        assert!(excluded.contains(Path::new("lib/data.txt")));
+        assert!(excluded.contains(Path::new("lib/separator.txt")));
+        assert!(excluded.contains(Path::new("directory")));
     }
 
     #[test]
@@ -415,7 +472,7 @@ mod tests {
 
         let entries = list_tree(
             &open(source.path()),
-            &paths(&["/static/asset.bin", "data/nested", "missing"]),
+            &exclusions(&["/static/asset.bin", "data/nested", "missing"]),
         )
         .unwrap();
 
@@ -461,14 +518,14 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
         let destination = tempfile::tempdir().unwrap();
 
-        let error = list_tree(&open(source.path()), &HashSet::new()).unwrap_err();
+        let error = list_tree(&open(source.path()), &CaptureExclusions::default()).unwrap_err();
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("pipe"), "{error}");
         let error = capture(
             &open(source.path()),
             destination.path(),
-            &HashSet::new(),
+            &CaptureExclusions::default(),
             FileCopyMode::Buffered,
         )
         .unwrap_err();
@@ -488,7 +545,7 @@ mod tests {
         std::fs::write(source.path().join("real/file"), b"contents").unwrap();
         std::os::unix::fs::symlink("real", source.path().join("alias")).unwrap();
 
-        let entries = list_tree(&open(source.path()), &HashSet::new()).unwrap();
+        let entries = list_tree(&open(source.path()), &CaptureExclusions::default()).unwrap();
 
         let relatives = entries
             .iter()
@@ -510,7 +567,7 @@ mod tests {
         capture(
             &open(source.path()),
             destination.path(),
-            &paths(&["static/asset.bin", "data/nested"]),
+            &exclusions(&["static/asset.bin", "data/nested"]),
             FileCopyMode::Buffered,
         )
         .unwrap();

@@ -2124,12 +2124,12 @@ mod tests {
         };
         let allocation_before = filesystem.observe_allocation().await.unwrap().unwrap();
 
-        let excluded = HashSet::from([
+        let excluded = Arc::new(CaptureExclusions::new([
             PathBuf::from("static/asset.bin"),
             PathBuf::from("data/nested"),
-        ]);
+        ]));
         let capture =
-            <SandboxFilesystem as SandboxFilesystemAdapter>::capture_tree(&filesystem, &excluded)
+            <SandboxFilesystem as SandboxFilesystemAdapter>::capture_tree(&filesystem, excluded)
                 .await
                 .unwrap();
 
@@ -2228,7 +2228,7 @@ mod tests {
         std::fs::write(&agent_file, vec![0x11; FILE_BYTES]).unwrap();
         let capture = <SandboxFilesystem as SandboxFilesystemAdapter>::capture_tree(
             &filesystem,
-            &HashSet::new(),
+            Arc::new(CaptureExclusions::default()),
         )
         .await
         .unwrap();
