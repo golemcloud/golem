@@ -2539,6 +2539,11 @@ fn pre_acceptance_rejection_reason(error: &WorkerExecutorError) -> InvocationRej
         | WorkerExecutorError::ComponentNotFound { .. }
         | WorkerExecutorError::PromiseNotFound { .. } => InvocationRejectionReason::NotFound,
         WorkerExecutorError::InvalidAccount => InvocationRejectionReason::Unauthorized,
+        // A routing miss rather than a refusal. The caller has to be able to tell it apart: it
+        // retries these on the shard's owner, and gives up on everything it reads as a refusal.
+        WorkerExecutorError::InvalidShardId { .. }
+        | WorkerExecutorError::ShardingNotReady
+        | WorkerExecutorError::OplogFenced { .. } => InvocationRejectionReason::ShardingNotReady,
         _ => InvocationRejectionReason::Internal,
     }
 }
@@ -3535,6 +3540,34 @@ mod freshness_tests {
             assert_eq!(
                 pre_acceptance_rejection_reason(&WorkerExecutorError::invalid_request(details)),
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn routing_misses_are_rejected_as_sharding_not_ready() {
+        // The caller retries these on the shard's owner and gives up on anything it reads as a
+        // refusal, so none of them may fall through to `Internal` - which is how an executor that
+        // had just lost its shards used to fail an invocation outright instead of redirecting it.
+        for error in [
+            WorkerExecutorError::InvalidShardId {
+                shard_id: golem_common::model::ShardId::new(0),
+                shard_ids: Vec::new(),
+            },
+            WorkerExecutorError::ShardingNotReady,
+            WorkerExecutorError::OplogFenced {
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "fenced".to_string(),
+                },
+                expected_epoch: 1,
+                actual_epoch: Some(2),
+            },
+        ] {
+            assert_eq!(
+                pre_acceptance_rejection_reason(&error),
+                InvocationRejectionReason::ShardingNotReady,
+                "{error}"
             );
         }
     }

@@ -729,6 +729,8 @@ fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
         InvocationRejectionReason::Internal => RpcError::RemoteInternalError {
             details: rejected.error,
         },
+        // The routing miss an executor reports as a typed failure once it has accepted.
+        InvocationRejectionReason::ShardingNotReady => WorkerExecutorError::ShardingNotReady.into(),
         _ => RpcError::ProtocolError {
             details: rejected.error,
         },

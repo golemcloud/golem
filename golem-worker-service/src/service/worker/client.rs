@@ -1761,6 +1761,14 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 },
                 |outcome| match outcome {
                     OneShotInvocationSessionResult::Success(output) => Ok(output),
+                    // A routing miss, retried on the shard's owner like the typed failure an
+                    // executor sends for the same condition after accepting.
+                    OneShotInvocationSessionResult::Rejected(rejected)
+                        if rejected.reason
+                            == InvocationRejectionReason::ShardingNotReady as i32 =>
+                    {
+                        Err(WorkerExecutorError::ShardingNotReady.into())
+                    }
                     OneShotInvocationSessionResult::Rejected(rejected) => {
                         Err(decode_invocation_rejection(rejected).into())
                     }
@@ -2338,7 +2346,9 @@ mod one_shot_session_tests {
 
 #[cfg(test)]
 mod rejection_mapping_tests {
-    use super::{WorkerClient, WorkerExecutorWorkerClient, decode_invocation_rejection};
+    use super::{
+        WorkerClient, WorkerExecutorWorkerClient, WorkerServiceError, decode_invocation_rejection,
+    };
     use futures::{Stream, stream};
     use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::shardmanager::{
@@ -2371,6 +2381,7 @@ mod rejection_mapping_tests {
     use std::net::Ipv4Addr;
     use std::pin::Pin;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -2485,8 +2496,13 @@ mod rejection_mapping_tests {
         }
     }
 
-    #[derive(Clone)]
-    struct RejectingExecutor;
+    /// Rejects every invocation as `NotFound`, after first rejecting `routing_misses` of them as
+    /// having reached an executor that does not own the agent's shard.
+    #[derive(Clone, Default)]
+    struct RejectingExecutor {
+        routing_misses: Arc<AtomicUsize>,
+        calls: Arc<AtomicUsize>,
+    }
 
     macro_rules! unimplemented_unary {
         ($name:ident, $request:ty, $response:ty) => {
@@ -2634,12 +2650,27 @@ mod rejection_mapping_tests {
                 )) => (start.idempotency_key, start.agent_id),
                 other => panic!("expected invocation start, got {other:?}"),
             };
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let routing_miss = self
+                .routing_misses
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            let (reason, error) = if routing_miss {
+                (
+                    InvocationRejectionReason::ShardingNotReady,
+                    "0 is not in shards []",
+                )
+            } else {
+                (InvocationRejectionReason::NotFound, "agent not found")
+            };
             Ok(Response::new(Box::pin(stream::iter([Ok(
                 InvocationResponse {
                     response: Some(invocation_response::Response::Rejected(
                         InvocationRejected {
-                            reason: InvocationRejectionReason::NotFound as i32,
-                            error: "agent not found".to_string(),
+                            reason: reason as i32,
+                            error: error.to_string(),
                             idempotency_key,
                             agent_id,
                             component_revision: None,
@@ -2650,14 +2681,15 @@ mod rejection_mapping_tests {
         }
     }
 
-    #[test]
-    async fn unary_not_found_rejection_preserves_the_public_error_category() {
+    /// Invokes an agent through a worker service whose only executor is `executor`, and returns
+    /// the error the invocation ends with.
+    async fn invoke_against(executor: RejectingExecutor) -> WorkerServiceError {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             tonic::transport::Server::builder()
                 .add_service(
-                    WorkerExecutorServer::new(RejectingExecutor)
+                    WorkerExecutorServer::new(executor)
                         .accept_compressed(CompressionEncoding::Gzip)
                         .send_compressed(CompressionEncoding::Gzip),
                 )
@@ -2701,7 +2733,7 @@ mod rejection_mapping_tests {
             agent_id: "missing".to_string(),
         };
 
-        let error = client
+        client
             .invoke_agent(
                 &agent_id,
                 Some("run".to_string()),
@@ -2723,12 +2755,42 @@ mod rejection_mapping_tests {
                 None,
             )
             .await
-            .unwrap_err();
+            .unwrap_err()
+    }
+
+    #[test]
+    async fn unary_not_found_rejection_preserves_the_public_error_category() {
+        let error = invoke_against(RejectingExecutor::default()).await;
 
         let public_error: AgentError = error.into();
         assert!(
             matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
             "InvocationRejected(NotFound) must remain a public not-found error, got {public_error:?}"
+        );
+    }
+
+    #[test]
+    async fn a_routing_miss_rejection_is_retried_rather_than_surfaced() {
+        // An executor that has just lost the agent's shard rejects before accepting. The worker
+        // service has to retry that on the shard's owner - here the same fake, answering the second
+        // time - rather than fail the invocation with the first rejection.
+        let executor = RejectingExecutor {
+            routing_misses: Arc::new(AtomicUsize::new(1)),
+            ..Default::default()
+        };
+        let calls = executor.calls.clone();
+
+        let error = invoke_against(executor).await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the routing miss must be retried, exactly once"
+        );
+        let public_error: AgentError = error.into();
+        assert!(
+            matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
+            "the retried call's answer must be the one surfaced, got {public_error:?}"
         );
     }
 }

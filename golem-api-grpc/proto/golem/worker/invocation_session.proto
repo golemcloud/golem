@@ -238,6 +238,10 @@ enum InvocationRejectionReason {
   INVOCATION_REJECTION_REASON_INPUT_CONFLICT = 12;
   INVOCATION_REJECTION_REASON_INPUT_GAP = 13;
   INVOCATION_REJECTION_REASON_RESOURCE_EXHAUSTED = 14;
+  // The request reached an executor that does not own the agent's shard: a stale route, or an
+  // executor whose lease has lapsed. Not a refusal of the invocation - the caller retries it on
+  // the shard's owner after refreshing its routing table.
+  INVOCATION_REJECTION_REASON_SHARDING_NOT_READY = 15;
 }
 
 message InvocationRejected {
