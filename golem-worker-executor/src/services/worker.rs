@@ -1923,7 +1923,7 @@ mod tests {
     }
 
     fn invocation_entries(keys: &[IdempotencyKey]) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut entries = BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::no_op())]);
+        let mut entries = BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::no_op(None))]);
         for (offset, key) in keys.iter().enumerate() {
             invocation_pair(&mut entries, 2 + offset as u64 * 2, key);
         }

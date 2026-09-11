@@ -979,6 +979,7 @@ where
                 .worker()
                 .add_and_commit_oplog(OplogEntry::CardDerived {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: ctx.entity_parent_start_index(),
                     card: created.clone(),
                     wallet_generation,
                 })
@@ -1651,6 +1652,7 @@ async fn load_card_transfer_request<Ctx: WorkerCtx>(
 
 async fn complete_source_card_transfer<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
+    entity_parent_start_index: Option<OplogIndex>,
     transfer_id: Uuid,
     source_card_id: CardId,
     installed_card: &StoredCard,
@@ -1664,6 +1666,7 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
 
     ensure_source_card_transfer_started(
         ctx,
+        entity_parent_start_index,
         transfer_id,
         source_card_id,
         &target_holder,
@@ -1690,6 +1693,7 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
     ctx.public_state
         .worker()
         .add_and_commit_oplog(OplogEntry::card_transfer_confirmed(
+            entity_parent_start_index,
             transfer_id,
             source_card_id,
             installed_card.card_id(),
@@ -1702,6 +1706,7 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
 
 async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
+    entity_parent_start_index: Option<OplogIndex>,
     transfer_id: Uuid,
     source_card_id: CardId,
     target_holder: &CardHolder,
@@ -1726,6 +1731,7 @@ async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
     ctx.public_state
         .worker()
         .add_and_commit_oplog(OplogEntry::card_transfer_started(
+            entity_parent_start_index,
             transfer_id,
             source_card_id,
             Some(CardHolder::Agent(AgentCardHolder {
@@ -1782,6 +1788,7 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                 .worker()
                 .add_and_commit_oplog(OplogEntry::CardDerived {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: ctx.entity_parent_start_index(),
                     card: installed_card.clone(),
                     wallet_generation: Some(ctx.state.wallet_generation),
                 })
@@ -1791,6 +1798,7 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
         ctx.public_state
             .worker()
             .add_and_commit_oplog(OplogEntry::card_event_queued(
+                ctx.entity_parent_start_index(),
                 QueuedCardEvent::transfer_started_with_source(
                     transfer.transfer_id,
                     transfer.source_card.card_id(),
@@ -1803,6 +1811,7 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
 
     complete_source_card_transfer(
         ctx,
+        ctx.entity_parent_start_index(),
         transfer.transfer_id,
         transfer.source_card.card_id(),
         &installed_card,
@@ -1955,6 +1964,10 @@ pub(super) struct PendingSourceCardTransferRetry {
 }
 
 impl PendingSourceCardTransferRetry {
+    pub(super) fn entity_parent_start_index(&self) -> Option<OplogIndex> {
+        self.pending.entity_parent_start_index
+    }
+
     pub(super) async fn is_confirmed(
         &self,
         oplog: &dyn Oplog,
@@ -2062,6 +2075,7 @@ pub(super) async fn prepare_pending_source_card_transfers<Ctx: WorkerCtx>(
             });
             ensure_source_card_transfer_started(
                 ctx,
+                pending.entity_parent_start_index,
                 retry.transfer_id,
                 retry.source_card_id,
                 &target_holder,
@@ -2108,6 +2122,7 @@ pub(super) async fn complete_pending_source_card_transfers<Ctx: WorkerCtx>(
         ctx.public_state
             .worker()
             .add_and_commit_oplog(OplogEntry::card_transfer_confirmed(
+                retry.entity_parent_start_index(),
                 retry.transfer_id,
                 retry.source_card_id,
                 retry.installed_card.card_id(),
@@ -2235,8 +2250,9 @@ async fn complete_permission_card_revoke<Ctx: WorkerCtx>(
         | Err(PermissionCardRevokeError::CardRevoked(_)) => vec![card_id],
         Err(PermissionCardRevokeError::NotPermitted(_)) => Vec::new(),
     };
+    let entity_parent_start_index = ctx.entity_parent_start_index();
     if let Err(error) = ctx
-        .apply_card_revoked_cascade(&locally_revoked_card_ids, false)
+        .apply_card_revoked_cascade(entity_parent_start_index, &locally_revoked_card_ids, false)
         .await
     {
         handle.abandon_for_trap();

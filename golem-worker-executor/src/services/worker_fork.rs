@@ -1010,6 +1010,7 @@ mod tests {
         let remote = agent_id("remote");
         let entry = OplogEntry::CardTransferStarted {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: CardId::new(),
             source_holder: Some(CardHolder::Agent(AgentCardHolder {

@@ -303,7 +303,26 @@ pub fn value_to_cli_text(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<String, RenderError> {
-    let mut renderer = CliTextRenderer { redact: true };
+    let mut renderer = CliTextRenderer {
+        capability_rendering: CapabilityRendering::Redacted,
+    };
+    drive(walk(&mut renderer, graph, ty, value))
+}
+
+/// Render a [`SchemaValue`] while exposing secret-handle metadata.
+///
+/// Secret values contain only their ID, config path, pinned revision, resolution timestamp and
+/// category; plaintext secret material is never carried by [`SchemaValue`]. Other host-managed
+/// capabilities remain redacted. This is intended for trusted observability surfaces such as the
+/// public oplog.
+pub fn value_to_cli_text_with_secret_metadata(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    value: &SchemaValue,
+) -> Result<String, RenderError> {
+    let mut renderer = CliTextRenderer {
+        capability_rendering: CapabilityRendering::SecretMetadata,
+    };
     drive(walk(&mut renderer, graph, ty, value))
 }
 
@@ -318,12 +337,21 @@ pub fn value_to_cli_text_unredacted(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<String, RenderError> {
-    let mut renderer = CliTextRenderer { redact: false };
+    let mut renderer = CliTextRenderer {
+        capability_rendering: CapabilityRendering::Unredacted,
+    };
     drive(walk(&mut renderer, graph, ty, value))
 }
 
+#[derive(Clone, Copy)]
+enum CapabilityRendering {
+    Redacted,
+    SecretMetadata,
+    Unredacted,
+}
+
 struct CliTextRenderer {
-    redact: bool,
+    capability_rendering: CapabilityRendering,
 }
 
 impl SchemaWalker for CliTextRenderer {
@@ -364,14 +392,24 @@ fn render_value(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<String, RenderError> {
-    if r.redact
-        && let (Some(type_kind), Some(value_kind)) = (
-            HostManagedKind::from_type(ty),
-            HostManagedKind::from_value(value),
-        )
-        && type_kind == value_kind
+    if let (Some(type_kind), Some(value_kind)) = (
+        HostManagedKind::from_type(ty),
+        HostManagedKind::from_value(value),
+    ) && type_kind == value_kind
     {
-        return Ok(type_kind.redacted_placeholder().to_string());
+        match r.capability_rendering {
+            CapabilityRendering::Redacted => {
+                return Ok(type_kind.redacted_placeholder().to_string());
+            }
+            CapabilityRendering::SecretMetadata => {
+                if let SchemaValue::Secret(secret) = value {
+                    let metadata = canonical::secret::to_json(secret)?;
+                    return Ok(format!("<secret metadata: {metadata}>"));
+                }
+                return Ok(type_kind.redacted_placeholder().to_string());
+            }
+            CapabilityRendering::Unredacted => {}
+        }
     }
 
     match (ty, value) {

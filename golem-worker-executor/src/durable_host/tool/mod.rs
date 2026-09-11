@@ -1183,17 +1183,16 @@ fn project_tool_rpc_error<Ctx: WorkerCtx>(
 fn project_tool_response_value<Ctx: WorkerCtx>(
     response: ToolInvokeResponse,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<(Option<TypedSchemaValue>, Option<Vec<u8>>), RpcError> {
+) -> Result<Option<TypedSchemaValue>, RpcError> {
     response
         .map_err(|error| project_tool_rpc_error(error, ctx))
         .and_then(|response| {
-            let result = response
+            response
                 .result
                 .as_ref()
                 .map(|value| encode_typed_tool_value(value, ctx))
                 .transpose()
-                .map_err(RpcError::ProtocolError)?;
-            Ok((result, response.stdout))
+                .map_err(RpcError::ProtocolError)
         })
 }
 
@@ -1206,12 +1205,11 @@ where
     Ctx: WorkerCtx,
 {
     accessor.with(|mut access| {
-        let (result, stdout) = project_tool_response_value(response, access.get())?;
-        let stdout = stdout
-            .map(|bytes| StreamReader::new(&mut access, bytes))
-            .transpose()
-            .map_err(|error| RpcError::RemoteInternalError(error.to_string()))?;
-        Ok(InvocationResult { result, stdout })
+        let result = project_tool_response_value(response, access.get())?;
+        Ok(InvocationResult {
+            result,
+            stdout: None,
+        })
     })
 }
 
@@ -1694,10 +1692,7 @@ fn decode_tool_terminal(
                         "invalid durable tool result payload: {error}"
                     ))
                 })?;
-            Ok(Ok(SerializableToolInvocationResult {
-                result,
-                stdout: None,
-            }))
+            Ok(Ok(SerializableToolInvocationResult { result }))
         }
         Err(error) => Ok(Err(error)),
     }
