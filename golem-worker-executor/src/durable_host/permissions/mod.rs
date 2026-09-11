@@ -29,7 +29,9 @@
 //! durable/cross-executor representation is the snapshot embedded in the
 //! surrounding value, never the live handle.
 
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::permissions::derive as permissions_derive;
 use crate::preview2::golem::permissions::inspect as permissions_inspect;
@@ -924,18 +926,19 @@ where
         oplog_index,
     };
     let card = build_card(card_id);
-    let request = HostRequestPermissionCardDerive {
-        card: serialize(&card).map_err(|err| {
-            anyhow!("failed to serialize runtime permission card {card_id}: {err}")
-        })?,
-        provenance: serialize(&provenance).map_err(|err| {
-            anyhow!("failed to serialize provenance for permission card {card_id}: {err}")
-        })?,
-    };
-    let handle = if begun.is_live() {
-        begun.start_live(ctx, request).await?
-    } else {
-        begun.start_replay(ctx).await?
+    let handle = match begun.resolve(ctx).await? {
+        ResolvedCall::Live(begun) => {
+            let request = HostRequestPermissionCardDerive {
+                card: serialize(&card).map_err(|err| {
+                    anyhow!("failed to serialize runtime permission card {card_id}: {err}")
+                })?,
+                provenance: serialize(&provenance).map_err(|err| {
+                    anyhow!("failed to serialize provenance for permission card {card_id}: {err}")
+                })?,
+            };
+            begun.start_live(ctx, request).await?
+        }
+        ResolvedCall::Replay(handle) => handle,
     };
 
     let response = if handle.is_live() {
@@ -2780,11 +2783,12 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 installed_card_provenance,
                 target_agent_id: target.agent_id,
             };
-            let request = transfer.request()?;
-            let mut handle = if begun.is_live() {
-                begun.start_live(self, request).await?
-            } else {
-                begun.start_replay(self).await?
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let request = transfer.request()?;
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
             };
             if handle.is_live() {
                 self.public_state

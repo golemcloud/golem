@@ -1,5 +1,6 @@
 use super::claims::{RequestClaimIdentity, StartClaim, recorded_request_payload_matches};
 use super::*;
+use crate::durable_host::PositionalRead;
 #[cfg(feature = "test-utils")]
 use std::pin::Pin;
 
@@ -2665,6 +2666,32 @@ impl ReplayState {
         }
     }
 
+    /// Atomically classifies the next positional read as either an entry or the replay tail.
+    /// A reserved completion-delivery boundary is waited out rather than mistaken for the tail.
+    pub async fn get_oplog_entry_or_replay_end(
+        &self,
+    ) -> Result<PositionalRead, WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let (read, blocked) = self
+                .with_tx(async |tx| {
+                    let entry = tx.try_get_oplog_entry(|_| true).await?;
+                    let read = match entry {
+                        Some((index, entry)) => PositionalRead::Entry(index, entry),
+                        None => PositionalRead::ReplayEnded,
+                    };
+                    Ok((read, tx.blocked_on_completion_delivery))
+                })
+                .await?;
+            if !blocked {
+                return Ok(read);
+            }
+            progress.await;
+        }
+    }
+
     /// Reads the next oplog entry, and if it matches the given condition, skips
     /// every hint entry following it and returns the oplog index of the entry read.
     /// If the condition is not met, returns `None` and the candidate entry is left unconsumed with
@@ -2696,31 +2723,12 @@ impl ReplayState {
         }
     }
 
-    /// [`Self::get_oplog_entry`] variant for callers running inside Wasmtime accessor futures:
-    /// the cursor transaction runs on an owned task (see [`Self::run_owned_cursor_op`]), so the
-    /// store-polled caller never queues on the cursor mutex directly. Direct invocation-loop /
-    /// p2 host-call readers keep using [`Self::get_oplog_entry`].
-    pub async fn get_oplog_entry_owned(
+    /// Owned-task variant of [`Self::get_oplog_entry_or_replay_end`].
+    pub async fn get_oplog_entry_or_replay_end_owned(
         &self,
-    ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
-        self.run_owned_cursor_op(|state| async move {
-            loop {
-                let progress = state.cursor.progress.notified();
-                tokio::pin!(progress);
-                progress.as_mut().enable();
-                if let Some(entry) = state
-                    .with_tx(async |tx| tx.try_get_oplog_entry(|_| true).await)
-                    .await?
-                {
-                    return Ok(entry);
-                }
-                if state.is_live() {
-                    return Err(state.end_of_replay_error());
-                }
-                progress.await;
-            }
-        })
-        .await
+    ) -> Result<PositionalRead, WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move { state.get_oplog_entry_or_replay_end().await })
+            .await
     }
 
     /// Returns true if the given log entry has unmatched persisted occurrences since the last

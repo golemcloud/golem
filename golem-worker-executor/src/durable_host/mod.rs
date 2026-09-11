@@ -2337,26 +2337,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
     }
 
-    async fn begin_local_live_continuation(
-        &self,
-    ) -> Result<PendingReplayToLive, WorkerExecutorError> {
-        begin_local_live_continuation(
-            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
-            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
-            self.entity_tool_operation(),
-            &self.public_state,
-            &self.linear_memory,
-            if self.runtime == OwnerRuntime::Agent {
-                ReplayToLiveRole::PrimaryAgent
-            } else {
-                ReplayToLiveRole::NonPrimary
-            },
-            self.state.local_live_tail(),
-            self.state.replay_state.replay_target(),
-        )
-        .await
-    }
-
     async fn finish_switch_to_live(
         &mut self,
         pending: PendingReplayToLive,
@@ -2367,6 +2347,113 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.process_pending_replay_events().await?;
         }
         Ok(outcome)
+    }
+
+    pub(crate) fn prepare_live_continuation_at_replay_tail(
+        &self,
+        replay_ended: bool,
+        expected: String,
+    ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static + use<Ctx>
+    {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        let replaying_incomplete_entity =
+            mode == Some(InvocationExecutionMode::ReplayingIncomplete);
+        let primary_replay_tail = self.runtime == OwnerRuntime::Agent && replay_ended;
+        let rejected = mode == Some(InvocationExecutionMode::ReplayingCompleted)
+            || (!replaying_incomplete_entity && !primary_replay_tail);
+        let replay_state = self.state.replay_state.clone();
+        let public_state = self.public_state.clone();
+        let linear_memory = self.linear_memory.clone();
+        let tool_entity = matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_)));
+        let tool_operation = self.entity_tool_operation();
+        let local_live_tail = self.state.local_live_tail();
+        let role = if self.runtime == OwnerRuntime::Agent {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
+        async move {
+            if rejected {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    expected,
+                    format!(
+                        "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
+                        replay_state.last_replayed_index()
+                    ),
+                ));
+            }
+            if replay_ended {
+                begin_replay_to_live(
+                    replaying_incomplete_entity,
+                    tool_entity,
+                    tool_operation,
+                    &public_state,
+                    &linear_memory,
+                    &replay_state,
+                    role,
+                    local_live_tail,
+                )
+                .await
+            } else {
+                begin_local_live_continuation(
+                    replaying_incomplete_entity,
+                    tool_entity,
+                    tool_operation,
+                    &public_state,
+                    &linear_memory,
+                    role,
+                    local_live_tail,
+                    replay_state.replay_target(),
+                )
+                .await
+                .map(BeginReplayToLive::Pending)
+            }
+        }
+    }
+
+    pub(crate) async fn continue_live_at_replay_tail(
+        &mut self,
+        replay_ended: bool,
+        expected: String,
+    ) -> Result<bool, WorkerExecutorError> {
+        let pending = match self
+            .prepare_live_continuation_at_replay_tail(replay_ended, expected)
+            .await?
+        {
+            BeginReplayToLive::ReplayResumed => return Ok(false),
+            BeginReplayToLive::Pending(pending) => pending,
+        };
+        self.finish_switch_to_live(pending).await?.require_live()?;
+        Ok(true)
+    }
+
+    pub(crate) async fn get_oplog_entry_or_continue_live(
+        &mut self,
+        expected: &str,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        loop {
+            if self.is_live() {
+                return Ok(None);
+            }
+            match self
+                .state
+                .replay_state
+                .get_oplog_entry_or_replay_end()
+                .await?
+            {
+                PositionalRead::Entry(index, entry) => {
+                    return Ok(Some((index, entry)));
+                }
+                PositionalRead::ReplayEnded => {
+                    if self
+                        .continue_live_at_replay_tail(true, expected.to_string())
+                        .await?
+                    {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
     }
 
     async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
@@ -5279,18 +5366,18 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let current_span_id = &self.state.current_span_id;
+        let current_span_id = self.state.current_span_id.clone();
 
-        let is_live = self.is_live();
+        let replay_entry = self.get_oplog_entry_or_continue_live("StartSpan").await?;
+        let continued_live = replay_entry.is_none();
 
-        let span = if is_live {
+        let span = if continued_live {
             self.state
                 .invocation_context
                 .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         } else {
-            let (_, entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::StartSpan)?;
+            let (_, entry) = replay_entry.expect("replay entry was checked above");
 
             let (timestamp, span_id) = match entry {
                 OplogEntry::StartSpan {
@@ -5318,11 +5405,11 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span
         };
 
-        if current_span_id != parent
+        if &current_span_id != parent
             && !self
                 .state
                 .invocation_context
-                .has_in_stack(current_span_id, parent)
+                .has_in_stack(&current_span_id, parent)
         {
             // The parent span is not in the current invocation stack. This can happen if it was created in a previous
             // invocation and stored in some global state.
@@ -5339,7 +5426,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span.set_attribute(name.clone(), value.clone());
         }
 
-        if is_live {
+        if continued_live {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::StartSpan {
@@ -5380,7 +5467,14 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if let Some((_, entry)) = self.get_oplog_entry_or_continue_live("FinishSpan").await? {
+            if !matches!(entry, OplogEntry::FinishSpan { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "FinishSpan",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::finish_span(
@@ -5388,8 +5482,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     span_id.clone(),
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
 
         if &self.state.current_span_id == span_id {
@@ -5421,7 +5513,17 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .set_attribute(span_id, key.to_string(), value.clone())
             .map_err(WorkerExecutorError::runtime)?;
-        if self.is_live() {
+        if let Some((_, entry)) = self
+            .get_oplog_entry_or_continue_live("SetSpanAttribute")
+            .await?
+        {
+            if !matches!(entry, OplogEntry::SetSpanAttribute { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "SetSpanAttribute",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::set_span_attribute(
@@ -5431,8 +5533,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     value,
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }
         Ok(())
     }
@@ -6577,6 +6677,14 @@ fn store_is_live(
 pub(crate) enum BeginReplayToLive {
     ReplayResumed,
     Pending(PendingReplayToLive),
+}
+
+// Callers immediately destructure this transient result; avoid allocating each oplog entry.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub(crate) enum PositionalRead {
+    Entry(OplogIndex, OplogEntry),
+    ReplayEnded,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -11114,17 +11222,6 @@ macro_rules! get_oplog_entry {
     };
     ($replay_state:expr, $($cases:path),+) => {
         $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
-    };
-}
-
-/// [`get_oplog_entry!`] variant for call sites running inside Wasmtime accessor futures: reads
-/// through [`crate::durable_host::replay_state::ReplayState::get_oplog_entry_owned`], whose cursor
-/// transaction runs on an owned task, so the store-polled caller never queues on the cursor mutex
-/// directly. Direct invocation-loop / p2 host-call readers keep using [`get_oplog_entry!`].
-#[macro_export]
-macro_rules! get_oplog_entry_owned {
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry_owned(); $($cases),+)
     };
 }
 

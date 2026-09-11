@@ -15,7 +15,9 @@
 pub mod types;
 
 use crate::durable_host::authorization::targets::secret_target;
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::types::SecretEntry;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
@@ -374,69 +376,63 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         expected: golem_schema::schema::wit::wire::SchemaGraph,
     ) -> anyhow::Result<Result<SchemaValueTree, SecretError>> {
         let entry = secret_entry(self, &s)?.clone();
-        let config_key = match canonical_config_key(&entry) {
-            Ok(config_key) => config_key,
-            Err(error) => return Ok(Err(reveal_error_to_wit(error))),
-        };
-        if self.entity_invocation_scope().is_some_and(|scope| {
-            !scope
-                .activation()
-                .policy()
-                .secret_keys_revealable()
-                .contains(&config_key)
-        }) {
-            return Ok(Err(SecretError::Unavailable(format!(
-                "Entity invocation is not allowed to reveal secret config key {config_key}"
-            ))));
-        }
-
-        let (denied, mut expected_graph) = if self.state.is_live() {
-            let denied = match canonical_secret_resource(&entry) {
-                Ok(resource) => {
-                    match secret_target(environment_owner(self), SecretVerb::Reveal, &resource) {
-                        Ok(target) => self
-                            .authorize_live_permission(&target)
-                            .await?
-                            .err()
-                            .map(|_| permission_denied()),
-                        Err(_) => Some(permission_denied()),
-                    }
-                }
-                Err(_) => Some(permission_denied()),
-            };
-            let expected_graph = match decode_graph(&expected) {
-                Ok(graph) => graph,
-                Err(error) => {
-                    return Ok(Err(SecretError::Internal(format!(
-                        "invalid expected schema graph: {error}"
-                    ))));
-                }
-            };
-            (denied, Some(expected_graph))
-        } else {
-            (None, None)
-        };
         let begun = DurableCallSession::<GolemSecretsReveal, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
-        let mut handle = if begun.is_live() {
-            begun
-                .start_live(
-                    self,
-                    HostRequestSecretReveal {
-                        secret_id: entry.secret_id.0,
-                        expected_type: expected_graph
-                            .as_ref()
-                            .expect("live secret reveal has a decoded expected graph")
-                            .clone(),
-                    },
-                )
-                .await?
-        } else {
-            begun.start_replay(self).await?
+        let (mut handle, denied, mut expected_graph) = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let config_key = match canonical_config_key(&entry) {
+                    Ok(config_key) => config_key,
+                    Err(error) => return Ok(Err(reveal_error_to_wit(error))),
+                };
+                if self.entity_invocation_scope().is_some_and(|scope| {
+                    !scope
+                        .activation()
+                        .policy()
+                        .secret_keys_revealable()
+                        .contains(&config_key)
+                }) {
+                    return Ok(Err(SecretError::Unavailable(format!(
+                        "Entity invocation is not allowed to reveal secret config key {config_key}"
+                    ))));
+                }
+                let denied = match canonical_secret_resource(&entry) {
+                    Ok(resource) => {
+                        match secret_target(environment_owner(self), SecretVerb::Reveal, &resource)
+                        {
+                            Ok(target) => self
+                                .authorize_live_permission(&target)
+                                .await?
+                                .err()
+                                .map(|_| permission_denied()),
+                            Err(_) => Some(permission_denied()),
+                        }
+                    }
+                    Err(_) => Some(permission_denied()),
+                };
+                let expected_graph = match decode_graph(&expected) {
+                    Ok(graph) => graph,
+                    Err(error) => {
+                        return Ok(Err(SecretError::Internal(format!(
+                            "invalid expected schema graph: {error}"
+                        ))));
+                    }
+                };
+                let handle = begun
+                    .start_live(
+                        self,
+                        HostRequestSecretReveal {
+                            secret_id: entry.secret_id.0,
+                            expected_type: expected_graph.clone(),
+                        },
+                    )
+                    .await?;
+                (handle, denied, Some(expected_graph))
+            }
+            ResolvedCall::Replay(handle) => (handle, None, None),
         };
 
         let mut live_secret = None;
