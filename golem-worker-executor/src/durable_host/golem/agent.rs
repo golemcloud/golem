@@ -459,7 +459,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
                     let owned_agent_id =
                         OwnedAgentId::new(self.owned_agent_id.environment_id, &target_agent_id);
-                    let Some(metadata) = self.state.worker_service().get(&owned_agent_id).await
+                    let Some(metadata) = self.state.worker_service().get(&owned_agent_id).await?
                     else {
                         return Ok(None);
                     };
