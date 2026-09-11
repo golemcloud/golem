@@ -2087,13 +2087,13 @@ mod tests {
         let agent_root = filesystem.root().to_path_buf();
         std::fs::create_dir_all(agent_root.join("data/nested")).unwrap();
         std::fs::create_dir(agent_root.join("static")).unwrap();
-        for index in 0..FILE_COUNT {
+        (0..FILE_COUNT).for_each(|index| {
             std::fs::write(
                 agent_root.join(format!("data/file-{index}")),
                 vec![index as u8; FILE_BYTES],
             )
             .unwrap();
-        }
+        });
         std::fs::write(agent_root.join("data/nested/hidden"), b"excluded directory").unwrap();
         std::fs::write(agent_root.join("static/asset.bin"), b"excluded file").unwrap();
         std::fs::write(agent_root.join("config.toml"), b"[config]").unwrap();
@@ -2153,16 +2153,18 @@ mod tests {
             std::fs::read(capture.root().join("data/file-0")).unwrap(),
             unsynced
         );
-        for index in 1..FILE_COUNT {
+        (1..FILE_COUNT).for_each(|index| {
             assert_eq!(
                 std::fs::read(capture.root().join(format!("data/file-{index}"))).unwrap(),
                 vec![index as u8; FILE_BYTES]
             );
-        }
+        });
         let mut expected = tree_copy::tree_listing(&agent_root);
-        for absent in ["static/asset.bin", "data/nested", "data/nested/hidden"] {
-            assert!(expected.remove(absent));
-        }
+        ["static/asset.bin", "data/nested", "data/nested/hidden"]
+            .into_iter()
+            .for_each(|absent| {
+                assert!(expected.remove(absent));
+            });
         assert_eq!(tree_copy::tree_listing(capture.root()), expected);
         assert_eq!(
             std::fs::metadata(capture.root().join("config.toml"))
@@ -2176,13 +2178,15 @@ mod tests {
             std::fs::read_link(capture.root().join("link")).unwrap(),
             PathBuf::from("data/file-0")
         );
-        for relative in ["data", "data/file-1", "config.toml"] {
-            assert_eq!(
-                file_project_id(&File::open(capture.root().join(relative)).unwrap()).unwrap(),
-                None,
-                "{relative} in the capture must belong to no project"
-            );
-        }
+        ["data", "data/file-1", "config.toml"]
+            .into_iter()
+            .for_each(|relative| {
+                assert_eq!(
+                    file_project_id(&File::open(capture.root().join(relative)).unwrap()).unwrap(),
+                    None,
+                    "{relative} in the capture must belong to no project"
+                );
+            });
         assert_eq!(
             file_project_id(&File::open(agent_root.join("data/file-1")).unwrap()).unwrap(),
             Some(project_id)
@@ -2335,13 +2339,16 @@ mod tests {
             std::fs::read_link(filesystem.root().join("link")).unwrap(),
             PathBuf::from("data/small")
         );
-        for relative in ["data", "data/large", "data/small"] {
-            assert_eq!(
-                file_project_id(&File::open(filesystem.root().join(relative)).unwrap()).unwrap(),
-                Some(project_id),
-                "{relative} must belong to the agent project"
-            );
-        }
+        ["data", "data/large", "data/small"]
+            .into_iter()
+            .for_each(|relative| {
+                assert_eq!(
+                    file_project_id(&File::open(filesystem.root().join(relative)).unwrap())
+                        .unwrap(),
+                    Some(project_id),
+                    "{relative} must belong to the agent project"
+                );
+            });
         assert!(tree.root().join("data/large").is_file());
 
         let existing =
@@ -2383,14 +2390,16 @@ mod tests {
         SandboxFilesystem::delete_and_verify(&limited)
             .await
             .unwrap();
-        for project in [project_id, limited_project_id] {
-            assert_eq!(
-                provisioning.project_allocation_for_test(project).unwrap(),
-                FilesystemAllocation {
-                    allocated_bytes: 0,
-                    filesystem_objects: 0,
-                }
-            );
-        }
+        [project_id, limited_project_id]
+            .into_iter()
+            .for_each(|project| {
+                assert_eq!(
+                    provisioning.project_allocation_for_test(project).unwrap(),
+                    FilesystemAllocation {
+                        allocated_bytes: 0,
+                        filesystem_objects: 0,
+                    }
+                );
+            });
     }
 }
