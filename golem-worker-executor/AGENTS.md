@@ -4,6 +4,10 @@ Load the `understanding-durable-execution` skill before changing replay, oplog, 
 RPC, durable-stream, tool/entity, snapshot, or worker-lifecycle code. This file states the rules; the skill explains the
 mechanisms, timelines and tests behind them.
 
+Keep `worker-executor-walkthrough.html` and the `understanding-durable-execution` skill aligned
+with executor behavior changes in the same PR. Update affected explanations, diagrams and
+interactive examples; preserve unrelated content and verify changed walkthrough sections in a browser.
+
 ## Axioms
 
 1. **Replay is deterministic.** The guest is a deterministic function of its guest-observable
