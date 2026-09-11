@@ -7938,7 +7938,7 @@ impl RunningWorker {
                 );
             }
         };
-        let context = match Ctx::create(
+        let mut context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
             parent.parsed_agent_id.clone(),
@@ -8018,6 +8018,12 @@ impl RunningWorker {
                 );
             }
         };
+        if last_snapshot_index.is_some() {
+            // Core initializers run before load-snapshot, but their recorded host calls are
+            // already inside the skipped snapshot history. Recreate that runtime state with
+            // the same durability suppression as snapshot loading, without consuming the tail.
+            context.begin_call_snapshotting_function();
+        }
         let mut hosted = match instance_host.instantiate(context, &component).await {
             Ok(hosted) => hosted,
             Err(error) => {
@@ -8033,6 +8039,9 @@ impl RunningWorker {
             );
         }
         let (instance, mut store) = hosted.into_parts();
+        if last_snapshot_index.is_some() {
+            store.data_mut().end_call_snapshotting_function();
+        }
         if let Some((active_agent, generation)) = entity_generation {
             let interrupt_state = parent.interrupt_signal.lock().await;
             if !interrupt_state.has_interrupt() {
