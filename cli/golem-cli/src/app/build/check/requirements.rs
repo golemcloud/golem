@@ -165,7 +165,7 @@ const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
 pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [ToolRequirement] {
     match language {
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
-        GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
+        GuestLanguage::TypeScript | GuestLanguage::Effect => TYPESCRIPT_TOOL_REQUIREMENTS,
         GuestLanguage::Scala => SCALA_TOOL_REQUIREMENTS,
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
     }
@@ -175,7 +175,7 @@ pub fn typescript_tsconfig_requirements(
     language: GuestLanguage,
 ) -> &'static [TsConfigSettingRequirement] {
     match language {
-        GuestLanguage::TypeScript => TS_TSCONFIG_REQUIREMENTS,
+        GuestLanguage::TypeScript | GuestLanguage::Effect => TS_TSCONFIG_REQUIREMENTS,
         _ => &[],
     }
 }

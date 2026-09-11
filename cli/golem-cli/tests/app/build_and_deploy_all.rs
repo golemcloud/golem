@@ -18,6 +18,23 @@ async fn build_and_deploy_all_templates_for_ts() {
 }
 
 #[test]
+async fn effect_default_template_builds() {
+    let mut ctx = TestContext::new();
+    let app_name = "effect-default-template-build";
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "effect"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+}
+
+#[test]
 async fn build_and_deploy_all_templates_for_rust() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::Rust).await;
 }

@@ -8,16 +8,29 @@ steps:
       deploy: true
 
   - id: "trigger-via-agent"
-    prompt: >
-      I have the test-app project deployed with a CounterAgent that has a string constructor
-      parameter (the counter name) and an increment method. Use the CLI to trigger a
-      fire-and-forget invocation of the increment method for a counter named "c1" without
-      waiting for the result.
+    prompt:
+      rust: &non-effect-trigger-agent-prompt >
+        I have the test-app project deployed with a CounterAgent that has a string constructor
+        parameter (the counter name) and an increment method. Use the CLI to trigger a
+        fire-and-forget invocation of the increment method for a counter named "c1" without
+        waiting for the result.
+      ts: *non-effect-trigger-agent-prompt
+      effect: >
+        I have the Effect-based test-app project deployed with the generated `Counter` agent. Its
+        Effect v4 `defineAgent` contract has the exact runtime name `Counter`, one string
+        `constructorParams` field for the counter name, and an `increment` method. Use the Golem
+        CLI and TypeScript value syntax to trigger a fire-and-forget invocation of `increment` for
+        the counter named "c1" without waiting for the result. Do not modify the project or replace
+        the CLI operation with the Effect SDK's in-agent typed client.
+      scala: *non-effect-trigger-agent-prompt
+      moonbit: *non-effect-trigger-agent-prompt
     expectedSkills:
       rust:
         - "golem-trigger-agent-rust"
       ts:
         - "golem-trigger-agent-ts"
+      effect:
+        - "golem-trigger-agent-effect"
       scala:
         - "golem-trigger-agent-scala"
       moonbit:
@@ -29,6 +42,22 @@ steps:
   - id: "verify-trigger-executed"
     invoke_json:
       agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      rust: &non-effect-trigger-executed-expect
+        result_json:
+          - path: "$"
+            equals: 2
+      ts: *non-effect-trigger-executed-expect
+      effect: {}
+      scala: *non-effect-trigger-executed-expect
+      moonbit: *non-effect-trigger-executed-expect
+
+  - id: "verify-effect-trigger-executed"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'Counter("c1")'
       method: "increment"
     expect:
       result_json:

@@ -15,6 +15,7 @@
 pub mod sdk {
     pub const RUST: &str = "2.1.0";
     pub const TS: &str = "1.1.1";
+    pub const EFFECT_GOLEM: &str = "1.5.0";
     pub const SCALA: &str = "1.5.1";
     pub const MOONBIT: &str = "0.5.2";
     pub const MANIFEST: &str = "1.6.0";
@@ -36,6 +37,10 @@ pub mod build_tool {
     pub const MOON_MIN: &str = "0.1.20260827";
     pub const JAVA_MIN: &str = "17.0.0";
     pub const WASM_TOOLS_MIN: &str = "1.227.1";
+}
+
+pub mod effect_dep {
+    pub const EFFECT: &str = "4.0.0-beta.98";
 }
 
 // Keep this aligned with the TS component template

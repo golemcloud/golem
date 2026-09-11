@@ -1093,6 +1093,17 @@ async fn gen_bridge_sdk_target(
                                 TypeScriptBridgeMode::GuestWasmRpc,
                             )?)
                         }
+                        (GuestLanguage::Effect, BridgeMode::External) => Box::new(
+                            TypeScriptBridgeGenerator::new(agent_type, &output_dir, false)?,
+                        ),
+                        (GuestLanguage::Effect, BridgeMode::Guest) => {
+                            Box::new(TypeScriptBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                false,
+                                TypeScriptBridgeMode::GuestWasmRpc,
+                            )?)
+                        }
                         (GuestLanguage::Scala, BridgeMode::External) => {
                             Box::new(ScalaBridgeGenerator::new_with_mode(
                                 agent_type,
@@ -1134,7 +1145,7 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             ScalaToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
-                        (GuestLanguage::TypeScript, BridgeMode::Guest) => {
+                        (GuestLanguage::TypeScript | GuestLanguage::Effect, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
                             TypeScriptToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
@@ -1142,7 +1153,7 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             MoonBitToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
-                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Scala and MoonBit guest bridges"),
+                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala and MoonBit guest bridges"),
                     },
                 }
             },

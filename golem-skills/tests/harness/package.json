@@ -6,6 +6,7 @@
   "main": "dist/src/run.js",
   "scripts": {
     "start": "tsx src/run.ts",
+    "migrate:effect": "tsx src/migrate-effect-skills.ts",
     "build": "npm run lint && tsc",
     "test": "node --test dist/tests/*.test.js",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",

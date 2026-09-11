@@ -1,4 +1,7 @@
 name: "transactions-1-fallible-rollback-http-ledger"
+semanticRequirements:
+  effect:
+    - Transaction execute and compensation steps must perform actual HTTP requests through Effect HttpClient; typed agent RPC is not a substitute.
 settings:
   golem_server:
     custom_request_port: 9006
@@ -10,41 +13,100 @@ steps:
       build: true
 
   - id: "add-fallible-transaction-with-http-ledger"
-    prompt: >
-      In the test-app project, add a second durable agent type called `OrderLedger` identified by
-      a single order id constructor parameter. Give it an HTTP mount under `/orders/{order-id}` and
-      make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+    prompt:
+      rust: &non-effect-fallible-transaction-with-http-ledger-prompt >
+        In the test-app project, add a second durable agent type called `OrderLedger` identified by
+        a single order id constructor parameter. Give it an HTTP mount under `/orders/{order-id}` and
+        make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
 
-      `OrderLedger` must expose these HTTP endpoints:
-      - `POST /reserve` to set `reserved = true` and append `"reserve"` to a history list
-      - `DELETE /reserve` to set `reserved = false` and append `"release"` to history
-      - `POST /charge` to set `charged = true` and append `"charge"` to history
-      - `DELETE /charge` to set `charged = false` and append `"refund"` to history
-      - `GET /state` to return a JSON object with exactly `reserved`, `charged`, and `history`
+        `OrderLedger` must expose these HTTP endpoints:
+        - `POST /reserve` to set `reserved = true` and append `"reserve"` to a history list
+        - `DELETE /reserve` to set `reserved = false` and append `"release"` to history
+        - `POST /charge` to set `charged = true` and append `"charge"` to history
+        - `DELETE /charge` to set `charged = false` and append `"refund"` to history
+        - `GET /state` to return a JSON object with exactly `reserved`, `charged`, and `history`
 
-      New ledger agents must start with `reserved = false`, `charged = false`, and empty history.
+        New ledger agents must start with `reserved = false`, `charged = false`, and empty history.
 
-      Then modify `CounterAgent` to add a new externally invokable method named `process-order`
-      or `processOrder` following the source language convention. It must take two parameters:
-      the order id and a boolean flag controlling whether the transaction should fail after the
-      charge step. It must return a `ProcessOrderResult` value with `success` and `error` fields.
+        Then modify `CounterAgent` to add a new externally invokable method named `process-order`
+        or `processOrder` following the source language convention. It must take two parameters:
+        the order id and a boolean flag controlling whether the transaction should fail after the
+        charge step. It must return a `ProcessOrderResult` value with `success` and `error` fields.
 
-      Implement that method using the language's transaction API from the SDK and two transaction
-      steps whose execute paths perform HTTP `POST` requests to `/orders/{order-id}/reserve` and
-      `/orders/{order-id}/charge`, and whose compensation paths perform matching HTTP `DELETE`
-      requests. After both steps succeed, if the boolean flag is true, deliberately fail the
-      transaction so compensation runs. On success return a successful result with no error. On
-      transaction failure return an unsuccessful result with an error value.
-      
-      Make sure you use test-app.localhost:9006 as the HTTP API endpoint for the OrderLedger.
-      If you are using TypeScript or Scala, use `fetch` for the request.
-      
-      Make sure the project builds and deploys successfully.
+        Implement that method using the language's transaction API from the SDK and two transaction
+        steps whose execute paths perform HTTP `POST` requests to `/orders/{order-id}/reserve` and
+        `/orders/{order-id}/charge`, and whose compensation paths perform matching HTTP `DELETE`
+        requests. After both steps succeed, if the boolean flag is true, deliberately fail the
+        transaction so compensation runs. On success return a successful result with no error. On
+        transaction failure return an unsuccessful result with an error value.
+
+        Make sure you use test-app.localhost:9006 as the HTTP API endpoint for the OrderLedger.
+        If you are using TypeScript or Scala, use `fetch` for the request.
+
+        Make sure the project builds and deploys successfully.
+      ts: *non-effect-fallible-transaction-with-http-ledger-prompt
+      effect: >
+        In the Effect-based test-app project, add a second durable agent type called `OrderLedger`
+        with one `constructorParams` string named `orderId`. Declare its HTTP mount as
+        `/orders/{orderId}` with the `Http` API from `@golemcloud/effect-golem`, and expose it through
+        the app HTTP API on `test-app.localhost:9006`.
+
+        Store snapshot-backed Effect state with exactly `reserved` (boolean), `charged` (boolean),
+        and `history` (an array of strings). New ledger agents start with both booleans false and an
+        empty history. Expose these methods with method-level HTTP declarations:
+        - `POST /reserve` sets `reserved = true` and appends `"reserve"`
+        - `DELETE /reserve` sets `reserved = false` and appends `"release"`
+        - `POST /charge` sets `charged = true` and appends `"charge"`
+        - `DELETE /charge` sets `charged = false` and appends `"refund"`
+        - `GET /state` returns a JSON object with exactly `reserved`, `charged`, and `history`
+
+        Then modify the existing Effect `Counter` agent definition rather than creating a duplicate.
+        Rename both its exported TypeScript binding and its `defineAgent` runtime `name` to exactly
+        `CounterAgent`, and update the matching `httpApi` deployment agent key in `golem.yaml`.
+        Preserve its existing methods and implementation-module import.
+
+        Add a `ProcessOrderInput` Effect Schema with exactly `orderId` (string) and `failAfterCharge`
+        (boolean), and a `ProcessOrderResult` Effect Schema with exactly `success` (boolean) and
+        `error` (nullable string). Declare an externally invokable `processOrder` method with one
+        top-level parameter named `input` whose schema is `ProcessOrderInput`, and set the method's
+        `success` to `ProcessOrderResult` (not `Schema.Void`). Its implementation receives
+        `{ input }` and uses the two fields from that record.
+
+        Implement `processOrder` as an Effect using `Saga.fallibleTransaction` and two
+        `Saga.withFallibleCompensation` steps from `@golemcloud/effect-golem`. Implement every
+        execute and compensation action as an actual outgoing HTTP request through `HttpClient`,
+        `HttpClientRequest`, and `HttpClientResponse` from `effect/unstable/http`, using
+        `http://test-app.localhost:9006/orders/${encodeURIComponent(orderId)}` as the base URL. The
+        first step must POST to `/reserve` and compensate by sending DELETE `/reserve`; the second
+        must POST to `/charge` and compensate by sending DELETE `/charge`. Execute and await every
+        request, require a
+        successful status with `HttpClientResponse.filterStatusOk`, and provide
+        `FetchHttpClient.layer` around the composed handler Effect. Do not obtain an `OrderLedger`
+        typed client or substitute typed agent RPC, direct fetch, Node networking, or stubs for any
+        execute or compensation request.
+
+        After both steps succeed, use a typed `Effect.fail` when `failAfterCharge` is true so
+        rollback runs in reverse order. Convert complete or partial saga transaction failures into
+        `{ success: false, error: <string> }`, return `{ success: true, error: null }` on success,
+        and do not disguise unexpected host failures as successful rollback. Return this mapping
+        Effect directly from the `processOrder` handler, with an explicit `ProcessOrderResult` value
+        on every successful control-flow path; do not drop it with `Effect.tap` or fall through to
+        a void result.
+
+        Import both agent implementation modules from `src/main.ts`, preserve existing manifest
+        entries, and make sure the project builds and deploys successfully. The order IDs `order-1`
+        and `order-2` are reserved for the scenario assertions; do not use them in any manual smoke
+        test performed while implementing this task.
+      scala: *non-effect-fallible-transaction-with-http-ledger-prompt
+      moonbit: *non-effect-fallible-transaction-with-http-ledger-prompt
     expectedSkills:
       rust:
         - "golem-add-transactions-rust"
       ts:
         - "golem-add-transactions-ts"
+      effect:
+        - "golem-add-transactions-effect"
+        - "golem-make-http-request-effect"
       scala:
         - "golem-add-transactions-scala"
       moonbit:
@@ -59,9 +121,15 @@ steps:
       method:
         rust: "process_order"
         ts: "processOrder"
+        effect: "processOrder"
         scala: "processOrder"
         moonbit: "process_order"
-      args: '"order-1", true'
+      args:
+        rust: &non-effect-failed-transaction-args '"order-1", true'
+        ts: *non-effect-failed-transaction-args
+        effect: '{ orderId: "order-1", failAfterCharge: true }'
+        scala: *non-effect-failed-transaction-args
+        moonbit: *non-effect-failed-transaction-args
     expect:
       result_json:
         - path: "$.success"
@@ -87,9 +155,15 @@ steps:
       method:
         rust: "process_order"
         ts: "processOrder"
+        effect: "processOrder"
         scala: "processOrder"
         moonbit: "process_order"
-      args: '"order-2", false'
+      args:
+        rust: &non-effect-successful-transaction-args '"order-2", false'
+        ts: *non-effect-successful-transaction-args
+        effect: '{ orderId: "order-2", failAfterCharge: false }'
+        scala: *non-effect-successful-transaction-args
+        moonbit: *non-effect-successful-transaction-args
     expect:
       result_json:
         - path: "$.success"
