@@ -177,8 +177,8 @@ impl AgentSecretsApi {
             .get_in_environment(environment_id, path, &auth)
             .await?;
 
-        let result =
-            AgentSecretDto::try_from(DomainAgentSecretDto::from(result)).map_err(anyhow::Error::msg)?;
+        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
+            .map_err(anyhow::Error::msg)?;
         Ok(Json(result))
     }
 
