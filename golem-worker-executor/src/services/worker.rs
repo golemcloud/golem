@@ -1691,7 +1691,7 @@ mod tests {
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
-    use std::collections::{BTreeMap, VecDeque};
+    use std::collections::{BTreeMap, HashSet, VecDeque};
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use tokio::sync::Notify;
@@ -1973,6 +1973,47 @@ mod tests {
         };
         let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
         (service, oplog, owned_agent_id)
+    }
+
+    fn assignment_tracking_test_service() -> (
+        DefaultWorkerService,
+        Arc<InMemoryKeyValueStorage>,
+        OwnedAgentId,
+        usize,
+    ) {
+        let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_service = Arc::new(ShardServiceDefault::new());
+        let number_of_shards = 4;
+        shard_service.register(number_of_shards, &HashSet::new());
+        let service = DefaultWorkerService::new(
+            key_value_storage.clone(),
+            shard_service,
+            Arc::new(IndexTestOplogService::new(BTreeMap::new())),
+            Arc::new(IndexTestComponentService),
+            Arc::new(GolemConfig::default()),
+        );
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "assignment-tracking-test".to_string(),
+        };
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+        (service, key_value_storage, owned_agent_id, number_of_shards)
+    }
+
+    async fn assignment_tracking_members(
+        key_value_storage: &InMemoryKeyValueStorage,
+        owned_agent_id: &OwnedAgentId,
+        number_of_shards: usize,
+    ) -> Vec<OwnedAgentId> {
+        let shard_id = ShardId::from_agent_id(&owned_agent_id.agent_id, number_of_shards);
+        key_value_storage
+            .with_entity("test", "get_assignment_tracking", "agent_id")
+            .members_of_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &DefaultWorkerService::running_in_shard_key(&shard_id),
+            )
+            .await
+            .unwrap()
     }
 
     async fn invocation_index_metadata(
@@ -2522,6 +2563,48 @@ mod tests {
                 .unwrap()
                 .contains_key(&owned_agent_id),
             "a cancelled catch-up must not retain one dead lock registration per agent"
+        );
+    }
+
+    #[test]
+    async fn set_assignment_tracking_writes_durable_worker_to_recovery_index() {
+        let (service, key_value_storage, owned_agent_id, number_of_shards) =
+            assignment_tracking_test_service();
+        let status = AgentStatusRecord {
+            status: AgentStatus::Running,
+            agent_mode: AgentMode::Durable,
+            ..AgentStatusRecord::default()
+        };
+
+        service
+            .set_assignment_tracking(&owned_agent_id, &status)
+            .await;
+
+        assert_eq!(
+            assignment_tracking_members(&key_value_storage, &owned_agent_id, number_of_shards)
+                .await,
+            vec![owned_agent_id]
+        );
+    }
+
+    #[test]
+    async fn set_assignment_tracking_does_not_write_ephemeral_worker_to_recovery_index() {
+        let (service, key_value_storage, owned_agent_id, number_of_shards) =
+            assignment_tracking_test_service();
+        let status = AgentStatusRecord {
+            status: AgentStatus::Running,
+            agent_mode: AgentMode::Ephemeral,
+            ..AgentStatusRecord::default()
+        };
+
+        service
+            .set_assignment_tracking(&owned_agent_id, &status)
+            .await;
+
+        assert!(
+            assignment_tracking_members(&key_value_storage, &owned_agent_id, number_of_shards)
+                .await
+                .is_empty()
         );
     }
 
