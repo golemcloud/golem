@@ -39,6 +39,7 @@ derive_more.workspace = true
 desert_rust = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
+h2 = { workspace = true }
 headers = { workspace = true }
 hex = { workspace = true }
 hmac.workspace = true

@@ -20,8 +20,8 @@ use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
-use crate::declare_structs;
 use crate::schema::TypedSchemaValue;
+use crate::{declare_structs, declare_unions};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -74,7 +74,79 @@ impl Display for OplogCursor {
 declare_structs! {
     pub struct PublicOplogEntryWithIndex {
         pub oplog_index: OplogIndex,
+        pub attribution: PublicOplogEntryAttribution,
         pub entry: PublicOplogEntry,
+    }
+
+    pub struct PublicAgentEntity {
+        pub kind: PublicAgentEntityKind,
+        pub name: String,
+    }
+
+    /// One entity invocation in an owner-oplog execution chain.
+    pub struct PublicEntityInvocation {
+        pub entity: PublicAgentEntity,
+        pub start_index: OplogIndex,
+        pub call_mode: PublicEntityCallMode,
+        pub operation: Option<PublicEntityInvocationOperation>,
+    }
+
+    /// Attribution for an entry executed by an entity. Ancestors are ordered from the root entity
+    /// invocation to the immediate parent of `invocation`.
+    pub struct PublicEntityInvocationContext {
+        pub invocation: PublicEntityInvocation,
+        pub ancestors: Vec<PublicEntityInvocation>,
+    }
+
+    pub struct PublicToolInvocationOperation {
+        pub command_path: Vec<String>,
+        /// Whether a live stdin attachment was requested.
+        pub has_stdin: bool,
+        /// Whether a live stdout attachment was requested. Stdout bytes are not recorded in the
+        /// oplog.
+        pub has_stdout: bool,
+        /// Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        pub declares_stdout: bool,
+    }
+}
+
+declare_unions! {
+    pub enum PublicOplogEntryAttribution {
+        Agent(Empty),
+        Entity(PublicEntityInvocationContext),
+    }
+
+    pub enum PublicEntityInvocationOperation {
+        Tool(PublicToolInvocationOperation),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum PublicAgentEntityKind {
+    Tool,
+    ToolMiddleware,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum PublicEntityCallMode {
+    Synchronous,
+    Asynchronous,
+    FireAndForget,
+}
+
+impl PublicOplogEntryAttribution {
+    pub fn agent() -> Self {
+        Self::Agent(Empty {})
+    }
+
+    pub fn entity(context: PublicEntityInvocationContext) -> Self {
+        Self::Entity(context)
     }
 }
 
