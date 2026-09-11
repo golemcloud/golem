@@ -1,0 +1,10 @@
+dist
+node_modules
+golem-types
+agent-template
+wasm
+wit/deps
+integration-test/golem-temp
+integration-test/node_modules
+pnpm-lock.yaml
+package-lock.json
