@@ -28,11 +28,12 @@ pub enum ProducerMetadataKey {
     Reference(StreamId),
     Session(StreamSessionKeyV1),
     Batch(StreamId, u64),
-    Attachment(AttachmentId, StreamId),
+    Attachment(AttachmentId, StreamId, EnvironmentId, AgentId),
+    ActiveAttachmentCount(StreamSessionKeyV1, StreamId),
     ConsumerHead(StreamSessionKeyV1, StreamId),
     Cascade(Box<StreamAttachmentKeyV1>),
     AttachmentPage(u64),
-    AttachmentPosition(AttachmentId, StreamId),
+    AttachmentPosition(AttachmentId, StreamId, EnvironmentId, AgentId),
     Position(StreamId, OplogIndex),
 }
 
@@ -87,7 +88,16 @@ impl ProducerMetadataKey {
             _ => None,
         };
         if let Some(key) = attachment {
-            keys.push(Self::Attachment(key.attachment_id, key.stream_id));
+            keys.push(Self::Attachment(
+                key.attachment_id,
+                key.stream_id,
+                key.consumer_environment_id,
+                key.consumer.clone(),
+            ));
+            keys.push(Self::ActiveAttachmentCount(
+                key.session_key.clone(),
+                key.stream_id,
+            ));
             keys.push(Self::Stream(key.stream_id));
         }
         let head = match record {
@@ -145,9 +155,10 @@ pub enum ProducerMetadataRow {
     Session(ProducerSessionMetadata),
     Batch(OplogIndex),
     Attachment(IndexedStreamAttachment),
+    ActiveAttachmentCount(u64),
     ConsumerHead(IndexedConsumerJournal),
     Cascade(StreamCascadeDependentResultV1),
-    AttachmentPage(Vec<(AttachmentId, StreamId)>),
+    AttachmentPage(Vec<(AttachmentId, StreamId, EnvironmentId, AgentId)>),
     AttachmentPosition(Option<u64>),
     Position(u64, u64),
 }
@@ -217,9 +228,21 @@ impl ProducerStreamIndex {
                 let (first, count) = self.batch_positions.get(&(*stream, *offset))?;
                 ProducerMetadataRow::Position(*first, *count)
             }
-            ProducerMetadataKey::Attachment(attachment, stream) => ProducerMetadataRow::Attachment(
-                self.attachments.get(&(*attachment, *stream))?.clone(),
-            ),
+            ProducerMetadataKey::Attachment(attachment, stream, environment, consumer) => {
+                ProducerMetadataRow::Attachment(
+                    self.attachments
+                        .get(&(*attachment, *stream, *environment, consumer.clone()))?
+                        .clone(),
+                )
+            }
+            ProducerMetadataKey::ActiveAttachmentCount(session, stream) => {
+                ProducerMetadataRow::ActiveAttachmentCount(
+                    self.active_attachments_by_session_stream
+                        .get(&(session.clone(), *stream))
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            }
             ProducerMetadataKey::ConsumerHead(session, stream) => {
                 ProducerMetadataRow::ConsumerHead(
                     self.consumer_journals
@@ -233,10 +256,10 @@ impl ProducerStreamIndex {
             ProducerMetadataKey::AttachmentPage(page) => {
                 ProducerMetadataRow::AttachmentPage(self.attachment_pages.get(page)?.clone())
             }
-            ProducerMetadataKey::AttachmentPosition(attachment, stream) => {
+            ProducerMetadataKey::AttachmentPosition(attachment, stream, environment, consumer) => {
                 ProducerMetadataRow::AttachmentPosition(
                     self.attachment_positions
-                        .get(&(*attachment, *stream))
+                        .get(&(*attachment, *stream, *environment, consumer.clone()))
                         .copied()
                         .flatten(),
                 )
@@ -330,16 +353,31 @@ impl ProducerStreamIndex {
                     .insert(sequence, offset);
             }
             (
-                ProducerMetadataKey::Attachment(attachment, stream),
+                ProducerMetadataKey::Attachment(attachment, stream, environment, consumer),
                 ProducerMetadataRow::Attachment(value),
             ) => {
-                self.attachments.insert((attachment, stream), value);
+                if value.key.attachment_id != attachment
+                    || value.key.stream_id != stream
+                    || value.key.consumer_environment_id != environment
+                    || value.key.consumer != consumer
+                {
+                    return Err("producer metadata attachment identity mismatch".into());
+                }
+                self.attachments
+                    .insert((attachment, stream, environment, consumer), value);
             }
             (
                 ProducerMetadataKey::ConsumerHead(session, stream),
                 ProducerMetadataRow::ConsumerHead(value),
             ) => {
                 self.consumer_journals.insert((session, stream), value);
+            }
+            (
+                ProducerMetadataKey::ActiveAttachmentCount(session, stream),
+                ProducerMetadataRow::ActiveAttachmentCount(value),
+            ) => {
+                self.active_attachments_by_session_stream
+                    .insert((session, stream), value);
             }
             (ProducerMetadataKey::Cascade(key), ProducerMetadataRow::Cascade(value)) => {
                 self.cascade_outbox.insert(*key, value);
@@ -351,11 +389,11 @@ impl ProducerStreamIndex {
                 self.attachment_pages.insert(page, value);
             }
             (
-                ProducerMetadataKey::AttachmentPosition(attachment, stream),
+                ProducerMetadataKey::AttachmentPosition(attachment, stream, environment, consumer),
                 ProducerMetadataRow::AttachmentPosition(value),
             ) => {
                 self.attachment_positions
-                    .insert((attachment, stream), value);
+                    .insert((attachment, stream, environment, consumer), value);
             }
             (
                 ProducerMetadataKey::Position(stream, offset),
@@ -396,10 +434,17 @@ impl Projection<'_> {
         &mut self,
         attachment: AttachmentId,
         stream: StreamId,
+        environment: EnvironmentId,
+        consumer: AgentId,
     ) -> Result<(), String> {
-        let key = (attachment, stream);
-        self.load(ProducerMetadataKey::AttachmentPosition(attachment, stream))
-            .await?;
+        let key = (attachment, stream, environment, consumer.clone());
+        self.load(ProducerMetadataKey::AttachmentPosition(
+            attachment,
+            stream,
+            environment,
+            consumer,
+        ))
+        .await?;
         let position = self.index.attachment_positions.get(&key).copied().flatten();
         let active = !matches!(
             self.index.attachments[&key].state,
@@ -414,7 +459,7 @@ impl Projection<'_> {
                     .attachment_pages
                     .entry(page)
                     .or_default()
-                    .push(key);
+                    .push(key.clone());
                 self.index.attachment_positions.insert(key, Some(position));
                 self.index.active_attachment_count += 1;
             }
@@ -442,14 +487,19 @@ impl Projection<'_> {
                     .and_then(Vec::pop)
                     .ok_or("active attachment catalogue page is missing")?;
                 if position != last {
-                    self.load(ProducerMetadataKey::AttachmentPosition(moved.0, moved.1))
-                        .await?;
+                    self.load(ProducerMetadataKey::AttachmentPosition(
+                        moved.0,
+                        moved.1,
+                        moved.2,
+                        moved.3.clone(),
+                    ))
+                    .await?;
                     *self
                         .index
                         .attachment_pages
                         .get_mut(&(position / ATTACHMENT_PAGE_SIZE))
                         .and_then(|page| page.get_mut((position % ATTACHMENT_PAGE_SIZE) as usize))
-                        .ok_or("active attachment catalogue slot is missing")? = moved;
+                        .ok_or("active attachment catalogue slot is missing")? = moved.clone();
                     self.index
                         .attachment_positions
                         .insert(moved, Some(position));
@@ -523,6 +573,13 @@ impl Projection<'_> {
             self.stream(key.stream_id).await?;
             self.load(ProducerMetadataKey::Attachment(
                 key.attachment_id,
+                key.stream_id,
+                key.consumer_environment_id,
+                key.consumer.clone(),
+            ))
+            .await?;
+            self.load(ProducerMetadataKey::ActiveAttachmentCount(
+                key.session_key.clone(),
                 key.stream_id,
             ))
             .await?;
@@ -695,8 +752,16 @@ pub(crate) async fn project_producer_metadata(
                     )
                     .map_err(|error| error.to_string())?;
                 for key in ProducerMetadataKey::session_record(&record) {
-                    if let ProducerMetadataKey::Attachment(attachment, stream) = key {
-                        projection.catalogue_attachment(attachment, stream).await?;
+                    if let ProducerMetadataKey::Attachment(
+                        attachment,
+                        stream,
+                        environment,
+                        consumer,
+                    ) = key
+                    {
+                        projection
+                            .catalogue_attachment(attachment, stream, environment, consumer)
+                            .await?;
                     }
                 }
                 if let StreamSessionRecordV1::Finished(record) = &record {
@@ -829,7 +894,7 @@ impl DurableStreamProducer {
             }
             match key {
                 ProducerMetadataKey::Batch(stream, _)
-                | ProducerMetadataKey::Attachment(_, stream) => {
+                | ProducerMetadataKey::Attachment(_, stream, _, _) => {
                     pending.push(ProducerMetadataKey::Stream(stream))
                 }
                 ProducerMetadataKey::Stream(stream) => pending.extend(
@@ -1005,7 +1070,7 @@ impl DurableStreamProducer {
                 }
                 let dependency = match &key {
                     ProducerMetadataKey::Batch(stream, _)
-                    | ProducerMetadataKey::Attachment(_, stream) => {
+                    | ProducerMetadataKey::Attachment(_, stream, _, _) => {
                         Some(ProducerMetadataKey::Stream(*stream))
                     }
                     ProducerMetadataKey::Stream(stream) => index
@@ -1165,7 +1230,7 @@ impl DurableStreamProducer {
         }
         let mut keys = Vec::new();
         for position in positions {
-            let (attachment, stream) = catalogue
+            let (attachment, stream, environment, consumer) = catalogue
                 .get(&(position / ATTACHMENT_PAGE_SIZE))
                 .and_then(|page| page.get((position % ATTACHMENT_PAGE_SIZE) as usize))
                 .ok_or_else(|| {
@@ -1173,7 +1238,12 @@ impl DurableStreamProducer {
                         "active attachment catalogue slot is missing".into(),
                     )
                 })?;
-            keys.push(ProducerMetadataKey::Attachment(*attachment, *stream));
+            keys.push(ProducerMetadataKey::Attachment(
+                *attachment,
+                *stream,
+                *environment,
+                consumer.clone(),
+            ));
             keys.push(ProducerMetadataKey::Stream(*stream));
         }
         let (_, rows) = service
@@ -1541,6 +1611,86 @@ mod tests {
             self.indexed.reset();
             self.blobs.reset();
         }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn active_attachment_count_is_available_after_cold_metadata_load() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let mut key = crate::durable_host::durable_stream::tests::attachment_key(
+            &fixture.identity,
+            handle.stream_id,
+        );
+        key.session_key = fixture.identity.invocation.clone();
+        key.attachment_id = AttachmentId::primary(
+            key.session_key.callee_environment_id,
+            &key.session_key.callee,
+            &key.session_key.idempotency_key,
+        )
+        .unwrap();
+        producer.prepare_attachment(key.clone(), 100).await.unwrap();
+        producer
+            .activate_attachment(key.clone(), 110)
+            .await
+            .unwrap();
+        fixture.persist().await;
+        drop(producer);
+
+        let cold = fixture.producer().await;
+        assert!(
+            cold.has_active_attachment(&key.session_key, &handle)
+                .await
+                .unwrap()
+        );
+        assert!(cold.index.lock().await.attachments.is_empty());
+        key.epoch += 1;
+        cold.prepare_attachment(key.clone(), 120).await.unwrap();
+        assert!(
+            !cold
+                .has_active_attachment(&key.session_key, &handle)
+                .await
+                .unwrap()
+        );
+        cold.activate_attachment(key.clone(), 130).await.unwrap();
+        assert!(
+            cold.activate_attachment(key.clone(), 130)
+                .await
+                .unwrap()
+                .replayed
+        );
+        fixture.persist().await;
+        drop(cold);
+
+        let cold = fixture.producer().await;
+        cold.finalize_attachment(
+            key.clone(),
+            StreamAttachmentFinalizationReasonV1::ConsumerFinalized,
+            140,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !cold
+                .has_active_attachment(&key.session_key, &handle)
+                .await
+                .unwrap()
+        );
+        fixture.persist().await;
+        drop(cold);
+        assert!(
+            !fixture
+                .producer()
+                .await
+                .has_active_attachment(&key.session_key, &handle)
+                .await
+                .unwrap()
+        );
     }
 
     #[test]

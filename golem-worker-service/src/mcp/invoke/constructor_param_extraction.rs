@@ -16,9 +16,9 @@ use golem_common::schema::agent::{FieldSource, InputSchema, NamedField};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::host_managed::find_host_managed_type;
 use golem_common::schema::multimodal::multimodal_variant_cases;
-use golem_common::schema::render::json_value::from_untrusted_json_value;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
+use golem_schema::schema::render::json_value::from_untrusted_json_value;
 
 /// Validate that a constructor [`InputSchema`] can be supplied through MCP,
 /// without requiring actual argument values. This mirrors the structural rules

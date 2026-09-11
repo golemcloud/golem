@@ -43,7 +43,10 @@ import type {
 } from 'golem:core/types@2.0.0';
 import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
-import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
+import {
+  GuestSchemaValueStreamHandle,
+  type GuestSchemaValueStream,
+} from './schemaValueStreamHandle';
 import { GuestPermissionCardHandle } from './permissionCardHandle';
 
 export type {
@@ -441,13 +444,19 @@ export type SchemaValue =
   // An opaque, affine owned `quota-token` handle. Carried by ownership; never
   // inspectable or forgeable from a guest. See `GuestQuotaTokenHandle`.
   | { tag: 'quota-token'; handle: GuestQuotaTokenHandle }
-  | { tag: 'stream'; handle: GuestSchemaValueStreamHandle }
+  | { tag: 'stream'; handle: SchemaValueStreamHandle }
   // An opaque, affine owned `permission-card` handle.
   | { tag: 'permission-card'; handle: GuestPermissionCardHandle };
 
 export interface SchemaMapEntry {
   key: SchemaValue;
   value: SchemaValue;
+}
+
+interface SchemaValueStreamHandle {
+  peek(): GuestSchemaValueStream | undefined;
+  take(): GuestSchemaValueStream | undefined;
+  close(): Promise<void>;
 }
 
 export type SchemaResult = { tag: 'ok'; value?: SchemaValue } | { tag: 'err'; value?: SchemaValue };
@@ -578,7 +587,7 @@ export const v = {
   union: (unionTag: string, body: SchemaValue): SchemaValue => ({ tag: 'union', unionTag, body }),
   secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
-  stream: (handle: GuestSchemaValueStreamHandle): SchemaValue => ({ tag: 'stream', handle }),
+  stream: (handle: SchemaValueStreamHandle): SchemaValue => ({ tag: 'stream', handle }),
   permissionCard: (handle: GuestPermissionCardHandle): SchemaValue => ({
     tag: 'permission-card',
     handle,

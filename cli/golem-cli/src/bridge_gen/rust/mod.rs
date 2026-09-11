@@ -211,6 +211,7 @@ pub struct RustBridgeGenerator {
     /// mapped to the generated `crate::Multimodal*` enum name.
     known_multimodals: Vec<(Vec<(String, SchemaType)>, String)>,
     schema_graphs: schema_graph::SchemaGraphRegistry,
+    stream_items: Vec<SchemaType>,
 }
 
 impl BridgeGenerator for RustBridgeGenerator {
@@ -314,6 +315,7 @@ impl RustBridgeGenerator {
             generated_mimetypes_enums: Vec::new(),
             known_multimodals: Vec::new(),
             schema_graphs: schema_graph::SchemaGraphRegistry::default(),
+            stream_items: Vec::new(),
         })
     }
 
@@ -926,6 +928,7 @@ impl RustBridgeGenerator {
 
         let type_definitions = self.type_definitions()?;
         let multimodals = self.multimodals()?;
+        let stream_factories = self.guest_stream_factories()?;
         let languages = self.languages_module();
         let mimetypes = self.mimetypes_module();
         let runtime_prelude = RustRuntimeConfig::new(self.mode).generated_prelude();
@@ -977,6 +980,8 @@ impl RustBridgeGenerator {
                 #(#methods)*
             }
 
+            #stream_factories
+
             #type_definitions
 
             #multimodals
@@ -987,6 +992,46 @@ impl RustBridgeGenerator {
         };
 
         Ok(tokens)
+    }
+
+    fn guest_stream_factories(&mut self) -> anyhow::Result<TokenStream> {
+        let mut factories = Vec::new();
+        let mut names = ParameterNaming::new();
+        for (_, name) in self.type_naming.types() {
+            if let RustTypeName::Derived(name) = name {
+                names.reserve(name.clone());
+            }
+        }
+        let mut index = 0;
+        while index < self.stream_items.len() {
+            let item = self.stream_items[index].clone();
+            let json = serde_json::to_value(&item)?;
+            let label = match self.type_naming.type_name_for_type(&item) {
+                Some(RustTypeName::Derived(name)) => name.to_snake_case(),
+                _ => json["kind"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing schema kind"))?
+                    .to_snake_case(),
+            };
+            let name = Self::ident_from_name(names.fresh(format!("new_{label}_stream")));
+            let doc = format!(
+                "Creates a native stream with item schema `{json}`.\n\nUse this factory instead of `AgentStream::new` for generated items: its consuming, fallible codecs preserve this schema even when multiple schemas share a Rust type. Write concurrently with the awaited invocation or reader; each write waits for acceptance. A codec rejection consumes the item, sends nothing, and leaves the writer usable. Dropping the writer produces EOF. Dropping the reader is observed by subsequent writes. Forward the unread reader directly to transfer the original endpoint without decoding items."
+            );
+            let ty = self.type_reference(&item, false)?;
+            let encode = self.emit_encode_expr(quote! { item }, &item, false, 0)?;
+            let decode = self.emit_decode_expr(quote! { item }, &item, false, 0)?;
+            factories.push(quote! {
+                #[doc = #doc]
+                pub fn #name() -> (golem_rust::agentic::AgentStreamWriter<#ty>, golem_rust::agentic::AgentStream<#ty>) {
+                    golem_rust::agentic::AgentStream::new_with_codecs(
+                        |item| #encode,
+                        |item| #decode,
+                    )
+                }
+            });
+            index += 1;
+        }
+        Ok(quote! { #(#factories)* })
     }
 
     fn global_config(&self) -> TokenStream {
@@ -1276,6 +1321,12 @@ impl RustBridgeGenerator {
         method: &AgentMethodSchema,
         names: &GuestMethodNames,
     ) -> anyhow::Result<Vec<TokenStream>> {
+        if method.uses_streams(&self.agent_type.schema) {
+            return Ok(vec![
+                self.guest_await_method(method, names)?,
+                self.guest_internal_method(method, names)?,
+            ]);
+        }
         Ok(vec![
             self.guest_await_method(method, names)?,
             self.guest_trigger_method(method, names)?,
@@ -1521,6 +1572,11 @@ impl RustBridgeGenerator {
         let params_schema_value = self
             .input_param_schema_value_with_ident_names(&method.input_schema, &names.param_names)?;
         let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
+        let encode_parameters = if method.uses_streams(&self.agent_type.schema) {
+            quote! { golem_rust::encode_schema_value_async(&method_parameters).await }
+        } else {
+            quote! { golem_rust::encode_schema_value(&method_parameters) }
+        };
 
         match return_type {
             Some(return_type) if ephemeral => {
@@ -1528,7 +1584,7 @@ impl RustBridgeGenerator {
                 Ok(quote! {
                     async fn #name(&self, #(#param_defs),*) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                        let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                        let method_parameters = #encode_parameters
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
                         let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None);
                         let metadata = invocation.metadata;
@@ -1551,7 +1607,7 @@ impl RustBridgeGenerator {
                 Ok(quote! {
                     async fn #name(&self, #(#param_defs),*) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                        let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                        let method_parameters = #encode_parameters
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
                         let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None).future;
                         let response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
@@ -1571,7 +1627,7 @@ impl RustBridgeGenerator {
             None if ephemeral => Ok(quote! {
                 async fn #name(&self, #(#param_defs),*) -> Result<(golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, Option<()>), crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                    let method_parameters = #encode_parameters
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
                     let invocation = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None);
                     let metadata = invocation.metadata;
@@ -1583,7 +1639,7 @@ impl RustBridgeGenerator {
             None => Ok(quote! {
                 async fn #name(&self, #(#param_defs),*) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
-                    let method_parameters = golem_rust::encode_schema_value(&method_parameters)
+                    let method_parameters = #encode_parameters
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
                     let rpc_result_future = self.wasm_rpc.async_invoke_and_await(#name_lit, method_parameters, None).future;
                     let _response = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await
@@ -1996,7 +2052,7 @@ impl RustBridgeGenerator {
                 variants.push(quote! { #case_ident(#payload_type) });
 
                 let idx_u32 = idx as u32;
-                if !streaming {
+                if !streaming || self.mode == RustBridgeMode::GuestWasmRpc {
                     let enc = self.emit_encode_expr(quote! { __inner }, payload, false, 0)?;
                     encode_arms.push(quote! {
                         #enum_ident::#case_ident(__inner) => Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Variant(crate::__golem_bridge_runtime::schema::VariantValuePayload {
@@ -2050,14 +2106,16 @@ impl RustBridgeGenerator {
                             || find_host_managed_type(&self.agent_type.schema, payload)?.is_some(),
                     )
                 })?;
-            let derive = if contains_host_managed {
+            let derive = if contains_host_managed
+                || (streaming && self.mode == RustBridgeMode::GuestWasmRpc)
+            {
                 quote! {}
             } else if streaming {
                 quote! { #[derive(Debug)] }
             } else {
                 quote! { #[derive(Debug, Clone)] }
             };
-            let ordinary_codecs = if streaming {
+            let ordinary_codecs = if streaming && self.mode == RustBridgeMode::ExternalRest {
                 quote! {}
             } else {
                 quote! {
@@ -2153,7 +2211,9 @@ impl RustBridgeGenerator {
             let typedef = self.emit_typedef(&name_ident, &resolved)?;
             let encode_fn = Ident::new(&format!("encode_{name_str}"), Span::call_site());
             let decode_fn = Ident::new(&format!("decode_{name_str}"), Span::call_site());
-            let ordinary_codecs = if contains_stream_in_graph(&self.agent_type.schema, &resolved) {
+            let ordinary_codecs = if self.mode == RustBridgeMode::ExternalRest
+                && contains_stream_in_graph(&self.agent_type.schema, &resolved)
+            {
                 quote! {}
             } else {
                 let encode_body = self.emit_encode_body(&name_ident, &resolved)?;
@@ -2213,15 +2273,15 @@ impl RustBridgeGenerator {
     fn emit_typedef(&mut self, name: &Ident, resolved: &SchemaType) -> anyhow::Result<TokenStream> {
         let contains_host_managed = self.mode == RustBridgeMode::GuestWasmRpc
             && find_host_managed_type(&self.agent_type.schema, resolved)?.is_some();
-        let derive = if contains_host_managed {
-            quote! {}
-        } else if self.mode == RustBridgeMode::ExternalRest
-            && contains_stream_in_graph(&self.agent_type.schema, resolved)
-        {
-            quote! { #[derive(Debug)] }
-        } else {
-            quote! { #[derive(Debug, Clone)] }
-        };
+        let streaming = contains_stream_in_graph(&self.agent_type.schema, resolved);
+        let derive =
+            if contains_host_managed || (streaming && self.mode == RustBridgeMode::GuestWasmRpc) {
+                quote! {}
+            } else if streaming {
+                quote! { #[derive(Debug)] }
+            } else {
+                quote! { #[derive(Debug, Clone)] }
+            };
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let mut emitted = Vec::new();
@@ -2972,6 +3032,12 @@ impl RustBridgeGenerator {
             | SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no Rust bridge encoding yet; type = {typ:?}")
             }
+            SchemaType::Stream { inner, .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
+                if inner.is_none() {
+                    bail!("Cannot generate an untyped Rust AgentStream");
+                }
+                quote! { Ok(crate::__golem_bridge_runtime::schema::SchemaValue::Stream(#val.into_schema_stream())) }
+            }
             SchemaType::Stream { inner, .. } if streaming => {
                 let item = inner
                     .as_deref()
@@ -3292,6 +3358,23 @@ impl RustBridgeGenerator {
             | SchemaType::Future { .. } => {
                 bail!("SchemaType variant has no Rust bridge decoding yet; type = {typ:?}")
             }
+            SchemaType::Stream { inner, .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
+                let item = inner
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("Cannot generate an untyped Rust AgentStream"))?;
+                let item_decode =
+                    self.emit_decode_expr(quote! { __stream_item }, item, false, next)?;
+                quote! {
+                    match #val {
+                        crate::__golem_bridge_runtime::schema::SchemaValue::Stream(__stream) => {
+                            Ok(golem_rust::agentic::AgentStream::from_schema_stream(
+                                __stream, |__stream_item| #item_decode,
+                            ))
+                        }
+                        __other => Err(format!("Expected stream value, got {:?}", __other)),
+                    }
+                }
+            }
             SchemaType::Stream { inner, .. } if streaming => {
                 let item = inner
                     .as_deref()
@@ -3449,16 +3532,20 @@ impl RustBridgeGenerator {
             )),
             SchemaType::Stream {
                 inner: Some(inner), ..
-            } if self.mode == RustBridgeMode::ExternalRest => {
+            } => {
+                if self.mode == RustBridgeMode::GuestWasmRpc && !self.stream_items.contains(inner) {
+                    self.stream_items.push((**inner).clone());
+                }
                 let item = self.type_reference(inner, false)?;
-                Ok(quote! { golem_client::invocation_session::AgentStream<#item> })
+                if self.mode == RustBridgeMode::GuestWasmRpc {
+                    Ok(quote! { golem_rust::agentic::AgentStream<#item> })
+                } else {
+                    Ok(quote! { golem_client::invocation_session::AgentStream<#item> })
+                }
             }
-            SchemaType::Stream { inner: None, .. } if self.mode == RustBridgeMode::ExternalRest => {
+            SchemaType::Stream { inner: None, .. } => {
                 Err(anyhow!("Cannot generate an untyped Rust AgentStream"))
             }
-            SchemaType::Stream { .. } => Err(anyhow!(
-                "Guest Rust bridge stream generation is not supported"
-            )),
         }
     }
 
