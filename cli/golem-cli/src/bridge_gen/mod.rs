@@ -37,10 +37,12 @@ pub mod type_naming;
 pub mod typescript;
 
 use camino::Utf8Path;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
-use golem_common::schema::{AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_common::schema::{
+    AgentTypeSchema, FieldSource, InputSchema, SchemaGraph, find_host_managed_type,
+};
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -87,6 +89,92 @@ pub fn bridge_client_directory_name(agent_type_name: &AgentTypeName, mode: Bridg
         BridgeMode::External => format!("{}-client", agent_type_name.as_str().to_kebab_case()),
         BridgeMode::Guest => format!("{}-guest-client", agent_type_name.as_str().to_kebab_case()),
     }
+}
+
+pub(crate) fn validate_host_managed_agent_bridge_policy(
+    agent: &AgentTypeSchema,
+    mode: BridgeMode,
+) -> anyhow::Result<()> {
+    for field in agent.constructor.input_schema.fields() {
+        if matches!(field.source, FieldSource::UserSupplied) {
+            validate_host_managed_bridge_root(
+                agent,
+                mode,
+                &field.schema,
+                &format!("constructor parameter `{}`", field.name),
+            )?;
+        }
+    }
+
+    for config in &agent.config {
+        if config.source == AgentConfigSource::Local {
+            validate_host_managed_bridge_root(
+                agent,
+                mode,
+                &config.value_type,
+                &format!("configuration `{}`", config.path.join(".")),
+            )?;
+        }
+    }
+
+    if mode == BridgeMode::External {
+        for method in &agent.methods {
+            for field in method.input_schema.fields() {
+                if matches!(field.source, FieldSource::UserSupplied) {
+                    validate_host_managed_bridge_root(
+                        agent,
+                        mode,
+                        &field.schema,
+                        &format!("method `{}` input parameter `{}`", method.name, field.name),
+                    )?;
+                }
+            }
+
+            if let Some(output) = method.output_schema.schema() {
+                validate_host_managed_bridge_root(
+                    agent,
+                    mode,
+                    output,
+                    &format!("method `{}` output", method.name),
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_host_managed_bridge_root(
+    agent: &AgentTypeSchema,
+    mode: BridgeMode,
+    ty: &SchemaType,
+    root: &str,
+) -> anyhow::Result<()> {
+    let occurrence = find_host_managed_type(&agent.schema, ty).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot validate {root} for {mode} bridge SDK agent `{}`: {error}",
+            agent.type_name
+        )
+    })?;
+
+    if let Some(occurrence) = occurrence {
+        let supported_position = match mode {
+            BridgeMode::External => {
+                "host-managed capabilities are not supported by external bridge SDKs"
+            }
+            BridgeMode::Guest => {
+                "host-managed capabilities are supported only in guest RPC method inputs and outputs"
+            }
+        };
+        anyhow::bail!(
+            "cannot generate {mode} bridge SDK for agent `{}`: {root} contains host-managed capability `{}` at {}; {supported_position}",
+            agent.type_name,
+            occurrence.kind.kind_name(),
+            occurrence.path,
+        );
+    }
+
+    Ok(())
 }
 
 pub(crate) fn projected_schema_graph(graph: &SchemaGraph, root: &SchemaType) -> SchemaGraph {
