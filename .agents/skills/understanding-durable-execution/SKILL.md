@@ -372,10 +372,8 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   (`validate_forwarded_mapping`, `CorruptHistory`).
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
-  Streaming keys use the atomic region's logical counter or, outside a region, the physical
-  `Start` index (see RPC section). Terminals are finalized exactly once; a protocol terminal
-  fences later guest terminals. Reconstructing terminal outputs does not require the finished
-  consumer to reattach.
+  Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
+  later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
