@@ -2701,6 +2701,72 @@ impl ReplayState {
         }
     }
 
+    /// Reads a primary Store's atomic begin without consuming a pending Start belonging to an
+    /// independently running reconstructed Store. Same-Store work must never be waited on here.
+    pub(crate) async fn get_primary_atomic_begin(
+        &self,
+    ) -> Result<(OplogIndex, OplogEntry), WorkerExecutorError> {
+        let mut bodies = self.historical_reconstruction_bodies();
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let entry = self
+                .with_tx(async |tx| {
+                    let mut candidate = None;
+                    let matched = tx
+                        .try_get_oplog_entry(|entry| {
+                            if matches!(entry, OplogEntry::BeginAtomicRegion { .. }) {
+                                true
+                            } else {
+                                candidate = Some(entry.clone());
+                                false
+                            }
+                        })
+                        .await?;
+                    if matched.is_some() {
+                        return Ok(matched);
+                    }
+                    if let Some(entry) = candidate {
+                        let active = bodies.borrow_and_update().clone();
+                        let index = tx.st.replay_buffer.front().unwrap().0;
+                        let mut current = entry.clone();
+                        let mut child = index;
+                        while let OplogEntry::Start {
+                            parent_start_index: Some(parent),
+                            ..
+                        } = current
+                        {
+                            if parent >= child || tx.st.skipped_regions.is_in_deleted_region(parent)
+                            {
+                                break;
+                            }
+                            if active.contains(&parent) {
+                                return Ok(None);
+                            }
+                            current = tx.cursor.oplog.read(parent).await;
+                            child = parent;
+                        }
+                        return Ok(Some((index, entry)));
+                    }
+                    Ok(None)
+                })
+                .await?;
+            if let Some(entry) = entry {
+                return Ok(entry);
+            }
+            if self.is_live() {
+                return Err(self.end_of_replay_error());
+            }
+            tokio::select! {
+                _ = progress => {}
+                changed = bodies.changed() => {
+                    changed.map_err(|_| WorkerExecutorError::runtime("reconstruction body tracker closed"))?;
+                }
+            }
+        }
+    }
+
     /// Reads the next oplog entry, and if it matches the given condition, skips
     /// every hint entry following it and returns the oplog index of the entry read.
     /// If the condition is not met, returns `None` and the candidate entry is left unconsumed with
