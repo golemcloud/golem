@@ -95,13 +95,12 @@ impl SchemaRef {
 
     #[cfg(feature = "json")]
     pub fn to_json_schema(&self, include_draft_marker: bool) -> serde_json::Value {
-        to_json_schema_with_config(
-            &self.graph,
-            &self.root,
-            crate::schema::render::JsonSchemaConfig {
-                include_draft_marker,
-            },
-        )
+        let config = if include_draft_marker {
+            crate::schema::render::JsonSchemaConfig::CANONICAL
+        } else {
+            crate::schema::render::JsonSchemaConfig::WITHOUT_DRAFT_MARKER
+        };
+        to_json_schema_with_config(&self.graph, &self.root, config)
     }
 }
 
