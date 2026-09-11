@@ -1245,7 +1245,7 @@ impl WorkerService for DefaultWorkerService {
             owned_agent_id,
             Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
         )
-        .await;
+        .await?;
 
         let shard_assignment = self
             .shard_service
@@ -2116,7 +2116,8 @@ mod tests {
                     &owned_agent_id.agent_id,
                 ),
             )
-            .await;
+            .await
+            .unwrap();
         assert_eq!(
             service
                 .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
