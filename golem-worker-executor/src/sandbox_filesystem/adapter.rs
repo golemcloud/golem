@@ -945,11 +945,11 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// root-relative paths in `excluded`.
     ///
     /// The exclusion set is applied and nothing else. An excluded directory is absent together
-    /// with its contents. The copy uses the shared set and does not copy the paths in it.
-    /// Directories and symlinks are made again. Permissions and modification times are copied.
-    /// On managed XFS each file is one reflink, so the cost follows the number of files, not the
-    /// bytes, and the copy adds nothing to the quota of this filesystem. Storage without reflink
-    /// gives an error for which [`FilesystemStorageError::capture_is_unsupported`] is true.
+    /// with its contents. Directories and symlinks are made again. Permissions and modification
+    /// times are copied. On managed XFS each file is one reflink, so the cost follows the number of
+    /// files, not the bytes, and the copy adds nothing to the quota of this filesystem. Storage
+    /// without reflink gives an error for which [`FilesystemStorageError::capture_is_unsupported`]
+    /// is true.
     #[allow(dead_code)]
     fn capture_tree(
         &self,

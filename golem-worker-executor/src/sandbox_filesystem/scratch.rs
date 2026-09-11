@@ -23,7 +23,7 @@ pub(super) const SCRATCH_DIRECTORY_NAME: &str = ".scratch";
 /// executor creates it empty at startup and removes what a previous process left in it.
 #[derive(Clone)]
 pub(crate) struct ScratchSpace {
-    root: PathBuf,
+    root: Box<Path>,
     _anchor: Option<Arc<File>>,
     cleanup_retry: RetryConfig,
 }
@@ -44,7 +44,7 @@ impl ScratchSpace {
             FilesystemStorageError::io("create scratch directory", &root, error)
         })?;
         Ok(Self {
-            root,
+            root: root.into_boxed_path(),
             _anchor: anchor,
             cleanup_retry: cleanup_retry.clone(),
         })
@@ -60,7 +60,7 @@ impl ScratchSpace {
         std::fs::create_dir(&root)
             .map_err(|error| FilesystemStorageError::io("create scratch tree", &root, error))?;
         Ok(ScratchTree {
-            root,
+            root: root.into_boxed_path(),
             space: self.clone(),
             removed: false,
         })
@@ -69,7 +69,7 @@ impl ScratchSpace {
 
 /// A directory under the scratch space. The executor owns it. Discard or drop removes it.
 pub(crate) struct ScratchTree {
-    root: PathBuf,
+    root: Box<Path>,
     space: ScratchSpace,
     removed: bool,
 }

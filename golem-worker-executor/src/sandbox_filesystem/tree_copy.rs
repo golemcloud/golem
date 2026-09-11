@@ -20,7 +20,7 @@ use std::time::SystemTime;
 /// One object of a tree, listed for a copy.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct TreeEntry {
-    pub(super) relative: PathBuf,
+    pub(super) relative: Box<Path>,
     pub(super) kind: TreeEntryKind,
     pub(super) permissions: cap_std::fs::Permissions,
     pub(super) modified: Option<SystemTime>,
@@ -30,7 +30,7 @@ pub(super) struct TreeEntry {
 pub(super) enum TreeEntryKind {
     Directory,
     File,
-    Symlink(PathBuf),
+    Symlink(Box<Path>),
 }
 
 /// The root-relative paths that a tree walk skips.
@@ -40,7 +40,7 @@ pub(super) enum TreeEntryKind {
 /// does not stop a match.
 #[derive(Debug, Default)]
 pub(crate) struct TreeExclusions {
-    paths: HashSet<PathBuf>,
+    paths: HashSet<Box<Path>>,
 }
 
 impl TreeExclusions {
@@ -53,7 +53,11 @@ impl TreeExclusions {
     #[allow(dead_code)]
     pub(crate) fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
-            paths: paths.into_iter().filter_map(normalize_exclusion).collect(),
+            paths: paths
+                .into_iter()
+                .filter_map(normalize_exclusion)
+                .map(PathBuf::into_boxed_path)
+                .collect(),
         }
     }
 
@@ -63,7 +67,7 @@ impl TreeExclusions {
     }
 
     #[cfg(test)]
-    pub(super) fn paths(&self) -> &HashSet<PathBuf> {
+    pub(super) fn paths(&self) -> &HashSet<Box<Path>> {
         &self.paths
     }
 }
@@ -95,8 +99,8 @@ fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
 pub(super) fn list_tree(
     root: &cap_std::fs::Dir,
     excluded: &TreeExclusions,
-) -> std::io::Result<Vec<TreeEntry>> {
-    list_directory(root, Path::new(""), excluded, Vec::new())
+) -> std::io::Result<Box<[TreeEntry]>> {
+    list_directory(root, Path::new(""), excluded, Vec::new()).map(Vec::into_boxed_slice)
 }
 
 /// Adds the entries under `directory` to `listed` and gives the list back.
@@ -111,7 +115,7 @@ fn list_directory(
 ) -> std::io::Result<Vec<TreeEntry>> {
     sorted_names(directory)?
         .into_iter()
-        .map(|name| (relative.join(&name), name))
+        .map(|name| (child_path(relative, &name), name))
         .filter(|(path, _)| !excluded.contains(path))
         .try_fold(listed, |mut listed, (path, name)| {
             let entry = tree_entry(directory, &name, path)?;
@@ -129,6 +133,17 @@ fn list_directory(
                 None => Ok(listed),
             }
         })
+}
+
+/// Makes the root-relative path of an entry from the path of its directory and its name.
+///
+/// The path is made in one allocation of its final size.
+fn child_path(relative: &Path, name: &OsStr) -> PathBuf {
+    let separator = usize::from(!relative.as_os_str().is_empty());
+    let mut path = PathBuf::with_capacity(relative.as_os_str().len() + separator + name.len());
+    path.push(relative);
+    path.push(name);
+    path
 }
 
 /// Reads the names of the entries in a directory and sorts them.
@@ -154,7 +169,7 @@ fn tree_entry(
     let metadata = directory.symlink_metadata(name)?;
     let file_type = metadata.file_type();
     let kind = if file_type.is_symlink() {
-        TreeEntryKind::Symlink(read_link_contents(directory, Path::new(name))?)
+        TreeEntryKind::Symlink(read_link_contents(directory, Path::new(name))?.into_boxed_path())
     } else if file_type.is_dir() {
         TreeEntryKind::Directory
     } else if file_type.is_file() {
@@ -169,7 +184,7 @@ fn tree_entry(
         ));
     };
     Ok(TreeEntry {
-        relative,
+        relative: relative.into_boxed_path(),
         kind,
         permissions: metadata.permissions(),
         modified: metadata.modified().ok().map(|time| time.into_std()),
@@ -199,9 +214,9 @@ pub(super) fn capture(
 
 /// Makes one listed entry again under the host directory `destination`.
 ///
-/// A directory is made empty. A regular file is transferred with `copy_mode` and gets the
-/// permissions and the modification time of the entry. A symlink is made with the same target
-/// and gets the modification time of the entry.
+/// For a directory entry, this function makes an empty directory. A regular file is transferred
+/// with `copy_mode` and gets the permissions and the modification time of the entry. A symlink is
+/// made with the same target and gets the modification time of the entry.
 fn capture_entry(
     source: &cap_std::fs::Dir,
     destination: &Path,
@@ -285,9 +300,9 @@ pub(super) fn seed(
 
 /// Makes one listed entry again in `destination` through the capability.
 ///
-/// A directory is made empty. A regular file goes through the same copy as a seeded file and gets
-/// the permissions and the modification time of the entry. A symlink is made with the same target
-/// and gets the modification time of the entry.
+/// For a directory entry, this function makes an empty directory. A regular file goes through the
+/// same copy as a seeded file and gets the permissions and the modification time of the entry. A
+/// symlink is made with the same target and gets the modification time of the entry.
 fn seed_entry(
     source: &Path,
     destination: &cap_std::fs::Dir,
@@ -470,8 +485,11 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
     use test_r::test;
 
-    fn paths(items: &[&str]) -> HashSet<PathBuf> {
-        items.iter().map(PathBuf::from).collect()
+    fn paths(items: &[&str]) -> HashSet<Box<Path>> {
+        items
+            .iter()
+            .map(|item| Box::from(Path::new(item)))
+            .collect()
     }
 
     fn exclusions(items: &[&str]) -> TreeExclusions {
@@ -589,11 +607,11 @@ mod tests {
         );
         assert_eq!(
             entries[3].kind,
-            TreeEntryKind::Symlink(PathBuf::from("data/db.sqlite"))
+            TreeEntryKind::Symlink(Path::new("data/db.sqlite").into())
         );
         assert_eq!(
             entries[5].kind,
-            TreeEntryKind::Symlink(PathBuf::from("/absolute/outside"))
+            TreeEntryKind::Symlink(Path::new("/absolute/outside").into())
         );
         assert_eq!(entries[6].permissions.mode() & 0o777, 0o755);
         assert_eq!(
@@ -648,7 +666,7 @@ mod tests {
         assert_eq!(relatives, ["alias", "real", "real/file"]);
         assert_eq!(
             entries[0].kind,
-            TreeEntryKind::Symlink(PathBuf::from("real"))
+            TreeEntryKind::Symlink(Path::new("real").into())
         );
     }
 
