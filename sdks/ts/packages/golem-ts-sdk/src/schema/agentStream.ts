@@ -20,6 +20,7 @@ import {
   schemaValueToWitAsync,
 } from '../internal/schema-model';
 import type { SchemaCodec } from './codec';
+import { ownStream, withNativeStreamScope } from '../internal/schema-model/streamScope';
 
 interface TypedStreamState<T> {
   readonly kind: 'typed';
@@ -102,8 +103,20 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
         ? { done: true, value: undefined }
         : {
             done: false,
-            value: state.itemCodec.fromValue(schemaValueFromWit(item.value)) as T,
+            value: await withNativeStreamScope(
+              () => state.itemCodec.fromValue(schemaValueFromWit(item.value)) as T,
+            ),
           };
+    } catch (error) {
+      if (state.kind === 'wire') {
+        states.delete(this);
+        try {
+          await state.iterator?.return?.();
+        } catch {
+          // Preserve the read or item-decoding failure.
+        }
+      }
+      throw error;
     } finally {
       state.busy = false;
     }
@@ -206,12 +219,16 @@ export function agentStreamFromHandle<T>(
   if (endpoint === undefined) {
     throw new Error('schema value stream was already transferred');
   }
-  return createAgentStream({
+  const stream = createAgentStream<T>({
     kind: 'wire',
     endpoint,
     itemCodec,
     busy: false,
   });
+  ownStream(async () => {
+    if (states.has(stream)) await stream.return();
+  });
+  return stream;
 }
 
 function createAgentStream<T>(state: AgentStreamState<T>): AgentStream<T> {
@@ -248,8 +265,17 @@ function asAsyncIterable<T>(source: Iterable<T> | AsyncIterable<T>): AsyncIterab
     return source as AsyncIterable<T>;
   }
   return {
-    async *[Symbol.asyncIterator]() {
-      yield* source as Iterable<T>;
+    [Symbol.asyncIterator]() {
+      const iterator = (source as Iterable<T>)[Symbol.iterator]();
+      return {
+        next: async () => iterator.next(),
+        return: async (value) => iterator.return?.(value) ?? { done: true, value },
+        throw: async (error) => {
+          if (iterator.throw) return iterator.throw(error);
+          iterator.return?.();
+          throw error;
+        },
+      };
     },
   };
 }
@@ -260,11 +286,48 @@ function iterableFromIterator<T>(iterator: AsyncIterator<T>): AsyncIterable<T> {
   };
 }
 
-async function* encodeItems<T>(
+function encodeItems<T>(
   source: AsyncIterable<T>,
   itemCodec: SchemaCodec,
 ): AsyncIterable<SchemaValueTree> {
-  for await (const item of source) {
-    yield await schemaValueToWitAsync(itemCodec.toValue(item));
-  }
+  let iterator: AsyncIterator<T> | undefined;
+  let closed = false;
+  const close = async () => {
+    if (!closed) {
+      closed = true;
+      iterator ??= source[Symbol.asyncIterator]();
+      await iterator.return?.();
+    }
+    return { done: true as const, value: undefined };
+  };
+  return {
+    [Symbol.asyncIterator]: () => ({
+      async next() {
+        if (closed) return { done: true, value: undefined };
+        iterator ??= source[Symbol.asyncIterator]();
+        try {
+          const item = await iterator.next();
+          if (item.done) {
+            closed = true;
+            return { done: true, value: undefined };
+          }
+          return {
+            done: false,
+            value: await withNativeStreamScope(
+              () => itemCodec.toValue(item.value),
+              schemaValueToWitAsync,
+            ),
+          };
+        } catch (error) {
+          try {
+            await close();
+          } catch {
+            // Preserve the item failure.
+          }
+          throw error;
+        }
+      },
+      return: close,
+    }),
+  };
 }

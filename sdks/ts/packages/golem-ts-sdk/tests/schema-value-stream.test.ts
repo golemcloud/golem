@@ -14,7 +14,19 @@
 
 import { describe, expect, it } from 'vitest';
 import type { SchemaValueStream, SchemaValueTree } from 'golem:core/types@2.0.0';
-import { AgentStream } from '../src/schema/agentStream';
+import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from '../src/schema/agentStream';
+import {
+  ownSchemaValueStreams,
+  withNativeStreamScope,
+} from '../src/internal/schema-model/streamScope';
+import { throwIfAborted } from '../src/internal/pollableUtils';
+import {
+  secretHandleToSchemaValue,
+  secretHandleFromSchemaValue,
+  permissionCardHandleToSchemaValue,
+  permissionCardHandleFromSchemaValue,
+} from '../src/bridge/schema';
+import { withCapabilityAdoptionTransaction } from '../src/internal/schema-model/capabilityTransaction';
 import { compileSchema } from '../src/schema/adapter';
 import { s } from '../src/schema/markers';
 import { Result } from '../src/host/result';
@@ -237,3 +249,224 @@ async function* emptyWireStream(): AsyncIterable<SchemaValueTree> {}
 function nativeHandle(): GuestSchemaValueStreamHandle {
   return new GuestSchemaValueStreamHandle({ kind: 'native', value: emptyWireStream() });
 }
+
+describe('native typed conversion ownership', () => {
+  const itemCodec = compileSchema(s.u32());
+  function producer(cleanupError?: Error) {
+    let pulls = 0;
+    let closes = 0;
+    const stream = AgentStream.from({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          pulls++;
+          return { done: false as const, value: 7 };
+        },
+        return: async () => {
+          closes++;
+          if (cleanupError) throw cleanupError;
+          return { done: true as const, value: undefined };
+        },
+      }),
+    });
+    return { stream, pulls: () => pulls, closes: () => closes };
+  }
+
+  it('closes a transferred sibling exactly once without masking typed encoding failure', async () => {
+    const first = producer(new Error('cleanup'));
+    const original = new Error('later field');
+    await expect(
+      withNativeStreamScope(() => {
+        agentStreamToHandle(first.stream, itemCodec);
+        throw original;
+      }),
+    ).rejects.toBe(original);
+    expect(first.closes()).toBe(1);
+    expect(first.pulls()).toBe(0);
+    await expect(first.stream.next()).rejects.toThrow('transferred');
+  });
+
+  it('cleans typed transfers when WIT preflight rejects a later sibling', async () => {
+    const first = producer();
+    await expect(
+      withNativeStreamScope(
+        () => v.record([v.stream(agentStreamToHandle(first.stream, itemCodec)), v.u32(-1)]),
+        schemaValueToWitAsync,
+      ),
+    ).rejects.toThrow('u32');
+    expect(first.closes()).toBe(1);
+    expect(first.pulls()).toBe(0);
+  });
+
+  it('rejects aliasing and releases the first transfer', async () => {
+    const first = producer();
+    await expect(
+      withNativeStreamScope(() => [
+        agentStreamToHandle(first.stream, itemCodec),
+        agentStreamToHandle(first.stream, itemCodec),
+      ]),
+    ).rejects.toThrow('transferred');
+    expect(first.closes()).toBe(1);
+  });
+
+  it('releases both decoded and unread siblings after typed decoding fails', async () => {
+    const first = producer();
+    const second = producer();
+    const h1 = agentStreamToHandle(first.stream, itemCodec);
+    const h2 = agentStreamToHandle(second.stream, itemCodec);
+    const model = v.record([v.stream(h1), v.stream(h2)]);
+    const original = new Error('decode');
+    await expect(
+      withNativeStreamScope(() => {
+        ownSchemaValueStreams(model);
+        agentStreamFromHandle(h1, itemCodec);
+        throw original;
+      }),
+    ).rejects.toBe(original);
+    expect([first.closes(), second.closes()]).toEqual([1, 1]);
+    expect([first.pulls(), second.pulls()]).toEqual([0, 0]);
+  });
+
+  it('forwards unread endpoints without running item codecs or pulling', async () => {
+    const first = producer();
+    const initial = agentStreamToHandle(first.stream, itemCodec);
+    const endpoint = initial.peek();
+    const poison = {
+      ...itemCodec,
+      toValue: () => {
+        throw new Error('encode');
+      },
+      fromValue: () => {
+        throw new Error('decode');
+      },
+    };
+    const forwarded = await withNativeStreamScope(() => {
+      const typed = agentStreamFromHandle(initial, poison);
+      return agentStreamToHandle(typed, poison);
+    });
+    expect(forwarded.peek()).toBe(endpoint);
+    expect(first.pulls()).toBe(0);
+    expect(first.closes()).toBe(0);
+    await forwarded.close();
+    expect(first.closes()).toBe(1);
+  });
+
+  it('cleans nested acquisitions when a lazy item encoder fails', async () => {
+    const nested = producer();
+    const original = new Error('item encode');
+    const outer = agentStreamToHandle(AgentStream.from([nested.stream]), {
+      ...itemCodec,
+      toValue: (item) => {
+        agentStreamToHandle(item as AgentStream<number>, itemCodec);
+        throw original;
+      },
+    });
+    const endpoint = outer.take()!;
+    if (endpoint.kind !== 'native') throw new Error('expected native');
+    const iterator = endpoint.value[Symbol.asyncIterator]();
+    await expect(iterator.next()).rejects.toBe(original);
+    await iterator.return?.();
+    expect(nested.closes()).toBe(1);
+    expect(nested.pulls()).toBe(0);
+  });
+
+  it.each([
+    ['secret', secretHandleToSchemaValue, secretHandleFromSchemaValue],
+    ['permission card', permissionCardHandleToSchemaValue, permissionCardHandleFromSchemaValue],
+  ] as const)(
+    'rolls back %s adoption when a generated lazy item encoder fails',
+    async (_, encode, decode) => {
+      const raw = { id: 'stream-item-capability' } as never;
+      const original = new Error('later item field');
+      let closes = 0;
+      const source = AgentStream.from(
+        (async function* () {
+          try {
+            yield {
+              capability: raw,
+              get later(): string {
+                throw original;
+              },
+            };
+          } finally {
+            closes += 1;
+          }
+        })(),
+      );
+      const outer = agentStreamToHandle(source, {
+        ...itemCodec,
+        toValue: (item) =>
+          withCapabilityAdoptionTransaction(() => {
+            const record = item as { capability: never; later: string };
+            return v.record([encode(record.capability), v.string(record.later)]);
+          }),
+      });
+      expect(closes).toBe(0);
+      const endpoint = outer.take()!;
+      if (endpoint.kind !== 'native') throw new Error('expected native');
+      const iterator = endpoint.value[Symbol.asyncIterator]();
+      await expect(iterator.next()).rejects.toBe(original);
+      await iterator.return?.();
+      expect(closes).toBe(1);
+      expect(decode(encode(raw))).toBe(raw);
+    },
+  );
+
+  it('cleans nested acquisitions when a lazy item decoder fails', async () => {
+    const nested = producer();
+    const streamCodec = compileSchema(s.stream(s.u32()));
+    const outer = agentStreamToHandle(AgentStream.from([nested.stream]), streamCodec);
+    const original = new Error('item decode');
+    const typed = agentStreamFromHandle(outer, {
+      ...streamCodec,
+      fromValue: (value) => {
+        streamCodec.fromValue(value);
+        throw original;
+      },
+    });
+    await expect(typed.next()).rejects.toBe(original);
+    await expect(typed.return()).rejects.toThrow('closed');
+    expect(nested.closes()).toBe(1);
+    expect(nested.pulls()).toBe(0);
+  });
+
+  it('closes the outer endpoint when a lazy item decoder fails', async () => {
+    let closes = 0;
+    const wireItem = await schemaValueToWitAsync(itemCodec.toValue(7));
+    const outer = new GuestSchemaValueStreamHandle({
+      kind: 'native',
+      value: {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({ done: false as const, value: wireItem }),
+          return: async () => {
+            closes++;
+            return { done: true as const, value: undefined };
+          },
+        }),
+      },
+    });
+    const original = new Error('item decode');
+    const typed = agentStreamFromHandle(outer, {
+      ...itemCodec,
+      fromValue: () => {
+        throw original;
+      },
+    });
+
+    await expect(typed.next()).rejects.toBe(original);
+    expect(closes).toBe(1);
+    await expect(typed.next()).rejects.toThrow('closed');
+  });
+
+  it('checks pre-abort before typed encoding transfers input', async () => {
+    const first = producer();
+    const signal = AbortSignal.abort(new Error('pre-abort'));
+    const invoke = async () => {
+      throwIfAborted(signal);
+      return withNativeStreamScope(() => agentStreamToHandle(first.stream, itemCodec));
+    };
+    await expect(invoke()).rejects.toThrow('pre-abort');
+    expect(await first.stream.next()).toEqual({ done: false, value: 7 });
+    await first.stream.return();
+    expect(first.closes()).toBe(1);
+  });
+});
