@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use axum::Router;
 use axum::routing::get;
@@ -39,11 +39,15 @@ use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
-use golem_test_framework::dsl::{drain_connection, stdout_event_matching, stdout_events};
+use golem_test_framework::dsl::{
+    AgentResult, drain_connection, stdout_event_matching, stdout_events,
+};
+use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use golem_worker_executor::worker::INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, registry_test_card, start, start_customized,
+    WorkerExecutorTestDependencies, fake_ownership, registry_test_card, start, start_customized,
     start_with_overrides, start_with_redis_storage,
 };
 use pretty_assertions::assert_eq;
@@ -59,6 +63,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -693,6 +698,7 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
         .commit_oplog_entry_bypassing_worker_status(
             &target_agent_id,
             golem_common::model::oplog::OplogEntry::card_event_queued(
+                None,
                 QueuedCardEvent::transfer_received(
                     detached_status_transfer_id,
                     source_card_id,
@@ -1136,12 +1142,15 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                pending_transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    pending_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     assert_eq!(
@@ -1152,29 +1161,36 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                completed_transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    completed_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                started_transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    started_transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_started(
+                None,
                 started_transfer_id,
                 card.card_id(),
                 Some(source_holder.clone()),
@@ -1187,6 +1203,7 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_started(
+                None,
                 completed_transfer_id,
                 card.card_id(),
                 Some(source_holder),
@@ -1199,6 +1216,7 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_confirmed(
+                None,
                 completed_transfer_id,
                 card.card_id(),
                 card.card_id(),
@@ -1367,12 +1385,15 @@ async fn pending_self_card_transfer_recovery_does_not_deadlock(
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                transfer_id,
-                card.card_id(),
-                card.clone(),
-                self_holder,
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    self_holder,
+                ),
+            ),
         )
         .await?;
 
@@ -1498,18 +1519,22 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
-            OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
-                transfer_id,
-                card.card_id(),
-                card.clone(),
-                target_holder.clone(),
-            )),
+            OplogEntry::card_event_queued(
+                None,
+                QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    card.card_id(),
+                    card.clone(),
+                    target_holder.clone(),
+                ),
+            ),
         )
         .await?;
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
             OplogEntry::card_transfer_started(
+                None,
                 transfer_id,
                 card.card_id(),
                 Some(source_holder),
@@ -1741,6 +1766,141 @@ async fn interruption(
     assert!(result.is_err());
     let err_msg = format!("{}", result.err().unwrap());
     assert!(err_msg.contains("Interrupted via the Golem API"));
+    Ok(())
+}
+
+/// Shard-assignment recovery must not acknowledge an assignment whose activations failed.
+///
+/// Recovery reads each running worker's record twice: once to enumerate the shard, once more
+/// when the worker is activated. This fails the second read only, so enumeration succeeds and
+/// activation does not. The assignment must fail - the shard manager retries a failed one,
+/// whereas a worker skipped here would stay stopped, unrecorded, until an unrelated invocation
+/// happened to arrive - and the retry, once storage is back, must restart the worker.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+    };
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "recovery-activation-fails");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // A long invocation keeps the worker Running, which is what puts it in the recovery index.
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_for", data_value!(60.0f64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
+    // The unloaded shell would otherwise still be cached, and activation would reuse it without
+    // reading storage. Retire it as the idle-expiry sweep would, which is also the shape of an
+    // executor restart: recovery then has to rebuild the worker from its record.
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+
+    // Enumeration reads the worker's record once; activation reads it again. Fail the second.
+    faults.fail_after(
+        "read_cached_agent_mode",
+        1,
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    let failure = match assigned.result {
+        Some(assign_shards_response::Result::Failure(failure)) => format!("{failure:?}"),
+        other => panic!("an assignment whose activation failed was acknowledged: {other:?}"),
+    };
+    assert!(
+        failure.contains("failed to restart") && failure.contains("injected"),
+        "the assignment failed for a different reason: {failure}"
+    );
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+    // Storage is back: the retried assignment restarts the worker.
+    faults.clear();
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    assert!(
+        matches!(
+            assigned.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "{:?}",
+        assigned.result
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker was not restarted by the retried assignment"))?;
+
+    drop(client);
+    drop(executor);
     Ok(())
 }
 
@@ -2626,62 +2786,86 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 2;
+            config.invocation_results.bloom_bits = 128;
+            config.invocation_results.bloom_hashes = 2;
+            config.invocation_results.physical_index_catch_up_chunk_size = 2;
+        })),
+        ..TestExecutorOverrides::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "test-repo-3");
-    let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
-
-    let idempotency_key = IdempotencyKey::fresh();
-    executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &repo_id,
-            &idempotency_key,
-            "add",
-            data_value!("G1000", "Golem T-Shirt M"),
-        )
+    let counter_id = agent_id!("Counter", "idempotency-index-after-restart");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
         .await?;
+
+    let mut oldest_key = None;
+    for expected in 1..=32 {
+        let idempotency_key = IdempotencyKey::fresh();
+        let result = executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &counter_id,
+                &idempotency_key,
+                "increment",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(result, expected);
+        oldest_key.get_or_insert(idempotency_key);
+    }
 
     drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(
+        executor
+            .start_agent(&component.id, counter_id.clone())
+            .await?,
+        worker_id
+    );
 
-    executor
+    let oldest_key = oldest_key.unwrap();
+    let read_exact_before = executor.oplog_service_call_count(&worker_id, "read_exact");
+    let duplicate_result = executor
         .invoke_and_await_agent_with_key(
             &component,
-            &repo_id,
-            &idempotency_key,
-            "add",
-            data_value!("G1000", "Golem T-Shirt M"),
+            &counter_id,
+            &oldest_key,
+            "increment",
+            data_value!(),
         )
-        .await?;
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(duplicate_result, 1);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "read_exact"),
+        read_exact_before,
+        "an evicted idempotency result must resolve from the hot physical index without scanning the oplog"
+    );
 
-    let contents = executor
-        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
-        .await?;
+    let next_key = IdempotencyKey::fresh();
+    let next_result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &counter_id,
+            &next_key,
+            "increment",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(next_result, 33);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-
-    let contents_value = contents
-        .into_return_value()
-        .expect("Expected a single return value");
-
-    assert_eq!(
-        contents_value,
-        SchemaValue::List {
-            elements: vec![SchemaValue::Record {
-                fields: vec![
-                    SchemaValue::String("G1000".to_string()),
-                    SchemaValue::String("Golem T-Shirt M".to_string()),
-                    SchemaValue::U64(1),
-                ],
-            }],
-        }
-    );
     Ok(())
 }
 
@@ -3853,7 +4037,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
@@ -3862,6 +4046,18 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     executor
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(20))
         .await?;
+
+    // Running can refer to initialize; interrupting its subsequent idle gap is a no-op.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(Some(event)) = rx.recv().await {
+            if stdout_event_matching(&event, "Received initial\n") {
+                return Ok(());
+            }
+        }
+        Err(anyhow!("Log stream ended before the first poll completed"))
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
 
     let values1 = executor
         .get_running_workers_metadata(
@@ -4340,7 +4536,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
@@ -4350,9 +4546,25 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
-    executor.interrupt(&worker_id).await?;
+    // Running can refer to initialize; interrupting its subsequent idle gap is a no-op.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(Some(event)) = rx.recv().await {
+            if stdout_event_matching(&event, "Received initial\n") {
+                return Ok(());
+            }
+        }
+        Err(anyhow!("Log stream ended before the first poll completed"))
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
 
-    drain_connection(rx).await;
+    tokio::time::timeout(Duration::from_secs(30), executor.interrupt(&worker_id))
+        .await
+        .map_err(|_| anyhow!("Timed out interrupting poll-loop worker"))??;
+
+    tokio::time::timeout(Duration::from_secs(30), drain_connection(rx))
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for log stream termination after interrupt"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     executor.delete_worker(&worker_id).await?;
@@ -5591,4 +5803,492 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
     );
 
     Ok(())
+}
+
+/// Control for [`a_caller_is_answered_when_its_agents_shard_is_taken_away`].
+///
+/// An agent's shard leaves this executor and comes straight back, and the
+/// promise it is parked on is then completed here. What this pins, and the test
+/// below cannot, is that revoking a shard interrupts the agents on it with
+/// `InterruptKind::Restart`, and that interrupt on its own does not strand the
+/// caller. So the test below is measuring the handoff and not the interrupt.
+///
+/// It does *not* prove the `select!` is cancel-safe, though it did have to stop
+/// claiming that twice. Only the `wait_for` future is dropped on a tick;
+/// `EventsSubscription` keeps the same `broadcast::Receiver`, which holds its
+/// cursor and buffers anything published while no `recv()` is pending. Nothing
+/// is rebuilt, so nothing can be lost, and no test here could tell you
+/// otherwise: the promise below is completed at a moment uncorrelated with the
+/// tick, so a genuinely lossy variant would pass this almost every time.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_comes_back(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let parked = park_a_caller_on_a_promise(
+        &executor,
+        &context,
+        host_api_tests,
+        "promise-shard-returned",
+    )
+    .await?;
+
+    info!("Revoking the shard, then handing it straight back");
+
+    revoke_shard_zero(&executor).await?;
+    assign_shard_zero(&executor).await?;
+
+    // Sit here long enough for the caller's ownership re-check to run several
+    // times before the result exists, so the answer has to survive the re-check
+    // firing repeatedly and finding nothing wrong.
+    sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 3).await;
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(30),
+            "caller was not answered even though the shard came back and the promise \
+             was completed on this executor",
+        )
+        .await?;
+    assert_eq!(
+        value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+    Ok(())
+}
+
+/// An executor that loses an agent must answer anyone still awaiting it.
+///
+/// [`Worker::wait_for_invocation_result`] can end in exactly two ways: the
+/// result turns up in this `Worker`'s in-memory state, or an
+/// `Event::InvocationCompleted` lands on *this executor's* event bus. Once the
+/// agent belongs to a different executor, neither can happen here - the work is
+/// finished over there, on a bus this caller does not subscribe to. There is no
+/// timeout and no ownership re-check, so the caller waits for as long as it is
+/// willing to. Chaos scenario S11 measured that as the client's own
+/// timeout, 120s, on an executor that was never killed and whose transport was
+/// never disturbed, so nothing below the application layer had anything to
+/// notice.
+///
+/// What it should get is an error of the `InvalidShardId` family, which is
+/// already what worker-service needs to invalidate its routing table and retry
+/// against the new owner. That path exists and works; nothing used to reach it.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_is_taken_away(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-shard-taken")
+            .await?;
+
+    info!("Revoking the shard that owns the suspended agent, for good");
+
+    revoke_shard_zero(&executor).await?;
+
+    // The agent is somebody else's now. Whatever this executor does about that,
+    // the caller holding an open invoke_and_await has to be told something: an
+    // error it can retry against the new owner is fine, silence is not.
+    // Four turns of INVOCATION_OWNERSHIP_RECHECK_INTERVAL, which is 5s. Left
+    // absolute on purpose: a bound derived from that constant would stretch
+    // along with it, and this test has to stay red when it is neutralised.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered, although this \
+             executor no longer owns the agent and can never finish the call",
+        )
+        .await?;
+    info!(result = ?answer, "caller was answered");
+
+    let error =
+        answer.expect_err("nobody completed the promise, so the only honest answer is an error");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("InvalidShardId"),
+        "the caller has to be told the shard moved, because that is what makes \
+         worker-service invalidate its routing table and retry against the new \
+         owner; instead it got: {rendered}"
+    );
+    Ok(())
+}
+
+/// A result that lands while ownership is being checked must still win.
+///
+/// The check and the completion are not ordered against each other. If the
+/// check comes back "not ours" a moment after the invocation finished here, the
+/// caller has to be handed its result rather than sent to a new owner that
+/// would run the work a second time. Mutation testing is what found this:
+/// deleting the re-poll from the timer arm left every other test green.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_result_that_lands_while_ownership_is_being_checked_still_reaches_the_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (overrides, controls) = fake_ownership();
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-check-race")
+            .await?;
+
+    controls.hold_the_next_check().await?;
+
+    info!("Ownership check is held open; landing the result behind it");
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+    executor
+        .wait_for_status(&parked.agent_id, AgentStatus::Idle, Duration::from_secs(20))
+        .await?;
+
+    // Only now does the held check report that the agent is not ours. The
+    // result is already sitting in the agent's invocation results.
+    controls.release_the_held_check()?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(20),
+            "caller was never answered, although its result had already landed",
+        )
+        .await?;
+    assert_eq!(
+        value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+
+    // Without this the test also passes when the held check reports that the
+    // agent is still ours, which exercises none of the code it is aimed at.
+    assert_eq!(
+        controls.agent_moved_reports(),
+        1,
+        "the caller's re-check should have been told exactly once that the agent had moved"
+    );
+    Ok(())
+}
+
+/// An executor that does not know its shards yet has not lost the agent.
+///
+/// `check_worker` fails in that state too, with the `Unknown` that
+/// `sharding_not_ready_error` produces, and only `InvalidShardId` means the
+/// agent has moved. Treating any failure as a move would fail callers during
+/// startup and rebalance windows, when an assignment is simply on its way.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_not_given_up_on_while_the_shard_assignment_is_missing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (overrides, controls) = fake_ownership();
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-not-ready")
+            .await?;
+
+    info!("Reporting no shard assignment for long enough to span several re-checks");
+
+    controls.pretend_the_assignment_is_missing();
+    sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 2 + Duration::from_secs(1)).await;
+    controls.stop_pretending();
+
+    // Both bounds earn their place. Without the lower one this passes against an
+    // executor that never had the fake installed and reported nothing at all.
+    // Without the upper one it passes just as happily when the re-check stops
+    // being paced and spins: dropping the deadline reset in
+    // `wait_for_invocation_result` turns these two checks into millions, and
+    // every other assertion in this file is blind to that.
+    let checks = controls.assignment_missing_reports();
+    assert!(
+        (2..=5).contains(&checks),
+        "expected a handful of re-checks across an 11s window while the assignment \
+         was missing, got {checks}"
+    );
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(30),
+            "caller was given up on while this executor merely did not know its \
+             shards yet",
+        )
+        .await?;
+    assert_eq!(
+        value,
+        SchemaValue::List {
+            elements: vec![SchemaValue::U8(42)]
+        }
+    );
+    Ok(())
+}
+
+/// The ownership re-check has to run while the event bus is lagging, too.
+///
+/// A subscriber that has fallen `invocation_result_broadcast_capacity` events
+/// behind is handed `Lagged` the instant it is polled, and the wait backs off
+/// 100ms and starts over. When unrelated events keep overflowing the buffer
+/// inside that 100ms, every restart is handed `Lagged` at once. A `select!`
+/// that polls the subscription ahead of the deadline then takes that arm every
+/// time and never reaches the deadline, so the caller whose agent moved is
+/// back to waiting out its own timeout, which is the one thing the re-check
+/// exists to prevent.
+///
+/// The buffer is shrunk to 16 so a burst of 64 every 50ms is enough to keep
+/// the receiver behind; with the default 100000 the flood would have to be
+/// that much larger to say the same thing.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_event_bus_lags(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.limits.invocation_result_broadcast_capacity = 16;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let parked = park_a_caller_on_a_promise(
+        &executor,
+        &context,
+        host_api_tests,
+        "promise-shard-taken-bus-lagging",
+    )
+    .await?;
+
+    // Taken while the agent is still resident; revoking its shard drops it.
+    let events = executor.event_bus(&parked.agent_id).await?;
+
+    info!("Revoking the shard for good, then flooding the event bus with somebody else's news");
+
+    revoke_shard_zero(&executor).await?;
+
+    let somebody_else = AgentId {
+        component_id: parked.agent_id.component_id,
+        agent_id: agent_id!("GolemHostApi", "somebody-else-entirely").to_string(),
+    };
+    // A probe that is never read, on the same bus. A quiet bus answers the
+    // caller too, so without this the assertion below passes whether or not
+    // the flood reaches the buffer at all.
+    let mut probe = events.subscribe();
+    let flood = tokio::spawn(async move {
+        loop {
+            for _ in 0..64 {
+                events.publish(Event::WorkerLoaded {
+                    agent_id: somebody_else.clone(),
+                    start_attempt: uuid::Uuid::new_v4(),
+                    result: Ok(()),
+                });
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    });
+
+    let overflowed =
+        tokio::time::timeout(Duration::from_secs(2), probe.wait_for(|_| None::<()>)).await;
+    if !matches!(overflowed, Ok(Err(RecvError::Lagged(_)))) {
+        flood.abort();
+        bail!(
+            "the flood did not overflow the event bus (probe saw {overflowed:?}), so this \
+             test would say nothing about a lagging subscription"
+        );
+    }
+
+    // Same absolute bound as the quiet-bus test, for the same reason.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered: this executor no \
+             longer owns the agent, and the lagging event bus kept the ownership \
+             re-check from ever running",
+        )
+        .await;
+    flood.abort();
+    let answer = answer?;
+    info!(result = ?answer, "caller was answered");
+
+    let error =
+        answer.expect_err("nobody completed the promise, so the only honest answer is an error");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("InvalidShardId"),
+        "the caller has to be told the shard moved; instead it got: {rendered}"
+    );
+    Ok(())
+}
+
+/// The test executor runs `ShardManagerServiceSingleShard`, so every agent in
+/// these tests lives on shard 0. Moving that one shard moves all of them.
+async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::RevokeShardsRequest;
+
+    executor
+        .client
+        .clone()
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![ShardId { value: 0 }],
+        })
+        .await?;
+    Ok(())
+}
+
+/// Hands shard 0 back, so the agents on it are this executor's again.
+async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::AssignShardsRequest;
+
+    executor
+        .client
+        .clone()
+        .assign_shards(AssignShardsRequest {
+            shard_ids: vec![ShardId { value: 0 }],
+        })
+        .await?;
+    Ok(())
+}
+
+/// Starts an agent, opens an `invoke_and_await` against it, and returns once
+/// that call is parked on a promise.
+///
+/// The returned fiber is the caller. It is deliberately left running: every test
+/// using this asks what the executor does to a caller it has stopped being able
+/// to answer.
+async fn park_a_caller_on_a_promise(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+) -> anyhow::Result<ParkedCaller> {
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", agent_name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let promise_data = crate::raw_params(vec![promise_id_value.clone()]);
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "await_promise",
+                    promise_data,
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    Ok(ParkedCaller {
+        agent_id: worker_id,
+        promise_id: promise_id_value,
+        caller: fiber,
+    })
+}
+
+/// A caller left parked inside `invoke_and_await`, and what a test needs to
+/// either answer it or take its agent away.
+struct ParkedCaller {
+    agent_id: AgentId,
+    promise_id: SchemaValue,
+    caller: JoinHandle<anyhow::Result<AgentResult>>,
+}
+
+impl ParkedCaller {
+    /// Waits for the parked call to come back. The outer result says whether it
+    /// was answered at all; the inner one is what it was told.
+    async fn answer_within(
+        mut self,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<anyhow::Result<AgentResult>> {
+        match tokio::time::timeout(patience, &mut self.caller).await {
+            Ok(joined) => Ok(joined?),
+            Err(_) => {
+                self.caller.abort();
+                Err(anyhow!("{gave_up}"))
+            }
+        }
+    }
+
+    /// Completes the promise this caller is parked on, which is what lets the
+    /// invocation it is waiting for finish.
+    async fn complete_the_promise(
+        &self,
+        executor: &TestWorkerExecutor,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let oplog_idx = extract_oplog_idx_from_promise_id(&self.promise_id);
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: self.agent_id.clone(),
+                    oplog_idx,
+                },
+                payload,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Waits for the parked call and returns the value it was given, failing if
+    /// it was not answered in time or was answered with an error.
+    async fn value_within(self, patience: Duration, gave_up: &str) -> anyhow::Result<SchemaValue> {
+        self.answer_within(patience, gave_up)
+            .await??
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))
+    }
 }

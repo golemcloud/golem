@@ -192,6 +192,50 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
     }
 }
 
+/// `SnapshotUpdateTest` with a snapshot larger than the executor's default
+/// `max_payload_size`, so it is stored outside the oplog and read back through a
+/// download. Only the first byte carries information.
+#[agent_definition(snapshotting = "enabled")]
+pub trait ExternalSnapshotUpdateTest {
+    fn new() -> Self;
+    fn loaded_snapshot_revision(&self) -> u32;
+}
+
+struct ExternalSnapshotUpdateTestImpl {
+    loaded_snapshot_revision: u32,
+}
+
+#[agent_implementation]
+impl ExternalSnapshotUpdateTest for ExternalSnapshotUpdateTestImpl {
+    fn new() -> Self {
+        Self {
+            loaded_snapshot_revision: 0,
+        }
+    }
+
+    fn loaded_snapshot_revision(&self) -> u32 {
+        self.loaded_snapshot_revision
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(vec![1; 128 * 1024])
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let loaded_snapshot_revision = bytes
+            .first()
+            .copied()
+            .map(u32::from)
+            .ok_or_else(|| "Missing snapshot revision".to_string())?;
+        Ok(Self {
+            loaded_snapshot_revision,
+        })
+    }
+}
+
 async fn report_f1(current: u64) {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 

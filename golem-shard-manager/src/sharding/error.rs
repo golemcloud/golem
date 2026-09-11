@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::sharding::leader_election::LeaseLost;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::repo::RepoError;
@@ -35,6 +36,18 @@ pub enum ShardManagerError {
     SerializationError(String),
     #[error("Concurrent modification: the persisted shard state was changed by another writer")]
     ConcurrentModification,
+    #[error(
+        "Leadership lost: the election key {leader_key} is no longer held at creation revision \
+         {create_revision}"
+    )]
+    LeadershipLost {
+        leader_key: String,
+        create_revision: i64,
+    },
+    #[error("Leadership lease lost while campaigning: {0}")]
+    LeaseLostWhileCampaigning(#[source] LeaseLost),
+    #[error("Shutdown requested")]
+    ShutdownRequested,
     #[error("DB error {0}")]
     RepoError(#[from] RepoError),
     #[error("etcd error {0}")]
@@ -61,6 +74,12 @@ impl IsRetriableError for ShardManagerError {
             // succeed: recovery is a re-read followed by re-deriving the change, which is a
             // different operation. Reporting this as retriable would turn a conflict into a spin.
             ShardManagerError::ConcurrentModification => false,
+            // Another replica holds the leadership now; no retry here can take it back.
+            ShardManagerError::LeadershipLost { .. } => false,
+            // A campaigner holds nothing yet: a fresh lease and a new campaign is full recovery.
+            ShardManagerError::LeaseLostWhileCampaigning(_) => true,
+            // Retrying would be the process refusing the stop it was just asked for.
+            ShardManagerError::ShutdownRequested => false,
             ShardManagerError::RepoError(_) => false,
             ShardManagerError::EtcdError(err) => match err {
                 etcd_client::Error::GRpcStatus(status) => status.is_retriable(),
@@ -134,5 +153,28 @@ impl IsRetriableError for HealthCheckError {
 
     fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::ShardManagerError;
+    use golem_common::retriable_error::IsRetriableError;
+
+    #[test]
+    // `with_retries` re-invokes with the same arguments, so a retry of any of these can only
+    // spin: the revision stays stale, the leadership stays lost, the stop stays requested.
+    fn the_fail_stop_errors_are_not_retriable() {
+        assert!(!ShardManagerError::ConcurrentModification.is_retriable());
+        assert!(
+            !ShardManagerError::LeadershipLost {
+                leader_key: "/golem/shard-manager/leader/abc".to_string(),
+                create_revision: 7,
+            }
+            .is_retriable()
+        );
+        assert!(!ShardManagerError::ShutdownRequested.is_retriable());
     }
 }

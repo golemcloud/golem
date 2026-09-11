@@ -1031,13 +1031,14 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     let context = TestContext::new(last_unique_id);
     let default_pressure =
         golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
+    let observation_delay = Duration::from_millis(25);
     let pressure = golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
         MINIMUM_AVAILABLE_BYTES,
         TARGET_AVAILABLE_BYTES,
         default_pressure.minimum_available_filesystem_objects(),
         default_pressure.target_available_filesystem_objects(),
         200,
-        Duration::from_millis(25),
+        observation_delay,
     )
     .unwrap();
     let executor = start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs(
@@ -1218,7 +1219,9 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
             before_gate_release >= minimum_margin_setup,
             "victim deletion left insufficient gate-release margin: available={before_gate_release}, required={minimum_margin_setup}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Allow recovery polling while leaving budget for verified unloading and
+        // a target-reaching observation within the 250 ms recovery deadline.
+        tokio::time::sleep(observation_delay * 2).await;
         assert_eq!(
             std::fs::read(trigger_path.join("pressure-target"))?,
             b"seed",

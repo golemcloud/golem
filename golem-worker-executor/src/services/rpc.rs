@@ -17,9 +17,8 @@ use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
-use crate::durable_host::stream_session::decode_recursive_stream_value;
 use crate::durable_host::websocket::WebSocketConnectionPool;
-use crate::grpc::build_durable_streaming_request;
+use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
@@ -65,9 +64,9 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
-use golem_schema::schema::SchemaValueStream;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use prost::Message;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -78,16 +77,25 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::debug;
 use wasmtime_wasi_http::HttpConnectionPool;
 
+/// Selects the component revision an invocation's method is validated against: `None` for the
+/// deployed revision, `Some` for the revision an existing agent is pinned to.
+///
+/// `KnownFresh` has already been proven to name no existing agent, so the deployed revision is
+/// selected without a lookup. Otherwise the existing agent's revision is loaded, and a lookup
+/// that *fails* is propagated rather than folded into `None`. `None` is not a safe default here:
+/// an existing agent pinned to an older revision, validated against the deployed one, can have a
+/// method it does have rejected before execution is even attempted, and a storage outage would
+/// then surface as a protocol error.
 async fn method_validation_revision<F, Fut>(
     freshness_disposition: InvocationFreshnessDisposition,
     load_existing_revision: F,
-) -> Option<ComponentRevision>
+) -> Result<Option<ComponentRevision>, WorkerExecutorError>
 where
     F: FnOnce() -> Fut,
-    Fut: Future<Output = Option<ComponentRevision>>,
+    Fut: Future<Output = Result<Option<ComponentRevision>, WorkerExecutorError>>,
 {
     if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-        None
+        Ok(None)
     } else {
         load_existing_revision().await
     }
@@ -1181,11 +1189,11 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<bool, RpcError> {
         let component_revision = method_validation_revision(freshness_disposition, || async {
-            Worker::<Ctx>::get_latest_metadata(self, owned_agent_id)
-                .await
-                .map(|metadata| metadata.last_known_status.component_revision)
+            Ok(Worker::<Ctx>::get_latest_metadata(self, owned_agent_id)
+                .await?
+                .map(|metadata| metadata.last_known_status.component_revision))
         })
-        .await;
+        .await?;
         let component = self
             .component_service()
             .get_metadata(owned_agent_id.component_id(), component_revision)
@@ -1475,10 +1483,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Some(status.component_revision),
             )
             .await?;
-        let input = decode_recursive_stream_value(method_parameters.clone(), |_, _| {
-            Ok(SchemaValueStream::from_host_endpoint(()))
-        })
-        .map_err(|details| RpcError::ProtocolError { details })?;
+        let input_encoded_len = method_parameters.encoded_len();
+        let input = decode_invocation_input(method_parameters)
+            .map_err(|details| RpcError::ProtocolError { details })?;
         let parsed_agent_id =
             ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
                 .map_err(|details| RpcError::ProtocolError { details })?;
@@ -1497,7 +1504,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let start = InvocationStart {
             agent_id: Some(owned_agent_id.agent_id().into()),
             method_name: Some(method_name.clone()),
-            input: Some(method_parameters.clone()),
+            input: None,
             idempotency_key: Some(idempotency_key.clone().into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                 parent: Some(self_agent_id.clone().into()),
@@ -1538,7 +1545,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             component.revision,
             expected_callee_fingerprint,
             invocation,
-            method_parameters,
+            input_encoded_len,
             acceptance_committed,
             self.config()
                 .limits
@@ -1618,7 +1625,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
         Worker::<Ctx>::get_latest_metadata(self, &target)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(target.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
@@ -1668,7 +1675,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
         Worker::<Ctx>::get_latest_metadata(self, &producer)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(producer.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
@@ -1818,9 +1825,10 @@ mod protocol_tests {
         let revision =
             method_validation_revision(InvocationFreshnessDisposition::KnownFresh, || async {
                 probed_existing_worker.set(true);
-                Some(ComponentRevision::INITIAL)
+                Ok(Some(ComponentRevision::INITIAL))
             })
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(revision, None);
         assert!(!probed_existing_worker.get());
@@ -1833,12 +1841,33 @@ mod protocol_tests {
         let revision =
             method_validation_revision(InvocationFreshnessDisposition::MayExist, || async {
                 probed_existing_worker.set(true);
-                Some(existing_revision)
+                Ok(Some(existing_revision))
             })
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(revision, Some(existing_revision));
         assert!(probed_existing_worker.get());
+    }
+
+    /// The deployed revision is selected only when the agent is known to be fresh or is found
+    /// to be absent. A lookup that fails must not select it: an existing agent pinned to a
+    /// revision with a different signature for the method would be validated against the wrong
+    /// one, and a storage outage would be reported as a protocol error.
+    #[test]
+    async fn may_exist_method_validation_propagates_a_failed_lookup() {
+        let result =
+            method_validation_revision(InvocationFreshnessDisposition::MayExist, || async {
+                Err(WorkerExecutorError::runtime(
+                    "key-value storage unavailable",
+                ))
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "a failed lookup selected a revision: {result:?}"
+        );
     }
 
     #[test]

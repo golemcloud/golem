@@ -73,12 +73,9 @@ pub fn try_deserialize_with_version<T: BinaryDeserializer>(
     version: u8,
 ) -> Result<Option<T>, String> {
     match version {
-        SERIALIZATION_VERSION_V1 => {
-            panic!("Support for v1 serialization format has been dropped");
-        }
-        SERIALIZATION_VERSION_V2 => {
-            panic!("Support for v2 serialization format has been dropped");
-        }
+        SERIALIZATION_VERSION_V1 | SERIALIZATION_VERSION_V2 => Err(format!(
+            "serialization version {version} is no longer supported"
+        )),
         SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data)
             .map_err(|err| err.to_string())
             .map(Some),
@@ -151,6 +148,22 @@ mod tests {
             let serialized = serde_json::to_vec(&example).unwrap();
             let result: Option<Example> = super::try_deserialize(&serialized).unwrap();
             assert_eq!(result, None);
+        }
+    }
+
+    #[test]
+    pub fn dropped_versions_are_an_error() {
+        for version in [
+            super::SERIALIZATION_VERSION_V1,
+            super::SERIALIZATION_VERSION_V2,
+        ] {
+            let bytes = [version, 0u8, 0u8, 0u8, 0u8];
+            let result: Result<Option<Example>, String> = super::try_deserialize(&bytes);
+            let err = result.expect_err("a dropped version must not deserialize");
+            assert_eq!(
+                err,
+                format!("serialization version {version} is no longer supported")
+            );
         }
     }
 }

@@ -657,6 +657,14 @@ impl Debug for ForwardingOplogService {
 
 #[async_trait]
 impl OplogService for ForwardingOplogService {
+    fn set_stream_session_index(&self, index: Arc<super::StreamSessionIndexService>) {
+        self.inner.set_stream_session_index(index);
+    }
+
+    fn stream_session_index(&self) -> Option<Arc<super::StreamSessionIndexService>> {
+        self.inner.stream_session_index()
+    }
+
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -1188,6 +1196,15 @@ impl Oplog for ForwardingOplog {
         self.inner.current_oplog_index().await
     }
 
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> super::RawDurableStreamSessionStatus {
+        self.inner
+            .raw_durable_stream_session_status(session_key)
+            .await
+    }
+
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
         self.inner.last_added_non_hint_entry().await
     }
@@ -1306,7 +1323,10 @@ impl ForwardingOplogState {
     /// Entries are always read from the persisted oplog (canonical source) to avoid
     /// buffer/index drift caused by checkpoint entries injected during flush.
     pub async fn try_flush(&mut self) {
-        let status = self.last_known_status.get().as_ref().clone();
+        // Read through the published `Arc` rather than copying the record: this runs every few
+        // commits on every agent, plugins or not, and the record is only copied further down by
+        // `prepare_flush_context`, which is reached only when there is a plugin to send to.
+        let status = self.last_known_status.get();
         let flush_set = self.reconcile_plugin_state(&status);
 
         if flush_set.is_empty() {
@@ -1787,7 +1807,9 @@ impl ForwardingOplogState {
     /// delivery always goes to the recorded `target_agent_id` with deterministic
     /// idempotency keys.
     async fn try_locality_recovery(&mut self) {
-        let status = self.last_known_status.get().as_ref().clone();
+        // Same shape as `try_flush`: read through the published `Arc`, and let
+        // `prepare_flush_context` copy the record only once there is a plugin to recover.
+        let status = self.last_known_status.get();
         // Ensure plugin_state is reconciled with current status
         self.reconcile_plugin_state(&status);
         let environment_id = self.initial_worker_metadata.environment_id;
@@ -2753,10 +2775,12 @@ mod tests {
 
         let first = oplog.enqueue_add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         });
         let second = oplog
             .add(OplogEntry::NoOp {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
             })
             .await;
 

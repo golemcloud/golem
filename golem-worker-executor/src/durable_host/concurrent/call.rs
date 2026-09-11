@@ -198,6 +198,7 @@ impl Drop for LiveCallPermit {
 
 #[derive(Debug, Clone)]
 pub(super) struct BegunCallExecutionScope {
+    pub(super) entity_parent_start_index: Option<OplogIndex>,
     /// The durable scope this host-call `Start` will be nested under, if any. This is derived from
     /// the call's own function type / begin index, never from temporally-open sibling scopes.
     pub(super) parent_start_index: Option<OplogIndex>,
@@ -216,6 +217,7 @@ impl BegunCallExecutionScope {
         atomic_lease: Option<Arc<AtomicRegionLease>>,
     ) -> CallExecutionScope {
         CallExecutionScope {
+            entity_parent_start_index: self.entity_parent_start_index,
             retry_from: self
                 .observational_owner
                 .or(self.parent_start_index)
@@ -229,6 +231,7 @@ impl BegunCallExecutionScope {
 
 #[derive(Debug, Clone)]
 pub(super) struct CallExecutionScope {
+    pub(super) entity_parent_start_index: Option<OplogIndex>,
     /// The retry point owned by this in-flight call: the enclosing durable scope `Start` if present,
     /// otherwise the host-call `Start` itself.
     pub(super) retry_from: OplogIndex,
@@ -1477,6 +1480,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             custom_invocation_scope,
         )?;
         let execution_scope = BegunCallExecutionScope {
+            entity_parent_start_index: ctx.entity_parent_start_index(),
             parent_start_index,
             atomic_region,
             observational_owner,
@@ -2403,7 +2407,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         prepared
                             .public_state
                             .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                            .add_and_commit_oplog(OplogEntry::jump(
+                                prepared.entity_parent_start_index,
+                                deleted_region,
+                            ))
                             .await;
                         prepared
                             .public_state
@@ -2644,6 +2651,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let begin_index = boundary.begin_index();
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         let execution_scope = BegunCallExecutionScope {
+            entity_parent_start_index: ctx.entity_parent_start_index(),
             parent_start_index: ctx.child_parent_start_index(&function_type, begin_index),
             atomic_region: ctx
                 .state
@@ -2963,6 +2971,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
         let mut retry_host = TaskRetryContext {
             retry_point,
+            entity_parent_start_index: self.execution_scope.entity_parent_start_index,
             environment_state_service,
             environment_id,
             default_retry_policy,
@@ -4500,29 +4509,29 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
         ))
     })?;
 
-    // Host responses can carry deeply nested schema graphs. Clone and serialize them on a fresh
-    // blocking-task stack rather than on a Tokio worker stack that may already be deep inside a
-    // Wasmtime guest call. Box both the task input and output: passing the response inline in the
-    // blocking task envelope can overflow the caller's stack before the task starts. Keep the typed
-    // cache so this changes neither the oplog representation nor same-process payload-read behavior.
+    // Flat responses have input-independent encoding depth and need no thread-pool handoff.
+    // Recursive or unaudited response families still use a fresh stack: this can be called inside
+    // a Wasmtime fiber, whose stack is independent of the native runtime thread's stack.
     let response = Box::new(response);
-    let prepared = tokio::task::spawn_blocking(move || {
-        let host_response: HostResponse = response.as_ref().clone().into();
-        let bytes = golem_common::serialization::serialize(&host_response)?;
-        Ok::<_, String>(Box::new((response, bytes, Arc::new(host_response))))
-    })
-    .await
-    .map_err(|err| {
-        WorkerExecutorError::runtime(format!("durable call response encoding task failed: {err}"))
-    })?
+    let prepared = if response_has_bounded_encoding_stack::<Pair::Resp>() {
+        encode_response(response)
+    } else {
+        tokio::task::spawn_blocking(move || encode_response(response))
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "durable call response encoding task failed: {err}"
+                ))
+            })?
+    }
     .map_err(|err| {
         WorkerExecutorError::runtime(format!("failed to serialize durable call response: {err}"))
     })?;
-    let (response, bytes, cached) = *prepared;
+    let (response, bytes) = *prepared;
     let raw_payload = oplog.upload_raw_payload(bytes).await.map_err(|err| {
         WorkerExecutorError::runtime(format!("failed to store durable call response: {err}"))
     })?;
-    let response_payload = raw_payload.into_payload_with_cache(cached).map_err(|err| {
+    let response_payload = raw_payload.into_payload().map_err(|err| {
         WorkerExecutorError::runtime(format!(
             "failed to prepare durable call response payload: {err}"
         ))
@@ -4536,6 +4545,161 @@ async fn prepare_end_entry<Pair: HostPayloadPair>(
             forced_commit: false,
         },
     ))
+}
+
+fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
+    use golem_common::model::oplog::payload::*;
+    use std::any::TypeId;
+
+    // Only audited scalar/flat collection families are admitted. In particular, a small value of
+    // a recursive schema-bearing type is not safe to classify by its current size or variant.
+    [
+        TypeId::of::<HostResponseBlobStoreUnit>(),
+        TypeId::of::<HostResponseBlobStoreGetData>(),
+        TypeId::of::<HostResponseBlobStoreListObjects>(),
+        TypeId::of::<HostResponseBlobStoreContains>(),
+        TypeId::of::<HostResponseBlobStoreTimestamp>(),
+        TypeId::of::<HostResponseBlobStoreOptionalTimestamp>(),
+        TypeId::of::<HostResponseMonotonicClockTimestamp>(),
+        TypeId::of::<HostResponseWallClock>(),
+        TypeId::of::<HostResponseGolemAgentWebhookUrl>(),
+        TypeId::of::<HostResponseGolemApiIdempotencyKey>(),
+        TypeId::of::<HostResponseGolemApiPromiseCompletion>(),
+        TypeId::of::<HostResponseGolemApiPromiseResult>(),
+        TypeId::of::<HostResponseGolemApiUnit>(),
+        TypeId::of::<HostResponseGolemRpcUnit>(),
+        TypeId::of::<HostResponseKVGet>(),
+        TypeId::of::<HostResponseKVGetMany>(),
+        TypeId::of::<HostResponseKVDelete>(),
+        TypeId::of::<HostResponseKVKeys>(),
+        TypeId::of::<HostResponseKVUnit>(),
+        TypeId::of::<HostResponsePollReady>(),
+        TypeId::of::<HostResponsePollResult>(),
+        TypeId::of::<HostResponseRandomBytes>(),
+        TypeId::of::<HostResponseRandomU64>(),
+        TypeId::of::<HostResponseRandomSeed>(),
+        TypeId::of::<HostResponseP3MonotonicClockUnit>(),
+        TypeId::of::<HostResponseStreamCheckWrite>(),
+        TypeId::of::<HostResponseStreamChunk>(),
+        TypeId::of::<HostResponseStreamSkip>(),
+        TypeId::of::<HostResponseStreamWriteResult>(),
+        TypeId::of::<HostResponseStreamWriteWithBytes>(),
+        TypeId::of::<HostResponseStreamWriteZeroes>(),
+        TypeId::of::<HostResponseQuotaTokenAcquired>(),
+        TypeId::of::<HostResponseQuotaCommitResult>(),
+        TypeId::of::<HostResponsePermissionCardDerived>(),
+        TypeId::of::<HostResponsePermissionCardTransferComplete>(),
+        TypeId::of::<HostResponseP3KeyvalueIncomingValueStream>(),
+        TypeId::of::<HostResponseP3BlobstoreIncomingValueStream>(),
+        TypeId::of::<HostResponseP3HttpClientConsumeBodyChunk>(),
+        TypeId::of::<HostResponseP3SocketsTcpReceiveChunk>(),
+        TypeId::of::<HostResponseGolemApiCard>(),
+        TypeId::of::<HostResponseGolemApiOplogEntries>(),
+        TypeId::of::<HostResponseConfigGetResponse>(),
+        TypeId::of::<HostResponseConfigGetAllResponse>(),
+        TypeId::of::<HostResponseCliEnvironmentGetEnvironment>(),
+    ]
+    .contains(&TypeId::of::<Resp>())
+}
+
+type EncodedResponse<Resp> = Box<(Box<Resp>, Vec<u8>)>;
+
+// Keep the large HostResponse enum's construction/serialization frame out of the async caller.
+// Box the input and output so the blocking-task envelope also has a bounded stack footprint.
+#[inline(never)]
+#[allow(
+    clippy::boxed_local,
+    reason = "the caller must not move the generic response onto its small Wasmtime fiber stack"
+)]
+fn encode_response<Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String>>(
+    response: Box<Resp>,
+) -> Result<EncodedResponse<Resp>, String> {
+    let host_response: HostResponse = (*response).into();
+    let bytes = golem_common::serialization::serialize(&host_response)?;
+    let response = Box::new(Resp::try_from(host_response)?);
+    Ok(Box::new((response, bytes)))
+}
+
+#[cfg(test)]
+mod response_encoding_tests {
+    use super::*;
+    use golem_common::model::oplog::payload::{
+        HostResponseGolemRpcInvokeAndAwait, HostResponseGolemToolTools, HostResponseRandomBytes,
+    };
+    use test_r::test;
+
+    #[test]
+    fn response_encoding_preserves_payload() {
+        let response = HostResponseRandomBytes {
+            bytes: vec![1, 2, 3, 4],
+        };
+        let expected: HostResponse = response.clone().into();
+        let (returned, bytes) = *encode_response(Box::new(response.clone())).unwrap();
+        assert_eq!(*returned, response);
+        assert_eq!(
+            bytes,
+            golem_common::serialization::serialize(&expected).unwrap()
+        );
+        assert_eq!(
+            golem_common::serialization::deserialize::<HostResponse>(&bytes).unwrap(),
+            expected
+        );
+        assert!(response_has_bounded_encoding_stack::<HostResponseRandomBytes>());
+        assert!(!response_has_bounded_encoding_stack::<
+            HostResponseGolemRpcInvokeAndAwait,
+        >());
+        assert!(!response_has_bounded_encoding_stack::<
+            HostResponseGolemToolTools,
+        >());
+    }
+
+    #[test]
+    async fn response_encoding_on_wasmtime_fiber() -> anyhow::Result<()> {
+        let config = golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache();
+        let engine = wasmtime::Engine::new(&config)?;
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"(module
+                (import "host" "encode" (func $encode))
+                (func $nested (param $depth i32) (result i32)
+                    local.get $depth
+                    if (result i32)
+                        local.get $depth
+                        i32.const 1
+                        i32.sub
+                        call $nested
+                        i32.const 1
+                        i32.add
+                    else
+                        call $encode
+                        i32.const 0
+                    end)
+                (func (export "run") (result i32)
+                    i32.const 512
+                    call $nested))"#,
+        )?;
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker.func_wrap("host", "encode", || -> wasmtime::Result<()> {
+            for length in [0, 4, 64 * 1024] {
+                let response = HostResponseRandomBytes {
+                    bytes: vec![42; length],
+                };
+                let (returned, bytes) = *encode_response(Box::new(response))
+                    .map_err(wasmtime::Error::msg)?;
+                assert_eq!(returned.bytes.len(), length);
+                assert!(!bytes.is_empty());
+                assert!(matches!(golem_common::serialization::deserialize::<HostResponse>(&bytes).unwrap(), HostResponse::RandomBytes(value) if value.bytes == returned.bytes));
+            }
+            Ok(())
+        })?;
+        let mut store = wasmtime::Store::new(&engine, ());
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(u64::MAX);
+        let instance = linker.instantiate_async(&mut store, &module).await?;
+        let run = instance.get_typed_func::<(), i32>(&mut store, "run")?;
+        assert_eq!(run.call_async(&mut store, ()).await?, 512);
+        Ok(())
+    }
 }
 
 impl ResolvedReconstructionTerminal {

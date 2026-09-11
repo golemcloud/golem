@@ -17,9 +17,11 @@ use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_shard_manager::config::{
     ShardManagerConfig, make_config_loader, reject_legacy_db_env_vars,
 };
+use golem_shard_manager::{Deployment, ShardManagerError};
 use prometheus::default_registry;
 use tokio::task::JoinSet;
-use tracing::info;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
 
 fn main() -> Result<(), anyhow::Error> {
     // Before the configuration is loaded at all, so that `--dump-config` cannot print a config
@@ -50,11 +52,77 @@ async fn async_main(
     config: ShardManagerConfig,
     registry: prometheus::Registry,
 ) -> anyhow::Result<()> {
-    let mut join_set = JoinSet::new();
-    golem_shard_manager::run(&config, registry, &mut join_set).await?;
+    let shutdown = CancellationToken::new();
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            shutdown_signal().await;
+            info!("Received a shutdown signal; stopping the shard manager");
+            shutdown.cancel();
+        }
+    });
 
-    while let Some(res) = join_set.join_next().await {
-        res??;
+    let mut join_set = JoinSet::new();
+    let details = match golem_shard_manager::run(
+        &config,
+        Deployment::Standalone {
+            shutdown: shutdown.clone(),
+        },
+        registry,
+        &mut join_set,
+    )
+    .await
+    {
+        Ok(details) => details,
+        Err(err)
+            if matches!(
+                err.downcast_ref::<ShardManagerError>(),
+                Some(ShardManagerError::ShutdownRequested)
+            ) =>
+        {
+            info!("Stopped campaigning for leadership; exiting");
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
+
+    golem_shard_manager::serve_until_stopped(details, join_set, shutdown).await
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            warn!(error = %err, "Cannot listen for Ctrl-C");
+            std::future::pending::<()>().await
+        }
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate_signal() => {}
     }
-    Ok(())
+}
+
+/// SIGTERM, which is what a container runtime sends first.
+#[cfg(unix)]
+async fn terminate_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    match signal(SignalKind::terminate()) {
+        Ok(mut terminate) => {
+            terminate.recv().await;
+        }
+        Err(err) => {
+            warn!(
+                error = %err,
+                "Cannot listen for SIGTERM; only Ctrl-C will release the leadership on shutdown"
+            );
+            std::future::pending::<()>().await
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn terminate_signal() {
+    std::future::pending::<()>().await
 }

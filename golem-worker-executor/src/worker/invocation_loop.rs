@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
-use crate::model::{ReadFileResult, TrapType};
+use crate::model::{LookupResult, ReadFileResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     LimitTransition, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
@@ -24,7 +24,8 @@ use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, close_window};
 use crate::services::{HasActiveAgents, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
+    lower_invocation,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -651,7 +652,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_non_detached_last_known_status()
                                             .await
-                                            .current_idempotency_key;
+                                            .current_idempotency_key
+                                            .clone();
                                         match kind {
                                             InterruptKind::Suspend(_) => {
                                                 self.parent.add_and_commit_oplog(OplogEntry::suspend()).await;
@@ -1606,6 +1608,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         parent: self.parent.clone(),
                         instance: self.instance,
                         store: store.deref_mut(),
+                        uses_streams: false,
                     };
                     invocation.external_invocation(timestamped_invocation).await
                 }
@@ -1742,6 +1745,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             parent: self.parent.clone(),
             instance: self.instance,
             store,
+            uses_streams: false,
         };
         invocation.process(message).await
     }
@@ -1957,6 +1961,7 @@ struct Invocation<'a, Ctx: WorkerCtx> {
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     instance: &'a Instance,
     store: &'a mut Store<Ctx>,
+    uses_streams: bool,
 }
 
 impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
@@ -1999,10 +2004,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             invocation => {
                 if let Some(idempotency_key) = invocation.idempotency_key() {
-                    let has_result = {
-                        let invocation_results = self.parent.invocation_results.read().await;
-                        invocation_results.contains_key(idempotency_key)
-                    };
+                    let has_result = matches!(
+                        self.parent.lookup_invocation_result(idempotency_key).await,
+                        LookupResult::Complete(_) | LookupResult::Interrupted
+                    );
                     if !has_result {
                         self.invoke_agent(invocation).await
                     } else {
@@ -2062,6 +2067,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let kind = invocation.kind();
         let display_name = invocation.display_name();
         let invocation_idempotency_key = idempotency_key.clone();
+        self.uses_streams = invocation_uses_streams(
+            &invocation,
+            &self.store.data().component_metadata().metadata,
+            self.parent.parsed_agent_id.as_ref(),
+        );
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
@@ -2085,7 +2095,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 } else {
                     drop(interrupt_state);
-                    if let AgentInvocationResult::AgentMethod { output } = &mut invocation_result {
+                    if self.uses_streams
+                        && let AgentInvocationResult::AgentMethod { output } =
+                            &mut invocation_result
+                    {
                         let component = self.store.data().component_metadata();
                         let Some(agent_type) =
                             self.parent.parsed_agent_id.as_ref().and_then(|parsed| {
@@ -2231,10 +2244,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
             }
 
-            let invocation_for_lowering = self
-                .parent
-                .rehydrate_durable_streaming_invocation(invocation.clone())
-                .await?;
+            let invocation_for_lowering = if self.uses_streams {
+                self.parent
+                    .rehydrate_durable_streaming_invocation(invocation.clone())
+                    .await?
+            } else {
+                invocation.clone()
+            };
             let lowered = lower_invocation(
                 invocation_for_lowering,
                 &component_metadata,
@@ -2299,10 +2315,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await
         {
             Ok(()) => {
-                if let Err(error) = self
-                    .parent
-                    .complete_durable_streaming_session(idempotency_key)
-                    .await
+                if self.uses_streams
+                    && let Err(error) = self
+                        .parent
+                        .complete_durable_streaming_session(idempotency_key)
+                        .await
                 {
                     tracing::error!(%error, "Failed to complete durable streaming session");
                     return failed_agent_invocation_outcome(
@@ -2322,10 +2339,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
                     .await;
-                let _ = self
-                    .parent
-                    .fail_durable_streaming_session(idempotency_key, kind.to_string())
-                    .await;
+                if self.uses_streams {
+                    let _ = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, kind.to_string())
+                        .await;
+                }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
             Err(error) => {
@@ -2342,10 +2361,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         },
                     )
                     .await;
-                let _ = self
-                    .parent
-                    .fail_durable_streaming_session(idempotency_key, error.to_string())
-                    .await;
+                if self.uses_streams {
+                    let _ = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, error.to_string())
+                        .await;
+                }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
@@ -2406,7 +2427,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             None => RetryDecision::None,
         };
 
-        if decision == RetryDecision::None {
+        if self.uses_streams && decision == RetryDecision::None {
             let _ = self
                 .parent
                 .fail_durable_streaming_session(idempotency_key, details)
