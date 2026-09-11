@@ -117,7 +117,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     }
 }
 
-fn stream_with_delay<T: golem_rust::schema::IntoSchema + 'static>(
+fn stream_with_delay<T: IntoSchema + FromSchema + 'static>(
     values: impl IntoIterator<Item = T>,
     delay_ms: u64,
 ) -> AgentStream<T> {
