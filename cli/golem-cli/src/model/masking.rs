@@ -266,7 +266,7 @@ mod tests {
             mask_typed_agent_config_entries(MaskingConfig::hide_secrets(), &entries, &secret_paths);
 
         assert_eq!(
-            golem_common::schema::render::to_json_value(
+            golem_schema::schema::render::to_json_value(
                 masked[0].value.graph(),
                 masked[0].value.root_type(),
                 masked[0].value.value(),
