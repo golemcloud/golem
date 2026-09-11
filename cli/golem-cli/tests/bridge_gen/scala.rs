@@ -768,6 +768,61 @@ fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
     assert!(build_sbt.contains("ScalaJSPlugin"));
 }
 
+#[test]
+fn guest_recursive_stream_matrix_compiles() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let mut schema = crate::bridge_gen::fixtures::guest_streaming_agent_type("scala");
+        schema.mode = mode;
+        let pkg = GeneratedPackage::new_with_mode(schema, ScalaBridgeMode::GuestWasmRpc);
+        let dir = pkg.package_dir();
+        let source = std::fs::read_to_string(dir.join(
+            "src/main/scala/golem/bridge/client/guest_streaming_agent/GuestStreamingAgentClient.scala",
+        )).unwrap();
+        assert!(source.contains("_root_.golem.schema.AgentStream["));
+        assert!(
+            source.contains("_root_.golem.schema.AgentStream[_root_.golem.schema.AgentStream[")
+        );
+        assert!(source.contains("AgentStream.intoSchema["));
+        assert!(source.contains("AgentStream.fromSchema["));
+        assert!(source.contains("new _root_.golem.schema.IntoSchema["));
+        assert!(source.contains("new _root_.golem.schema.FromSchema["));
+        assert!(source.contains("SchemaRpcCodec.decodeResultAsync"));
+        assert!(!source.contains("StreamSession"));
+        assert!(!source.contains("golem.bridge.runtime"));
+        // Only the stream-free status method retains fire-and-forget forms.
+        assert_eq!(source.matches("def trigger(").count(), 1);
+        assert_eq!(source.matches("def scheduleAt(").count(), 1);
+        assert_eq!(source.matches("def scheduleCancelableAt(").count(), 1);
+        assert_eq!(source.matches("def cancelable(").count(), 8);
+        compile_guest_if_enabled(dir.as_path());
+    }
+}
+
+#[test]
+fn guest_untyped_stream_is_rejected() {
+    let schema = agent(
+        "UntypedStream",
+        "scala",
+        vec![],
+        vec![method(
+            "invalid",
+            vec![field("input", SchemaType::stream(None))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let result = ScalaBridgeGenerator::new_with_mode(
+        schema,
+        Utf8Path::from_path(dir.path()).unwrap(),
+        true,
+        ScalaBridgeMode::GuestWasmRpc,
+    )
+    .and_then(|mut generator| generator.generate());
+    assert!(format!("{:#}", result.unwrap_err()).contains("require an element schema"));
+}
+
 /// Guest agent bridges expose the Scala SDK RPC surface: constructors resolve
 /// remote agents through `RemoteAgentClient`, methods invoke Wasm RPC via
 /// `asyncInvokeAndAwait`, and the generated Scala.js build is ready for a real
