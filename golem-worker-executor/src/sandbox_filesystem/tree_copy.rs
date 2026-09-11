@@ -494,13 +494,15 @@ mod tests {
             .unwrap();
         std::os::unix::fs::symlink("data/db.sqlite", root.join("db-link")).unwrap();
         std::os::unix::fs::symlink("/absolute/outside", root.join("outside-link")).unwrap();
-        for (relative, seconds) in [
+        [
             ("data/db.sqlite", 1_700_000_001u64),
             ("data/nested/note.txt", 1_700_000_002),
             ("data/nested", 1_700_000_003),
             ("data", 1_700_000_004),
             ("script.sh", 1_700_000_005),
-        ] {
+        ]
+        .into_iter()
+        .for_each(|(relative, seconds)| {
             let time = UNIX_EPOCH + Duration::from_secs(seconds);
             File::options()
                 .write(true)
@@ -509,7 +511,7 @@ mod tests {
                 .unwrap()
                 .set_modified(time)
                 .unwrap();
-        }
+        });
     }
 
     #[test]
@@ -659,9 +661,14 @@ mod tests {
         .unwrap();
 
         let mut expected = tree_listing(source.path());
-        for absent in ["static/asset.bin", "data/nested", "data/nested/note.txt"] {
-            assert!(expected.remove(absent));
-        }
+        ["static/asset.bin", "data/nested", "data/nested/note.txt"]
+            .into_iter()
+            .for_each(|absent| {
+                assert!(
+                    expected.remove(absent),
+                    "{absent} must be in the source listing"
+                );
+            });
         assert_eq!(tree_listing(destination.path()), expected);
         assert_eq!(
             std::fs::read(destination.path().join("data/db.sqlite")).unwrap(),
