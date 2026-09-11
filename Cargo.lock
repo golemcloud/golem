@@ -4174,6 +4174,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "h2 0.4.19",
  "headers",
  "hex",
  "hmac 0.12.1",

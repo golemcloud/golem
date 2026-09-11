@@ -168,7 +168,7 @@ impl StreamSessionIndexService {
             let values = this
                 .kv
                 .with_entity("stream_session_index", "lookup_producer", "metadata")
-                .get_many_raw(Self::namespace(&id), fields)
+                .get_many_raw(Self::namespace(&id), fields.into())
                 .await?;
             let covered = values
                 .first()
@@ -237,7 +237,7 @@ impl StreamSessionIndexService {
                 let fields = this
                     .kv
                     .with_entity("stream_session_index", "read_recovery", "page")
-                    .get_many_raw(namespace.clone(), names)
+                    .get_many_raw(namespace.clone(), names.into())
                     .await?;
                 let metadata: Metadata = fields[0]
                     .as_ref()
@@ -286,7 +286,7 @@ impl StreamSessionIndexService {
                 let values = this
                     .kv
                     .with_entity("stream_session_index", "read_recovery", "session")
-                    .get_many_raw(namespace.clone(), fields)
+                    .get_many_raw(namespace.clone(), fields.into())
                     .await?;
                 let coverage: Metadata = deserialize(
                     values[0]
@@ -452,7 +452,8 @@ impl StreamSessionIndexService {
                         METADATA_FIELD.into(),
                         stream_control_index_field(&key)?,
                         "consumer-deleting".into(),
-                    ],
+                    ]
+                    .into(),
                 )
                 .await?;
             let coverage = fields
@@ -604,7 +605,7 @@ impl StreamSessionIndexService {
         if !keys.is_empty() {
             self.kv
                 .with("stream_session_index", "clear")
-                .del_many(namespace, keys)
+                .del_many(namespace, keys.into())
                 .await?;
         }
         Ok(())
@@ -962,7 +963,7 @@ impl StreamSessionIndexService {
             .with_entity("stream_session_index", "lookup", "session")
             .get_many_raw(
                 Self::namespace(id),
-                vec![METADATA_FIELD.into(), Self::field(key)],
+                vec![METADATA_FIELD.into(), Self::field(key)].into(),
             )
             .await?;
         let Some(metadata) = values.first().and_then(Option::as_ref) else {

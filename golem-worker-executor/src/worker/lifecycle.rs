@@ -110,7 +110,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
     ) -> Result<AgentMetadata, WorkerExecutorError> {
         Self::get_latest_metadata(deps, owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
     }
 
@@ -162,7 +162,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let Some(metadata) = Self::get_latest_metadata(deps, owned_agent_id).await else {
+        let Some(metadata) = Self::get_latest_metadata(deps, owned_agent_id).await? else {
             return Ok(());
         };
 
@@ -455,7 +455,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let agent_mode = deps
             .worker_service()
             .get_agent_mode(owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
 
         let oplog_service = deps.oplog_service();

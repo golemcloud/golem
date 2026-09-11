@@ -1291,6 +1291,7 @@ impl DurableStreamProducer {
             let mode = service
                 .get_agent_mode(&owner)
                 .await
+                .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
                 .ok_or(DurableStreamProducerError::InvalidHandle)?;
             let (_, rows) = service
                 .lookup_durable_stream_producer_metadata(&owner, mode, keys)

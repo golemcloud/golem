@@ -2355,7 +2355,7 @@ impl WorkerService {
                 method_parameters,
                 mode,
                 schedule_at,
-                Some(idempotency_key.clone()),
+                idempotency_key.clone(),
                 invocation_context,
                 freshness_disposition,
                 config,
@@ -2797,7 +2797,7 @@ mod tests {
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -3652,7 +3652,7 @@ mod tests {
             _: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
             _: i32,
             _: Option<::prost_types::Timestamp>,
-            idempotency_key: Option<IdempotencyKey>,
+            idempotency_key: IdempotencyKey,
             _: Option<InvocationContext>,
             freshness_disposition: InvocationFreshnessDisposition,
             _: Vec<AgentConfigEntryDto>,
@@ -3664,7 +3664,7 @@ mod tests {
         ) -> WorkerResult<AgentInvocationOutput> {
             self.invocations.lock().unwrap().push((
                 agent_id.clone(),
-                idempotency_key.expect("worker service should supply an idempotency key"),
+                idempotency_key,
                 freshness_disposition,
             ));
             self.invocation_environments
@@ -5257,6 +5257,61 @@ mod tests {
         assert_eq!(invocations[0].0, agent_id);
         assert_eq!(invocations[0].1, idempotency_key);
         assert_eq!(invocations[0].2, InvocationFreshnessDisposition::MayExist);
+    }
+
+    /// A keyless invocation is given a key, and never a shared one.
+    ///
+    /// `call_worker_executor` retries on `InvalidShardId` and on transport
+    /// failure, re-sending the request as it stands, and `invoke_agent_internal`
+    /// mints a fresh key for any request that arrives without one. So a keyless
+    /// invocation that got retried used to look like work nobody had started and
+    /// run a second time on its new owner. `WorkerClient::invoke_agent` no longer
+    /// accepts an absent key, so the decision happens once, in
+    /// `normalize_agent_invocation_identity`, above the retry loop.
+    ///
+    /// What this checks is that a key is always minted and that unrelated
+    /// invocations never share one. That every *attempt* of a single invocation
+    /// carries the same key is structural rather than covered here: the key is
+    /// bound before the retry closure is built and the closure only clones what
+    /// it captured. `RecordingWorkerClient` stands above `call_worker_executor`,
+    /// so no test at this seam can see a second attempt at all.
+    ///
+    /// Both REST invocation modes go through the same mint and both are checked,
+    /// since a mint that covered only `Await` would look correct from one call.
+    #[test]
+    async fn keyless_invocations_are_each_given_their_own_key() {
+        let harness = RestHarness::new(AgentMode::Durable);
+
+        // Twice per mode, not once each: a mint that handed every request of one
+        // mode the same constant would still look fine across two different
+        // modes, and only collides with itself.
+        for mode in [AgentInvocationMode::Await, AgentInvocationMode::Schedule] {
+            for _ in 0..2 {
+                let mut request = harness.invoke_request();
+                request.mode = mode.clone();
+                harness
+                    .worker_service
+                    .invoke_agent_rest(request, AuthCtx::system())
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let keys: Vec<IdempotencyKey> = harness
+            .worker_client
+            .invocations()
+            .into_iter()
+            .map(|(_, key, _)| key)
+            .collect();
+
+        assert_eq!(keys.len(), 4);
+        let distinct: BTreeSet<&str> = keys.iter().map(|key| key.value.as_str()).collect();
+        assert_eq!(
+            distinct.len(),
+            4,
+            "unrelated invocations must not be handed the same key, or one would \
+             join another instead of running: {keys:?}"
+        );
     }
 
     #[test]
