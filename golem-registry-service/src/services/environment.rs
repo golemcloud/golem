@@ -329,6 +329,32 @@ impl EnvironmentService {
         Ok(environment)
     }
 
+    /// Loads only the environment's ownership triple, **without** enforcing
+    /// `EnvironmentVerb::View`.
+    ///
+    /// This is for building the permission target of a *narrower*, resource-scoped grant
+    /// (by-path / by-name lookups), so that a caller holding only the resource permission is
+    /// authorized against the resource directly — matching the behaviour of the ID-based
+    /// lookups. The returned owner is always passed to a subsequent resource authorization
+    /// check; never return the `Environment` itself (or any non-ownership data) from here.
+    pub async fn get_owner_unchecked(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<EnvironmentOwnerPattern, EnvironmentError> {
+        let environment: Environment = self
+            .environment_repo
+            .get_by_id(environment_id.0, false)
+            .await?
+            .ok_or(EnvironmentError::EnvironmentNotFound(environment_id))?
+            .try_into()?;
+
+        Ok(EnvironmentOwnerPattern::Environment {
+            account: environment.owner_account_email,
+            application: environment.application_name,
+            environment: environment.name,
+        })
+    }
+
     pub async fn get_in_application(
         &self,
         application_id: ApplicationId,

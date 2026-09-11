@@ -569,9 +569,9 @@ impl AgentSecretService {
         path: CanonicalAgentSecretPath,
         auth: &AuthCtx,
     ) -> Result<AgentSecret, AgentSecretError> {
-        let environment = self
+        let owner = self
             .environment_service
-            .get(environment_id, false, auth)
+            .get_owner_unchecked(environment_id)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -579,9 +579,9 @@ impl AgentSecretService {
                 }
                 other => other.into(),
             })?;
-        authorize_agent_secret_permission(
+        authorize_agent_secret_permission_for_owner(
             auth,
-            &environment,
+            owner,
             Some(&path),
             EnvironmentAgentSecretVerb::View,
         )

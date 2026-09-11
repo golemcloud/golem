@@ -254,9 +254,9 @@ impl RetryPolicyService {
         name: &str,
         auth: &AuthCtx,
     ) -> Result<StoredRetryPolicy, RetryPolicyError> {
-        let environment = self
+        let owner = self
             .environment_service
-            .get(environment_id, false, auth)
+            .get_owner_unchecked(environment_id)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -264,9 +264,9 @@ impl RetryPolicyService {
                 }
                 other => other.into(),
             })?;
-        authorize_retry_policy_permission(
+        authorize_retry_policy_permission_for_owner(
             auth,
-            &environment,
+            owner,
             Some(name),
             EnvironmentRetryPolicyVerb::View,
         )
