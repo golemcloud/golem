@@ -749,6 +749,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> Result<(OplogIndex, OplogIndex), OplogError>;
 
+    /// The shard epoch this oplog's writes assert, or `None` for an oplog nothing fences - one
+    /// opened without an ownership claim, or an ephemeral one.
+    ///
+    /// Only the primary oplog knows it, so a wrapper answers from the oplog it wraps.
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.inner().and_then(|inner| inner.shard_epoch())
+    }
+
     /// Returns the inner oplog wrapped by this implementation, if any.
     /// Wrapper oplogs should override this to enable generic traversal of the
     /// oplog composition chain (used by `downcast_oplog`).
@@ -989,7 +997,7 @@ pub trait OplogOps: Oplog {
             trace_states: ctx.trace_states,
             invocation_context,
             wallet_pin: Some(wallet_pin),
-            shard_epoch: None,
+            shard_epoch: self.shard_epoch().map(|epoch| epoch.0),
         })
     }
 

@@ -1079,6 +1079,9 @@ struct PrimaryOplog {
     key: String,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
+    /// The epoch the actor's state asserts on every append, copied here so that reading it does
+    /// not have to go through the actor. Fixed for the oplog's lifetime.
+    shard_epoch: Option<ShardEpoch>,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     close: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
@@ -1448,6 +1451,7 @@ impl PrimaryOplog {
             key,
             owned_agent_id,
             agent_mode,
+            shard_epoch,
             stream_session_index,
             close: Some(close),
         }
@@ -2172,5 +2176,9 @@ impl Oplog for PrimaryOplog {
             done,
         })
         .await
+    }
+
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.shard_epoch
     }
 }

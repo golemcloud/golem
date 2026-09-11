@@ -7231,6 +7231,79 @@ async fn deleting_an_oplog_fences_a_writer_that_still_holds_it(_tracing: &Tracin
 }
 
 #[test]
+async fn an_invocation_started_records_the_epoch_its_oplog_asserts(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let primary = Arc::new(fencing_oplog_service(&tempdir, "recorded").await);
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        1,
+        RetryConfig::default(),
+    ));
+    // Through the layered service rather than the primary alone: the entry is written from the
+    // top of a wrapper chain, as in production, so the epoch has to be found through it.
+    let service = MultiLayerOplogService::new(primary, nev![archive], 10, 10);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+
+    // `None` must stay `None` rather than become epoch 0, which is a real epoch.
+    for (name, shard_epoch) in [
+        ("fenced", Some(golem_common::model::ShardEpoch(9))),
+        ("unfenced", None),
+    ] {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: name.into(),
+        };
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let oplog = service
+            .open(
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(agent_id, account_id, environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                shard_epoch,
+            )
+            .await;
+
+        let index = oplog
+            .add_agent_invocation_started_with_index(
+                AgentInvocation::AgentMethod {
+                    idempotency_key: IdempotencyKey::fresh(),
+                    method_name: "f".to_string(),
+                    input: SchemaValue::Record { fields: vec![] },
+                    invocation_context: InvocationContextStack::fresh_rounded(),
+                    principal: Principal::anonymous(),
+                    scope_card: None,
+                },
+                invocation_wallet_pin(),
+            )
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        // Read back from the storage, so the field is shown to survive being persisted as well.
+        let stored = service
+            .read_exact(&owned_agent_id, AgentMode::Durable, index, 1)
+            .await
+            .remove(&index)
+            .expect("the committed entry reads back");
+        match stored {
+            OplogEntry::AgentInvocationStarted {
+                shard_epoch: recorded,
+                ..
+            } => assert_eq!(
+                recorded,
+                shard_epoch.map(|epoch| epoch.0),
+                "{name}: the entry must record the epoch its oplog asserts"
+            ),
+            other => panic!("{name}: expected AgentInvocationStarted, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 async fn an_executor_that_loses_the_shard_mid_flight_is_refused_at_its_next_write(
     _tracing: &Tracing,
 ) {
