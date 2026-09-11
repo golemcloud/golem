@@ -280,8 +280,8 @@ pub enum UpdateDescription {
         target_revision: ComponentRevision,
         payload: OplogPayload<Vec<u8>>,
         mime_type: String,
-        /// The filesystem snapshot that was taken with this application snapshot. `None` when
-        /// no filesystem capture was made.
+        /// The filesystem snapshot that the executor captured with this application snapshot.
+        /// `None` means that the executor made no filesystem capture.
         filesystem_snapshot: Option<FilesystemSnapshotName>,
     },
 }

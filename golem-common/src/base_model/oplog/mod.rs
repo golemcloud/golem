@@ -621,9 +621,10 @@ oplog_entry! {
             mime_type: String,
             active_cards: Vec<StoredCard>,
             wallet_generation: u64,
-            /// The filesystem snapshot that was captured with this application snapshot. `None`
-            /// when no filesystem capture was made. The filesystem snapshot is usable only after
-            /// a `SnapshotConfirmed` entry with the same name.
+            /// The filesystem snapshot that the executor captured with this application
+            /// snapshot. `None` means that the executor made no filesystem capture. The
+            /// filesystem snapshot is usable only after a `SnapshotConfirmed` entry with the
+            /// same name.
             filesystem_snapshot: Option<FilesystemSnapshotName>,
         }
         public {
