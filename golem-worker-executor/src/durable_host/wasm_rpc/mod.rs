@@ -676,8 +676,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             {
                 Ok(result) => result,
                 Err(error) => {
-                    handle.abandon_for_trap();
-                    return Err(error);
+                    return Err(handle.trap(error));
                 }
             };
             let stream_auth_ctx = auth_ctx.clone().unwrap_or_else(|| self.agent_auth_ctx());
@@ -733,8 +732,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     ensure_rpc_target_activated(self, &self_, &auth_ctx, &prepared.method_name)
                         .await
             {
-                handle.abandon_for_trap();
-                return Err(error);
+                return Err(handle.trap(error));
             }
             let attempt_id = streams
                 .caller_attempt_id()
@@ -773,9 +771,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 );
                 match futures::future::select(call, interrupt_signal).await {
                     Either::Left((result, _)) => result,
-                    Either::Right((interrupt_kind, _)) => {
-                        handle.abandon_for_trap();
-                        return Err(interrupt_kind.into());
+                    Either::Right((error, _)) => {
+                        return Err(handle.trap(error));
                     }
                 }
             };
@@ -803,9 +800,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         tokio::pin!(materialize);
                         match futures::future::select(materialize, interrupt_signal).await {
                             Either::Left((result, _)) => result.map_err(anyhow::Error::msg)?,
-                            Either::Right((interrupt_kind, _)) => {
-                                handle.abandon_for_trap();
-                                return Err(interrupt_kind.into());
+                            Either::Right((error, _)) => {
+                                return Err(handle.trap(error));
                             }
                         }
                     };
@@ -1805,14 +1801,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             tokio::pin!(activation);
             match futures::future::select(activation, interrupt_signal).await {
                 Either::Left((result, _)) => result,
-                Either::Right((interrupt_kind, _)) => Err(interrupt_kind.into()),
+                Either::Right((interrupt_kind, _)) => Err(interrupt_kind),
             }
         };
         let demand = match demand {
             Ok(demand) => demand,
             Err(error) => {
-                handle.abandon_for_trap();
-                return Err(error);
+                return Err(handle.trap(error));
             }
         };
         let target_fingerprint = demand.fingerprint();
@@ -2091,8 +2086,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             {
                 Ok(fingerprint) => fingerprint,
                 Err(err) => {
-                    handle.abandon_for_trap();
-                    return Err(err);
+                    return Err(handle.trap(err));
                 }
             };
             ScheduledAction::Invoke {
@@ -2705,8 +2699,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
             && let Err(err) =
                 ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name).await
         {
-            handle.abandon_for_trap();
-            return Err(err);
+            return Err(handle.trap(err));
         }
 
         let retry_properties =
@@ -2758,10 +2751,8 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
                 .await;
                 match either_result {
                     Either::Left((result, _)) => result,
-                    Either::Right((interrupt_kind, _)) => {
-                        tracing::info!("Interrupted while waiting for RPC result");
-                        handle.abandon_for_trap();
-                        return Err(interrupt_kind);
+                    Either::Right((error, _)) => {
+                        return Err(handle.trap(error));
                     }
                 }
             };
@@ -2843,8 +2834,7 @@ async fn run_invoke<Ctx: WorkerCtx>(
             && let Err(err) =
                 ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name).await
         {
-            handle.abandon_for_trap();
-            return Err(err);
+            return Err(handle.trap(err));
         }
 
         let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &prepared.method_name);
@@ -4070,7 +4060,7 @@ async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
         tokio::pin!(activation);
         match futures::future::select(activation, interrupt_signal).await {
             Either::Left((result, _)) => result?,
-            Either::Right((interrupt_kind, _)) => return Err(interrupt_kind.into()),
+            Either::Right((interrupt_kind, _)) => return Err(interrupt_kind),
         }
     };
     let target_fingerprint = demand.fingerprint();
@@ -4823,7 +4813,7 @@ mod tests {
         };
         assert_eq!(waits.lock().unwrap().len(), 2);
         drop(task);
-        // After the RPC's durable terminal, only a sleep and an unsafe HTTP call remain live.
+        // After the RPC's durable terminal, only a sleep and an active HTTP call remain live.
         assert!(
             !crate::durable_host::PrivateDurableWorkerState::suspend_admissible(
                 2,

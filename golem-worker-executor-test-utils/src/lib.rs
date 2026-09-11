@@ -2719,6 +2719,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
+    wrap_rpc: Option<Arc<WrapRpcFn>>,
     active_agents: Arc<
         std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     >,
@@ -2796,6 +2797,14 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn ResourceLimits> {
         self.resource_limits.clone()
+    }
+
+    fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
+        if let Some(wrap) = &self.wrap_rpc {
+            wrap(rpc)
+        } else {
+            rpc
+        }
     }
 
     fn create_additional_deps(
@@ -2947,19 +2956,17 @@ fn make_production_context_config(
     config
 }
 
-type ProductionContextConfigOverride = Arc<dyn Fn(&mut GolemConfig) + Send + Sync>;
-
 async fn run_production_context_bootstrap(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     resource_limits: Arc<dyn ResourceLimits>,
-    configure: Option<ProductionContextConfigOverride>,
+    overrides: TestExecutorOverrides,
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     timeout_msg: &'static str,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let prometheus = golem_worker_executor::metrics::register_all();
     let mut config = make_production_context_config(deps, context);
-    if let Some(configure) = configure {
+    if let Some(configure) = &overrides.configure {
         configure(&mut config);
     }
 
@@ -2971,6 +2978,7 @@ async fn run_production_context_bootstrap(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
+            wrap_rpc: overrides.wrap_rpc,
             active_agents: active_agents.clone(),
         },
         config,
@@ -3050,7 +3058,7 @@ pub async fn start_with_resource_limits(
         deps,
         context,
         resource_limits,
-        None,
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for custom-resource-limits server to start",
     )
@@ -3071,7 +3079,7 @@ pub async fn start_with_table_limit(
         deps,
         context,
         Arc::new(FixedTableLimitResourceLimits { max_table_elements }),
-        None,
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for table-limit server to start",
     )
@@ -3114,6 +3122,21 @@ pub async fn start_with_concurrent_agent_limit(
     context: &TestContext,
     max_concurrent_agents: u64,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_concurrent_agent_limit_and_overrides(
+        deps,
+        context,
+        max_concurrent_agents,
+        TestExecutorOverrides::default(),
+    )
+    .await
+}
+
+pub async fn start_with_concurrent_agent_limit_and_overrides(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_concurrent_agents: u64,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
     let resource_entry = Arc::new(AtomicResourceEntry::new(
         u64::MAX,
         usize::MAX,
@@ -3127,7 +3150,7 @@ pub async fn start_with_concurrent_agent_limit(
         Arc::new(FixedConcurrentAgentLimitResourceLimits {
             max_concurrent_agents_per_executor: max_concurrent_agents,
         }),
-        None,
+        overrides,
         Some(resource_entry),
         "Timeout waiting for concurrent-agent-limit server to start",
     )
@@ -3211,7 +3234,7 @@ pub async fn start_with_agent_storage_quota(
         Arc::new(FixedFilesystemStorageQuotaResourceLimits {
             max_disk_space_bytes,
         }),
-        None,
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for agent-storage-quota server to start",
     )
@@ -3306,13 +3329,16 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
         Arc::new(FixedFilesystemStorageQuotaResourceLimits {
             max_disk_space_bytes,
         }),
-        Some(Arc::new(move |config| {
-            config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
-            config.filesystem_storage.pressure = pressure.clone();
-            config.resource_usage_metering = metering;
-            config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
-            config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
-        })),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_storage.pressure = pressure.clone();
+                config.resource_usage_metering = metering;
+                config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
         None,
         "Timeout waiting for managed agent-storage-quota server to start",
     )
@@ -3374,12 +3400,15 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         Arc::new(MutableFilesystemStorageQuotaResourceLimits {
             entry: Arc::clone(&entry),
         }),
-        Some(Arc::new(move |config| {
-            config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
-            config.resource_usage_metering = metering;
-            config.filesystem_storage.filesystem_object_limit_policy =
-                FilesystemObjectLimitPolicyConfig::new(262_144, 1, 1024).unwrap();
-        })),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.resource_usage_metering = metering;
+                config.filesystem_storage.filesystem_object_limit_policy =
+                    FilesystemObjectLimitPolicyConfig::new(262_144, 1, 1024).unwrap();
+            })),
+            ..Default::default()
+        },
         None,
         "Timeout waiting for mutable managed agent-storage-quota server to start",
     )
@@ -3432,7 +3461,7 @@ pub async fn start_with_invocation_limits(
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
         }),
-        None,
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for invocation-limit server to start",
     )
@@ -3489,7 +3518,7 @@ pub async fn start_with_monthly_call_limits(
             monthly_http_calls,
             monthly_rpc_calls,
         }),
-        None,
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for monthly-call-limit server to start",
     )
@@ -5466,12 +5495,127 @@ pub struct FailingRpc {
     remaining_failures: AtomicU32,
 }
 
+pub struct RecordingRpc {
+    inner: Arc<dyn Rpc>,
+    method_name: String,
+    attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+}
+
+impl RecordingRpc {
+    pub fn new(
+        inner: Arc<dyn Rpc>,
+        method_name: impl Into<String>,
+        attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+    ) -> Self {
+        Self {
+            inner,
+            method_name: method_name.into(),
+            attempts,
+        }
+    }
+}
+
 impl FailingRpc {
     pub fn new(inner: Arc<dyn Rpc>, failure_count: u32) -> Self {
         Self {
             inner,
             remaining_failures: AtomicU32::new(failure_count),
         }
+    }
+}
+
+#[async_trait]
+impl Rpc for RecordingRpc {
+    async fn create_demand(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.inner
+            .create_demand(
+                owned_agent_id,
+                method_name,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn invoke_and_await(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        method_name: String,
+        method_parameters: SchemaValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<SchemaValue, ServiceRpcError> {
+        if method_name == self.method_name {
+            self.attempts.lock().unwrap().push(idempotency_key.clone());
+        }
+        self.inner
+            .invoke_and_await(
+                owned_agent_id,
+                idempotency_key,
+                freshness_disposition,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                scope_card,
+            )
+            .await
+    }
+
+    async fn invoke(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        method_name: String,
+        method_parameters: SchemaValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), ServiceRpcError> {
+        self.inner
+            .invoke(
+                owned_agent_id,
+                idempotency_key,
+                freshness_disposition,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+            )
+            .await
     }
 }
 

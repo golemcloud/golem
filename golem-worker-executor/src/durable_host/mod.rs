@@ -9883,8 +9883,8 @@ struct PrivateDurableWorkerState {
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
-    /// Number of live durable host calls currently in flight. Used by suspendable P3 waits to
-    /// detect when all in-flight work is parked in waits that can safely suspend the worker.
+    /// Number of live durable host calls currently in flight. Shared wait scheduling uses this
+    /// to defer voluntary suspension while work outside registered waits is progressing.
     live_host_calls: Arc<AtomicUsize>,
 
     /// Activity tracking for Golem-spawned store background tasks. The invocation completion
@@ -10434,10 +10434,10 @@ impl PrivateDurableWorkerState {
             )
     }
 
-    /// Pure form of [`Self::safe_to_suspend`], factored out so its truth table can be tested
-    /// without constructing worker state: the worker may suspend when every live durable host
-    /// call in flight is parked in a suspendable wait, no durable scope is open, and no P3 HTTP
-    /// request transmission is pending.
+    /// Shared scheduling heuristic for voluntary suspension, not a recoverability boundary.
+    /// Explicit interruption and arbitrary Store loss still reconstruct from durable history.
+    /// Defer automatic yielding until every live call is in a registered wait, no durable
+    /// scope is open, and no P3 HTTP request transmission is pending.
     fn suspend_admissible(
         live_host_calls: usize,
         suspendable_waits: usize,

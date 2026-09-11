@@ -2361,9 +2361,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 idem_for_closure,
                                 Some(pending.clone()),
                             )
-                            .await.map_err(|error| {
+                            .await.inspect_err(|error| {
                                 pending.publish(read_only_cache::AdmissionSignal::Failure(error.clone()));
-                                error
                             })?;
                             if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
                                 // Defensive: only `AgentMethod` outputs are cacheable.
@@ -2411,7 +2410,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if let read_only_cache::AdmissionSignal::Failure(error) = signal {
                             return Err(error);
                         }
-                        let result = pending
+
+                        pending
                             .completion
                             .wait_for(|value| value.is_some())
                             .await
@@ -2419,8 +2419,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 WorkerExecutorError::runtime("read-only owner disappeared")
                             })?
                             .clone()
-                            .expect("completion watch was observed as Some");
-                        result
+                            .expect("completion watch was observed as Some")
                     }
                 },
                 Err(error) => Err(error),

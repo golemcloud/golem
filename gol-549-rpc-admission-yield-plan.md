@@ -19,10 +19,15 @@ not solved by changing admission. This change does not weaken either contract.
 Register pending durable RPC operations as suspendable waits. After 30 seconds
 waiting for an RPC, check the same `safe_to_suspend` condition used by sleeps:
 every live durable host call must have a suspendable wait, no durable scope may
-be open, and no P3 HTTP request transmission may be pending. If unsafe work
-prevents suspension, recheck every 10 seconds while the RPC remains pending.
+be open, and no P3 HTTP request transmission may be pending. If active work
+defers voluntary suspension, recheck every 10 seconds while the RPC remains pending.
 Completing an HTTP request therefore permits a later suspension attempt; the
 first failed check does not disarm the policy.
+
+This is the shared sleep scheduling heuristic, not a correctness requirement for
+unloading. Explicit interruption, eviction, resharding, and arbitrary process loss
+still reconstruct from durable history. No RPC-specific unload gate, alternative
+recovery path, or dependence on surviving resident state is introduced.
 
 When eligible, persist a scheduled wakeup and return `InterruptKind::Suspend`.
 The RPC wakeup is five seconds from the scheduling attempt. Suspension tears down
@@ -42,7 +47,7 @@ Example with one slot:
 
 1. A runs and calls B. B's accepted invocation is durably queued.
 2. B waits for capacity while A waits for B's result.
-3. A's wait reaches 30 seconds; if safe, schedule its wake and suspend A.
+3. A's wait reaches 30 seconds; if eligible, schedule its wake and suspend A.
 4. B acquires capacity and finishes its queued invocation.
 5. A's wake becomes due after five seconds. A reacquires capacity, recovers, and
    obtains B's result using the same call identity.
@@ -55,7 +60,7 @@ The same policy applies whether RPC dispatch is local or remote. It does not
 query the target's phase, detect a dependency graph, exceed account limits, or
 change Wasmtime. A long queue or slow target also justifies yielding; proof of
 permit contention is unnecessary. Ephemeral callers do not opt into automatic
-RPC suspension. Existing sleep safety exclusions remain intact.
+RPC suspension. Existing voluntary-sleep scheduling exclusions remain intact.
 
 Mixed waits choose the earliest real sleep deadline or `now + rpc_resume_after`,
 regardless of which wait initiates suspension. After awaiting wakeup persistence,
@@ -125,8 +130,8 @@ eligibility threshold, not an RPC deadline or a completion guarantee. Existing
 lifecycle cleanup must finish before capacity is released. Scheduled wakeups can
 race completion; ordinary recovery preserves the invocation's durable outcome.
 
-Open durable scopes, unsafe sibling calls, and pending HTTP transmissions can
-prevent suspension indefinitely. A completed but unconsumed async RPC can also
+Open durable scopes, active sibling calls, and pending HTTP transmissions can
+defer voluntary suspension indefinitely. A completed but unconsumed async RPC can also
 block eligibility until its durable handle finishes. These are conservative
 limits of using the existing sleep checks, not reasons to weaken their accounting.
 

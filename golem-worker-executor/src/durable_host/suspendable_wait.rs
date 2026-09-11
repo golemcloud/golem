@@ -171,9 +171,9 @@ where
                 if poll_ready_once(ready()).await {
                     return Ok(ParkOutcome::Ready);
                 }
-                // The yield above lets the store's event loop drive other guest tasks, which may
-                // have started new live host calls; suspending now would drop them mid-flight,
-                // so re-check and keep parking if suspension is no longer safe.
+                // Other guest tasks may have started live host calls during the yield.
+                // Defer voluntary suspension while that work progresses; this scheduling
+                // heuristic does not gate explicit interruption or crash recovery.
                 if !safe_to_suspend() {
                     continue;
                 }
@@ -190,7 +190,7 @@ where
                         .sleep_until(scheduled_deadline)
                         .await?;
                     // Scheduling the wakeup awaits (oplog index read, promise creation, schedule
-                    // write) — another window in which waits or unsafe work can appear. Re-check
+                    // write) — another window in which waits or active work can appear. Re-check
                     // both before suspending, and schedule again if a new wait needs an earlier
                     // wakeup. Already-scheduled later wakeups are harmless.
                     if final_ready() {
@@ -542,6 +542,35 @@ mod tests {
         async fn cleanup(&self) {}
     }
 
+    struct FailingPromiseService;
+
+    #[async_trait]
+    impl PromiseService for FailingPromiseService {
+        async fn create(
+            &self,
+            _agent_id: &AgentId,
+            _oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
+            Err(WorkerExecutorError::runtime(
+                "wakeup promise creation failed",
+            ))
+        }
+
+        async fn poll(&self, _promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+            unreachable!("promise polling is unused by this test")
+        }
+
+        async fn complete(
+            &self,
+            _promise_id: PromiseId,
+            _data: Vec<u8>,
+        ) -> Result<bool, WorkerExecutorError> {
+            unreachable!("promise completion is unused by this test")
+        }
+
+        async fn cleanup(&self) {}
+    }
+
     /// A scheduler whose `schedule` simulates a new live (not suspendable-parked) host call
     /// appearing while the wakeup is being scheduled, by flipping the shared safety flag.
     struct FlippingSchedulerService {
@@ -729,6 +758,20 @@ mod tests {
         WakeupScheduler {
             promise_service: Arc::new(StubPromiseService),
             scheduler_service: Arc::new(FlippingSchedulerService { safe }),
+            oplog: Arc::new(StubOplog),
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent_id),
+            created_by: AccountId::new(),
+        }
+    }
+
+    fn failing_wakeup_scheduler() -> WakeupScheduler {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "failing".to_string(),
+        };
+        WakeupScheduler {
+            promise_service: Arc::new(FailingPromiseService),
+            scheduler_service: Arc::new(UnusedSchedulerService),
             oplog: Arc::new(StubOplog),
             owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent_id),
             created_by: AccountId::new(),
@@ -1029,7 +1072,7 @@ mod tests {
         let outcome = park_suspendable_wait(
             context,
             Box::pin(pending::<InterruptKind>()),
-            || pending::<()>(),
+            pending::<()>,
             || false,
             || checks.fetch_add(1, Ordering::AcqRel) > 0,
             || None,
@@ -1038,6 +1081,38 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, ParkOutcome::SuspendWorker(_)));
         assert!(checks.load(Ordering::Acquire) >= 3);
+    }
+
+    #[test]
+    async fn wakeup_scheduling_failure_is_propagated_instead_of_suspending() {
+        let context = SuspendableWaitContext {
+            wait_id: 1,
+            agent_mode: AgentMode::Durable,
+            suspend: SuspendConfig {
+                suspend_after: Duration::ZERO,
+                ephemeral_max_sleep: Duration::from_secs(60),
+                wait_suspend_grace: Duration::ZERO,
+                wait_suspend_check_interval: Duration::from_secs(10),
+                rpc_suspend_after: Duration::from_secs(30),
+                rpc_resume_after: Duration::from_secs(5),
+            },
+            wait_deadline: None,
+            suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
+            wakeup_scheduler: failing_wakeup_scheduler(),
+        };
+
+        let error = park_suspendable_wait(
+            context,
+            Box::pin(pending::<InterruptKind>()),
+            pending::<()>,
+            || false,
+            || true,
+            || None,
+        )
+        .await
+        .expect_err("wakeup scheduling failure must escape instead of returning SuspendWorker");
+
+        assert!(error.to_string().contains("wakeup promise creation failed"));
     }
 
     #[test]
@@ -1062,7 +1137,7 @@ mod tests {
         let outcome = park_suspendable_wait(
             context,
             Box::pin(pending::<InterruptKind>()),
-            || pending::<()>(),
+            pending::<()>,
             || false,
             || true,
             || None,
@@ -1099,7 +1174,7 @@ mod tests {
         let outcome = park_suspendable_wait(
             context,
             Box::pin(pending::<InterruptKind>()),
-            || pending::<()>(),
+            pending::<()>,
             || false,
             || true,
             || None,

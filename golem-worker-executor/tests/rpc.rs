@@ -43,13 +43,14 @@ use golem_worker_executor::services::direct_invocation_auth::{
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit, start_with_overrides,
+    LastUniqueId, PrecompiledComponent, RecordingRpc, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, start,
+    start_with_concurrent_agent_limit_and_overrides, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::mpsc;
@@ -2050,7 +2051,26 @@ async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+    let rpc_attempt_keys = Arc::new(Mutex::new(Vec::new()));
+    let executor = start_with_concurrent_agent_limit_and_overrides(
+        deps,
+        &context,
+        1,
+        TestExecutorOverrides {
+            wrap_rpc: Some(Arc::new({
+                let rpc_attempt_keys = rpc_attempt_keys.clone();
+                move |rpc| {
+                    Arc::new(RecordingRpc::new(
+                        rpc,
+                        "increment_scalar",
+                        rpc_attempt_keys.clone(),
+                    ))
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
@@ -2170,6 +2190,52 @@ async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
         .into_typed::<u64>()?;
     assert_eq!(first, 1);
     assert_eq!(request_count.load(Ordering::Acquire), 1);
+
+    let rpc_attempt_keys = rpc_attempt_keys.lock().unwrap().clone();
+    assert!(
+        rpc_attempt_keys.len() >= 2,
+        "RPC suspension must cause at least two dispatch attempts"
+    );
+    let rpc_idempotency_key = rpc_attempt_keys[0]
+        .as_ref()
+        .expect("durable RPC attempt must have an idempotency key");
+    assert!(
+        rpc_attempt_keys
+            .iter()
+            .all(|key| key.as_ref() == Some(rpc_idempotency_key)),
+        "all RPC attempts must reuse the same idempotency key"
+    );
+
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let started = target_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(&started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "increment_scalar"
+                                && &method.idempotency_key == rpc_idempotency_key)
+            )
+        })
+        .count();
+    let finished = target_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("increment_scalar")
+            )
+        })
+        .count();
+    assert_eq!(started, 1, "target must start the logical RPC exactly once");
+    assert_eq!(
+        finished, 1,
+        "target must finish the logical RPC exactly once"
+    );
+
     let second = executor
         .invoke_and_await_agent(&component, &target_id, "increment_scalar", data_value!())
         .await?
