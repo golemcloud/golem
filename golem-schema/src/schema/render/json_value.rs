@@ -80,9 +80,36 @@ pub fn from_json_value(
     ty: &SchemaType,
     json: &Value,
 ) -> Result<SchemaValue, RenderError> {
+    from_json_value_with_policy(graph, ty, json, JsonDecodePolicy::Trusted)
+}
+
+/// Decode externally supplied JSON without allowing it to construct
+/// host-managed capabilities. Rejection happens when the selected value path
+/// reaches a capability leaf, so absent options and unselected sum-type arms
+/// remain valid.
+pub fn from_untrusted_json_value(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    json: &Value,
+) -> Result<SchemaValue, RenderError> {
+    from_json_value_with_policy(graph, ty, json, JsonDecodePolicy::Untrusted)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JsonDecodePolicy {
+    Trusted,
+    Untrusted,
+}
+
+fn from_json_value_with_policy(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    json: &Value,
+    policy: JsonDecodePolicy,
+) -> Result<SchemaValue, RenderError> {
     let mut path = PathStack::new();
     let mut visited: HashSet<TypeId> = HashSet::new();
-    from_json_inner(graph, ty, json, &mut path, &mut visited)
+    from_json_inner(graph, ty, json, &mut path, &mut visited, policy)
 }
 
 // --------------------------------------------------------------------- to
@@ -459,11 +486,12 @@ fn from_json_inner(
     json: &Value,
     path: &mut PathStack,
     visited: &mut HashSet<TypeId>,
+    policy: JsonDecodePolicy,
 ) -> Result<SchemaValue, RenderError> {
     // Route through the shared ref-resolution helper so the decoder uses
     // the same cycle protection as the walker-based encoder.
     let res = resolve_ref::<_, SchemaValue, RenderError>(graph, ty, visited, |graph, body| {
-        match from_json_body(graph, body, json, path, &mut HashSet::new()) {
+        match from_json_body(graph, body, json, path, &mut HashSet::new(), policy) {
             Ok(v) => Ok(v),
             Err(e) => Err(WalkerError::Walker(e)),
         }
@@ -495,12 +523,25 @@ fn from_json_body(
     json: &Value,
     path: &mut PathStack,
     _local_visited: &mut HashSet<TypeId>,
+    policy: JsonDecodePolicy,
 ) -> Result<SchemaValue, RenderError> {
     // The `visited` HashSet for nested references is provided by the caller
     // through `resolve_ref`. For sub-recursions we re-enter `from_json_inner`
     // with a fresh set per sibling traversal because ref protection is
     // scoped to the active stack of references, not the entire walk.
     let mut visited: HashSet<TypeId> = HashSet::new();
+    if policy == JsonDecodePolicy::Untrusted
+        && let Some(kind) = HostManagedKind::from_type(ty)
+    {
+        return Err(mismatch(
+            path,
+            format!(
+                "host-managed capability `{}` cannot be constructed from external JSON",
+                kind.kind_name()
+            ),
+        ));
+    }
+
     match ty {
         SchemaType::Ref { .. } => unreachable!("ref resolved by resolve_ref"),
         SchemaType::Bool { .. } => match json.as_bool() {
@@ -637,7 +678,7 @@ fn from_json_body(
                     mismatch(path, format!("missing record field `{}`", field.name))
                 })?;
                 path.push(PathSegment::Field(field.name.clone()));
-                let v = from_json_inner(graph, &field.body, value, path, &mut visited)?;
+                let v = from_json_inner(graph, &field.body, value, path, &mut visited, policy)?;
                 path.pop();
                 out.push(v);
             }
@@ -670,7 +711,8 @@ fn from_json_body(
                     )
                 })?;
                 path.push(PathSegment::Variant(name.clone()));
-                let inner = from_json_inner(graph, payload_ty, payload_json, path, &mut visited)?;
+                let inner =
+                    from_json_inner(graph, payload_ty, payload_json, path, &mut visited, policy)?;
                 path.pop();
                 Ok(SchemaValue::Variant(VariantValuePayload {
                     case: idx as u32,
@@ -736,7 +778,7 @@ fn from_json_body(
             let mut out = Vec::with_capacity(arr.len());
             for (i, (et, ev)) in elements.iter().zip(arr.iter()).enumerate() {
                 path.push(PathSegment::Index(i));
-                let v = from_json_inner(graph, et, ev, path, &mut visited)?;
+                let v = from_json_inner(graph, et, ev, path, &mut visited, policy)?;
                 path.pop();
                 out.push(v);
             }
@@ -750,7 +792,7 @@ fn from_json_body(
             let mut out = Vec::with_capacity(arr.len());
             for (i, ev) in arr.iter().enumerate() {
                 path.push(PathSegment::Index(i));
-                let v = from_json_inner(graph, element, ev, path, &mut visited)?;
+                let v = from_json_inner(graph, element, ev, path, &mut visited, policy)?;
                 path.pop();
                 out.push(v);
             }
@@ -776,7 +818,7 @@ fn from_json_body(
             let mut out = Vec::with_capacity(arr.len());
             for (i, ev) in arr.iter().enumerate() {
                 path.push(PathSegment::Index(i));
-                let v = from_json_inner(graph, element, ev, path, &mut visited)?;
+                let v = from_json_inner(graph, element, ev, path, &mut visited, policy)?;
                 path.pop();
                 out.push(v);
             }
@@ -802,10 +844,10 @@ fn from_json_body(
                     ));
                 }
                 path.push(PathSegment::MapKey(i));
-                let k = from_json_inner(graph, key, &pair[0], path, &mut visited)?;
+                let k = from_json_inner(graph, key, &pair[0], path, &mut visited, policy)?;
                 path.pop();
                 path.push(PathSegment::MapValue(i));
-                let v = from_json_inner(graph, value, &pair[1], path, &mut visited)?;
+                let v = from_json_inner(graph, value, &pair[1], path, &mut visited, policy)?;
                 path.pop();
                 out.push((k, v));
             }
@@ -816,7 +858,7 @@ fn from_json_body(
             Value::Null => Ok(SchemaValue::Option { inner: None }),
             other => {
                 path.push(PathSegment::OptionInner);
-                let v = from_json_inner(graph, inner, other, path, &mut visited)?;
+                let v = from_json_inner(graph, inner, other, path, &mut visited, policy)?;
                 path.pop();
                 Ok(SchemaValue::Option {
                     inner: Some(Box::new(v)),
@@ -824,9 +866,11 @@ fn from_json_body(
             }
         },
 
-        SchemaType::Result { spec, .. } => decode_result(graph, spec, json, path, &mut visited),
+        SchemaType::Result { spec, .. } => {
+            decode_result(graph, spec, json, path, &mut visited, policy)
+        }
 
-        SchemaType::Union { spec, .. } => decode_union(graph, spec, json, path),
+        SchemaType::Union { spec, .. } => decode_union(graph, spec, json, path, policy),
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => Err(RenderError::Unsupported(
             "future/stream values have no JSON representation",
@@ -840,6 +884,7 @@ fn decode_result(
     json: &Value,
     path: &mut PathStack,
     visited: &mut HashSet<TypeId>,
+    policy: JsonDecodePolicy,
 ) -> Result<SchemaValue, RenderError> {
     let obj = json
         .as_object()
@@ -857,7 +902,7 @@ fn decode_result(
                 (None, Value::Null) => None,
                 (Some(ok_ty), other) => {
                     path.push(PathSegment::Ok);
-                    let v = from_json_inner(graph, ok_ty, other, path, visited)?;
+                    let v = from_json_inner(graph, ok_ty, other, path, visited, policy)?;
                     path.pop();
                     Some(Box::new(v))
                 }
@@ -875,7 +920,7 @@ fn decode_result(
                 (None, Value::Null) => None,
                 (Some(err_ty), other) => {
                     path.push(PathSegment::Err);
-                    let v = from_json_inner(graph, err_ty, other, path, visited)?;
+                    let v = from_json_inner(graph, err_ty, other, path, visited, policy)?;
                     path.pop();
                     Some(Box::new(v))
                 }
@@ -897,6 +942,7 @@ fn decode_union(
     spec: &UnionSpec,
     json: &Value,
     path: &mut PathStack,
+    policy: JsonDecodePolicy,
 ) -> Result<SchemaValue, RenderError> {
     // First: find every branch whose discriminator rule matches the
     // incoming JSON value. Validation rules out multi-match at construction
@@ -912,7 +958,8 @@ fn decode_union(
         [branch] => {
             // Then: decode the body against the matched branch.
             path.push(PathSegment::Union(branch.tag.clone()));
-            let body = from_json_inner(graph, &branch.body, json, path, &mut HashSet::new())?;
+            let body =
+                from_json_inner(graph, &branch.body, json, path, &mut HashSet::new(), policy)?;
             path.pop();
             Ok(SchemaValue::Union(UnionValuePayload {
                 tag: branch.tag.clone(),

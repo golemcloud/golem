@@ -16,6 +16,8 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] load_config_value(Array[Stri
 
 pub fn[T : ConfigField] load_field(@schema.TypeTag[T], Array[String]) -> T raise @common.AgentError
 
+pub fn[T : ConfigField] load_snapshot_config(@agents.SnapshotRestoreContext, @schema.TypeTag[T]) -> Config[T] raise @common.AgentError
+
 // Errors
 
 // Types and methods

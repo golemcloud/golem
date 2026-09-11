@@ -16,7 +16,9 @@
 
 use crate::schema::agent::{FieldSource, InputSchema, OutputSchema};
 use crate::schema::{MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType};
-use golem_schema::schema::render::json_schema::{JsonSchemaConfig, to_json_schema_with_config};
+use golem_schema::schema::render::json_schema::{
+    JsonSchemaConfig, to_external_input_json_schema, to_external_output_json_schema,
+};
 use serde_json::Value;
 
 /// Render an agent input schema as an object containing only user-supplied fields.
@@ -39,7 +41,7 @@ pub fn input_schema_to_json_schema(
         fields: record_fields,
         metadata: MetadataEnvelope::default(),
     };
-    to_json_schema_with_config(graph, &record, config)
+    to_external_input_json_schema(graph, &record, config.include_draft_marker)
 }
 
 /// Render an agent output schema, returning `None` for unit output.
@@ -50,6 +52,10 @@ pub fn output_schema_to_json_schema(
 ) -> Option<Value> {
     match output {
         OutputSchema::Unit => None,
-        OutputSchema::Single(ty) => Some(to_json_schema_with_config(graph, ty, config)),
+        OutputSchema::Single(ty) => Some(to_external_output_json_schema(
+            graph,
+            ty,
+            config.include_draft_marker,
+        )),
     }
 }

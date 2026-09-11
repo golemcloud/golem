@@ -30,6 +30,7 @@ import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
 import { t, typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
 import { tool } from '../src';
+import { encodeToolValue } from '../src/internal/tool/invocationResult';
 import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
 
 const streamFailures = [
@@ -1077,6 +1078,75 @@ describe('tool guest exports', () => {
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
     expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe(raw);
+  });
+
+  it('releases a permission card after a non-canonical result so it can be retried', async () => {
+    const raw = { id: 'retry-permission-card' } as never;
+    let attempt = 0;
+    toolDefinition('permission-card-result-retry')
+      .body((body) => body.returns(z.object({ card: s.permissionCard({ polymorphic: false }) })))
+      .implement({
+        'permission-card-result-retry': async () =>
+          ok(attempt++ === 0 ? ({ card: raw, extra: true } as never) : { card: raw }),
+      });
+    const registered = ToolRegistry.get('permission-card-result-retry');
+    const commandNode = registered?.extended.commandByPath([]);
+    if (!registered || !commandNode) {
+      throw new Error('permission-card-result-retry was not registered');
+    }
+    const invoke = () =>
+      tool.invoke(
+        'permission-card-result-retry',
+        [],
+        typedSchemaValueToWit(registered.extended.canonicalInputModel(commandNode).encodeTyped({})),
+        undefined,
+        undefined,
+        { tag: 'anonymous' },
+      );
+
+    await expect(invoke()).rejects.toEqual({
+      tag: 'invalid-result',
+      val: 'tool result: is not canonical for its declared schema',
+    });
+
+    const result = await invoke();
+    expect(result.result).toBeDefined();
+    const decoded = typedSchemaValueFromWit(result.result!);
+    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toEqual({ card: raw });
+  });
+
+  it.each([
+    ['secret', s.secret(z.string())],
+    ['quota-token', s.quotaToken()],
+    ['permission-card', s.permissionCard({ polymorphic: false })],
+  ] as const)('rolls back partial %s result adoption before retry', (_name, schema) => {
+    const raw = {} as never;
+    const codec = compileSchema(z.array(schema));
+    expect(() => encodeToolValue(codec, [raw, raw], 'tool result')).toThrow();
+    const result = encodeToolValue(codec, [raw], 'tool result');
+    expect(codec.fromValue(typedSchemaValueFromWit(result).value)).toEqual([raw]);
+  });
+
+  it.each([
+    ['secret', s.secret(z.string())],
+    ['quota-token', s.quotaToken()],
+    ['permission-card', s.permissionCard({ polymorphic: false })],
+  ] as const)('rolls back %s adoption when a later property getter throws', (_name, schema) => {
+    const raw = {} as never;
+    const codec = compileSchema(z.object({ capability: schema, later: z.string() }));
+    expect(() =>
+      codec.toValue({
+        capability: raw,
+        get later() {
+          throw new Error('getter failed');
+        },
+      }),
+    ).toThrow('getter failed');
+    const result = encodeToolValue(codec, { capability: raw, later: 'ok' }, 'tool result');
+    expect(codec.fromValue(typedSchemaValueFromWit(result).value)).toEqual({
+      capability: raw,
+      later: 'ok',
+    });
   });
 
   it('delivers an owned permission-card input to a tool handler', async () => {
