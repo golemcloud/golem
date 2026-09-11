@@ -851,23 +851,43 @@ async fn test_streaming_invocation_cli_end_to_end() {
             .is_some_and(|cursors| !cursors.is_empty()),
         "checkpoint did not record the item emitted before interruption: {saved_checkpoint}"
     );
-    let resumed = ctx
-        .cli([
-            cmd::AGENT,
-            cmd::INVOKE,
-            &resume_agent,
-            "produce",
-            &checkpoint_values,
-            flag::FORMAT,
-            "json",
-            "--no-stream",
-            "--resume-session",
-            resume_checkpoint.to_str().unwrap(),
-        ])
-        .await;
+    // Process exit does not wait for the server to persist the transport detach.
+    let detach_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let resumed = loop {
+        let resumed = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                &resume_agent,
+                "produce",
+                &checkpoint_values,
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+                "--resume-session",
+                resume_checkpoint.to_str().unwrap(),
+            ])
+            .await;
+        if resumed.success() {
+            break resumed;
+        }
+        let events = resumed.stdout_json::<serde_json::Value>();
+        if events.len() != 1
+            || events[0]["kind"] != "rejected"
+            || events[0]["reason"] != "invalid-attachment-state"
+        {
+            break resumed;
+        }
+        assert!(
+            tokio::time::Instant::now() < detach_deadline,
+            "the killed invocation session did not become resumable"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
     assert!(
-        resumed.success(),
-        "checkpoint resume failed: {:?}",
+        resumed.success_or_dump(),
+        "checkpoint resume failed ({:?}): {:?}",
+        resumed.status,
         resumed.stderr().collect::<Vec<_>>()
     );
     let resumed_events = resumed
@@ -3443,7 +3463,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         &component_source_code_main_file,
         indoc! { r#"
             import { z } from 'zod';
-            import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
             export const TargetAgent = defineAgent({
               name: 'TargetAgent',
@@ -3462,8 +3482,6 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               },
             });
 
-            const targetClient = clientFor(TargetAgent);
-
             export const CallerAgent = defineAgent({
               name: 'CallerAgent',
               id: { id: z.string() },
@@ -3476,7 +3494,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               init: ({ id }) => ({ id: id.id }),
               methods: {
                 async callTarget({ targetId }) {
-                  return await targetClient({ id: targetId }).ping();
+                  return await TargetAgent.client.get({ id: targetId }).ping();
                 },
               },
             });

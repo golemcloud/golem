@@ -24,15 +24,14 @@ mod schema_native_tests {
     use crate::schema::metadata::MetadataEnvelope;
     use crate::schema::schema_type::{
         BinaryRestrictions, DiscriminatorRule, NamedFieldType, PathDirection, PathKind, PathSpec,
-        QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec,
-        TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+        QuantitySpec, QuantityValue, ResultSpec, SchemaType, TextRestrictions, UnionBranch,
+        UnionSpec, UrlRestrictions, VariantCaseType,
     };
     use crate::schema::schema_value::{
-        BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-        SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+        BinaryValuePayload, DurationValuePayload, ResultValuePayload, SchemaValue,
+        SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
     };
     use chrono::{TimeZone, Utc};
-    use golem_schema::EnvironmentId;
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
@@ -288,13 +287,6 @@ mod schema_native_tests {
     #[test]
     fn rich_values_and_map_roundtrip() {
         let dt = Utc.with_ymd_and_hms(2025, 4, 12, 13, 14, 15).unwrap();
-        let quota = QuotaTokenValuePayload {
-            environment_id: EnvironmentId { uuid: Uuid::nil() },
-            resource_name: "res".into(),
-            expected_use: 5,
-            last_credit: -2,
-            last_credit_at: dt,
-        };
         let v = typed(
             vec![
                 ("text", SchemaType::text(TextRestrictions::default())),
@@ -325,8 +317,6 @@ mod schema_native_tests {
                         max: None,
                     }),
                 ),
-                ("secret", SchemaType::secret(SecretSpec::default())),
-                ("quota", SchemaType::quota_token(QuotaTokenSpec::default())),
                 (
                     "map",
                     SchemaType::map(SchemaType::string(), SchemaType::u32()),
@@ -364,14 +354,6 @@ mod schema_native_tests {
                     scale: 1,
                     unit: "kg".into(),
                 }),
-                SchemaValue::Secret(SecretValuePayload {
-                    secret_id: Uuid::parse_str("00000000-0000-0000-0000-000000000123").unwrap(),
-                    config_key: Some(vec!["secret".to_string(), "ref".to_string()]),
-                    version: 7,
-                    resolved_at: dt,
-                    category: Some("api-key".to_string()),
-                }),
-                SchemaValue::QuotaToken(quota),
                 SchemaValue::Map {
                     entries: vec![
                         (SchemaValue::String("a".into()), SchemaValue::U32(1)),
@@ -381,13 +363,31 @@ mod schema_native_tests {
             ],
         );
         let formatted = roundtrip(&v);
-        assert!(formatted.starts_with("@t\"hello\",@t[hu]\"szia\",@b[]\"AQID\",@b[text/plain]\"YWJj\",@p\"/tmp/a b\",@u\"https://example.com/a?b=c\",@dt\"2025-04-12T13:14:15.000000000Z\",@dur\"PT1.5S\",@qty\"12.3kg\",@secret\"secret:{"));
-        assert!(
-            formatted.contains("\\\"secretId\\\":\\\"00000000-0000-0000-0000-000000000123\\\"")
-        );
-        assert!(formatted.contains("\\\"configKey\\\":[\\\"secret\\\",\\\"ref\\\"]"));
-        assert!(formatted.contains("\\\"version\\\":7"));
+        assert!(formatted.starts_with("@t\"hello\",@t[hu]\"szia\",@b[]\"AQID\",@b[text/plain]\"YWJj\",@p\"/tmp/a b\",@u\"https://example.com/a?b=c\",@dt\"2025-04-12T13:14:15.000000000Z\",@dur\"PT1.5S\",@qty\"12.3kg\""));
         assert!(formatted.ends_with(",m[(\"a\",1),(\"b\",2)]"));
+    }
+
+    #[test]
+    fn host_managed_capabilities_are_rejected_in_agent_ids() {
+        let value = typed(
+            vec![("secret", SchemaType::secret(Default::default()))],
+            vec![SchemaValue::Secret(SecretValuePayload {
+                secret_id: Uuid::nil(),
+                config_key: None,
+                version: 1,
+                resolved_at: Utc::now(),
+                category: None,
+            })],
+        );
+
+        assert_eq!(
+            format_structural_typed(&value),
+            Err(StructuralFormatError::HostManagedCapability)
+        );
+        assert_eq!(
+            parse_structural_typed("@secret\"forged\"", value.graph(), value.root_type()),
+            Err(StructuralFormatError::HostManagedCapability)
+        );
     }
 
     #[test]

@@ -50,7 +50,12 @@ jobs:
           token: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
           path: benchmark-results
 
+      # The suite exits non-zero when any benchmark recorded failed attempts,
+      # after the results JSON has been written. The results are committed
+      # either way; the last step turns the recorded failures into a red run.
       - name: Run benchmark suite
+        id: benchmark
+        continue-on-error: true
         run: |
           cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' \
             --primary-only \
@@ -71,3 +76,9 @@ jobs:
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add results/results.json
           git diff --staged --quiet || (git commit -m "Appended new benchmark results" && git push)
+
+      - name: Fail on recorded benchmark failures
+        if: steps.benchmark.outcome != 'success'
+        run: |
+          echo "The benchmark suite exited with status ${{ steps.benchmark.outcome }}; see its FAILURES output above."
+          exit 1

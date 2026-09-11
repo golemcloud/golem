@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineAgent, method, s, clientFor } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, s } from '@golemcloud/golem-ts-sdk';
 
 import {
   ObjectType,
@@ -327,9 +327,6 @@ export const BarAgentImpl = BarAgent.implement({
   },
 });
 
-// A typed RPC client factory for the remote BarAgent (mirrors `Client<BarAgent>`).
-const barAgentClient = clientFor(BarAgent);
-
 // ---------------------------------------------------------------------------
 // FooAgent — forwards every call to its BarAgent client and returns the result.
 // ---------------------------------------------------------------------------
@@ -346,11 +343,11 @@ export const FooAgent = defineAgent({
 });
 
 export const FooAgentImpl = FooAgent.implement({
-  // Build the phantom BarAgent client mirroring the old `BarAgent.get("foooo", 1)`
+  // Build the typed RPC client for BarAgent, mirroring `BarAgent.get("foooo", 1)`
   // (constructor params optionalStringType = "foooo", optionalUnionType = 1).
   init: ({ id }) => ({
     input: id.input,
-    barAgent: barAgentClient({ optionalStringType: 'foooo', optionalUnionType: 1 }),
+    barAgent: BarAgent.client.get({ optionalStringType: 'foooo', optionalUnionType: 1 }),
   }),
   methods: {
     funAll(input) {

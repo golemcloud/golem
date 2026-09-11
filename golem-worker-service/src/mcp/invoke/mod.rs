@@ -130,8 +130,8 @@ mod codec_tests {
 
     use golem_common::schema::graph::SchemaGraph;
     use golem_common::schema::metadata::MetadataEnvelope;
-    use golem_common::schema::render::json_value::{from_json_value, to_json_value};
     use golem_common::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
+    use golem_schema::schema::render::json_value::{from_json_value, to_json_value};
     use serde_json::json;
     use test_r::test;
 
