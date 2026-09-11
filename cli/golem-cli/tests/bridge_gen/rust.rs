@@ -244,6 +244,85 @@ fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
 }
 
 #[test]
+fn guest_generation_compiles_host_managed_capability_methods() {
+    let dir = TempDir::new().unwrap();
+    let target_path = Utf8Path::from_path(dir.path()).unwrap();
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "rust",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("CapabilityEnvelope"))],
+                Some(ref_to("CapabilityEnvelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("CapabilityEnvelope", envelope)],
+        AgentMode::Durable,
+    );
+    let mut generator = RustBridgeGenerator::new_with_mode(
+        agent_type,
+        target_path,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+    for capability_type in [
+        "golem_rust::secrets::GuestSecretHandle",
+        "golem_rust::quota::QuotaToken",
+        "golem_rust::schema::wit::GuestPermissionCardHandle",
+    ] {
+        assert!(
+            lib_rs.contains(capability_type),
+            "missing capability type {capability_type}:\n{lib_rs}"
+        );
+    }
+    assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub struct CapabilityEnvelope"));
+    assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub enum Multimodal0"));
+
+    let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
+    let output = std::process::Command::new("cargo")
+        .arg("check")
+        .arg("--target-dir")
+        .arg(shared_target_dir)
+        .current_dir(target_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated guest capability crate failed cargo check\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn bridge_rust_external_consumer_can_configure_with_only_generated_dependency() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();

@@ -25,11 +25,26 @@ import {
   SchemaType,
   SchemaValue,
 } from '../internal/schema-model';
-import { GuestSecretHandle } from '../internal/schema-model/secretHandle';
+import {
+  createUntrackedGuestSecretHandle,
+  peekGuestSecretHandle,
+  releaseGuestSecretHandle,
+  takeGuestSecretHandle,
+} from '../internal/schema-model/secretHandle';
 import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
-import { GuestQuotaTokenHandle } from '../internal/schema-model/quotaTokenHandle';
+import {
+  createUntrackedGuestQuotaTokenHandle,
+  peekGuestQuotaTokenHandle,
+  releaseGuestQuotaTokenHandle,
+  takeGuestQuotaTokenHandle,
+} from '../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
-import { GuestPermissionCardHandle } from '../internal/schema-model/permissionCardHandle';
+import {
+  createUntrackedGuestPermissionCardHandle,
+  peekGuestPermissionCardHandle,
+  releaseGuestPermissionCardHandle,
+  takeGuestPermissionCardHandle,
+} from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import type {
   PermissionCard as RawPermissionCard,
@@ -190,9 +205,12 @@ export function sourceValueIsCanonical(
     return deepEqual(codec.fromValue(encoded), source);
   }
 
-  const probe = codec.toValue(source);
+  const sentinels = new Map<unknown, object>();
+  const probe = cloneWithSentinelHandles(encoded, sentinels);
   try {
-    return deepEqual(codec.fromValue(probe), source);
+    return deepEqual(source, codec.fromValue(probe), (raw, sentinel) => {
+      return sentinels.has(raw) && sentinels.get(raw) === sentinel;
+    });
   } finally {
     drainCapabilityHandles(probe);
   }
@@ -288,27 +306,30 @@ function cloneWithSentinelHandles(
 
   switch (value.tag) {
     case 'secret': {
-      const raw = value.handle.withHandle((handle) => handle);
+      const raw = peekGuestSecretHandle(SECRET_INTERNAL, value.handle);
       if (raw === undefined) throw new Error('secret handle was already transferred');
       return {
         tag: 'secret',
-        handle: GuestSecretHandle.fromRaw(SECRET_INTERNAL, sentinelFor(raw) as RawSecret),
+        handle: createUntrackedGuestSecretHandle(SECRET_INTERNAL, sentinelFor(raw) as RawSecret),
       };
     }
     case 'quota-token': {
-      const raw = value.handle.withHandle((handle) => handle);
+      const raw = peekGuestQuotaTokenHandle(QUOTA_INTERNAL, value.handle);
       if (raw === undefined) throw new Error('quota-token handle was already transferred');
       return {
         tag: 'quota-token',
-        handle: GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, sentinelFor(raw) as RawQuotaToken),
+        handle: createUntrackedGuestQuotaTokenHandle(
+          QUOTA_INTERNAL,
+          sentinelFor(raw) as RawQuotaToken,
+        ),
       };
     }
     case 'permission-card': {
-      const raw = value.handle.withHandle((handle) => handle);
+      const raw = peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
       if (raw === undefined) throw new Error('permission-card handle was already transferred');
       return {
         tag: 'permission-card',
-        handle: GuestPermissionCardHandle.fromRaw(
+        handle: createUntrackedGuestPermissionCardHandle(
           PERMISSION_CARD_INTERNAL,
           sentinelFor(raw) as RawPermissionCard,
         ),
@@ -382,9 +403,13 @@ function cloneWithSentinelHandles(
 function drainCapabilityHandles(value: SchemaValue): void {
   switch (value.tag) {
     case 'secret':
+      takeGuestSecretHandle(SECRET_INTERNAL, value.handle);
+      return;
     case 'quota-token':
+      takeGuestQuotaTokenHandle(QUOTA_INTERNAL, value.handle);
+      return;
     case 'permission-card':
-      value.handle.take();
+      takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
       return;
     case 'record':
       value.fields.forEach(drainCapabilityHandles);
@@ -411,6 +436,48 @@ function drainCapabilityHandles(value: SchemaValue): void {
       return;
     case 'union':
       drainCapabilityHandles(value.body);
+      return;
+    default:
+      return;
+  }
+}
+
+export function relinquishSchemaValueCapabilities(value: SchemaValue): void {
+  switch (value.tag) {
+    case 'secret':
+      releaseGuestSecretHandle(SECRET_INTERNAL, value.handle);
+      return;
+    case 'quota-token':
+      releaseGuestQuotaTokenHandle(QUOTA_INTERNAL, value.handle);
+      return;
+    case 'permission-card':
+      releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
+      return;
+    case 'record':
+      value.fields.forEach(relinquishSchemaValueCapabilities);
+      return;
+    case 'variant':
+      if (value.payload !== undefined) relinquishSchemaValueCapabilities(value.payload);
+      return;
+    case 'tuple':
+    case 'list':
+    case 'fixed-list':
+      value.elements.forEach(relinquishSchemaValueCapabilities);
+      return;
+    case 'map':
+      value.entries.forEach((entry) => {
+        relinquishSchemaValueCapabilities(entry.key);
+        relinquishSchemaValueCapabilities(entry.value);
+      });
+      return;
+    case 'option':
+      if (value.value !== undefined) relinquishSchemaValueCapabilities(value.value);
+      return;
+    case 'result':
+      if (value.result.value !== undefined) relinquishSchemaValueCapabilities(value.result.value);
+      return;
+    case 'union':
+      relinquishSchemaValueCapabilities(value.body);
       return;
     default:
       return;

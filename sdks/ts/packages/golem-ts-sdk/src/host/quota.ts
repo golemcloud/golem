@@ -20,12 +20,28 @@ import {
   merge as rawMerge,
   Reservation as RawReservation,
 } from 'golem:quota/types@1.5.0';
-import { GuestQuotaTokenHandle, type SchemaValue, v } from '../internal/schema-model';
+import { type SchemaValue, v } from '../internal/schema-model';
 import { QUOTA_INTERNAL, type QuotaInternal } from '../internal/schema-model/quotaInternal';
+import {
+  createGuestQuotaTokenHandle,
+  GuestQuotaTokenHandle,
+  peekGuestQuotaTokenHandle,
+  takeGuestQuotaTokenHandle,
+} from '../internal/schema-model/quotaTokenHandle';
 import { isPromiseLike } from './guard';
 import { Result } from './result';
 
 export type { FailedReservation };
+
+const tokenHandles = new WeakMap<QuotaToken, GuestQuotaTokenHandle>();
+
+function handleOf(token: QuotaToken): GuestQuotaTokenHandle {
+  const handle = tokenHandles.get(token);
+  if (handle === undefined) {
+    throw new Error('invalid quota token');
+  }
+  return handle;
+}
 
 /**
  * A committed or in-flight resource-consumption handle.
@@ -66,16 +82,12 @@ export class Reservation {
  * Or use the RAII helper {@link withQuotaToken} to commit automatically.
  */
 export class QuotaToken {
-  // True ECMAScript private field: the opaque owned handle is unreachable from
-  // guest code, so a `QuotaToken` cannot be forged or have its capability
-  // extracted by reaching into the instance.
-  readonly #handle: GuestQuotaTokenHandle;
-
-  private constructor(handle: GuestQuotaTokenHandle) {
+  constructor(key: QuotaInternal, handle: GuestQuotaTokenHandle) {
+    requireQuotaInternal(key);
     if (!(handle instanceof GuestQuotaTokenHandle)) {
       throw new Error('QuotaToken can only be constructed from an opaque quota-token handle');
     }
-    this.#handle = handle;
+    tokenHandles.set(this, handle);
   }
 
   /**
@@ -91,17 +103,15 @@ export class QuotaToken {
    * token first if you need to both keep and send a capability.
    */
   reserve(amount: bigint): Result<Reservation, FailedReservation> {
-    const result = this.#handle.withHandle((raw): Result<Reservation, FailedReservation> => {
-      try {
-        return Result.ok(new Reservation(rawReserve(raw, amount)));
-      } catch (e) {
-        return Result.err(e as FailedReservation);
-      }
-    });
-    if (result === undefined) {
+    const raw = peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handleOf(this));
+    if (raw === undefined) {
       throw new Error(TOKEN_CONSUMED);
     }
-    return result;
+    try {
+      return Result.ok(new Reservation(rawReserve(raw, amount)));
+    } catch (e) {
+      return Result.err(e as FailedReservation);
+    }
   }
 
   /**
@@ -115,11 +125,12 @@ export class QuotaToken {
    * if this token has already been transferred.
    */
   split(childExpectedUse: bigint): QuotaToken {
-    const raw = this.#handle.withHandle((h) => rawSplit(h, childExpectedUse));
-    if (raw === undefined) {
+    const parent = peekGuestQuotaTokenHandle(QUOTA_INTERNAL, handleOf(this));
+    if (parent === undefined) {
       throw new Error(TOKEN_CONSUMED);
     }
-    return new QuotaToken(GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, raw));
+    const child = rawSplit(parent, childExpectedUse);
+    return new QuotaToken(QUOTA_INTERNAL, createGuestQuotaTokenHandle(QUOTA_INTERNAL, child));
   }
 
   /**
@@ -132,57 +143,23 @@ export class QuotaToken {
    * already been transferred.
    */
   merge(other: QuotaToken): void {
+    const thisHandle = handleOf(this);
+    const otherHandle = handleOf(other);
     // Reject merging a token into itself before taking any handle, so a shared
     // handle is not consumed by the receiver and then read again as `other`.
-    if (other.#handle === this.#handle) {
+    if (otherHandle === thisHandle) {
       throw new Error('cannot merge a quota token with itself');
     }
     // Check this token first so a consumed receiver does not consume `other`.
-    if (!this.#handle.isPresent()) {
+    const thisRaw = peekGuestQuotaTokenHandle(QUOTA_INTERNAL, thisHandle);
+    if (thisRaw === undefined) {
       throw new Error(TOKEN_CONSUMED);
     }
-    const otherRaw = other.#handle.take();
+    const otherRaw = takeGuestQuotaTokenHandle(QUOTA_INTERNAL, otherHandle);
     if (otherRaw === undefined) {
       throw new Error(TOKEN_CONSUMED);
     }
-    this.#handle.withHandle((h) => rawMerge(h, otherRaw));
-  }
-
-  /**
-   * Lower the token into a schema value by sharing its opaque owned handle. The
-   * handle is not transferred here; it is moved out of the cell only when the
-   * resulting `SchemaValue` is encoded into a WIT `schema-value-tree`.
-   *
-   * This exposes the opaque handle, so it is gated behind the unexported
-   * {@link QUOTA_INTERNAL} key: only SDK-internal code (the value mapping layer)
-   * may extract a token's handle. A guest cannot, so it cannot reach the raw
-   * owned resource to forge or duplicate the capability.
-   */
-  _toSchemaValue(key: QuotaInternal): SchemaValue {
-    requireQuotaInternal(key);
-    return v.quotaToken(this.#handle);
-  }
-
-  /**
-   * Reconstruct a token from a decoded schema value's opaque handle. Gated
-   * behind {@link QUOTA_INTERNAL} so only SDK-internal code can wrap a handle
-   * back into a token.
-   */
-  static _fromSchemaValue(key: QuotaInternal, value: SchemaValue): QuotaToken {
-    requireQuotaInternal(key);
-    if (value.tag !== 'quota-token') {
-      throw new Error(`Expected a quota-token schema value, got '${value.tag}'`);
-    }
-    return new QuotaToken(value.handle);
-  }
-
-  /**
-   * Wrap a freshly acquired owned handle. Gated behind {@link QUOTA_INTERNAL} so
-   * only SDK-internal code can construct a token from a raw handle.
-   */
-  static _fromHandle(key: QuotaInternal, handle: GuestQuotaTokenHandle): QuotaToken {
-    requireQuotaInternal(key);
-    return new QuotaToken(handle);
+    rawMerge(thisRaw, otherRaw);
   }
 
   /**
@@ -195,6 +172,25 @@ export class QuotaToken {
       'quota tokens cannot be serialized; pass them directly to RPC or agent boundaries',
     );
   }
+}
+
+export function quotaTokenToSchemaValueInternal(
+  key: QuotaInternal,
+  value: QuotaToken,
+): SchemaValue {
+  requireQuotaInternal(key);
+  return v.quotaToken(handleOf(value));
+}
+
+export function quotaTokenFromSchemaValueInternal(
+  key: QuotaInternal,
+  value: SchemaValue,
+): QuotaToken {
+  requireQuotaInternal(key);
+  if (value.tag !== 'quota-token') {
+    throw new Error(`Expected a quota-token schema value, got '${value.tag}'`);
+  }
+  return new QuotaToken(key, value.handle);
 }
 
 function requireQuotaInternal(key: QuotaInternal): void {
@@ -215,9 +211,9 @@ const TOKEN_CONSUMED =
  *                       credit rate and max-credit for fair scheduling.
  */
 export function acquireQuotaToken(resourceName: string, expectedUse: bigint): QuotaToken {
-  return QuotaToken._fromHandle(
+  return new QuotaToken(
     QUOTA_INTERNAL,
-    GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, newToken(resourceName, expectedUse)),
+    createGuestQuotaTokenHandle(QUOTA_INTERNAL, newToken(resourceName, expectedUse)),
   );
 }
 
