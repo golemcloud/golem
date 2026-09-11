@@ -2808,6 +2808,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
 mod tests {
     use super::*;
     use crate::services::golem_config::GolemConfig;
+    use crate::worker::{MonthlyResourceAdmission, monthly_resource_admission};
     use golem_common::model::AgentId;
     use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
     use golem_common::model::application::{ApplicationId, ApplicationName};
@@ -2826,8 +2827,10 @@ mod tests {
     use golem_service_base::model::{
         AccountResourceLimits, ResourceLimits as ServiceResourceLimits,
     };
+    use std::collections::VecDeque;
     use std::sync::Mutex;
     use test_r::test;
+    use tokio::sync::Semaphore;
     use uuid::Uuid;
 
     test_r::enable!();
@@ -2990,6 +2993,17 @@ mod tests {
             if let Some(entry) = self.entry.upgrade() {
                 entry.record_memory_gb_seconds(AgentMode::Durable, amount);
             }
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecordingMemoryLimitTarget {
+        enforced: AtomicU64,
+    }
+
+    impl AgentMemoryLimitTarget for RecordingMemoryLimitTarget {
+        fn enforce_limit(&self, limit: u64) {
+            self.enforced.store(limit, Ordering::Release);
         }
     }
 
@@ -3629,6 +3643,158 @@ mod tests {
                     entry.durable_byte_seconds_delta(),
                     if filesystem { 13 } else { 0 }
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn every_enabled_monthly_dimension_independently_controls_admission_in_all_meter_combinations()
+    {
+        let period = AccountUsagePeriod::current();
+        for compute in [false, true] {
+            for memory in [false, true] {
+                for filesystem in [false, true] {
+                    let metering = ResourceUsageMeteringConfig {
+                        compute,
+                        memory,
+                        filesystem,
+                    };
+                    let cases = [
+                        (
+                            MonthlyResourceExhaustion::Compute,
+                            compute,
+                            AgentMode::Durable,
+                        ),
+                        (
+                            MonthlyResourceExhaustion::Memory,
+                            memory,
+                            AgentMode::Durable,
+                        ),
+                        (
+                            MonthlyResourceExhaustion::DurableStorage,
+                            filesystem,
+                            AgentMode::Durable,
+                        ),
+                        (
+                            MonthlyResourceExhaustion::EphemeralStorage,
+                            filesystem,
+                            AgentMode::Ephemeral,
+                        ),
+                    ];
+
+                    for (exhausted, enabled, agent_mode) in cases {
+                        let mut policy = MonthlyResourcePolicy {
+                            period,
+                            mode: MonthlyUsageMode::HardLimit,
+                            available_fuel: 1,
+                            available_memory_gb_seconds: 1,
+                            available_memory_byte_nanoseconds_remainder: 0,
+                            available_durable_storage_byte_seconds: 1,
+                            available_durable_storage_byte_nanoseconds_remainder: 0,
+                            available_ephemeral_storage_byte_seconds: 1,
+                            available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+                        };
+                        match exhausted {
+                            MonthlyResourceExhaustion::Compute => policy.available_fuel = 0,
+                            MonthlyResourceExhaustion::Memory => {
+                                policy.available_memory_gb_seconds = 0
+                            }
+                            MonthlyResourceExhaustion::DurableStorage => {
+                                policy.available_durable_storage_byte_seconds = 0
+                            }
+                            MonthlyResourceExhaustion::EphemeralStorage => {
+                                policy.available_ephemeral_storage_byte_seconds = 0
+                            }
+                        }
+                        let entry =
+                            AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+                                policy,
+                                4_096,
+                                usize::MAX,
+                                8_192,
+                                u64::MAX,
+                                u64::MAX,
+                                u64::MAX,
+                                u64::MAX,
+                                AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+                                AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                                metering,
+                                7,
+                                0,
+                            );
+
+                        let expected_capacity = enabled.then_some(exhausted);
+                        assert_eq!(
+                            entry.monthly_resource_capacity(agent_mode),
+                            expected_capacity.map_or(Ok(()), Err),
+                            "metering={metering:?}, exhausted={exhausted:?}, mode={agent_mode:?}"
+                        );
+                        let expected_admission = match (expected_capacity, agent_mode) {
+                            (None, _) => MonthlyResourceAdmission::Admit,
+                            (Some(_), AgentMode::Durable) => MonthlyResourceAdmission::Suspend,
+                            (Some(exhaustion), AgentMode::Ephemeral) => {
+                                MonthlyResourceAdmission::FailInvocation(exhaustion)
+                            }
+                        };
+                        assert_eq!(
+                            monthly_resource_admission(&entry, agent_mode),
+                            expected_admission,
+                            "metering={metering:?}, exhausted={exhausted:?}, mode={agent_mode:?}"
+                        );
+
+                        assert_eq!(entry.max_memory_limit(), 4_096);
+                        assert_eq!(entry.max_disk_space_limit(), 8_192);
+                    }
+
+                    let accounting_entry =
+                        AtomicResourceEntry::new_with_all_limits_metering_policy_and_revision(
+                            MonthlyResourcePolicy {
+                                period,
+                                mode: MonthlyUsageMode::HardLimit,
+                                available_fuel: 1,
+                                available_memory_gb_seconds: 1,
+                                available_memory_byte_nanoseconds_remainder: 0,
+                                available_durable_storage_byte_seconds: 1,
+                                available_durable_storage_byte_nanoseconds_remainder: 0,
+                                available_ephemeral_storage_byte_seconds: 1,
+                                available_ephemeral_storage_byte_nanoseconds_remainder: 0,
+                            },
+                            4_096,
+                            usize::MAX,
+                            8_192,
+                            u64::MAX,
+                            u64::MAX,
+                            u64::MAX,
+                            u64::MAX,
+                            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+                            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+                            metering,
+                            7,
+                            0,
+                        );
+                    assert!(accounting_entry.borrow_fuel(1));
+                    accounting_entry.record_memory_gb_seconds(AgentMode::Durable, 1);
+                    accounting_entry.record_storage_byte_seconds(AgentMode::Durable, 1);
+                    accounting_entry.record_storage_byte_seconds(AgentMode::Ephemeral, 1);
+
+                    let captured = accounting_entry
+                        .capture_usage_update(0)
+                        .expect("the zero refresh threshold includes every meter combination")
+                        .update;
+                    assert_eq!(captured.fuel_delta, i64::from(compute));
+                    assert_eq!(captured.memory_gb_seconds_delta, i64::from(memory));
+                    assert_eq!(
+                        captured.durable_storage_byte_seconds_delta,
+                        i64::from(filesystem)
+                    );
+                    assert_eq!(
+                        captured.ephemeral_storage_byte_seconds_delta,
+                        i64::from(filesystem)
+                    );
+                    assert_eq!(captured.metering.compute, compute);
+                    assert_eq!(captured.metering.memory, memory);
+                    assert_eq!(captured.metering.filesystem, filesystem);
+                }
             }
         }
     }
@@ -5996,7 +6162,15 @@ mod tests {
     struct MockRegistryService {
         get_limits_result: Mutex<Result<ServiceResourceLimits, RegistryServiceError>>,
         batch_update_result: Mutex<Result<AccountResourceLimits, RegistryServiceError>>,
+        delayed_batch_updates: Mutex<VecDeque<DelayedBatchUpdate>>,
         last_batch_updates: Mutex<HashMap<AccountId, ResourceUsageUpdate>>,
+        batch_update_calls: AtomicUsize,
+    }
+
+    struct DelayedBatchUpdate {
+        result: AccountResourceLimits,
+        started: Arc<Semaphore>,
+        release: Arc<Semaphore>,
     }
 
     impl MockRegistryService {
@@ -6017,7 +6191,9 @@ mod tests {
                     monthly_usage_mode_revision: 0,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
+                delayed_batch_updates: Mutex::new(VecDeque::new()),
                 last_batch_updates: Mutex::new(HashMap::new()),
+                batch_update_calls: AtomicUsize::new(0),
             }
         }
 
@@ -6039,6 +6215,23 @@ mod tests {
             *self.batch_update_result.lock().unwrap() = Err(
                 RegistryServiceError::InternalServerError("mock batch error".into()),
             );
+        }
+
+        fn delay_next_batch_update(
+            &self,
+            result: AccountResourceLimits,
+        ) -> (Arc<Semaphore>, Arc<Semaphore>) {
+            let started = Arc::new(Semaphore::new(0));
+            let release = Arc::new(Semaphore::new(0));
+            self.delayed_batch_updates
+                .lock()
+                .unwrap()
+                .push_back(DelayedBatchUpdate {
+                    result,
+                    started: Arc::clone(&started),
+                    release: Arc::clone(&release),
+                });
+            (started, release)
         }
 
         fn last_batch_update(&self, account_id: AccountId) -> ResourceUsageUpdate {
@@ -6084,7 +6277,14 @@ mod tests {
             &self,
             updates: HashMap<AccountId, ResourceUsageUpdate>,
         ) -> Result<AccountResourceLimits, RegistryServiceError> {
+            self.batch_update_calls.fetch_add(1, Ordering::AcqRel);
             *self.last_batch_updates.lock().unwrap() = updates;
+            let delayed = self.delayed_batch_updates.lock().unwrap().pop_front();
+            if let Some(delayed) = delayed {
+                delayed.started.add_permits(1);
+                delayed.release.acquire().await.unwrap().forget();
+                return Ok(delayed.result);
+            }
             self.batch_update_result
                 .lock()
                 .unwrap()
@@ -6268,6 +6468,50 @@ mod tests {
         )
     }
 
+    fn service_limits(
+        monthly_policy: MonthlyResourcePolicy,
+        monthly_usage_mode_revision: u64,
+        max_memory_per_worker: u64,
+        max_disk_space_per_worker: u64,
+    ) -> ServiceResourceLimits {
+        ServiceResourceLimits {
+            monthly_policy,
+            max_memory_per_worker,
+            max_table_elements_per_worker: u64::MAX,
+            max_disk_space_per_worker,
+            per_invocation_http_call_limit: u64::MAX,
+            per_invocation_rpc_call_limit: u64::MAX,
+            available_http_calls: u64::MAX,
+            available_rpc_calls: u64::MAX,
+            max_concurrent_agents_per_executor: u64::MAX,
+            oplog_writes_per_second: u64::MAX,
+            usage_update_applied: true,
+            monthly_usage_mode_revision,
+        }
+    }
+
+    fn account_limits(
+        account_id: AccountId,
+        limits: ServiceResourceLimits,
+    ) -> AccountResourceLimits {
+        AccountResourceLimits(HashMap::from([(account_id, limits)]))
+    }
+
+    fn assert_monthly_resource_admission(
+        entry: &AtomicResourceEntry,
+        durable: MonthlyResourceAdmission,
+        ephemeral: MonthlyResourceAdmission,
+    ) {
+        assert_eq!(
+            monthly_resource_admission(entry, AgentMode::Durable),
+            durable
+        );
+        assert_eq!(
+            monthly_resource_admission(entry, AgentMode::Ephemeral),
+            ephemeral
+        );
+    }
+
     #[test]
     async fn initialize_account_fetches_limits_from_registry() {
         let mock = Arc::new(MockRegistryService::new(5000, 1024));
@@ -6278,6 +6522,238 @@ mod tests {
 
         assert_eq!(entry.effective_fuel(), 5000);
         assert_eq!(entry.max_memory_limit(), 1024);
+    }
+
+    #[test]
+    async fn all_disabled_production_service_skips_monthly_work_and_keeps_per_agent_limits() {
+        let account_id = account_id();
+        let mock = Arc::new(MockRegistryService::new(0, 4_096));
+        mock.set_get_limits_response(service_limits(
+            MonthlyResourcePolicy {
+                available_memory_gb_seconds: 0,
+                available_durable_storage_byte_seconds: 0,
+                available_ephemeral_storage_byte_seconds: 0,
+                ..monthly_policy(0)
+            },
+            0,
+            4_096,
+            8_192,
+        ));
+        let token = CancellationToken::new();
+        token.cancel();
+        let client: Arc<dyn RegistryService> = mock.clone();
+        let svc = ResourceLimitsGrpc::new(
+            client,
+            Duration::from_secs(3600),
+            Duration::from_secs(300),
+            ResourceUsageMeteringConfig::default(),
+            token,
+        );
+
+        let entry = svc.initialize_account(account_id).await.unwrap();
+        assert!(
+            entry
+                .usage_revision_state
+                .lock()
+                .unwrap()
+                .monthly_policy
+                .is_none()
+        );
+        assert!(entry.account_usage_accumulator.is_none());
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Admit,
+            MonthlyResourceAdmission::Admit,
+        );
+        assert!(entry.borrow_fuel(u64::MAX));
+        entry.record_memory_gb_seconds(AgentMode::Durable, i64::MAX);
+        entry.record_storage_byte_seconds(AgentMode::Durable, i64::MAX);
+        entry.record_storage_byte_seconds(AgentMode::Ephemeral, i64::MAX);
+
+        let memory_target = Arc::new(RecordingMemoryLimitTarget {
+            enforced: AtomicU64::new(0),
+        });
+        let memory_target_dyn: Arc<dyn AgentMemoryLimitTarget> = memory_target.clone();
+        entry.register_agent_memory_limit_target(Arc::downgrade(&memory_target_dyn));
+        let observed_disk_limits = Arc::new(Mutex::new(Vec::new()));
+        let _filesystem_registration = entry.register_agent_filesystem_limit_target(
+            OwnedAgentId::new(
+                EnvironmentId(Uuid::new_v4()),
+                &AgentId {
+                    component_id: ComponentId(Uuid::new_v4()),
+                    agent_id: "all-disabled-managed-xfs".to_string(),
+                },
+            ),
+            {
+                let observed_disk_limits = Arc::clone(&observed_disk_limits);
+                move |limit| {
+                    let observed_disk_limits = Arc::clone(&observed_disk_limits);
+                    Box::pin(async move {
+                        observed_disk_limits.lock().unwrap().push(limit);
+                        Ok(())
+                    })
+                }
+            },
+        );
+
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        assert_eq!(mock.batch_update_calls.load(Ordering::Acquire), 0);
+        assert_eq!(entry.max_memory_limit(), 4_096);
+        assert_eq!(entry.max_disk_space_limit(), 8_192);
+        entry.update_memory_limit(2_048);
+        entry.apply_agent_filesystem_limit(4_096).await.unwrap();
+        assert_eq!(entry.max_memory_limit(), 2_048);
+        assert_eq!(entry.max_disk_space_limit(), 4_096);
+        assert_eq!(memory_target.enforced.load(Ordering::Acquire), 2_048);
+        assert_eq!(*observed_disk_limits.lock().unwrap(), vec![4_096]);
+    }
+
+    #[test]
+    async fn production_refresh_updates_shared_entry_in_both_directions() {
+        let account_id = account_id();
+        let mock = Arc::new(MockRegistryService::new(0, usize::MAX as u64));
+        let svc = make_grpc(Arc::clone(&mock));
+        let entry = svc.initialize_account(account_id).await.unwrap();
+        let shared_entry = svc.initialize_account(account_id).await.unwrap();
+        assert!(Arc::ptr_eq(&entry, &shared_entry));
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Suspend,
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Compute),
+        );
+
+        mock.set_batch_update_response(account_limits(
+            account_id,
+            service_limits(monthly_policy(1), 0, usize::MAX as u64, u64::MAX),
+        ));
+        svc.send_batch(0).await;
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Admit,
+            MonthlyResourceAdmission::Admit,
+        );
+
+        mock.set_batch_update_response(account_limits(
+            account_id,
+            service_limits(monthly_policy(0), 0, usize::MAX as u64, u64::MAX),
+        ));
+        svc.send_batch(0).await;
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Suspend,
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Compute),
+        );
+    }
+
+    #[test]
+    async fn production_refresh_updates_existing_per_agent_limit_targets() {
+        let account_id = account_id();
+        let mock = Arc::new(MockRegistryService::new(1, 8_192));
+        mock.set_get_limits_response(service_limits(monthly_policy(1), 0, 8_192, 16_384));
+        let svc = make_grpc(Arc::clone(&mock));
+        let entry = svc.initialize_account(account_id).await.unwrap();
+        let memory_target = Arc::new(RecordingMemoryLimitTarget {
+            enforced: AtomicU64::new(0),
+        });
+        let memory_target_dyn: Arc<dyn AgentMemoryLimitTarget> = memory_target.clone();
+        entry.register_agent_memory_limit_target(Arc::downgrade(&memory_target_dyn));
+        let observed_disk_limits = Arc::new(Mutex::new(Vec::new()));
+        let _filesystem_registration = entry.register_agent_filesystem_limit_target(
+            OwnedAgentId::new(
+                EnvironmentId(Uuid::new_v4()),
+                &AgentId {
+                    component_id: ComponentId(Uuid::new_v4()),
+                    agent_id: "refresh-existing-limit-targets".to_string(),
+                },
+            ),
+            {
+                let observed_disk_limits = Arc::clone(&observed_disk_limits);
+                move |limit| {
+                    let observed_disk_limits = Arc::clone(&observed_disk_limits);
+                    Box::pin(async move {
+                        observed_disk_limits.lock().unwrap().push(limit);
+                        Ok(())
+                    })
+                }
+            },
+        );
+        mock.set_batch_update_response(account_limits(
+            account_id,
+            service_limits(monthly_policy(1), 0, 4_096, 8_192),
+        ));
+
+        svc.send_batch(0).await;
+
+        assert_eq!(entry.max_memory_limit(), 4_096);
+        assert_eq!(entry.max_disk_space_limit(), 8_192);
+        assert_eq!(memory_target.enforced.load(Ordering::Acquire), 4_096);
+        assert_eq!(*observed_disk_limits.lock().unwrap(), vec![8_192]);
+    }
+
+    #[test]
+    async fn delayed_older_refresh_cannot_restore_admission() {
+        let account_id = account_id();
+        let mock = Arc::new(MockRegistryService::new(1, usize::MAX as u64));
+        let svc = make_grpc(Arc::clone(&mock));
+        let entry = svc.initialize_account(account_id).await.unwrap();
+
+        let (older_started, release_older) = mock.delay_next_batch_update(account_limits(
+            account_id,
+            service_limits(monthly_policy(1), 0, usize::MAX as u64, u64::MAX),
+        ));
+        let older_refresh = {
+            let svc = Arc::clone(&svc);
+            tokio::spawn(async move { svc.send_batch(0).await })
+        };
+        older_started.acquire().await.unwrap().forget();
+
+        mock.set_batch_update_response(account_limits(
+            account_id,
+            service_limits(monthly_policy(0), 0, usize::MAX as u64, u64::MAX),
+        ));
+        svc.send_batch(0).await;
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Suspend,
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Compute),
+        );
+
+        release_older.add_permits(1);
+        older_refresh.await.unwrap();
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Suspend,
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Compute),
+        );
+    }
+
+    #[test]
+    async fn owner_overage_refresh_recovers_durable_and_ephemeral_admission() {
+        let account_id = account_id();
+        let mock = Arc::new(MockRegistryService::new(0, usize::MAX as u64));
+        let svc = make_grpc(Arc::clone(&mock));
+        let entry = svc.initialize_account(account_id).await.unwrap();
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Suspend,
+            MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Compute),
+        );
+
+        let mut owner_overage = monthly_policy(0);
+        owner_overage.mode = MonthlyUsageMode::AllowOverage;
+        mock.set_batch_update_response(account_limits(
+            account_id,
+            service_limits(owner_overage, 1, usize::MAX as u64, u64::MAX),
+        ));
+
+        svc.send_batch(0).await;
+
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Admit,
+            MonthlyResourceAdmission::Admit,
+        );
     }
 
     #[test]

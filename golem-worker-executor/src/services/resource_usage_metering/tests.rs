@@ -261,40 +261,51 @@ async fn wait_for_active_observation(window: &ResourceUsageMeteringWindow) {
 }
 
 #[test]
-fn deployment_switches_construct_only_enabled_storage_state() {
-    for memory in [false, true] {
-        for filesystem in [false, true] {
-            let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
-            let (account, tracker) = configured_account(&entry, GIB, memory, Instant::now());
-            let constructions = Arc::new(AtomicUsize::new(0));
-            let factory_constructions = Arc::clone(&constructions);
-            let reader = ScriptedUsageReader::new(Vec::new());
-            let meter = create_configured_meter(
-                ResourceUsageMeteringConfig {
-                    compute: false,
-                    memory,
-                    filesystem,
-                },
-                move || {
-                    factory_constructions.fetch_add(1, Ordering::AcqRel);
-                    FilesystemUsageSource::scripted(reader)
-                },
-                account,
-            );
+async fn deployment_switches_construct_only_enabled_byte_time_state_in_all_combinations() {
+    for compute in [false, true] {
+        for memory in [false, true] {
+            for filesystem in [false, true] {
+                let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
+                let (account, tracker) = configured_account(&entry, GIB, memory, Instant::now());
+                let constructions = Arc::new(AtomicUsize::new(0));
+                let factory_constructions = Arc::clone(&constructions);
+                let reader = ScriptedUsageReader::new(Vec::new());
+                let meter = create_configured_meter(
+                    ResourceUsageMeteringConfig {
+                        compute,
+                        memory,
+                        filesystem,
+                    },
+                    move || {
+                        factory_constructions.fetch_add(1, Ordering::AcqRel);
+                        FilesystemUsageSource::scripted(reader)
+                    },
+                    account,
+                );
 
-            assert_eq!(meter.shared.is_some(), memory || filesystem);
-            assert_eq!(tracker.meter_if_enabled().is_some(), memory);
-            assert_eq!(
-                meter
-                    .shared
-                    .as_ref()
-                    .is_some_and(|shared| shared.observation_lane.is_some()),
-                filesystem
-            );
-            assert_eq!(
-                constructions.load(Ordering::Acquire),
-                usize::from(filesystem)
-            );
+                assert_eq!(meter.shared.is_some(), memory || filesystem);
+                assert_eq!(tracker.meter_if_enabled().is_some(), memory);
+                assert_eq!(
+                    meter
+                        .shared
+                        .as_ref()
+                        .is_some_and(|shared| shared.observation_lane.is_some()),
+                    filesystem
+                );
+                assert_eq!(
+                    constructions.load(Ordering::Acquire),
+                    usize::from(filesystem)
+                );
+                if !compute && !memory && !filesystem {
+                    let (_, _, permit) = permit(&entry).await;
+                    let window = open_window(&meter, permit).await.unwrap();
+                    assert!(window.shared.is_none());
+                    close_window(window, Instant::now() + Duration::from_secs(1))
+                        .await
+                        .unwrap();
+                    assert_eq!(constructions.load(Ordering::Acquire), 0);
+                }
+            }
         }
     }
 }

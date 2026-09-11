@@ -27,6 +27,8 @@ pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
 
+#[cfg(test)]
+pub(crate) use invocation_loop::{MonthlyResourceAdmission, monthly_resource_admission};
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
 
 use self::agent_config::{

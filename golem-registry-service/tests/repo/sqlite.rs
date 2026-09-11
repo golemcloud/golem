@@ -341,6 +341,11 @@ async fn test_account_resource_override_resolution(deps: &Deps) {
 }
 
 #[test]
+async fn test_account_resource_override_clear_falls_back_to_plan(deps: &Deps) {
+    crate::repo::common::test_account_resource_override_clear_falls_back_to_plan(deps).await;
+}
+
+#[test]
 async fn test_admin_resource_grants_resolve_all_dimensions_and_preserve_owner_values(deps: &Deps) {
     crate::repo::common::test_admin_resource_grants_resolve_all_dimensions_and_preserve_owner_values(deps).await;
 }

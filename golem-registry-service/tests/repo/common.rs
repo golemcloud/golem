@@ -23,7 +23,7 @@ use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
     AccountUsagePeriod, AdminResourceGrantDimension, AdminResourceGrantEventType,
     AdminResourceGrantReason, BYTE_NANOSECONDS_PER_GB_SECOND, EFFECTIVELY_UNLIMITED_STORAGE_LIMIT,
-    MonthlyUsageMode, MonthlyUsageModeTransitionSource,
+    FUEL_PER_GCU, MonthlyUsageMode, MonthlyUsageModeTransitionSource,
 };
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -3769,6 +3769,72 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
+pub async fn test_account_resource_override_clear_falls_back_to_plan(deps: &Deps) {
+    let account = deps.create_account().await;
+    let account_id = account.revision.account_id;
+    let mut plan = deps
+        .plan_repo
+        .get_by_id(account.revision.plan_id)
+        .await
+        .unwrap()
+        .unwrap();
+    plan.max_memory_per_worker = 100.into();
+    plan.max_memory_per_worker_ceiling = 1_000.into();
+    plan.max_memory_per_worker_user_configurable = true;
+    plan.max_disk_space_per_worker_enabled = true;
+    plan.max_disk_space_per_worker = 200.into();
+    plan.max_disk_space_per_worker_ceiling = 2_000.into();
+    plan.max_disk_space_per_worker_user_configurable = true;
+    deps.plan_repo.create_or_update(plan).await.unwrap();
+
+    for (dimension, value) in [
+        (AccountResourceOverrideDimension::MaxMemoryPerWorker, 500),
+        (
+            AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+            1_500,
+        ),
+    ] {
+        deps.account_resource_override_repo
+            .set_user_override(account_id, dimension, value, account_id)
+            .await
+            .unwrap();
+    }
+
+    let usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    let limits = usage.resource_limits().unwrap();
+    assert_eq!(limits.max_memory_per_worker, 500);
+    assert_eq!(limits.max_disk_space_per_worker, 1_500);
+    assert_eq!(usage.max_memory_per_worker.override_value, Some(500));
+    assert_eq!(usage.storage_limit.override_value, Some(1_500));
+
+    for dimension in [
+        AccountResourceOverrideDimension::MaxMemoryPerWorker,
+        AccountResourceOverrideDimension::MaxDiskSpacePerWorker,
+    ] {
+        deps.account_resource_override_repo
+            .delete(account_id, dimension)
+            .await
+            .unwrap();
+    }
+
+    let usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    let limits = usage.resource_limits().unwrap();
+    assert_eq!(limits.max_memory_per_worker, 100);
+    assert_eq!(limits.max_disk_space_per_worker, 200);
+    assert_eq!(usage.max_memory_per_worker.override_value, None);
+    assert_eq!(usage.storage_limit.override_value, None);
+}
+
 pub async fn test_account_resource_override_resolution(deps: &Deps) {
     let account = deps.create_account().await;
     let now = SqlDateTime::now();
@@ -4353,6 +4419,17 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
     let account = deps.create_account().await;
     let account_id = account.revision.account_id;
     assign_grant_test_plan(deps, &account).await;
+    let mut exhausted_usage = deps
+        .account_usage_repo
+        .get(account_id, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    exhausted_usage.add_change(
+        UsageType::MonthlyGasLimit,
+        i64::try_from(2 * FUEL_PER_GCU).unwrap(),
+    );
+    deps.account_usage_repo.add(&exhausted_usage).await.unwrap();
     let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::seconds(1));
     let just_before_expiry =
         SqlDateTime::new(expires_at.as_utc().to_owned() - chrono::Duration::microseconds(1));
@@ -4379,6 +4456,14 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
     assert_eq!(
         before_expiry.admin_grant_values.monthly_compute_gcu,
         Some(3)
+    );
+    assert_eq!(
+        before_expiry
+            .resource_limits()
+            .unwrap()
+            .monthly_policy
+            .available_fuel,
+        FUEL_PER_GCU
     );
     assert_eq!(before_expiry.admin_grants.len(), 1);
     assert_eq!(before_expiry.admin_grants[0].value, 3);
@@ -4413,6 +4498,14 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         .unwrap();
     assert_eq!(after_expiry.admin_grant_values.monthly_compute_gcu, None);
     assert!(after_expiry.admin_grants.is_empty());
+    assert_eq!(
+        after_expiry
+            .resource_limits()
+            .unwrap()
+            .monthly_policy
+            .available_fuel,
+        0
+    );
 
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     let replacement = deps
@@ -5333,6 +5426,22 @@ pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
     assert_eq!(seeded.monthly_memory_gb_seconds.get(), 3);
     assert_eq!(seeded.monthly_durable_storage_gb_month.get(), 5);
     assert_eq!(seeded.monthly_ephemeral_storage_gb_month.get(), 7);
+    let account_id = deps.create_account().await.revision.account_id;
+    let policy = deps
+        .account_usage_service()
+        .get_resource_policy(AccountId(account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(2));
+    assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(3));
+    assert_eq!(
+        policy.monthly.durable_storage_gb_month.monthly_amount,
+        Some(5)
+    );
+    assert_eq!(
+        policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+        Some(7)
+    );
 
     let mut updated = seeded;
     updated.monthly_compute_gcu = 11.into();
@@ -5346,6 +5455,21 @@ pub async fn test_plan_monthly_amounts_are_upserted(deps: &Deps) {
     assert_eq!(loaded.monthly_memory_gb_seconds.get(), 13);
     assert_eq!(loaded.monthly_durable_storage_gb_month.get(), 17);
     assert_eq!(loaded.monthly_ephemeral_storage_gb_month.get(), 19);
+    let policy = deps
+        .account_usage_service()
+        .get_resource_policy(AccountId(account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert_eq!(policy.monthly.compute_gcu.monthly_amount, Some(11));
+    assert_eq!(policy.monthly.memory_gb_seconds.monthly_amount, Some(13));
+    assert_eq!(
+        policy.monthly.durable_storage_gb_month.monthly_amount,
+        Some(17)
+    );
+    assert_eq!(
+        policy.monthly.ephemeral_storage_gb_month.monthly_amount,
+        Some(19)
+    );
 
     let listed = deps
         .plan_repo
@@ -6227,6 +6351,10 @@ pub async fn test_monthly_usage_mode_transitions(deps: &Deps) {
         .unwrap()
         .unwrap();
     assert_eq!(usage.monthly_usage_mode, MonthlyUsageMode::AllowOverage);
+    assert_eq!(
+        usage.resource_limits().unwrap().monthly_policy.mode,
+        MonthlyUsageMode::AllowOverage
+    );
 
     assert!(matches!(
         deps.account_usage_repo
@@ -6331,6 +6459,10 @@ pub async fn test_monthly_usage_mode_transitions(deps: &Deps) {
         .unwrap()
         .unwrap();
     assert_eq!(usage.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    assert_eq!(
+        usage.resource_limits().unwrap().monthly_policy.mode,
+        MonthlyUsageMode::HardLimit
+    );
     assert!(matches!(
         deps.account_usage_repo
             .set_monthly_usage_mode(
