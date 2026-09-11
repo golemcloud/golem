@@ -268,7 +268,10 @@ impl PluginRegistrationService {
             .account_service
             .resolve_account_id_by_email_unchecked(account_email)
             .await
-            .map_err(|_| not_found())?;
+            .map_err(|err| match err {
+                AccountError::AccountByEmailNotFound(_) => not_found(),
+                other => other.into(),
+            })?;
         let record = self
             .plugin_repo
             .get_by_name_and_version(account_id.0, name, version)
