@@ -29,7 +29,8 @@ mod tests {
     use golem_common::model::plugin_registration::{
         OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
     };
-    use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
+    use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OplogIndex};
+    use golem_common::schema::SchemaValue;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::components::rdb::DbInfo;
@@ -71,6 +72,9 @@ mod tests {
     pub async fn create_deps() -> EnvBasedTestDependencies {
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             number_of_shards_override: Some(16),
+            // The shortest lease the shard manager accepts, so that a paused executor is seen to
+            // lose its shards well inside a test's timeout.
+            shard_lease_duration_override: Some(Duration::from_secs(30)),
             ..EnvBasedTestDependenciesConfig::new()
         })
         .await
@@ -275,6 +279,146 @@ mod tests {
         info!("Sharding test completed");
         stop_tx.send(()).await.unwrap();
         chaos.await.unwrap();
+    }
+
+    #[test]
+    #[timeout(300000)]
+    // Not `#[flaky]`, unlike the scenarios above: what this pins is that a duplicate never
+    // happens, and a retry would hide one that only happens some of the time.
+    async fn an_executor_paused_past_its_lease_cannot_finish_the_invocations_it_started(
+        deps: &EnvBasedTestDependencies,
+        cluster_control: &WorkerExecutorClusterControlStub,
+        _tracing: &Tracing,
+    ) {
+        // Under the executor's `suspend_after` (10s by default), so the sleep runs in flight instead
+        // of suspending the agent: the executors freeze mid-invocation, which is the case a lease
+        // alone cannot stop - a frozen executor wakes up still holding work it can try to finish.
+        const DELAY_MILLIS: u64 = 8_000;
+
+        deps.reset(cluster_control, 16).await;
+        let admin = deps.admin().await;
+        let (_, env) = admin.app_and_env().await.unwrap();
+        let component = admin
+            .component(&env.id, "it_agent_counters_release")
+            .name("it:agent-counters")
+            .store()
+            .await
+            .unwrap();
+
+        let mut agents = Vec::new();
+        for i in 1..=8 {
+            let parsed_agent_id = agent_id!("InstantiationGrowthCounter", format!("fenced-{i}"));
+            let agent_id = admin
+                .start_agent(&component.id, parsed_agent_id.clone())
+                .await
+                .unwrap();
+            let finished_before = count_invocations_finished(&admin, &agent_id).await;
+            agents.push((parsed_agent_id, agent_id, finished_before));
+        }
+
+        let mut invocations = JoinSet::new();
+        for (parsed_agent_id, _, _) in &agents {
+            let user = deps.admin().await;
+            let component = component.clone();
+            let parsed_agent_id = parsed_agent_id.clone();
+            invocations.spawn(
+                async move {
+                    let result = user
+                        .invoke_and_await_agent_with_key(
+                            &component,
+                            &parsed_agent_id,
+                            &IdempotencyKey::fresh(),
+                            "delayed_increment",
+                            data_value!(DELAY_MILLIS),
+                        )
+                        .await;
+                    (parsed_agent_id, result)
+                }
+                .in_current_span(),
+            );
+        }
+
+        // Every invocation is inside its sleep now, on whichever executor owns its agent. Freezing
+        // all executors but one leaves the survivor as the only one to take their shards over, so
+        // nothing here needs to know which executor owned which agent.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let started = cluster_control.started_indices().await;
+        let (survivor, frozen) = started
+            .split_first()
+            .expect("the reset starts every executor");
+        info!("Pausing worker executors {frozen:?}, keeping {survivor}");
+        for idx in frozen {
+            cluster_control.pause(*idx).await;
+        }
+
+        // Past the frozen executors' leases, so that their shards are granted to the survivor at a
+        // higher epoch and it recovers and finishes their invocations itself, and past the delay,
+        // so that the frozen executors' own sleeps are over the moment they wake.
+        tokio::time::sleep(Duration::from_secs(45)).await;
+
+        // Thawed, the frozen executors carry on from exactly where they stopped, still holding
+        // invocations the survivor now owns. For each one, either the executor gives the agent up
+        // when it re-registers, or it finishes the sleep first and the fence refuses its write.
+        info!("Resuming worker executors {frozen:?}");
+        for idx in frozen {
+            cluster_control.resume(*idx).await;
+        }
+
+        while let Some(joined) =
+            tokio::time::timeout(Duration::from_secs(180), invocations.join_next())
+                .await
+                .expect("Timed out waiting for the invocations to finish")
+        {
+            let (parsed_agent_id, result) = joined.unwrap();
+            let value = result
+                .unwrap_or_else(|err| panic!("{parsed_agent_id}: invocation failed: {err:?}"))
+                .into_return_value()
+                .unwrap_or_else(|| panic!("{parsed_agent_id}: expected a return value"));
+            assert_eq!(
+                value,
+                SchemaValue::U32(1),
+                "{parsed_agent_id}: the delayed increment must be applied exactly once"
+            );
+        }
+
+        // No executor may have died on the way: a write the fence let through would land in an
+        // oplog the survivor is writing too, and a conflicting append there is fatal to the
+        // executor that makes it - which can be the rightful owner.
+        for idx in cluster_control.started_indices().await {
+            assert!(
+                cluster_control.is_running(idx).await,
+                "worker executor {idx} exited during the test"
+            );
+        }
+
+        for (parsed_agent_id, agent_id, finished_before) in &agents {
+            assert_eq!(
+                count_invocations_finished(&admin, agent_id).await,
+                finished_before + 1,
+                "{parsed_agent_id}: exactly one executor may record the invocation's completion"
+            );
+            // The agent's state agrees: one increment from the delayed call, one from this.
+            let next = admin
+                .invoke_and_await_agent(&component, parsed_agent_id, "increment", data_value!())
+                .await
+                .unwrap()
+                .into_return_value()
+                .unwrap_or_else(|| panic!("{parsed_agent_id}: expected a return value"));
+            assert_eq!(
+                next,
+                SchemaValue::U32(2),
+                "{parsed_agent_id}: the delayed increment must not have been applied twice"
+            );
+        }
+    }
+
+    async fn count_invocations_finished(user: &impl TestDsl, agent_id: &AgentId) -> usize {
+        user.get_oplog(agent_id, OplogIndex::INITIAL)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count()
     }
 
     async fn coordinated_scenario(
