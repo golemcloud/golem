@@ -70,7 +70,7 @@ use golem_common::schema::public_json::{
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FieldSource, InputSchema, NamedFieldType, ResultValuePayload, SchemaGraph, SchemaType,
-    SchemaValue, TypedSchemaValue, UnionValuePayload, VariantValuePayload,
+    SchemaValue, TypedSchemaValue, UnionValuePayload, VariantValuePayload, find_host_managed_type,
     schema_value_to_proto_with_streams,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -2470,7 +2470,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2567,7 +2567,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2661,8 +2661,24 @@ impl WorkerService {
                 ))
             })?;
 
+        if let Some(output_schema) = method.output_schema.schema()
+            && let Some(occurrence) = find_host_managed_type(
+                &invocation_agent_type.schema,
+                output_schema,
+            )
+            .map_err(|error| {
+                WorkerServiceError::Internal(format!("Invalid agent method output schema: {error}"))
+            })?
+        {
+            return Err(WorkerServiceError::TypeChecker(format!(
+                "Agent method output schema contains host-managed capability {} at {}; this method cannot be invoked through external REST",
+                occurrence.kind.kind_name(),
+                occurrence.path,
+            )));
+        }
+
         let method_parameters = json_input_schema_value_to_typed_schema_value(
-            request.method_parameters,
+            request.method_parameters.into_inner(),
             &invocation_agent_type.schema,
             &method.input_schema,
         )
@@ -2751,6 +2767,11 @@ impl WorkerService {
                     .cloned()
                     .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
                 let typed_output = TypedSchemaValue::new(output_graph, output_value);
+                let typed_output = typed_output.try_into().map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "Agent method result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?;
                 Ok(AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
@@ -2830,8 +2851,8 @@ mod tests {
     use golem_common::schema::public_json::PublicStreamReference;
     use golem_common::schema::stream::SchemaValueStream;
     use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
-        OutputSchema, SchemaGraph, SchemaType, SchemaValue,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, ExternalSchemaValue,
+        InputSchema, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
     };
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -4138,8 +4159,8 @@ mod tests {
         }
     }
 
-    fn empty_json_tuple() -> SchemaValue {
-        SchemaValue::Record { fields: vec![] }
+    fn empty_json_tuple() -> ExternalSchemaValue {
+        ExternalSchemaValue::try_from(SchemaValue::Record { fields: vec![] }).unwrap()
     }
 
     fn test_card() -> StoredCard {
@@ -5145,6 +5166,70 @@ mod tests {
         }
 
         assert_eq!(harness.worker_client.invocations().len(), 3);
+    }
+
+    #[test]
+    async fn rest_capability_outputs_are_rejected_before_worker_dispatch() {
+        for capability in [
+            SchemaType::secret(Default::default()),
+            SchemaType::quota_token(Default::default()),
+            SchemaType::permission_card(Default::default()),
+        ] {
+            for output in [capability.clone(), SchemaType::option(capability)] {
+                let harness = RestHarness::new_with_output(
+                    AgentMode::Durable,
+                    OutputSchema::Single(Box::new(output)),
+                );
+                for (mode, schedule_at) in [
+                    (AgentInvocationMode::Await, None),
+                    (AgentInvocationMode::Schedule, None),
+                    (AgentInvocationMode::Schedule, Some(Utc::now())),
+                ] {
+                    let mut request = harness.invoke_request();
+                    request.mode = mode;
+                    request.schedule_at = schedule_at;
+                    request.idempotency_key = None;
+                    let error = harness
+                        .worker_service
+                        .invoke_agent_rest(request, AuthCtx::system())
+                        .await
+                        .expect_err("capability outputs must be rejected before execution");
+                    assert!(matches!(error, WorkerServiceError::TypeChecker(_)));
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("output schema contains host-managed capability")
+                    );
+                }
+                assert!(harness.worker_client.invocations().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    async fn rest_capability_output_preflight_uses_existing_worker_revision() {
+        let capability_output =
+            OutputSchema::Single(Box::new(SchemaType::secret(Default::default())));
+        let pinned_capability = RestHarness::new_with_pinned_and_latest_output(
+            capability_output.clone(),
+            OutputSchema::Unit,
+        );
+        let error = pinned_capability
+            .worker_service
+            .invoke_agent_rest(pinned_capability.invoke_request(), AuthCtx::system())
+            .await
+            .expect_err("the pinned capability-bearing revision must be rejected");
+        assert!(matches!(error, WorkerServiceError::TypeChecker(_)));
+        assert!(pinned_capability.worker_client.invocations().is_empty());
+
+        let pinned_plain =
+            RestHarness::new_with_pinned_and_latest_output(OutputSchema::Unit, capability_output);
+        pinned_plain
+            .worker_service
+            .invoke_agent_rest(pinned_plain.invoke_request(), AuthCtx::system())
+            .await
+            .expect("the pinned ordinary output must remain dispatchable");
+        assert_eq!(pinned_plain.worker_client.invocations().len(), 1);
     }
 
     #[test]

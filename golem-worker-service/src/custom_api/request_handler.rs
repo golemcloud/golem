@@ -24,7 +24,7 @@ use super::webhooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
-use golem_common::schema::render::json_value::to_json_value_redacted;
+use golem_schema::schema::render::json_value::to_json_value_redacted;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::OpenApiSpecFormat;
 use http::StatusCode;

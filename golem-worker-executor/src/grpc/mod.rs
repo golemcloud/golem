@@ -310,7 +310,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             // Compare the existing entry's plain (schema-guided) JSON (the same
             // form the request DTO carries) against the requested value.
-            let existing_json = golem_common::schema::render::to_json_value(
+            let existing_json = golem_schema::schema::render::to_json_value(
                 existing_entry.value.graph(),
                 existing_entry.value.root_type(),
                 existing_entry.value.value(),
@@ -1642,14 +1642,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         entries: chunk
                             .entries
                             .into_iter()
-                            .map(|(idx, entry)| {
-                                entry.try_into().map(|entry: golem::worker::OplogEntry| {
-                                    golem::worker::OplogEntryWithIndex {
-                                        oplog_index: idx.into(),
-                                        entry: Some(entry),
-                                    }
-                                })
-                            })
+                            .map(|entry| entry.try_into())
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(WorkerExecutorError::unknown)?,
                         next,

@@ -723,6 +723,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         Ok(worker
             .add_to_oplog(OplogEntry::card_event_queued(
+                None,
                 golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
             ))
             .await)
@@ -741,6 +742,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         worker
             .add_and_commit_oplog(OplogEntry::card_event_queued(
+                None,
                 golem_common::base_model::oplog::QueuedCardEvent::install(card),
             ))
             .await;
@@ -2363,6 +2365,20 @@ impl HostWasmRpc for TestWorkerCtx {
             .await
     }
 
+    async fn create(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx
+            .create(agent_type_name, constructor, phantom_id, config)
+            .await
+    }
+
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
@@ -3718,7 +3734,7 @@ impl Oplog for TestOplog {
             .additional_test_deps
             .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::no_op();
+            return OplogEntry::no_op(None);
         }
         self.oplog.read(oplog_index).await
     }

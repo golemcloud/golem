@@ -296,7 +296,9 @@ mod tests {
     use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
     use golem_common::schema::agent::{InputSchema, NamedField, OutputSchema};
     use golem_common::schema::schema_type::SchemaType;
-    use golem_common::schema::{SchemaGraph, SchemaTypeDef, SchemaValue, TypeId};
+    use golem_common::schema::{
+        ExternalSchemaValue, SchemaGraph, SchemaTypeDef, SchemaValue, TypeId,
+    };
     use uuid::Uuid;
 
     fn schema_str() -> SchemaType {
@@ -393,7 +395,7 @@ mod tests {
             ),
             revision: serde_json::from_value(serde_json::json!(0)).unwrap(),
             secret_type,
-            secret_value: value,
+            secret_value: value.map(|value| ExternalSchemaValue::try_from(value).unwrap()),
         }
     }
 

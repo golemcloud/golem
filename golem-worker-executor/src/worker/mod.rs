@@ -4041,6 +4041,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let foreign_mappings = request.foreign_mappings.clone();
+        for mapping in &foreign_mappings {
+            if producer.owns_handle_identity(&mapping.handle) {
+                producer
+                    .validate_handle(&mapping.handle)
+                    .await
+                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            }
+        }
 
         let prepared = if let Some(prepared) = existing_prepared {
             let mut requested_attempt = request.attempt.clone();
@@ -4246,10 +4254,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
         .with_response_lease(response_lease);
         for mapping in foreign_mappings {
-            if streams
-                .has_journaled_consumer_terminal(mapping)
-                .await
-                .map_err(WorkerExecutorError::runtime)?
+            if producer.owns_handle_identity(&mapping.handle)
+                || streams
+                    .has_journaled_consumer_terminal(mapping)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?
             {
                 continue;
             }
@@ -4271,16 +4280,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .add_pair(
                     pending,
                     Box::new(move |pending_invocation_oplog_index| {
-                        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
-                            StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
-                                format_version: 1,
-                                session_key: attached_attempt.session_key,
-                                attachment_id: attached_attempt.attachment_id,
-                                attempt_id: attached_attempt.attempt_id,
-                                epoch: 1,
-                                pending_invocation_oplog_index,
-                            }),
-                        )))
+                        OplogEntry::stream_session(
+                            None,
+                            OplogPayload::Inline(Box::new(StreamSessionRecordV1::Attached(
+                                StreamSessionAttachedRecordV1 {
+                                    format_version: 1,
+                                    session_key: attached_attempt.session_key,
+                                    attachment_id: attached_attempt.attachment_id,
+                                    attempt_id: attached_attempt.attempt_id,
+                                    epoch: 1,
+                                    pending_invocation_oplog_index,
+                                },
+                            ))),
+                        )
                     }),
                 )
                 .await;
@@ -4290,10 +4302,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(WorkerExecutorError::runtime)?;
         }
         for mapping in foreign_mappings {
-            if streams
-                .has_journaled_consumer_terminal(mapping)
-                .await
-                .map_err(WorkerExecutorError::runtime)?
+            if producer.owns_handle_identity(&mapping.handle)
+                || streams
+                    .has_journaled_consumer_terminal(mapping)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?
             {
                 continue;
             }
@@ -4870,7 +4883,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         if requires_attachment {
-            streams = streams.require_attachment_before_production();
+            streams = streams.require_root_attachment_before_production();
         }
         streams
             .materialize_result(value, graph, root, component_revision)
@@ -5632,9 +5645,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queued_event_indices = Vec::with_capacity(card_ids.len());
         for card_id in card_ids {
             queued_event_indices.push(
-                self.add_to_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
-                    card_id,
-                )))
+                self.add_to_oplog(OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::revoke(card_id),
+                ))
                 .await,
             );
         }
@@ -5694,11 +5708,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
         self.state_actor
             .append_and_commit_attached(
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    card,
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card),
+                ),
                 self.clone(),
                 instance_guard,
                 boundary_guard,

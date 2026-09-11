@@ -21,9 +21,9 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_session_public::{
     new_durable_stream_session_id, validate_durable_stream_session_id,
 };
-use golem_common::schema::render::to_json_value;
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{SchemaType, SchemaValue, schema_value_to_proto_with_streams};
+use golem_schema::schema::render::to_json_value;
 use golem_service_base::custom_api::CallAgentBehaviour;
 use golem_service_base::model::auth::AuthCtx;
 use http::{HeaderName, Method, StatusCode};

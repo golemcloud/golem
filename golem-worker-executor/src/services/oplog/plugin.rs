@@ -2418,7 +2418,7 @@ mod tests {
             )
             .await,
         );
-        oplog.add(OplogEntry::no_op()).await;
+        oplog.add(OplogEntry::no_op(None)).await;
         let commit = tokio::spawn({
             let oplog = oplog.clone();
             async move { oplog.commit(CommitLevel::Always).await }
@@ -2433,7 +2433,7 @@ mod tests {
                 if *confirmed_up_to == OplogIndex::NONE && *sending_up_to == OplogIndex::INITIAL));
         oplog.jobs.send(ForwardingJob::Tick).unwrap();
         assert_eq!(
-            oplog.add(OplogEntry::no_op()).await,
+            oplog.add(OplogEntry::no_op(None)).await,
             OplogIndex::from_u64(4)
         );
         let cleanup = oplog.commit(CommitLevel::Always).await;
@@ -2472,7 +2472,7 @@ mod tests {
                 Duration::from_secs(3600),
             )
             .await;
-            oplog.add(OplogEntry::no_op()).await;
+            oplog.add(OplogEntry::no_op(None)).await;
             oplog.commit(CommitLevel::Always).await;
             oplog.jobs.send(ForwardingJob::Tick).unwrap();
             entered.notified().await;
@@ -3099,10 +3099,12 @@ mod tests {
 
         let first = oplog.enqueue_add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         });
         let second = oplog
             .add(OplogEntry::NoOp {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
             })
             .await;
 

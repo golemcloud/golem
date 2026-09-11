@@ -390,6 +390,7 @@ mod tests {
             oplog
                 .add(OplogEntry::NoOp {
                     timestamp: golem_common::model::Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                 })
                 .await;
             let shutdown = slot.shutdown();
