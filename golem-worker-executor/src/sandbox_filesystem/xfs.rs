@@ -2156,14 +2156,18 @@ mod tests {
         (1..FILE_COUNT).for_each(|index| {
             assert_eq!(
                 std::fs::read(capture.root().join(format!("data/file-{index}"))).unwrap(),
-                vec![index as u8; FILE_BYTES]
+                vec![index as u8; FILE_BYTES],
+                "data/file-{index} in the capture must have the bytes of the agent file"
             );
         });
         let mut expected = tree_copy::tree_listing(&agent_root);
         ["static/asset.bin", "data/nested", "data/nested/hidden"]
             .into_iter()
             .for_each(|absent| {
-                assert!(expected.remove(absent));
+                assert!(
+                    expected.remove(absent),
+                    "{absent} must be in the agent tree listing"
+                );
             });
         assert_eq!(tree_copy::tree_listing(capture.root()), expected);
         assert_eq!(
@@ -2398,7 +2402,8 @@ mod tests {
                     FilesystemAllocation {
                         allocated_bytes: 0,
                         filesystem_objects: 0,
-                    }
+                    },
+                    "project {project} must have no allocation after cleanup"
                 );
             });
     }

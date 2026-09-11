@@ -75,19 +75,17 @@ fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
     {
         return (!path.as_os_str().is_empty()).then_some(path);
     }
+    let mut normalized = PathBuf::new();
     path.components()
-        .try_fold(
-            PathBuf::new(),
-            |mut normalized, component| match component {
-                Component::Normal(component) => {
-                    normalized.push(component);
-                    Some(normalized)
-                }
-                Component::RootDir | Component::CurDir => Some(normalized),
-                Component::ParentDir | Component::Prefix(_) => None,
-            },
-        )
-        .filter(|normalized| !normalized.as_os_str().is_empty())
+        .try_for_each(|component| match component {
+            Component::Normal(component) => {
+                normalized.push(component);
+                Some(())
+            }
+            Component::RootDir | Component::CurDir => Some(()),
+            Component::ParentDir | Component::Prefix(_) => None,
+        })?;
+    (!normalized.as_os_str().is_empty()).then_some(normalized)
 }
 
 /// Lists a tree, parents before children, without the excluded root-relative paths.
@@ -440,19 +438,27 @@ fn create_capability_symlink(
 /// Lists every root-relative path under `root` through the ambient filesystem, for comparisons.
 #[cfg(test)]
 pub(super) fn tree_listing(root: &Path) -> std::collections::BTreeSet<String> {
-    let mut found = std::collections::BTreeSet::new();
-    let mut pending = vec![PathBuf::new()];
-    while let Some(relative) = pending.pop() {
-        for entry in std::fs::read_dir(root.join(&relative)).unwrap() {
-            let entry = entry.unwrap();
+    list_into(root, PathBuf::new(), std::collections::BTreeSet::new())
+}
+
+/// Adds every root-relative path under `relative` to `found` and gives the set back.
+#[cfg(test)]
+fn list_into(
+    root: &Path,
+    relative: PathBuf,
+    found: std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    std::fs::read_dir(root.join(&relative))
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .fold(found, |mut found, entry| {
             let entry_relative = relative.join(entry.file_name());
-            if entry.file_type().unwrap().is_dir() {
-                pending.push(entry_relative.clone());
-            }
             found.insert(entry_relative.to_string_lossy().into_owned());
-        }
-    }
-    found
+            match entry.file_type().unwrap().is_dir() {
+                true => list_into(root, entry_relative, found),
+                false => found,
+            }
+        })
 }
 
 #[cfg(test)]
