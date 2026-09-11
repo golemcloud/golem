@@ -122,6 +122,7 @@ pub(crate) enum ProducerOutputSourceV1 {
 pub(crate) struct ProducerOutputRegistrationV1 {
     pub(crate) transport_stream_id: u64,
     pub(crate) source: ProducerOutputSourceV1,
+    pub(crate) cancellation_epoch: Option<u64>,
 }
 
 pub(crate) struct PendingCommittedCancellation {
@@ -2854,61 +2855,89 @@ impl DurableStreamProducer {
         .await
     }
 
-    async fn append_session_record_owned(
+    pub(crate) async fn append_session_record_owned(
         &self,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamSessionRecordV1,
     ) -> Result<(), DurableStreamProducerError> {
-        if !record.has_supported_format() {
+        self.append_session_records_owned(entity_parent_start_index, vec![record])
+            .await
+    }
+
+    pub(crate) async fn append_session_records_owned(
+        &self,
+        entity_parent_start_index: Option<OplogIndex>,
+        records: Vec<StreamSessionRecordV1>,
+    ) -> Result<(), DurableStreamProducerError> {
+        if records.iter().any(|record| !record.has_supported_format()) {
             return Err(DurableStreamProducerError::CorruptHistory(
                 "unsupported or malformed durable Stream Session record".to_string(),
             ));
         }
         let mut index = self
-            .index_for(ProducerMetadataKey::session_record(&record))
+            .index_for(records.iter().flat_map(ProducerMetadataKey::session_record))
             .await?;
-        if index.deleting
-            && !matches!(
-                &record,
-                StreamSessionRecordV1::AttachmentFinalized(_)
-                    | StreamSessionRecordV1::CascadeOutbox(_)
-                    | StreamSessionRecordV1::ConsumerDeleting(_)
-                    | StreamSessionRecordV1::SourceUnavailable(_)
-            )
-        {
-            return Err(DurableStreamProducerError::ProducerDeleting);
-        }
-        if index.consumer_deleting
-            && matches!(
-                &record,
-                StreamSessionRecordV1::TopologyPrepared(_)
-                    | StreamSessionRecordV1::TopologyActivated(_)
-            )
-        {
-            return Err(DurableStreamProducerError::ConsumerDeleting);
-        }
         let mut staged = index.clone();
-        staged.apply_session_references(entity_parent_start_index, &record)?;
-        staged.apply_deletion_record(
-            &record,
-            self.environment_id,
-            &self.producer,
-            self.producer_fingerprint,
-        )?;
-        let result_key = match &record {
-            StreamSessionRecordV1::InvocationResult(record) => Some(record.session_key.clone()),
-            _ => None,
-        };
+        for record in &records {
+            if staged.deleting
+                && !matches!(
+                    record,
+                    StreamSessionRecordV1::AttachmentFinalized(_)
+                        | StreamSessionRecordV1::CascadeOutbox(_)
+                        | StreamSessionRecordV1::ConsumerDeleting(_)
+                        | StreamSessionRecordV1::SourceUnavailable(_)
+                )
+            {
+                return Err(DurableStreamProducerError::ProducerDeleting);
+            }
+            if staged.consumer_deleting
+                && matches!(
+                    record,
+                    StreamSessionRecordV1::TopologyPrepared(_)
+                        | StreamSessionRecordV1::TopologyActivated(_)
+                )
+            {
+                return Err(DurableStreamProducerError::ConsumerDeleting);
+            }
+            staged.apply_session_references(entity_parent_start_index, record)?;
+            staged.apply_deletion_record(
+                record,
+                self.environment_id,
+                &self.producer,
+                self.producer_fingerprint,
+            )?;
+        }
+        let result_keys = records
+            .iter()
+            .enumerate()
+            .filter_map(|(position, record)| match record {
+                StreamSessionRecordV1::InvocationResult(record) => {
+                    Some((position, record.session_key.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         self.begin_durable_effect();
-        let oplog_index = self
+        let entries = self
             .oplog
-            .add(OplogEntry::stream_session(
-                entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
-            ))
-            .await;
-        if let Some(key) = result_key {
-            staged.invocation_results.entry(key).or_insert(oplog_index);
+            .add_durable_stream_batch(Box::new(move |_| {
+                records
+                    .into_iter()
+                    .map(|record| {
+                        DurableStreamOplogRecord::Session(
+                            entity_parent_start_index,
+                            Box::new(record),
+                        )
+                    })
+                    .collect()
+            }))
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        for (position, key) in result_keys {
+            staged
+                .invocation_results
+                .entry(key)
+                .or_insert(entries[position].0);
         }
         self.commit().await;
         *index = staged;
@@ -3619,6 +3648,38 @@ impl DurableStreamProducer {
         }
         let mut index = self.index_for(keys).await?;
         let result_offset = index.invocation_results.get(&session_key).copied();
+        let result_session_key = session_key.clone();
+        let mut cancellations = Vec::new();
+        for (position, output) in outputs.iter().enumerate() {
+            if let Some(epoch) = output.cancellation_epoch {
+                if epoch == 0 {
+                    return Err(DurableStreamProducerError::InvalidAttachmentState);
+                }
+                let terminal = match &output.source {
+                    ProducerOutputSourceV1::New(_) => Some((0, entity_parent_start_index)),
+                    ProducerOutputSourceV1::Existing(handle)
+                        if self.owns_handle_identity(handle) =>
+                    {
+                        let stream = index
+                            .streams
+                            .get(&handle.stream_id)
+                            .ok_or(DurableStreamProducerError::UnknownStream(handle.stream_id))?;
+                        if stream.terminal {
+                            None
+                        } else {
+                            Some((
+                                stream.next_sequence,
+                                index.entity_parent_start_index(handle.stream_id)?,
+                            ))
+                        }
+                    }
+                    ProducerOutputSourceV1::Existing(_) => None,
+                };
+                let applied_locally = matches!(&output.source, ProducerOutputSourceV1::New(_))
+                    || matches!(&output.source, ProducerOutputSourceV1::Existing(handle) if self.owns_handle_identity(handle));
+                cancellations.push((position, epoch, terminal, applied_locally));
+            }
+        }
         let requests = outputs
             .iter()
             .filter_map(|output| match &output.source {
@@ -3669,9 +3730,11 @@ impl DurableStreamProducer {
         }) {
             return Err(DurableStreamProducerError::RegistrationDivergence);
         }
-        if requests.is_empty() {
+        if requests.is_empty()
+            && let Some(result_offset) = result_offset
+        {
             let expected = make_result(Vec::new());
-            let StreamSessionRecordV1::InvocationResult(expected_result) = &expected else {
+            let StreamSessionRecordV1::InvocationResult(_) = &expected else {
                 return Err(DurableStreamProducerError::CorruptHistory(
                     "empty result registration did not build an invocation-result record"
                         .to_string(),
@@ -3682,56 +3745,13 @@ impl DurableStreamProducer {
                     "result registration built a malformed invocation-result record".to_string(),
                 ));
             }
-            let session_finished = index
-                .finished_sessions
-                .contains(&expected_result.session_key);
-            let session_key = expected_result.session_key.clone();
             drop(index);
-            if let Some(offset) = result_offset {
-                let record = self.read_result_record(offset).await?;
-                return if record == expected {
-                    Ok((Vec::new(), record))
-                } else {
-                    Err(DurableStreamProducerError::RegistrationDivergence)
-                };
-            }
-            if session_finished {
-                return Err(DurableStreamProducerError::SessionFinished(session_key));
-            }
-            let expected_for_entry = expected.clone();
-            self.begin_durable_effect();
-            let mut entries = self
-                .oplog
-                .add_durable_stream_batch(Box::new(move |_| {
-                    vec![DurableStreamOplogRecord::Session(
-                        entity_parent_start_index,
-                        Box::new(expected_for_entry),
-                    )]
-                }))
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            self.commit().await;
-            let (oplog_index, entry) = entries.pop().ok_or_else(|| {
-                DurableStreamProducerError::CorruptHistory(
-                    "empty result registration batch returned no session record".to_string(),
-                )
-            })?;
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                return Err(DurableStreamProducerError::CorruptHistory(
-                    "empty result registration batch returned an unexpected entry".to_string(),
-                ));
+            let record = self.read_result_record(result_offset).await?;
+            return if record == expected {
+                Ok((Vec::new(), record))
+            } else {
+                Err(DurableStreamProducerError::RegistrationDivergence)
             };
-            let record = self
-                .oplog
-                .download_payload(record)
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            let mut index = self
-                .index_for(ProducerMetadataKey::session_record(&record))
-                .await?;
-            index.apply_session_references(entity_parent_start_index, &record)?;
-            index.apply_result_offset(oplog_index, &record);
-            return Ok((Vec::new(), record));
         }
         let existing_handles = requests
             .iter()
@@ -3765,6 +3785,11 @@ impl DurableStreamProducer {
                 }
             }
             return Err(DurableStreamProducerError::RegistrationDivergence);
+        }
+        if index.finished_sessions.contains(&result_session_key) {
+            return Err(DurableStreamProducerError::SessionFinished(
+                result_session_key,
+            ));
         }
         let session_key = requests.first().and_then(|request| {
             index.registration_session_key(&request.coordinate, &request.session_mapping)
@@ -3833,6 +3858,61 @@ impl DurableStreamProducer {
                 if !session_record.has_supported_format() {
                     return Vec::new();
                 }
+                let StreamSessionRecordV1::InvocationResult(invocation_result) = &session_record else {
+                    unreachable!("result builder returns an invocation result");
+                };
+                let mut cancelled = HashSet::new();
+                for (position, epoch, terminal, applied_locally) in cancellations {
+                    let handle = &invocation_result.stream_mappings[position].handle;
+                    if !cancelled.insert(handle.stream_id) { continue; }
+                    result.push(DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecordV1::ConsumerCancelIntent(
+                            golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: invocation_result.session_key.clone(),
+                                stream_id: handle.stream_id,
+                                epoch,
+                                role: StreamCancelRoleV1::OutputConsumer,
+                                reason: StreamCancelReasonV1::Cancelled,
+                                details: None,
+                            }
+                        )),
+                    ));
+                    if let Some((sequence, attribution)) = terminal {
+                        let offset = StreamOffsetV1::new(OplogIndex::from_u64(first_index.as_u64() + result.len() as u64), 0);
+                        result.push(DurableStreamOplogRecord::Cancel(attribution, StreamCancelRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            stream_id: handle.stream_id,
+                            producer_fingerprint,
+                            sequence,
+                            offset,
+                            authored_by: StreamTerminalAuthorV1::Protocol,
+                            role: StreamCancelRoleV1::OutputConsumer,
+                            reason: StreamCancelReasonV1::Cancelled,
+                            details: None,
+                        }));
+                    }
+                    if applied_locally {
+                        result.push(DurableStreamOplogRecord::Session(
+                            entity_parent_start_index,
+                            Box::new(StreamSessionRecordV1::ConsumerCancelApplied(
+                                golem_common::base_model::durable_stream::StreamConsumerCancelAppliedRecordV1 {
+                                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                    intent: golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecordV1 {
+                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                        session_key: invocation_result.session_key.clone(),
+                                        stream_id: handle.stream_id,
+                                        epoch,
+                                        role: StreamCancelRoleV1::OutputConsumer,
+                                        reason: StreamCancelReasonV1::Cancelled,
+                                        details: None,
+                                    },
+                                },
+                            )),
+                        ));
+                    }
+                }
                 result.push(DurableStreamOplogRecord::Session(
                     entity_parent_start_index,
                     Box::new(session_record),
@@ -3845,6 +3925,7 @@ impl DurableStreamProducer {
 
         let mut handles = Vec::new();
         let mut session_record = None;
+        let mut cancelled_count = 0;
         for (oplog_index, entry) in entries {
             match entry {
                 OplogEntry::StreamRegistered {
@@ -3886,7 +3967,30 @@ impl DurableStreamProducer {
                         .map_err(DurableStreamProducerError::Oplog)?;
                     index.apply_session_references(entity_parent_start_index, &record)?;
                     index.apply_result_offset(oplog_index, &record);
-                    session_record = Some(record);
+                    if matches!(record, StreamSessionRecordV1::InvocationResult(_)) {
+                        session_record = Some(record);
+                    }
+                }
+                OplogEntry::StreamCancel {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                } => {
+                    let record = self
+                        .oplog
+                        .download_payload(record)
+                        .await
+                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let event = index.apply_cancel(
+                        oplog_index,
+                        entity_parent_start_index,
+                        record,
+                        self.producer_fingerprint,
+                    )?;
+                    self.cancel_source(event.stream_id);
+                    // The terminal dispatcher publishes without delaying result registration on a reader.
+                    drop(self.enqueue_events(event.stream_id, vec![event], false)?);
+                    cancelled_count += 1;
                 }
                 _ => {
                     return Err(DurableStreamProducerError::CorruptHistory(
@@ -3896,6 +4000,7 @@ impl DurableStreamProducer {
             }
         }
         self.record_registered_streams(handles.len());
+        self.record_terminal_streams(cancelled_count);
         crate::metrics::durable_stream::record_producer_operation("register_result", false);
         Ok((
             handles,
@@ -6676,22 +6781,24 @@ impl DbDirectStreamAttachmentConsumerProbe {
             rpc: Some(rpc),
         }
     }
-}
 
-#[async_trait]
-impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
-    async fn status(
+    pub(crate) async fn committed_cancellation_status(
         &self,
         key: &StreamAttachmentKeyV1,
+        mapping: &StreamSessionMappingRecordV1,
+        intent: &golem_common::model::durable_stream::StreamConsumerCancelIntentRecordV1,
     ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
-        self.status_exact(key, None).await
+        self.inspect_status(key, Some(mapping), Some(intent)).await
     }
 
     #[tracing::instrument(name = "durable_stream.consumer.status", level = "debug", skip_all)]
-    async fn status_exact(
+    async fn inspect_status(
         &self,
         key: &StreamAttachmentKeyV1,
         expected_mapping: Option<&StreamSessionMappingRecordV1>,
+        expected_cancel: Option<
+            &golem_common::model::durable_stream::StreamConsumerCancelIntentRecordV1,
+        >,
     ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
         let session_owner = OwnedAgentId::new(
             key.session_key.callee_environment_id,
@@ -6776,7 +6883,9 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             .zip(status.attachment_attempt_id)
             .zip(status.attachment_attached)
             .map(|((epoch, attempt_id), attached)| (epoch, attempt_id, attached));
-        if attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch) {
+        if expected_cancel.is_none()
+            && attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch)
+        {
             return Ok(ConsumerAttachmentStatus::EpochMismatch);
         }
 
@@ -6813,6 +6922,19 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         if !metadata.covered_through.is_defined() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
+        if let Some(intent) = expected_cancel {
+            let mapping = expected_mapping.expect("cancellation inspection requires a mapping");
+            return metadata
+                .has_committed_cancellation(key, mapping, intent)
+                .map(|matches| {
+                    if matches {
+                        ConsumerAttachmentStatus::Active
+                    } else {
+                        ConsumerAttachmentStatus::Missing
+                    }
+                })
+                .map_err(DurableStreamProducerError::CorruptHistory);
+        }
         let topology = metadata
             .topology_status(key, expected_mapping)
             .map_err(DurableStreamProducerError::CorruptHistory)?;
@@ -6839,6 +6961,24 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             }
             (None, topology) => Ok(topology),
         }
+    }
+}
+
+#[async_trait]
+impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
+    async fn status(
+        &self,
+        key: &StreamAttachmentKeyV1,
+    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+        self.status_exact(key, None).await
+    }
+
+    async fn status_exact(
+        &self,
+        key: &StreamAttachmentKeyV1,
+        expected_mapping: Option<&StreamSessionMappingRecordV1>,
+    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+        self.inspect_status(key, expected_mapping, None).await
     }
 
     #[tracing::instrument(
@@ -12092,10 +12232,12 @@ pub(crate) mod tests {
                 ProducerOutputRegistrationV1 {
                     transport_stream_id: 31,
                     source: ProducerOutputSourceV1::New(request.clone()),
+                    cancellation_epoch: None,
                 },
                 ProducerOutputRegistrationV1 {
                     transport_stream_id: 12,
                     source: ProducerOutputSourceV1::Existing(existing.clone()),
+                    cancellation_epoch: None,
                 },
             ]
         };
@@ -12131,6 +12273,96 @@ pub(crate) mod tests {
     }
 
     #[test]
+    async fn result_registration_cancels_outputs_before_publishing_the_result() {
+        for new_output in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let producer = producer(oplog.clone(), &identity, None).await;
+            let mut request = root_registration(&identity);
+            request.coordinate = StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: vec![StreamValuePathStepV1::RecordField(0)],
+            };
+            let existing = producer.register(request.clone()).await.unwrap().value;
+            producer
+                .end(existing.stream_id, 0, StreamEndResultV1::Ok)
+                .await
+                .unwrap();
+            request.coordinate = StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: vec![StreamValuePathStepV1::RecordField(1)],
+            };
+            let open = if new_output {
+                None
+            } else {
+                Some(producer.register(request.clone()).await.unwrap().value)
+            };
+            let outputs = || {
+                vec![
+                    ProducerOutputRegistrationV1 {
+                        transport_stream_id: 13,
+                        source: match &open {
+                            Some(handle) => ProducerOutputSourceV1::Existing(handle.clone()),
+                            None => ProducerOutputSourceV1::New(request.clone()),
+                        },
+                        cancellation_epoch: Some(7),
+                    },
+                    ProducerOutputRegistrationV1 {
+                        transport_stream_id: 29,
+                        source: ProducerOutputSourceV1::Existing(existing.clone()),
+                        cancellation_epoch: Some(7),
+                    },
+                ]
+            };
+            let registered = producer
+                .register_result_streams(identity.invocation.clone(), vec![3], outputs(), None)
+                .await
+                .unwrap();
+            let StreamSessionRecordV1::InvocationResult(result) = &registered.1 else {
+                unreachable!()
+            };
+            let result_index = oplog.current_oplog_index().await;
+            let recovered = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            for (position, handle) in result.output_streams.iter().enumerate() {
+                let mut reader = recovered.catch_up(handle.clone(), None).await.unwrap();
+                let event = reader.next().await.unwrap().unwrap();
+                assert!(event.offset.producer_oplog_index() < result_index);
+                assert_eq!(
+                    event.payload,
+                    if position == 0 {
+                        CommittedProducerStreamEventPayloadV1::Cancel {
+                            role: StreamCancelRoleV1::OutputConsumer,
+                            reason: StreamCancelReasonV1::Cancelled,
+                            details: None,
+                        }
+                    } else {
+                        CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+                    }
+                );
+                assert!(reader.next().await.unwrap().is_none());
+            }
+            assert_eq!(
+                recovered
+                    .register_result_streams(identity.invocation.clone(), vec![3], outputs(), None)
+                    .await
+                    .unwrap(),
+                registered
+            );
+            assert_eq!(oplog.current_oplog_index().await, result_index);
+        }
+    }
+
+    #[test]
     async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
@@ -12140,10 +12372,12 @@ pub(crate) mod tests {
             ProducerOutputRegistrationV1 {
                 transport_stream_id: 1,
                 source: ProducerOutputSourceV1::New(request.clone()),
+                cancellation_epoch: None,
             },
             ProducerOutputRegistrationV1 {
                 transport_stream_id: 2,
                 source: ProducerOutputSourceV1::New(request),
+                cancellation_epoch: None,
             },
         ];
 
@@ -12750,6 +12984,66 @@ pub(crate) mod tests {
             index.apply_session_references(None, &record(mapping(MAX_DURABLE_STREAMS_PER_SESSION))),
             Err(DurableStreamProducerError::StreamLimit)
         );
+    }
+
+    #[test]
+    async fn session_control_batch_validates_before_appending_any_record() {
+        use crate::services::oplog::OplogOps;
+        use golem_common::model::durable_stream::{
+            StreamSessionCancelRequestedRecordV1, StreamSlotTombstonedRecordV1,
+        };
+
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let cancel = StreamSessionRecordV1::CancelRequested(StreamSessionCancelRequestedRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: identity.invocation.clone(),
+        });
+        let tombstone = StreamSessionRecordV1::Tombstoned(StreamSlotTombstonedRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: identity.invocation,
+            slot: "$result".into(),
+            role: SessionStreamRoleV1::Output,
+        });
+        let mut malformed = tombstone.clone();
+        if let StreamSessionRecordV1::Tombstoned(record) = &mut malformed {
+            record.slot.clear();
+        }
+        let before = oplog.current_oplog_index().await;
+        let invalid_records = vec![cancel.clone(), malformed];
+        assert!(matches!(
+            producer
+                .run_owned(0, move |owner| async move {
+                    owner
+                        .append_session_records_owned(None, invalid_records)
+                        .await
+                })
+                .await,
+            Err(DurableStreamProducerError::CorruptHistory(_))
+        ));
+        assert_eq!(oplog.current_oplog_index().await, before);
+
+        let records = vec![cancel.clone(), tombstone.clone()];
+        producer
+            .run_owned(0, move |owner| async move {
+                owner.append_session_records_owned(None, records).await
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            oplog.current_oplog_index().await.as_u64(),
+            before.as_u64() + 2
+        );
+        for (offset, expected) in [cancel, tombstone].into_iter().enumerate() {
+            let entry = oplog
+                .read(OplogIndex::from_u64(before.as_u64() + 1 + offset as u64))
+                .await;
+            let OplogEntry::StreamSession { record, .. } = entry else {
+                panic!("expected session control record");
+            };
+            assert_eq!(oplog.download_payload(record).await.unwrap(), expected);
+        }
     }
 
     #[test]

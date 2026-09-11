@@ -342,10 +342,7 @@ impl StreamSessionIndexService {
         let keys: Vec<_> = controls.keys().cloned().collect();
         for key in keys {
             let control = controls.get(&key).unwrap();
-            match (
-                control.recovery_slot,
-                control.needs_topology_recovery(id, &key),
-            ) {
+            match (control.recovery_slot, control.needs_recovery(id, &key)) {
                 (None, true) => {
                     let slot = metadata.recovery_session_count;
                     let page = self
@@ -1019,6 +1016,11 @@ fn record_key(record: &StreamSessionRecordV1) -> Option<&IdempotencyKey> {
         StreamSessionRecordV1::Detached(value) => Some(&value.session_key.idempotency_key),
         StreamSessionRecordV1::InvocationResult(value) => Some(&value.session_key.idempotency_key),
         StreamSessionRecordV1::Finished(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecordV1::ConsumerCancelApplied(value) => {
+            Some(&value.intent.session_key.idempotency_key)
+        }
+        StreamSessionRecordV1::Tombstoned(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecordV1::CancelRequested(value) => Some(&value.session_key.idempotency_key),
         _ => None,
     }
 }

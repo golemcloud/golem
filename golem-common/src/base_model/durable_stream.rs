@@ -514,7 +514,9 @@ pub struct StreamCancelRecordV1 {
     pub details: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamCancelRoleV1 {
     InputProducer,
@@ -524,7 +526,9 @@ pub enum StreamCancelRoleV1 {
     System,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamCancelReasonV1 {
     Cancelled,
@@ -1008,7 +1012,7 @@ pub struct StreamConsumerTerminalRecordV1 {
     pub terminal: StreamConsumerTerminalV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerCancelIntentRecordV1 {
@@ -1019,6 +1023,14 @@ pub struct StreamConsumerCancelIntentRecordV1 {
     pub role: StreamCancelRoleV1,
     pub reason: StreamCancelReasonV1,
     pub details: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamConsumerCancelAppliedRecordV1 {
+    pub format_version: u8,
+    pub intent: StreamConsumerCancelIntentRecordV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1055,6 +1067,24 @@ pub struct StreamSessionFinishedRecordV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamSlotTombstonedRecordV1 {
+    pub format_version: u8,
+    pub session_key: StreamSessionKeyV1,
+    pub slot: String,
+    pub role: SessionStreamRoleV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamSessionCancelRequestedRecordV1 {
+    pub format_version: u8,
+    pub session_key: StreamSessionKeyV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamCallerAttemptRecordV1 {
     pub format_version: u8,
     pub session_key: StreamSessionKeyV1,
@@ -1084,9 +1114,12 @@ pub enum StreamSessionRecordV1 {
     ExternalProducerState(StreamExternalProducerStateRecordV1),
     ConsumerItemValue(StreamConsumerItemValueRecordV1),
     ConsumerCancelIntent(StreamConsumerCancelIntentRecordV1),
+    ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1),
     ConsumerTerminal(StreamConsumerTerminalRecordV1),
     InvocationResult(StreamSessionInvocationResultRecordV1),
     Finished(StreamSessionFinishedRecordV1),
+    Tombstoned(StreamSlotTombstonedRecordV1),
+    CancelRequested(StreamSessionCancelRequestedRecordV1),
 }
 
 impl StreamSessionRecordV1 {
@@ -1112,9 +1145,12 @@ impl StreamSessionRecordV1 {
             Self::ExternalProducerState(record) => record.format_version,
             Self::ConsumerItemValue(record) => record.format_version,
             Self::ConsumerCancelIntent(record) => record.format_version,
+            Self::ConsumerCancelApplied(record) => record.format_version,
             Self::ConsumerTerminal(record) => record.format_version,
             Self::InvocationResult(record) => record.format_version,
             Self::Finished(record) => record.format_version,
+            Self::Tombstoned(record) => record.format_version,
+            Self::CancelRequested(record) => record.format_version,
         }
     }
 
@@ -1253,6 +1289,10 @@ impl StreamSessionRecordV1 {
                     }
             }
             Self::ConsumerCancelIntent(record) => record.epoch > 0,
+            Self::ConsumerCancelApplied(record) => {
+                record.intent.format_version == DURABLE_STREAM_FORMAT_VERSION
+                    && record.intent.epoch > 0
+            }
             Self::ConsumerTerminal(record) => {
                 StreamOffsetV1::from_bytes(record.source_offset.0).is_ok()
             }
@@ -1337,6 +1377,8 @@ impl StreamSessionRecordV1 {
                     .is_ok_and(|attachment_id| attachment_id == record.attachment_id)
             }
             Self::Finished(_) => true,
+            Self::Tombstoned(record) => !record.slot.is_empty(),
+            Self::CancelRequested(_) => true,
         }
     }
 }

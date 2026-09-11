@@ -1854,6 +1854,7 @@ mod tests {
             vec![ProducerOutputRegistrationV1 {
                 transport_stream_id: 0,
                 source: ProducerOutputSourceV1::Existing(handle),
+                cancellation_epoch: None,
             }],
             entity_parent_start_index,
         )

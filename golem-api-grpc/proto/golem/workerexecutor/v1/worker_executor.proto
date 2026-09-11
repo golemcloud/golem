@@ -497,12 +497,30 @@ message DurableStreamAttachmentControlRequest {
   golem.common.EnvironmentId consumer_environment_id = 5;
   golem.common.UUID expected_consumer_fingerprint = 6;
   golem.auth.AuthCtx auth_ctx = 7;
+  // System-only control after the HTTP route has authorized the method.
+  // Mutually exclusive with attachment payload and consumer identity fields.
+  ExportStreamControl export_control = 8;
+}
+
+message ExportStreamControl {
+  string session = 1;
+  // Absent cancels session streams; present soft-deletes one canonical slot.
+  optional string slot = 2;
+  string expected_method = 3;
+}
+
+enum ExportStreamControlResult {
+  EXPORT_STREAM_CONTROL_RESULT_UNSPECIFIED = 0;
+  EXPORT_STREAM_CONTROL_RESULT_APPLIED = 1;
+  EXPORT_STREAM_CONTROL_RESULT_NOT_FOUND = 2;
+  EXPORT_STREAM_CONTROL_RESULT_GONE = 3;
 }
 
 message DurableStreamAttachmentControlResponse {
   oneof result {
     bool replayed = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
+    ExportStreamControlResult export_result = 3;
   }
 }
 
@@ -578,6 +596,8 @@ message ReadStreamSlotSuccess {
   string stream_identity = 9;
   // Names from the invocation's pinned schema, including input and output slots.
   repeated string slots = 10;
+  // The canonical slot URL is soft-deleted; no stream content is returned.
+  bool tombstoned = 11;
 }
 
 message ReadStreamSlotResponse {

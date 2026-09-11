@@ -481,7 +481,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn control_durable_stream_attachment_internal(
         &self,
         request: DurableStreamAttachmentControlRequest,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<durable_stream_attachment_control_response::Result, WorkerExecutorError> {
         let owned_agent_id = extract_owned_agent_id(
             &request,
             |request| &request.producer_agent_id,
@@ -497,6 +497,41 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment control requires an authenticated internal caller",
             ));
+        }
+        if let Some(control) = request.export_control {
+            if !matches!(auth_ctx, AuthCtx::System)
+                || !request.payload.is_empty()
+                || request.consumer_agent_id.is_some()
+                || request.consumer_environment_id.is_some()
+                || request.expected_consumer_fingerprint.is_some()
+            {
+                return Err(WorkerExecutorError::invalid_request(
+                    "export stream control requires a system caller and no attachment fields",
+                ));
+            }
+            let result = if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+                .await?
+                .is_none()
+            {
+                golem_api_grpc::proto::golem::workerexecutor::v1::ExportStreamControlResult::NotFound
+            } else {
+                Worker::get_or_create_suspended(
+                    self,
+                    &owned_agent_id,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                )
+                .await?
+                .control_export_stream(control)
+                .await?
+            };
+            return Ok(
+                durable_stream_attachment_control_response::Result::ExportResult(result.into()),
+            );
         }
         let control: StreamAttachmentControlRequestV1 =
             golem_common::serialization::deserialize(&request.payload)
@@ -552,7 +587,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Principal::anonymous(),
         )
         .await?;
-        worker.control_durable_stream_attachment(control).await
+        worker
+            .control_durable_stream_attachment(control)
+            .await
+            .map(durable_stream_attachment_control_response::Result::Replayed)
     }
 
     async fn read_durable_stream_segment_internal(
@@ -3023,11 +3061,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(replayed) => {
+            Ok(result) => {
                 record.succeed(Ok(Response::new(DurableStreamAttachmentControlResponse {
-                    result: Some(
-                        durable_stream_attachment_control_response::Result::Replayed(replayed),
-                    ),
+                    result: Some(result),
                 })))
             }
             Err(mut error) => record.fail(

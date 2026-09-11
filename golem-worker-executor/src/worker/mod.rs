@@ -553,6 +553,16 @@ pub(crate) struct DurableTopologyRecoveryCache {
 }
 
 impl DurableTopologyRecoveryCache {
+    fn acknowledge_recovery(&mut self, key: &StreamSessionKeyV1, covered_through: OplogIndex) {
+        if self
+            .sessions
+            .get(key)
+            .is_some_and(|control| control.covered_through == covered_through)
+        {
+            self.dirty.remove(key);
+        }
+    }
+
     pub(crate) async fn refresh(
         &mut self,
         oplog: &dyn Oplog,
@@ -572,7 +582,7 @@ impl DurableTopologyRecoveryCache {
                     && record.consumer_fingerprint == fingerprint
             });
             for (key, control) in metadata.sessions {
-                if control.needs_topology_recovery(owner, &key) {
+                if control.needs_recovery(owner, &key) {
                     self.dirty.insert(key.clone());
                     self.sessions.insert(key, control);
                 }
@@ -612,6 +622,13 @@ impl DurableTopologyRecoveryCache {
                         | StreamSessionRecordV1::ConsumerTerminal(_)
                         | StreamSessionRecordV1::SourceUnavailable(_)
                         | StreamSessionRecordV1::Finished(_)
+                        | StreamSessionRecordV1::ConsumerCancelIntent(_)
+                        | StreamSessionRecordV1::ConsumerCancelApplied(_)
+                        | StreamSessionRecordV1::CancelRequested(_)
+                        | StreamSessionRecordV1::Tombstoned(_)
+                        | StreamSessionRecordV1::Mapping(_)
+                        | StreamSessionRecordV1::InvocationResult(_)
+                        | StreamSessionRecordV1::ConsumerItemValue(_)
                 ) {
                     continue;
                 }
@@ -635,7 +652,7 @@ impl DurableTopologyRecoveryCache {
                 .next_back()
                 .ok_or("empty topology recovery suffix")?;
             self.sessions
-                .retain(|key, control| control.needs_topology_recovery(owner, key));
+                .retain(|key, control| control.needs_recovery(owner, key));
             self.dirty.retain(|key| self.sessions.contains_key(key));
         }
         Ok(())
@@ -1312,7 +1329,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
         {
             worker.reconcile_durable_stream_attachments().await?;
-            worker.recover_durable_stream_topologies().await?;
+            worker.recover_durable_stream_topologies(false).await?;
             worker.recover_finished_durable_streaming_sessions().await?;
         }
         crate::metrics::wasm::record_create_worker(start.elapsed());
@@ -5116,7 +5133,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    async fn recover_durable_stream_topologies(&self) -> Result<(), WorkerExecutorError> {
+    async fn recover_durable_stream_topologies(
+        &self,
+        retry_remote_cancellations: bool,
+    ) -> Result<(), WorkerExecutorError> {
         if !self.has_durable_stream_history() {
             return Ok(());
         }
@@ -5149,16 +5169,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
         .map_err(WorkerExecutorError::runtime)?;
         let mut recoverable = Vec::new();
+        let mut first_error = None;
         for (key, metadata) in sessions {
+            let streams = DurableSessionStreams::new(
+                self.durable_stream_producer().await?,
+                self.oplog.clone(),
+                key.clone(),
+                std::iter::empty(),
+            );
+            streams
+                .reconcile_local_cancellation_intents()
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            let mut cancellations_done = !streams
+                .current_control_metadata()
+                .await
+                .map_err(WorkerExecutorError::runtime)?
+                .has_cancellation_intents();
+            if retry_remote_cancellations && !cancellations_done {
+                let result = streams
+                    .with_rpc(self.rpc())
+                    .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?)
+                    .reconcile_foreign_cancellation_intents(
+                        self.deps.config().durable_stream.reconciliation_interval,
+                    )
+                    .await;
+                match result {
+                    Ok(()) => cancellations_done = true,
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
             let topologies = metadata
                 .recovery_topologies(&self.owned_agent_id, &key)
                 .map_err(WorkerExecutorError::runtime)?;
             if topologies.is_empty() {
-                self.durable_topology_recovery
-                    .lock()
-                    .await
-                    .dirty
-                    .remove(&key);
+                if cancellations_done {
+                    self.durable_topology_recovery
+                        .lock()
+                        .await
+                        .acknowledge_recovery(&key, metadata.covered_through);
+                }
                 continue;
             }
             if key.callee_environment_id == self.owned_agent_id.environment_id
@@ -5201,16 +5253,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ));
                 }
             }
-            recoverable.push((key, topologies));
+            recoverable.push((
+                key,
+                metadata.covered_through,
+                topologies,
+                cancellations_done,
+            ));
         }
         if recoverable.is_empty() {
-            return Ok(());
+            return first_error.map_or(Ok(()), |error| Err(WorkerExecutorError::runtime(error)));
         }
         let producer = self.durable_stream_producer().await?;
         let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
-        let mut first_error = None;
-        for (session_key, topologies) in recoverable {
-            let mut succeeded = true;
+        for (session_key, covered_through, topologies, cancellations_done) in recoverable {
+            let mut succeeded = cancellations_done;
             for (attachment, mapping) in topologies {
                 let control = RoutedStreamAttachmentControl::new(
                     self.rpc(),
@@ -5249,8 +5305,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.durable_topology_recovery
                     .lock()
                     .await
-                    .dirty
-                    .remove(&session_key);
+                    .acknowledge_recovery(&session_key, covered_through);
             }
         }
         if let Some(error) = first_error {
@@ -5324,10 +5379,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
-        let consumer_status = probe
-            .status_exact(key, Some(mapping))
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        let consumer_status = if let StreamAttachmentControlOperationV1::Cancel {
+            role,
+            reason,
+            details,
+            ..
+        } = &request.operation
+        {
+            let intent = golem_common::model::durable_stream::StreamConsumerCancelIntentRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: key.session_key.clone(),
+                stream_id: key.stream_id,
+                epoch: key.epoch,
+                role: *role,
+                reason: *reason,
+                details: details.clone(),
+            };
+            probe
+                .committed_cancellation_status(key, mapping, &intent)
+                .await
+        } else {
+            probe.status_exact(key, Some(mapping)).await
+        }
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         let authorized = match &request.operation {
             StreamAttachmentControlOperationV1::Prepare { .. } => matches!(
                 consumer_status,
@@ -5554,7 +5628,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     biased;
                     _ = shutdown.cancelled() => {}
                     _ = guard.scope(async {
-                        if let Err(error) = worker.recover_durable_stream_topologies().await {
+                        if let Err(error) = worker.recover_durable_stream_topologies(true).await {
                             warn!(
                                 agent_id = %worker.agent_id(),
                                 error = %error,
@@ -8681,6 +8755,20 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn recovery_acknowledgement_keeps_newer_cancellation_work_dirty() {
+        let key = crate::durable_host::durable_stream::tests::identity().invocation;
+        let mut cache = DurableTopologyRecoveryCache::default();
+        let mut control = SessionControlMetadata::default();
+        control.covered_through = OplogIndex::from_u64(12);
+        cache.sessions.insert(key.clone(), control);
+        cache.dirty.insert(key.clone());
+        cache.acknowledge_recovery(&key, OplogIndex::from_u64(11));
+        assert!(cache.dirty.contains(&key));
+        cache.acknowledge_recovery(&key, OplogIndex::from_u64(12));
+        assert!(!cache.dirty.contains(&key));
+    }
+
+    #[test]
     fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
         let target_revision = ComponentRevision::new(2).unwrap();
         let (semantic_key, storage_key, payload, _) =
@@ -9784,9 +9872,12 @@ pub(crate) fn stream_session_record_key(
         StreamSessionRecordV1::ExternalProducerState(record) => Some(&record.session_key),
         StreamSessionRecordV1::ConsumerItemValue(record) => Some(&record.session_key),
         StreamSessionRecordV1::ConsumerCancelIntent(record) => Some(&record.session_key),
+        StreamSessionRecordV1::ConsumerCancelApplied(record) => Some(&record.intent.session_key),
         StreamSessionRecordV1::ConsumerTerminal(record) => Some(&record.session_key),
         StreamSessionRecordV1::InvocationResult(record) => Some(&record.session_key),
         StreamSessionRecordV1::Finished(record) => Some(&record.session_key),
+        StreamSessionRecordV1::Tombstoned(record) => Some(&record.session_key),
+        StreamSessionRecordV1::CancelRequested(record) => Some(&record.session_key),
         StreamSessionRecordV1::ProducerDeleting(_) | StreamSessionRecordV1::ConsumerDeleting(_) => {
             None
         }

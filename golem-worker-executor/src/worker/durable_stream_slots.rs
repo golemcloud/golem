@@ -20,9 +20,9 @@ use crate::durable_host::durable_stream::{
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     AppendAccepted, AppendDuplicate, AppendEpochFenced, AppendSequenceGap,
-    AppendToStreamSlotRequest, AppendToStreamSlotResponse, ReadStreamSlotRequest,
-    ReadStreamSlotSuccess, StreamSlotItem, append_to_stream_slot_request,
-    append_to_stream_slot_response, stream_slot_item,
+    AppendToStreamSlotRequest, AppendToStreamSlotResponse, ExportStreamControl,
+    ExportStreamControlResult, ReadStreamSlotRequest, ReadStreamSlotSuccess, StreamSlotItem,
+    append_to_stream_slot_request, append_to_stream_slot_response, stream_slot_item,
 };
 use golem_common::model::durable_stream::{
     DurableStreamHandleV1, DurableStreamReadRequestV1, StreamHandleReadRequestV1,
@@ -50,6 +50,7 @@ enum SlotSource {
     Stream(DurableStreamHandleV1),
     Value(Vec<u8>, StreamOffsetV1),
     Pending { finished: bool },
+    Tombstoned,
 }
 
 type SlotSchema = (SchemaType, Option<usize>, bool, bool);
@@ -231,7 +232,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
-        let source = if writable {
+        let source = if status.tombstoned_slots.contains(name) {
+            SlotSource::Tombstoned
+        } else if writable {
             SlotSource::Stream(slot_handle(
                 &descriptor.invocation_value,
                 field,
@@ -252,7 +255,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         } else {
             SlotSource::Pending {
-                finished: status.finished.is_some(),
+                finished: status.finished.is_some() || (is_stream && status.cancellation_requested),
             }
         };
         if let SlotSource::Stream(handle) = &source {
@@ -332,7 +335,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let stream_id = match &slot.source {
             SlotSource::Stream(handle) => Some(handle.stream_id),
-            SlotSource::Value(..) | SlotSource::Pending { .. } => None,
+            SlotSource::Value(..) | SlotSource::Pending { .. } | SlotSource::Tombstoned => None,
         };
         let identity = golem_common::serialization::serialize(&(
             slot.session.clone(),
@@ -356,6 +359,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             head_offset: Vec::new(),
             stream_identity: blake3::hash(&identity).to_hex().to_string(),
             slots: slot.slots,
+            tombstoned: matches!(slot.source, SlotSource::Tombstoned),
         };
         match slot.source {
             SlotSource::Stream(handle) => {
@@ -432,11 +436,108 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 response.closed = finished;
                 response.cancelled = finished;
             }
+            SlotSource::Tombstoned => {}
         }
         producer.ensure_healthy().map_err(|error| {
             DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         Ok(Some(response))
+    }
+
+    pub(crate) async fn control_export_stream(
+        self: &Arc<Self>,
+        request: ExportStreamControl,
+    ) -> Result<ExportStreamControlResult, WorkerExecutorError> {
+        validate_durable_stream_session_id(&request.session)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if request.expected_method.is_empty()
+            || request
+                .slot
+                .as_ref()
+                .is_some_and(|slot| slot.is_empty() || slot.starts_with("__ds"))
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "invalid export stream control target",
+            ));
+        }
+        let Some(prepared) = self
+            .prepared_stream_session(&IdempotencyKey::new(request.session.clone()))
+            .await?
+        else {
+            return Ok(ExportStreamControlResult::NotFound);
+        };
+        if prepared.attempt.invocation.method_name != request.expected_method {
+            return Ok(ExportStreamControlResult::NotFound);
+        }
+        let producer = self.durable_stream_producer().await?;
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            self.oplog.clone(),
+            prepared.attempt.session_key.clone(),
+            prepared.stream_mappings.iter().map(|mapping| {
+                (
+                    mapping.transport_stream_id,
+                    mapping.handle.clone(),
+                    mapping.role,
+                )
+            }),
+        )
+        .with_rpc(self.rpc())
+        .with_consumer_journal(self.durable_stream_consumer_journal())
+        .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
+        if let Some(name) = request.slot {
+            let worker = self.clone();
+            producer
+                .run_lifecycle(0, move |owner| async move {
+                    let lock = owner.session_lock(&prepared.attempt.session_key);
+                    let guard = lock.lock().await;
+                    let Some(slot) = worker
+                        .resolve_stream_slot(
+                            &request.session,
+                            &name,
+                            Some(&request.expected_method),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?
+                    else {
+                        return Ok::<_, String>(ExportStreamControlResult::NotFound);
+                    };
+                    let stream = match slot.source {
+                        SlotSource::Tombstoned => return Ok(ExportStreamControlResult::Gone),
+                        SlotSource::Stream(handle) => Some((
+                            handle,
+                            if slot.writable {
+                                SessionStreamRoleV1::Input
+                            } else {
+                                SessionStreamRoleV1::Output
+                            },
+                        )),
+                        SlotSource::Value(..) | SlotSource::Pending { .. } => None,
+                    };
+                    let applied = streams
+                        .tombstone_slot_owned(slot.name, stream, guard)
+                        .await?;
+                    Ok(if applied {
+                        ExportStreamControlResult::Applied
+                    } else {
+                        ExportStreamControlResult::Gone
+                    })
+                })
+                .await
+                .map_err(WorkerExecutorError::runtime)
+        } else {
+            streams
+                .cancel_session_streams()
+                .await
+                .map(|exists| {
+                    if exists {
+                        ExportStreamControlResult::Applied
+                    } else {
+                        ExportStreamControlResult::NotFound
+                    }
+                })
+                .map_err(WorkerExecutorError::runtime)
+        }
     }
 
     pub(crate) async fn append_to_stream_slot(

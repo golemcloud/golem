@@ -7,8 +7,11 @@
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use base64::Engine;
 use golem_common::base_model::agent::AgentTypeName;
+use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::{AgentId, OplogIndex};
 use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
 use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
@@ -105,6 +108,38 @@ async fn wait_for_closed(agent: &HttpTestContext, path: &str) -> anyhow::Result<
     .await?
 }
 
+async fn observations(agent: &HttpTestContext, id: &str) -> anyhow::Result<Vec<u64>> {
+    let response = agent
+        .client
+        .put(
+            agent
+                .base_url
+                .join(&format!("/durable-stream-agents/{id}/observations"))?,
+        )
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    Ok(response.json().await?)
+}
+
+async fn wait_for_observations(
+    agent: &HttpTestContext,
+    id: &str,
+    expected: &[u64],
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let actual = observations(agent, id).await?;
+            if actual == expected {
+                return Ok::<_, anyhow::Error>(());
+            }
+            eprintln!("waiting for observations {expected:?}, current value is {actual:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?
+}
+
 #[test]
 #[timeout("120s")]
 async fn lifecycle_json_binary_head_and_methods(
@@ -179,14 +214,64 @@ async fn lifecycle_json_binary_head_and_methods(
         serde_json::json!(["message-0000", "message-0001", "message-0002"])
     );
 
-    for method in [Method::POST, Method::DELETE] {
-        let response = agent
+    let response = agent
+        .client
+        .post(agent.base_url.join(&json)?)
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(header(&response, ALLOW.as_str()), "PUT, HEAD, GET, DELETE");
+
+    let session_path = format!("/durable-stream-agents/ds3-{session}/json/3/invocations/{session}");
+    for _ in 0..2 {
+        assert_eq!(
+            agent
+                .client
+                .delete(agent.base_url.join(&session_path)?)
+                .send()
+                .await?
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    let ended = agent.client.get(agent.base_url.join(&json)?).send().await?;
+    assert_eq!(ended.status(), StatusCode::OK);
+    assert_eq!(header(&ended, "stream-closed"), "true");
+    assert!(!ended.headers().contains_key("stream-cancelled"));
+    assert_eq!(
+        ended.json::<Value>().await?,
+        serde_json::json!(["message-0000", "message-0001", "message-0002"])
+    );
+    assert_eq!(
+        agent
             .client
-            .request(method, agent.base_url.join(&json)?)
+            .delete(agent.base_url.join(&json)?)
             .send()
-            .await?;
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(header(&response, ALLOW.as_str()), "PUT, HEAD, GET");
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    for method in [
+        Method::GET,
+        Method::HEAD,
+        Method::POST,
+        Method::DELETE,
+        Method::PUT,
+    ] {
+        let expected = if method == Method::PUT {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::GONE
+        };
+        assert_eq!(
+            agent
+                .client
+                .request(method, agent.base_url.join(&json)?)
+                .send()
+                .await?
+                .status(),
+            expected
+        );
     }
 
     let bytes_session = Uuid::new_v4().to_string();
@@ -652,6 +737,295 @@ async fn websocket_input_is_readable_through_http(
 }
 
 #[test]
+#[timeout("180s")]
+async fn session_delete_is_cooperative_and_survives_reconstruction(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let id = format!("ds3-{session}");
+    let path = stream_path("cancellation-output/5", &session, "$result", 5000);
+    let session_path = format!(
+        "/durable-stream-agents/{id}/cancellation-output/5/invocations/{session}?delay_ms=5000"
+    );
+    assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
+
+    let first = loop {
+        let response = agent.client.get(agent.base_url.join(&path)?).send().await?;
+        if response.content_length() != Some(2) {
+            break response;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first.json::<Value>().await?,
+        serde_json::json!(["cancel-0"])
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            agent
+                .client
+                .delete(agent.base_url.join(&session_path)?)
+                .send()
+                .await?
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    wait_for_observations(agent, &id, &[0, 0, 2, 1, 1, 0, 0]).await?;
+    let history = agent.client.get(agent.base_url.join(&path)?).send().await?;
+    assert_eq!(history.status(), StatusCode::OK);
+    assert_eq!(header(&history, "stream-closed"), "true");
+    assert_eq!(header(&history, "stream-cancelled"), "true");
+    assert_eq!(
+        history.json::<Value>().await?,
+        serde_json::json!(["cancel-0"])
+    );
+
+    let marked = agent
+        .client
+        .put(
+            agent
+                .base_url
+                .join(&format!("/durable-stream-agents/{id}/mark/37"))?,
+        )
+        .send()
+        .await?;
+    assert_eq!(marked.status(), StatusCode::OK);
+    assert_eq!(marked.json::<Value>().await?, serde_json::json!(37));
+    assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 37, 0]);
+
+    let component_id = agent
+        .client
+        .put(
+            agent
+                .base_url
+                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+        )
+        .send()
+        .await?
+        .json::<String>()
+        .await?;
+    let worker = AgentId {
+        component_id: ComponentId(Uuid::parse_str(&component_id)?),
+        agent_id: format!("DurableStreamAgent(\"{id}\")"),
+    };
+    let before = agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(!before.is_empty());
+    agent.user.simulated_crash(&worker).await?;
+    agent.user.resume(&worker, false).await?;
+    assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 37, 0]);
+    let history = agent.client.get(agent.base_url.join(&path)?).send().await?;
+    assert_eq!(history.status(), StatusCode::OK);
+    assert_eq!(header(&history, "stream-cancelled"), "true");
+    assert_eq!(
+        history.json::<Value>().await?,
+        serde_json::json!(["cancel-0"])
+    );
+    assert!(
+        agent
+            .user
+            .get_oplog(&worker, OplogIndex::INITIAL)
+            .await?
+            .len()
+            >= before.len()
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn input_slot_delete_is_guest_observable_and_tombstoned(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    use crate::api::streaming_rpc::{
+        connect_public_invocation_socket, receive_public_response, send_public_request,
+    };
+    use golem_common::model::invocation_session_public::{
+        DecimalU64, INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage,
+        PublicServerMessage,
+    };
+
+    let session = Uuid::new_v4().to_string();
+    let id = format!("ds3-{session}");
+    let input_reference = Uuid::new_v4();
+    let mut socket =
+        connect_public_invocation_socket(&agent.user.deps, Some(&agent.user.token)).await?;
+    send_public_request(
+        &mut socket,
+        &PublicClientMessage::InvocationStart {
+            attempt_id: Uuid::new_v4(),
+            config: Vec::new(),
+            idempotency_key: session.clone(),
+            method_parameters: serde_json::json!({
+                "input": { "$stream": { "provisionalRef": input_reference } }
+            }),
+            selector: Box::new(InvocationSelector {
+                agent_type: "DurableStreamAgent".into(),
+                application: agent.application_name.clone(),
+                constructor_parameters: serde_json::json!({"id": id}),
+                environment: agent.environment_name.clone(),
+                method: "echo".into(),
+                phantom_id: None,
+            }),
+            version: INVOCATION_SESSION_VERSION,
+        },
+    )
+    .await?;
+    let input_channel = match receive_public_response(&mut socket).await? {
+        PublicServerMessage::InvocationAccepted { mappings, .. } => {
+            mappings
+                .into_iter()
+                .find(|mapping| mapping.provisional_ref == Some(input_reference))
+                .ok_or_else(|| anyhow::anyhow!("missing input mapping"))?
+                .channel
+        }
+        other => anyhow::bail!("invocation was not accepted: {other:?}"),
+    };
+    send_public_request(
+        &mut socket,
+        &PublicClientMessage::InputStreamItem {
+            channel: input_channel,
+            sequence: DecimalU64(0),
+            value: serde_json::json!("kept"),
+            version: INVOCATION_SESSION_VERSION,
+        },
+    )
+    .await?;
+    loop {
+        if matches!(
+            receive_public_response(&mut socket).await?,
+            PublicServerMessage::OutputStreamItem { .. }
+        ) {
+            break;
+        }
+    }
+    let input = stream_path("echo", &session, "input", 0);
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&input)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    for method in [
+        Method::GET,
+        Method::HEAD,
+        Method::POST,
+        Method::DELETE,
+        Method::PUT,
+    ] {
+        let expected = if method == Method::PUT {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::GONE
+        };
+        assert_eq!(
+            agent
+                .client
+                .request(method, agent.base_url.join(&input)?)
+                .send()
+                .await?
+                .status(),
+            expected
+        );
+    }
+    wait_for_observations(agent, &id, &[1, 1, 1, 0, 1, 0, 0]).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn output_slot_delete_is_guest_observable_and_tombstoned(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let id = format!("ds3-{session}");
+    let output = stream_path("cancellation-output/5", &session, "$result", 5000);
+    assert_eq!(create(agent, &output).await?.status(), StatusCode::CREATED);
+    let first = loop {
+        let response = agent
+            .client
+            .get(agent.base_url.join(&output)?)
+            .send()
+            .await?;
+        if response.content_length() != Some(2) {
+            break response;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        first.json::<Value>().await?,
+        serde_json::json!(["cancel-0"])
+    );
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&output)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    for method in [
+        Method::GET,
+        Method::HEAD,
+        Method::POST,
+        Method::DELETE,
+        Method::PUT,
+    ] {
+        let expected = if method == Method::PUT {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::GONE
+        };
+        assert_eq!(
+            agent
+                .client
+                .request(method, agent.base_url.join(&output)?)
+                .send()
+                .await?
+                .status(),
+            expected
+        );
+    }
+    wait_for_observations(agent, &id, &[0, 0, 2, 1, 1, 0, 0]).await?;
+
+    let component_id = agent
+        .client
+        .put(
+            agent
+                .base_url
+                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+        )
+        .send()
+        .await?
+        .json::<String>()
+        .await?;
+    let worker = AgentId {
+        component_id: ComponentId(Uuid::parse_str(&component_id)?),
+        agent_id: format!("DurableStreamAgent(\"{id}\")"),
+    };
+    agent.user.simulated_crash(&worker).await?;
+    agent.user.resume(&worker, false).await?;
+    for method in [Method::GET, Method::HEAD, Method::POST, Method::DELETE] {
+        assert_eq!(
+            agent
+                .client
+                .request(method, agent.base_url.join(&output)?)
+                .send()
+                .await?
+                .status(),
+            StatusCode::GONE
+        );
+    }
+    assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 0, 0]);
+    Ok(())
+}
+
+#[test]
 #[timeout("120s")]
 async fn live_reader_limit_and_disconnect_release(
     #[dimension(db)] agent: &HttpTestContext,
@@ -821,6 +1195,69 @@ async fn output_stream_survives_guest_sleep_suspension(
         result.json::<Value>().await?,
         serde_json::json!(["message-0000"])
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn cancellation_closes_pending_output_without_waiting_for_guest(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let path = stream_path("delayed-output/10000", &session, "$result", 0);
+    let session_path =
+        format!("/durable-stream-agents/ds3-{session}/delayed-output/10000/invocations/{session}");
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&session_path)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
+    let head = agent
+        .client
+        .head(agent.base_url.join(&path)?)
+        .send()
+        .await?;
+    assert_eq!(header(&head, "stream-closed"), "false");
+    let wrong_method = format!("/durable-stream-agents/ds3-{session}/json/1/invocations/{session}");
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&wrong_method)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&session_path)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let result = agent
+        .client
+        .get(agent.base_url.join(&format!("{path}&live=long-poll"))?)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await?;
+    assert_eq!(result.status(), StatusCode::NO_CONTENT);
+    assert_eq!(header(&result, "stream-closed"), "true");
+    assert_eq!(header(&result, "stream-cancelled"), "true");
+    // The method later produces its output; that must not reopen the cancelled slot.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let result = agent.client.get(agent.base_url.join(&path)?).send().await?;
+    assert_eq!(result.status(), StatusCode::OK);
+    assert_eq!(header(&result, "stream-closed"), "true");
+    assert_eq!(header(&result, "stream-cancelled"), "true");
+    assert_eq!(result.json::<Value>().await?, serde_json::json!([]));
     Ok(())
 }
 

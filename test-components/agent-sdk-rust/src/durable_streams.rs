@@ -1,6 +1,16 @@
 use golem_rust::agentic::{AgentStream, spawn_local};
 use golem_rust::schema::{FromSchema, IntoSchema};
 use golem_rust::{agent_definition, agent_implementation, endpoint};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static INPUT_ITEMS: AtomicU64 = AtomicU64::new(0);
+static INPUT_EOF: AtomicU64 = AtomicU64::new(0);
+static INPUT_ERRORS: AtomicU64 = AtomicU64::new(0);
+// Native transport acceptance can precede durable publication, including a final dropped item.
+static OUTPUT_WRITES: AtomicU64 = AtomicU64::new(0);
+static OUTPUT_ERRORS: AtomicU64 = AtomicU64::new(0);
+static CONTINUATIONS: AtomicU64 = AtomicU64::new(0);
+static MARKERS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(IntoSchema, FromSchema)]
 pub struct EchoOutput {
@@ -22,6 +32,18 @@ pub trait DurableStreamAgent {
 
     #[endpoint(put = "/echo")]
     fn echo(&self, input: AgentStream<String>) -> EchoOutput;
+
+    #[endpoint(put = "/cancellation-output/{count}?delay_ms={delay_ms}")]
+    fn cancellation_output(&self, count: u32, delay_ms: u64) -> AgentStream<String>;
+
+    #[endpoint(put = "/observations")]
+    fn observations(&self) -> Vec<u64>;
+
+    #[endpoint(put = "/mark/{value}")]
+    fn mark(&self, value: u64) -> u64;
+
+    #[endpoint(put = "/component-id")]
+    fn component_id(&self) -> String;
 
     #[endpoint(put = "/shadow/{output}")]
     fn shadow(&self, output: String) -> EchoOutput;
@@ -80,13 +102,70 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     fn echo(&self, mut input: AgentStream<String>) -> EchoOutput {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Ok(Some(value)) = input.next().await {
-                if writer.write_one(value).await.is_err() {
-                    break;
+            loop {
+                match input.next().await {
+                    Ok(Some(value)) => {
+                        INPUT_ITEMS.fetch_add(1, Ordering::Relaxed);
+                        if writer.write_one(value).await.is_err() {
+                            OUTPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                            break;
+                        }
+                        OUTPUT_WRITES.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(None) => {
+                        INPUT_EOF.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
+                    Err(_) => {
+                        INPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
                 }
             }
+            CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
         });
         EchoOutput { output }
+    }
+
+    fn cancellation_output(&self, count: u32, delay_ms: u64) -> AgentStream<String> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            for value in 0..count {
+                if value != 0 {
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                        delay_ms.saturating_mul(1_000_000),
+                    )
+                    .await;
+                }
+                if writer.write_one(format!("cancel-{value}")).await.is_err() {
+                    OUTPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    break;
+                }
+                OUTPUT_WRITES.fetch_add(1, Ordering::Relaxed);
+            }
+            CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
+        });
+        output
+    }
+
+    fn observations(&self) -> Vec<u64> {
+        vec![
+            INPUT_ITEMS.load(Ordering::Relaxed),
+            INPUT_EOF.load(Ordering::Relaxed),
+            OUTPUT_WRITES.load(Ordering::Relaxed),
+            OUTPUT_ERRORS.load(Ordering::Relaxed),
+            CONTINUATIONS.load(Ordering::Relaxed),
+            MARKERS.load(Ordering::Relaxed),
+            INPUT_ERRORS.load(Ordering::Relaxed),
+        ]
+    }
+
+    fn mark(&self, value: u64) -> u64 {
+        MARKERS.fetch_add(value, Ordering::Relaxed) + value
+    }
+
+    fn component_id(&self) -> String {
+        std::env::var("GOLEM_COMPONENT_ID").unwrap()
     }
 
     fn shadow(&self, output: String) -> EchoOutput {

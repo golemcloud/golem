@@ -957,6 +957,7 @@ impl DefaultWorkerService {
             status.status,
             AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted
         ) || status.has_pending_work()
+            || !status.pending_durable_stream_cancellations.is_empty()
     }
 }
 
@@ -2644,6 +2645,44 @@ mod tests {
         };
 
         assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+            &status
+        ));
+    }
+
+    #[test]
+    fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
+        use golem_common::model::durable_stream::{
+            StreamCancelReasonV1, StreamCancelRoleV1, StreamConsumerCancelIntentRecordV1,
+            StreamInvocationIdV1,
+        };
+
+        let mut status = AgentStatusRecord::default();
+        status
+            .pending_durable_stream_cancellations
+            .insert(StreamConsumerCancelIntentRecordV1 {
+                format_version: 1,
+                session_key: StreamInvocationIdV1 {
+                    callee_environment_id: EnvironmentId::new(),
+                    callee: AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "remote".into(),
+                    },
+                    callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+                    idempotency_key: IdempotencyKey::new("caller-side".into()),
+                },
+                stream_id: StreamId(uuid::Uuid::new_v4()),
+                epoch: 1,
+                role: StreamCancelRoleV1::OutputConsumer,
+                reason: StreamCancelReasonV1::Cancelled,
+                details: None,
+            });
+
+        assert!(status.durable_stream_sessions.iter().next().is_none());
+        assert!(DefaultWorkerService::should_track_for_assignment_recovery(
+            &status
+        ));
+        status.pending_durable_stream_cancellations.clear();
+        assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
             &status
         ));
     }

@@ -566,6 +566,29 @@ fn update_status_with_precomputed_regions(
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
     let durable_stream_sessions =
         calculate_durable_stream_sessions(last_known.durable_stream_sessions, &new_entries)?;
+    let mut pending_durable_stream_cancellations = last_known.pending_durable_stream_cancellations;
+    for entry in new_entries.values() {
+        if let OplogEntry::StreamSession {
+            record: OplogPayload::Inline(record),
+            ..
+        } = entry
+        {
+            match record.as_ref() {
+                StreamSessionRecordV1::ConsumerCancelIntent(intent) => {
+                    if !pending_durable_stream_cancellations.iter().any(|existing| {
+                        existing.session_key == intent.session_key
+                            && existing.stream_id == intent.stream_id
+                    }) {
+                        pending_durable_stream_cancellations.insert(intent.clone());
+                    }
+                }
+                StreamSessionRecordV1::ConsumerCancelApplied(receipt) => {
+                    pending_durable_stream_cancellations.remove(&receipt.intent);
+                }
+                _ => {}
+            }
+        }
+    }
     let has_durable_stream_history = last_known.has_durable_stream_history
         || new_entries.values().any(|entry| {
             matches!(
@@ -651,6 +674,7 @@ fn update_status_with_precomputed_regions(
         received_card_transfers,
         durable_stream_sessions,
         has_durable_stream_history,
+        pending_durable_stream_cancellations,
         current_idempotency_key,
         cancelled_idempotency_key,
         component_revision,
@@ -1848,6 +1872,81 @@ mod test {
             default_retry_policy,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
+        use golem_common::model::durable_stream::{
+            StreamCancelReasonV1, StreamCancelRoleV1, StreamConsumerCancelAppliedRecordV1,
+            StreamConsumerCancelIntentRecordV1,
+        };
+        let intent = StreamConsumerCancelIntentRecordV1 {
+            format_version: 1,
+            session_key: StreamInvocationIdV1 {
+                callee_environment_id: EnvironmentId::new(),
+                callee: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "remote".into(),
+                },
+                callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
+                idempotency_key: IdempotencyKey::fresh(),
+            },
+            stream_id: golem_common::model::StreamId(Uuid::new_v4()),
+            epoch: 7,
+            role: StreamCancelRoleV1::OutputConsumer,
+            reason: StreamCancelReasonV1::Cancelled,
+            details: Some("cancel requested".into()),
+        };
+        let entry = |record| OplogEntry::StreamSession {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            record: OplogPayload::Inline(Box::new(record)),
+        };
+        let fold = |status, index, record| {
+            update_status_with_new_entries(
+                AgentMode::Durable,
+                status,
+                BTreeMap::from([(OplogIndex::from_u64(index), entry(record))]),
+                &RetryConfig::default(),
+            )
+            .unwrap()
+        };
+        let pending = fold(
+            AgentStatusRecord::default(),
+            2,
+            StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+        );
+        assert!(pending.durable_stream_sessions.iter().next().is_none());
+        assert_eq!(
+            pending.pending_durable_stream_cancellations,
+            HashSet::from([intent.clone()])
+        );
+        let bytes = golem_common::serialization::serialize(&pending).unwrap();
+        let pending: AgentStatusRecord = golem_common::serialization::deserialize(&bytes).unwrap();
+        let mut wrong = intent.clone();
+        wrong.epoch = 8;
+        let pending = fold(
+            pending,
+            3,
+            StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+                format_version: 1,
+                intent: wrong,
+            }),
+        );
+        assert_eq!(
+            pending.pending_durable_stream_cancellations,
+            HashSet::from([intent.clone()])
+        );
+        let applied = fold(
+            pending,
+            4,
+            StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+                format_version: 1,
+                intent,
+            }),
+        );
+        assert!(applied.pending_durable_stream_cancellations.is_empty());
+        assert!(applied.durable_stream_sessions.iter().next().is_none());
     }
 
     #[test]

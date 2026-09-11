@@ -45,14 +45,15 @@ use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1,
     InputStreamHighWaterV1, MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
     SessionStreamRoleV1, StreamAttachmentKeyV1, StreamCallerAttemptRecordV1, StreamCancelReasonV1,
-    StreamCancelRoleV1, StreamConsumerCancelIntentRecordV1, StreamConsumerItemValueRecordV1,
-    StreamConsumerTerminalRecordV1, StreamConsumerTerminalV1, StreamEndResultV1,
-    StreamInvocationIdV1, StreamItemsPayloadV1, StreamRegistrationCoordinateV1,
-    StreamResumeOperationV1, StreamRootKindV1, StreamSessionDetachedRecordV1,
-    StreamSessionInvocationResultRecordV1, StreamSessionKeyV1, StreamSessionMappingRecordV1,
-    StreamSessionMappingUpdateRecordV1, StreamSessionMappingV1, StreamSessionRecordV1,
-    StreamSessionResumeAttemptRecordV1, StreamSourceKindV1, StreamTopologyActivatedRecordV1,
-    StreamTopologyPreparedRecordV1, StreamValuePathStepV1,
+    StreamCancelRoleV1, StreamConsumerCancelAppliedRecordV1, StreamConsumerCancelIntentRecordV1,
+    StreamConsumerItemValueRecordV1, StreamConsumerTerminalRecordV1, StreamConsumerTerminalV1,
+    StreamEndResultV1, StreamInvocationIdV1, StreamItemsPayloadV1, StreamRegistrationCoordinateV1,
+    StreamResumeOperationV1, StreamRootKindV1, StreamSessionCancelRequestedRecordV1,
+    StreamSessionDetachedRecordV1, StreamSessionInvocationResultRecordV1, StreamSessionKeyV1,
+    StreamSessionMappingRecordV1, StreamSessionMappingUpdateRecordV1, StreamSessionMappingV1,
+    StreamSessionRecordV1, StreamSessionResumeAttemptRecordV1, StreamSlotTombstonedRecordV1,
+    StreamSourceKindV1, StreamTopologyActivatedRecordV1, StreamTopologyPreparedRecordV1,
+    StreamValuePathStepV1,
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
@@ -140,6 +141,9 @@ pub struct SessionControlMetadata {
         HashMap<(AttachmentId, golem_common::model::StreamId), StreamAttachmentKeyV1>,
     closed_consumer_streams: HashSet<golem_common::model::StreamId>,
     cancel_intents: HashMap<golem_common::model::StreamId, StreamConsumerCancelIntentRecordV1>,
+    applied_cancel_intents: HashSet<StreamConsumerCancelIntentRecordV1>,
+    tombstoned_slots: HashMap<String, SessionStreamRoleV1>,
+    cancellation_requested: bool,
     pub(crate) consumer_record_counts: HashMap<golem_common::model::StreamId, u64>,
     pub(crate) consumer_deleting:
         Option<golem_common::model::durable_stream::StreamConsumerDeletingRecordV1>,
@@ -166,6 +170,55 @@ impl SessionControlMetadata {
         Ok(self.acceptance_mappings.clone())
     }
 
+    pub(crate) fn has_committed_cancellation(
+        &self,
+        key: &StreamAttachmentKeyV1,
+        mapping: &StreamSessionMappingRecordV1,
+        intent: &StreamConsumerCancelIntentRecordV1,
+    ) -> Result<bool, String> {
+        if self.malformed_record {
+            return Err("unsupported or malformed durable Stream Session record version".into());
+        }
+        if let Some(error) = &self.topology_error {
+            return Err(error.clone());
+        }
+        let consumer_matches = key.consumer_invocation == key.session_key
+            || self.topologies.values().any(|topology| {
+                let mut current_key = key.clone();
+                current_key.epoch = topology.attachment.epoch;
+                topology.attachment == current_key && topology.mapping == *mapping
+            });
+        Ok(consumer_matches
+            && intent.session_key == key.session_key
+            && intent.stream_id == key.stream_id
+            && intent.epoch == key.epoch
+            && mapping.handle.stream_id == key.stream_id
+            && self.cancel_intents.get(&key.stream_id) == Some(intent)
+            && self.persisted_mappings.contains(&(
+                mapping.transport_stream_id,
+                mapping.handle.clone(),
+                mapping.role,
+            )))
+    }
+
+    pub(crate) fn needs_recovery(
+        &self,
+        owner: &golem_common::model::OwnedAgentId,
+        key: &StreamSessionKeyV1,
+    ) -> bool {
+        self.needs_topology_recovery(owner, key)
+            || self
+                .cancel_intents
+                .values()
+                .any(|intent| !self.applied_cancel_intents.contains(intent))
+    }
+
+    pub(crate) fn has_cancellation_intents(&self) -> bool {
+        self.cancel_intents
+            .values()
+            .any(|intent| !self.applied_cancel_intents.contains(intent))
+    }
+
     pub(crate) fn needs_topology_recovery(
         &self,
         owner: &golem_common::model::OwnedAgentId,
@@ -179,6 +232,9 @@ impl SessionControlMetadata {
                     && key.callee == owner.agent_id
                     && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
                 !(local && self.finished.is_some())
+                    && !self
+                        .cancel_intents
+                        .contains_key(&topology.attachment.stream_id)
                     && !self
                         .closed_consumer_streams
                         .contains(&topology.attachment.stream_id)
@@ -208,6 +264,9 @@ impl SessionControlMetadata {
                     && key.callee == owner.agent_id
                     && key.callee_fingerprint == topology.attachment.expected_consumer_fingerprint;
                 !(local && self.finished.is_some())
+                    && !self
+                        .cancel_intents
+                        .contains_key(&topology.attachment.stream_id)
                     && !self
                         .closed_consumer_streams
                         .contains(&topology.attachment.stream_id)
@@ -291,6 +350,24 @@ impl SessionControlMetadata {
             self.cancel_intents
                 .entry(record.stream_id)
                 .or_insert_with(|| record.clone());
+        }
+        if let StreamSessionRecordV1::ConsumerCancelApplied(record) = record
+            && &record.intent.session_key == key
+            && self.cancel_intents.get(&record.intent.stream_id) == Some(&record.intent)
+        {
+            self.applied_cancel_intents.insert(record.intent.clone());
+        }
+        if let StreamSessionRecordV1::Tombstoned(record) = record
+            && &record.session_key == key
+        {
+            self.tombstoned_slots
+                .entry(record.slot.clone())
+                .or_insert(record.role);
+        }
+        if let StreamSessionRecordV1::CancelRequested(record) = record
+            && &record.session_key == key
+        {
+            self.cancellation_requested = true;
         }
         if let StreamSessionRecordV1::Prepared(record) = record
             && &record.attempt.session_key == key
@@ -1158,7 +1235,7 @@ impl DurableSessionStreams {
         }
     }
 
-    async fn current_control_metadata(
+    pub(crate) async fn current_control_metadata(
         &self,
     ) -> Result<tokio::sync::MutexGuard<'_, SessionControlMetadata>, String> {
         let horizon = self.oplog.current_oplog_index().await;
@@ -1545,6 +1622,15 @@ impl DurableSessionStreams {
         }
         if self.has_journaled_consumer_terminal(mapping).await? {
             return Ok(());
+        }
+        {
+            let metadata = self.current_control_metadata().await?;
+            if let Some(intent) = metadata.cancel_intents.get(&mapping.handle.stream_id) {
+                let key = self.attachment_key(&mapping.handle, intent.epoch)?;
+                if metadata.has_committed_cancellation(&key, mapping, intent)? {
+                    return Ok(());
+                }
+            }
         }
         let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
         if self.topology_state(&attachment, Some(mapping)).await?
@@ -2129,6 +2215,136 @@ impl DurableSessionStreams {
         }
     }
 
+    pub(crate) async fn cancel_session_streams(&self) -> Result<bool, String> {
+        if !self.has_local_session_authority() {
+            return Err("session cancellation requires the session owner".into());
+        }
+        let session = self.clone();
+        let exists = self
+            .producer
+            .run_lifecycle(0, move |owner| async move {
+                let _guard = session.session_lock.lock().await;
+                let metadata = session.current_control_metadata().await?;
+                if metadata.prepared.is_none() {
+                    return Ok::<_, String>(false);
+                }
+                if metadata.malformed_record || metadata.topology_error.is_some() {
+                    return Err("cannot cancel a malformed durable stream session".into());
+                }
+                let (epoch, _, _) = session.authoritative_attachment_state().await?;
+                let mut records = Vec::new();
+                if !metadata.cancellation_requested {
+                    records.push(StreamSessionRecordV1::CancelRequested(
+                        StreamSessionCancelRequestedRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: session.session_key.clone(),
+                        },
+                    ));
+                }
+                let mut cancelled = metadata
+                    .cancel_intents
+                    .keys()
+                    .copied()
+                    .collect::<HashSet<_>>();
+                for (_, handle, role) in &metadata.persisted_mappings {
+                    if cancelled.insert(handle.stream_id) {
+                        records.push(StreamSessionRecordV1::ConsumerCancelIntent(
+                            StreamConsumerCancelIntentRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: session.session_key.clone(),
+                                stream_id: handle.stream_id,
+                                epoch,
+                                role: match role {
+                                    SessionStreamRoleV1::Input => StreamCancelRoleV1::InputProducer,
+                                    SessionStreamRoleV1::Output => {
+                                        StreamCancelRoleV1::OutputConsumer
+                                    }
+                                },
+                                reason: StreamCancelReasonV1::Cancelled,
+                                details: None,
+                            },
+                        ));
+                    }
+                }
+                drop(metadata);
+                if !records.is_empty() {
+                    owner
+                        .append_session_records_owned(session.entity_parent_start_index, records)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(true)
+            })
+            .await?;
+        if exists {
+            self.reconcile_local_cancellation_intents().await?;
+        }
+        Ok(exists)
+    }
+
+    /// The caller resolves the canonical slot under this session guard inside an owned lifecycle operation.
+    pub(crate) async fn tombstone_slot_owned(
+        &self,
+        slot: String,
+        stream: Option<(DurableStreamHandleV1, SessionStreamRoleV1)>,
+        session_guard: tokio::sync::MutexGuard<'_, ()>,
+    ) -> Result<bool, String> {
+        if !self.has_local_session_authority() {
+            return Err("slot deletion requires the session owner".into());
+        }
+        let metadata = self.current_control_metadata().await?;
+        if metadata.prepared.is_none() {
+            return Err("unknown durable stream session".into());
+        }
+        if metadata.tombstoned_slots.contains_key(&slot) {
+            return Ok(false);
+        }
+        let mut records = vec![StreamSessionRecordV1::Tombstoned(
+            StreamSlotTombstonedRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: self.session_key.clone(),
+                slot,
+                role: stream
+                    .as_ref()
+                    .map_or(SessionStreamRoleV1::Output, |(_, role)| *role),
+            },
+        )];
+        if let Some((handle, role)) = stream {
+            if !metadata
+                .persisted_mappings
+                .iter()
+                .any(|(_, saved, saved_role)| saved == &handle && saved_role == &role)
+            {
+                return Err("deleted slot has no persisted stream mapping".into());
+            }
+            if !metadata.cancel_intents.contains_key(&handle.stream_id) {
+                let (epoch, _, _) = self.authoritative_attachment_state().await?;
+                records.push(StreamSessionRecordV1::ConsumerCancelIntent(
+                    StreamConsumerCancelIntentRecordV1 {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: self.session_key.clone(),
+                        stream_id: handle.stream_id,
+                        epoch,
+                        role: match role {
+                            SessionStreamRoleV1::Input => StreamCancelRoleV1::InputProducer,
+                            SessionStreamRoleV1::Output => StreamCancelRoleV1::OutputConsumer,
+                        },
+                        reason: StreamCancelReasonV1::Cancelled,
+                        details: None,
+                    },
+                ));
+            }
+        }
+        drop(metadata);
+        self.producer
+            .append_session_records_owned(self.entity_parent_start_index, records)
+            .await
+            .map_err(|error| error.to_string())?;
+        drop(session_guard);
+        self.reconcile_local_cancellation_intents().await?;
+        Ok(true)
+    }
+
     pub(crate) async fn cancel_stream(
         &self,
         transport_stream_id: u64,
@@ -2188,7 +2404,6 @@ impl DurableSessionStreams {
         if mapping.role != expected_role {
             return Err("durable stream cancellation role does not match its mapping".to_string());
         }
-        let locally_produced = self.producer.owns_handle_identity(&mapping.handle);
         let epoch = if self.has_local_session_authority() {
             match self.attachment_attempt_id {
                 // Streams bound to a transport attempt may only cancel while that attempt is
@@ -2233,14 +2448,216 @@ impl DurableSessionStreams {
                 intent
             }
         };
-        if locally_produced {
+        self.apply_cancel_intent_owned(mapping, intent, session_guard)
+            .await
+    }
+
+    pub(crate) async fn reconcile_local_cancellation_intents(&self) -> Result<(), String> {
+        let metadata = self.current_control_metadata().await?;
+        let mut pending = Vec::new();
+        for intent in metadata.cancel_intents.values() {
+            if metadata.applied_cancel_intents.contains(intent) {
+                continue;
+            }
+            let (transport_stream_id, handle, role) = metadata
+                .persisted_mappings
+                .iter()
+                .find(|(_, handle, _)| handle.stream_id == intent.stream_id)
+                .ok_or("durable cancellation intent has no persisted stream mapping")?;
+            if self.producer.owns_handle_identity(handle) {
+                pending.push((
+                    StreamSessionMappingRecordV1 {
+                        transport_stream_id: *transport_stream_id,
+                        handle: handle.clone(),
+                        role: *role,
+                    },
+                    intent.clone(),
+                ));
+            }
+        }
+        drop(metadata);
+        for (mapping, intent) in pending {
+            let session = self.clone();
+            self.producer
+                .run_lifecycle(
+                    intent.details.as_ref().map_or(0, String::len),
+                    move |_| async move {
+                        let _guard = session.session_lock.lock().await;
+                        session
+                            .producer
+                            .validate_handle(&mapping.handle)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        // The terminal dispatcher owns publication; recovery only waits for
+                        // durable cancellation, not for a slow live reader to make room.
+                        session
+                            .producer
+                            .commit_cancel_open(
+                                mapping.handle.stream_id,
+                                intent.role,
+                                intent.reason,
+                                intent.details.clone(),
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        session
+                            .producer
+                            .append_session_record_owned(
+                                session.entity_parent_start_index,
+                                StreamSessionRecordV1::ConsumerCancelApplied(
+                                    StreamConsumerCancelAppliedRecordV1 {
+                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                        intent,
+                                    },
+                                ),
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        Ok::<_, String>(())
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn reconcile_foreign_cancellation_intents(
+        &self,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let metadata = self.current_control_metadata().await?;
+        let mut pending = Vec::new();
+        for intent in metadata.cancel_intents.values() {
+            if metadata.applied_cancel_intents.contains(intent) {
+                continue;
+            }
+            let (transport_stream_id, handle, role) = metadata
+                .persisted_mappings
+                .iter()
+                .find(|(_, handle, _)| handle.stream_id == intent.stream_id)
+                .ok_or("durable cancellation intent has no persisted stream mapping")?;
+            if self.producer.owns_handle_identity(handle) {
+                continue;
+            }
+            let mapping = StreamSessionMappingRecordV1 {
+                transport_stream_id: *transport_stream_id,
+                handle: handle.clone(),
+                role: *role,
+            };
+            let consumer_invocation = if self.has_local_session_authority() {
+                self.session_key.clone()
+            } else {
+                metadata
+                    .topologies
+                    .values()
+                    .find(|topology| topology.mapping == mapping)
+                    .ok_or("foreign cancellation has no consumer invocation authority")?
+                    .attachment
+                    .consumer_invocation
+                    .clone()
+            };
+            let key = self
+                .clone()
+                .with_consumer_invocation(consumer_invocation)
+                .attachment_key(handle, intent.epoch)?;
+            pending.push((key, mapping, intent.clone()));
+        }
+        drop(metadata);
+        let mut first_error = None;
+        for (key, mapping, intent) in pending {
+            let rpc = self
+                .rpc
+                .clone()
+                .ok_or("foreign cancellation routing is unavailable")?;
+            let auth_ctx = self
+                .auth_ctx
+                .clone()
+                .ok_or("foreign cancellation authorization is unavailable")?;
+            let receipt_intent = intent.clone();
+            let result = self
+                .producer
+                .run_lifecycle(
+                    intent.details.as_ref().map_or(0, String::len),
+                    move |owner| async move {
+                        owner.defer_remote_cancellation(async move {
+                            tokio::time::timeout(
+                                timeout,
+                                RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx)
+                                    .cancel_stream(key, intent.role, intent.reason, intent.details),
+                            )
+                            .await
+                            .map_err(|_| DurableStreamProducerError::RecoveryRequired)?
+                            .map(|_| ())
+                        });
+                        Ok::<_, String>(())
+                    },
+                )
+                .await;
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            } else {
+                // The routed operation has released its lifecycle admission before the
+                // acknowledgment takes a new one. A lost acknowledgment safely retries.
+                let attribution = self.entity_parent_start_index;
+                let receipt = self
+                    .producer
+                    .run_lifecycle(0, move |owner| async move {
+                        owner
+                            .append_session_record_owned(
+                                attribution,
+                                StreamSessionRecordV1::ConsumerCancelApplied(
+                                    StreamConsumerCancelAppliedRecordV1 {
+                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                        intent: receipt_intent,
+                                    },
+                                ),
+                            )
+                            .await
+                            .map_err(|error| error.to_string())
+                    })
+                    .await;
+                if let Err(error) = receipt {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    async fn apply_cancel_intent_owned(
+        &self,
+        mapping: StreamSessionMappingRecordV1,
+        intent: StreamConsumerCancelIntentRecordV1,
+        session_guard: tokio::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), String> {
+        if self
+            .current_control_metadata()
+            .await?
+            .applied_cancel_intents
+            .contains(&intent)
+        {
+            return Ok(());
+        }
+        if self.producer.owns_handle_identity(&mapping.handle) {
             let pending = self
                 .producer
                 .commit_cancel_open(
                     mapping.handle.stream_id,
                     intent.role,
                     intent.reason,
-                    intent.details,
+                    intent.details.clone(),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            self.producer
+                .append_session_record_owned(
+                    self.entity_parent_start_index,
+                    StreamSessionRecordV1::ConsumerCancelApplied(
+                        StreamConsumerCancelAppliedRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            intent: intent.clone(),
+                        },
+                    ),
                 )
                 .await
                 .map_err(|error| error.to_string())?;
@@ -2553,12 +2970,34 @@ impl DurableSessionStreams {
         component_revision: golem_common::model::component::ComponentRevision,
     ) -> Result<(SchemaValue, Vec<PendingOwnedStreamDrain>), String> {
         let session_guard = self.session_lock.lock().await;
+        let metadata = self.current_control_metadata().await?;
+        let first_result = metadata.invocation_result.is_none();
+        let cancel_session = metadata.cancellation_requested;
+        let deleted_outputs = metadata
+            .tombstoned_slots
+            .iter()
+            .filter(|(_, role)| **role == SessionStreamRoleV1::Output)
+            .map(|(slot, _)| slot.clone())
+            .collect::<HashSet<_>>();
+        let existing_intents = metadata
+            .cancel_intents
+            .keys()
+            .copied()
+            .collect::<HashSet<_>>();
+        drop(metadata);
+        let cancellation_epoch = if first_result && (cancel_session || !deleted_outputs.is_empty())
+        {
+            Some(self.authoritative_attachment_state().await?.0)
+        } else {
+            None
+        };
         struct PendingOutput {
             path: Vec<StreamValuePathStepV1>,
             endpoint: Option<LiveStreamEndpoint>,
             forwarded_handle: Option<DurableStreamHandleV1>,
             element_type: SchemaType,
             element_schema_fingerprint: SchemaFingerprintV1,
+            cancelled: bool,
         }
 
         validate_forwarded_durable_input_schemas(
@@ -2583,12 +3022,30 @@ impl DurableSessionStreams {
                 };
                 let canonical_handle_index = u64::try_from(pending.len())
                     .map_err(|_| "durable output handle index overflow".to_string())?;
+                let slot = match path {
+                    [] => Some("$result"),
+                    [StreamValuePathStepV1::RecordField(index)] => {
+                        match graph
+                            .resolve_ref(&root)
+                            .map_err(|error| error.to_string())?
+                        {
+                            SchemaType::Record { fields, .. } => {
+                                fields.get(*index as usize).map(|field| field.name.as_str())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
                 pending.push(PendingOutput {
                     path: path.to_vec(),
                     endpoint,
                     forwarded_handle,
                     element_type: element.cloned().unwrap_or_else(SchemaType::u8),
                     element_schema_fingerprint,
+                    cancelled: first_result
+                        && (cancel_session
+                            || slot.is_some_and(|slot| deleted_outputs.contains(slot))),
                 });
                 Ok(canonical_handle_index)
             })?;
@@ -2649,9 +3106,18 @@ impl DurableSessionStreams {
         let mut request_index = 0usize;
         for pending in &pending {
             let transport_stream_id = if let Some(handle) = &pending.forwarded_handle {
-                self.ensure_nested_mapping_under_lock(handle.clone(), SessionStreamRoleV1::Output)
+                if pending.cancelled || existing_intents.contains(&handle.stream_id) {
+                    self.mapping_for_handle(handle, SessionStreamRoleV1::Output)
+                        .map(|mapping| Ok(mapping.transport_stream_id))
+                        .unwrap_or_else(|| self.allocate_transport_stream_id())?
+                } else {
+                    self.ensure_nested_mapping_under_lock(
+                        handle.clone(),
+                        SessionStreamRoleV1::Output,
+                    )
                     .await?
                     .transport_stream_id
+                }
             } else {
                 let request = &requests[request_index];
                 request_index += 1;
@@ -2678,6 +3144,13 @@ impl DurableSessionStreams {
             .map(
                 |(pending, &transport_stream_id)| ProducerOutputRegistrationV1 {
                     transport_stream_id,
+                    cancellation_epoch: cancellation_epoch.filter(|_| {
+                        pending.cancelled
+                            && !pending
+                                .forwarded_handle
+                                .as_ref()
+                                .is_some_and(|handle| existing_intents.contains(&handle.stream_id))
+                    }),
                     source: match &pending.forwarded_handle {
                         Some(handle) => ProducerOutputSourceV1::Existing(handle.clone()),
                         None => ProducerOutputSourceV1::New(
@@ -2714,7 +3187,9 @@ impl DurableSessionStreams {
                 handle.clone(),
                 SessionStreamRoleV1::Output,
             )?;
-            if let Some(endpoint) = pending.endpoint {
+            if let Some(endpoint) = pending.endpoint
+                && !pending.cancelled
+            {
                 drains.push(PendingOwnedStreamDrain {
                     handle,
                     endpoint,
@@ -6021,6 +6496,7 @@ mod tests {
     struct AttachedProducerRpc {
         producer: Arc<DurableStreamProducer>,
         cancellation_owner: Option<Arc<DurableStreamProducer>>,
+        stall_next_cancel: std::sync::atomic::AtomicBool,
         scripted_reads: Mutex<VecDeque<Result<Vec<u8>, DurableStreamReadError<RpcError>>>>,
         pending_read: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
         read_requests:
@@ -6034,10 +6510,22 @@ mod tests {
             request: golem_common::base_model::durable_stream::StreamAttachmentControlRequestV1,
             _auth_ctx: &AuthCtx,
         ) -> Result<bool, RpcError> {
-            let owner = self
-                .cancellation_owner
-                .as_ref()
-                .expect("unexpected control RPC");
+            if self.stall_next_cancel.swap(false, Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            if self.cancellation_owner.is_none() {
+                let golem_common::base_model::durable_stream::StreamAttachmentControlOperationV1::Cancel {
+                    key, role, reason, details,
+                } = request.operation else { panic!("unexpected control RPC") };
+                self.producer
+                    .cancel_open(key.stream_id, role, reason, details)
+                    .await
+                    .map_err(|error| RpcError::ProtocolError {
+                        details: error.to_string(),
+                    })?;
+                return Ok(false);
+            }
+            let owner = self.cancellation_owner.as_ref().unwrap();
             assert!(matches!(
                 request.operation,
                 golem_common::base_model::durable_stream::StreamAttachmentControlOperationV1::Cancel {
@@ -6183,6 +6671,7 @@ mod tests {
         let rpc = Arc::new(AttachedProducerRpc {
             producer: producer.clone(),
             cancellation_owner: None,
+            stall_next_cancel: Default::default(),
             scripted_reads: Mutex::default(),
             pending_read: Mutex::default(),
             read_requests: Mutex::default(),
@@ -6436,6 +6925,145 @@ mod tests {
 
     #[test]
     #[test_r::timeout("15s")]
+    async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_retry() {
+        let local = identity();
+        let mut remote = identity();
+        remote.agent_id.agent_id.push_str("-remote");
+        remote.invocation.callee = remote.agent_id.clone();
+        let remote_oplog = Arc::new(TestOplog::default());
+        let remote_producer = DurableStreamProducer::load(
+            remote_oplog.clone(),
+            remote.environment_id,
+            remote.agent_id.clone(),
+            remote.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = remote_producer
+            .register(registration(
+                &remote,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: remote.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            local.environment_id,
+            local.agent_id.clone(),
+            local.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        producer
+            .append_session_record(StreamSessionRecordV1::Mapping(
+                StreamSessionMappingUpdateRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: local.invocation.clone(),
+                    mapping: StreamSessionMappingRecordV1 {
+                        transport_stream_id: 17,
+                        handle: handle.clone(),
+                        role: SessionStreamRoleV1::Output,
+                    },
+                },
+            ))
+            .await
+            .unwrap();
+        producer
+            .append_session_record(StreamSessionRecordV1::ConsumerCancelIntent(
+                StreamConsumerCancelIntentRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: local.invocation.clone(),
+                    stream_id: handle.stream_id,
+                    epoch: 3,
+                    role: StreamCancelRoleV1::OutputConsumer,
+                    reason: StreamCancelReasonV1::GuestDrop,
+                    details: Some("persisted remote cancellation".into()),
+                },
+            ))
+            .await
+            .unwrap();
+        drop(producer);
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            local.environment_id,
+            local.agent_id,
+            local.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(producer, oplog, local.invocation, [])
+            .with_auth_ctx(AuthCtx::System)
+            .with_rpc(Arc::new(AttachedProducerRpc {
+                producer: remote_producer,
+                cancellation_owner: None,
+                stall_next_cancel: true.into(),
+                scripted_reads: Mutex::default(),
+                pending_read: Mutex::default(),
+                read_requests: Mutex::default(),
+            }));
+        let before = remote_oplog.current_oplog_index().await;
+        let error = streams
+            .reconcile_foreign_cancellation_intents(Duration::from_millis(10))
+            .await
+            .unwrap_err();
+        assert_eq!(error, "RecoveryRequired");
+        assert_eq!(remote_oplog.current_oplog_index().await, before);
+        assert!(
+            streams
+                .current_control_metadata()
+                .await
+                .unwrap()
+                .has_cancellation_intents()
+        );
+        streams
+            .producer
+            .run_lifecycle(0, |_| async { Ok::<_, String>(()) })
+            .await
+            .expect("remote timeout must not poison the local producer");
+        streams
+            .reconcile_foreign_cancellation_intents(Duration::from_secs(1))
+            .await
+            .unwrap();
+        let after = remote_oplog.current_oplog_index().await;
+        assert_eq!(after, before.next());
+        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await else {
+            panic!("remote cancellation was not committed");
+        };
+        let record = remote_oplog.download_payload(record).await.unwrap();
+        assert_eq!(record.stream_id, handle.stream_id);
+        assert_eq!(record.role, StreamCancelRoleV1::OutputConsumer);
+        assert_eq!(
+            record.details.as_deref(),
+            Some("persisted remote cancellation")
+        );
+        assert!(
+            !streams
+                .current_control_metadata()
+                .await
+                .unwrap()
+                .has_cancellation_intents()
+        );
+        let local_after = streams.oplog.current_oplog_index().await;
+        streams
+            .reconcile_foreign_cancellation_intents(Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(remote_oplog.current_oplog_index().await, after);
+        assert_eq!(streams.oplog.current_oplog_index().await, local_after);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
     async fn foreign_cancellation_can_drain_its_local_owner_from_the_rpc_callback() {
         retirement_from_foreign_rpc(false).await;
     }
@@ -6524,6 +7152,7 @@ mod tests {
         .with_rpc(Arc::new(AttachedProducerRpc {
             producer: remote_producer,
             cancellation_owner: Some(producer.clone()),
+            stall_next_cancel: Default::default(),
             scripted_reads: Mutex::default(),
             pending_read: Mutex::default(),
             read_requests: Mutex::default(),
@@ -6653,6 +7282,528 @@ mod tests {
         .await
         .expect("a terminal output must reconstruct without a consumer attachment")
         .unwrap();
+    }
+
+    #[test]
+    async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal() {
+        for already_ended in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let producer = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let handle = producer
+                .register(registration(
+                    &identity,
+                    StreamRegistrationCoordinateV1::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKindV1::MethodResult,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKindV1::InvocationOutput,
+                ))
+                .await
+                .unwrap()
+                .value;
+            producer
+                .append_session_record(StreamSessionRecordV1::Mapping(
+                    StreamSessionMappingUpdateRecordV1 {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation.clone(),
+                        mapping: StreamSessionMappingRecordV1 {
+                            transport_stream_id: 17,
+                            handle: handle.clone(),
+                            role: SessionStreamRoleV1::Output,
+                        },
+                    },
+                ))
+                .await
+                .unwrap();
+            if already_ended {
+                producer
+                    .end(handle.stream_id, 0, StreamEndResultV1::Ok)
+                    .await
+                    .unwrap();
+            }
+            producer
+                .append_session_record(StreamSessionRecordV1::ConsumerCancelIntent(
+                    StreamConsumerCancelIntentRecordV1 {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: identity.invocation.clone(),
+                        stream_id: handle.stream_id,
+                        epoch: 7,
+                        role: StreamCancelRoleV1::OutputConsumer,
+                        reason: StreamCancelReasonV1::GuestDrop,
+                        details: Some("consumer gone before restart".into()),
+                    },
+                ))
+                .await
+                .unwrap();
+            let before = oplog.current_oplog_index().await;
+            drop(producer);
+            let producer = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let recovered =
+                DurableSessionStreams::new(producer, oplog.clone(), identity.invocation, []);
+            let key = recovered.attachment_key(&handle, 7).unwrap();
+            let mapping = StreamSessionMappingRecordV1 {
+                transport_stream_id: 17,
+                handle: handle.clone(),
+                role: SessionStreamRoleV1::Output,
+            };
+            let mut metadata = recovered.current_control_metadata().await.unwrap().clone();
+            metadata.topology_epoch = Some(9);
+            let intent = metadata.cancel_intents[&handle.stream_id].clone();
+            assert!(
+                metadata
+                    .has_committed_cancellation(&key, &mapping, &intent)
+                    .unwrap()
+            );
+            let mut changed = intent.clone();
+            changed.details = None;
+            assert!(
+                !metadata
+                    .has_committed_cancellation(&key, &mapping, &changed)
+                    .unwrap()
+            );
+            let mut stale_key = key.clone();
+            stale_key.epoch = 6;
+            assert!(
+                !metadata
+                    .has_committed_cancellation(&stale_key, &mapping, &intent)
+                    .unwrap()
+            );
+            let mut wrong_mapping = mapping.clone();
+            wrong_mapping.transport_stream_id = 18;
+            assert!(
+                !metadata
+                    .has_committed_cancellation(&key, &wrong_mapping, &intent)
+                    .unwrap()
+            );
+            metadata.cancel_intents.clear();
+            assert!(
+                !metadata
+                    .has_committed_cancellation(&key, &mapping, &intent)
+                    .unwrap()
+            );
+            recovered
+                .reconcile_local_cancellation_intents()
+                .await
+                .unwrap();
+            let after = oplog.current_oplog_index().await;
+            assert_eq!(
+                after.as_u64(),
+                before.as_u64() + u64::from(!already_ended) + 1
+            );
+            let OplogEntry::StreamSession { record, .. } = oplog.read(after).await else {
+                panic!("missing cancellation applied receipt");
+            };
+            let StreamSessionRecordV1::ConsumerCancelApplied(receipt) =
+                oplog.download_payload(record).await.unwrap()
+            else {
+                panic!("unexpected cancellation applied receipt");
+            };
+            assert_eq!(receipt.intent, intent);
+            assert!(
+                !recovered
+                    .current_control_metadata()
+                    .await
+                    .unwrap()
+                    .has_cancellation_intents()
+            );
+            if !already_ended {
+                let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await
+                else {
+                    panic!("missing recovered cancellation terminal");
+                };
+                let record = oplog.download_payload(record).await.unwrap();
+                assert_eq!(record.stream_id, handle.stream_id);
+                assert_eq!(record.role, StreamCancelRoleV1::OutputConsumer);
+                assert_eq!(
+                    record.details.as_deref(),
+                    Some("consumer gone before restart")
+                );
+            }
+            recovered
+                .reconcile_local_cancellation_intents()
+                .await
+                .unwrap();
+            assert_eq!(oplog.current_oplog_index().await, after);
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn session_cancellation_retains_history_and_is_idempotent_under_backpressure() {
+        let (producer, streams, mut reader, handle) = backpressured_session_input().await;
+        let identity = identity();
+        let mut outputs = Vec::new();
+        for index in 0..2 {
+            let output = producer
+                .register(registration(
+                    &identity,
+                    StreamRegistrationCoordinateV1::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKindV1::MethodResult,
+                        recursive_value_path: vec![StreamValuePathStepV1::RecordField(index)],
+                    },
+                    StreamSourceKindV1::InvocationOutput,
+                ))
+                .await
+                .unwrap()
+                .value;
+            streams
+                .append_record(StreamSessionRecordV1::Mapping(
+                    StreamSessionMappingUpdateRecordV1 {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: streams.session_key.clone(),
+                        mapping: StreamSessionMappingRecordV1 {
+                            transport_stream_id: 17 + u64::from(index),
+                            handle: output.clone(),
+                            role: SessionStreamRoleV1::Output,
+                        },
+                    },
+                ))
+                .await;
+            if index == 1 {
+                producer
+                    .end(output.stream_id, 0, StreamEndResultV1::Ok)
+                    .await
+                    .unwrap();
+            }
+            outputs.push(output);
+        }
+        assert!(streams.cancel_session_streams().await.unwrap());
+        let committed = streams.oplog.current_oplog_index().await;
+        let metadata = streams.current_control_metadata().await.unwrap();
+        assert!(metadata.cancellation_requested);
+        let intent = metadata.cancel_intents.get(&handle.stream_id).unwrap();
+        assert_eq!(intent.role, StreamCancelRoleV1::InputProducer);
+        assert_eq!(intent.reason, StreamCancelReasonV1::Cancelled);
+        assert_eq!(intent.epoch, 1);
+        drop(metadata);
+        assert!(streams.cancel_session_streams().await.unwrap());
+        assert_eq!(streams.oplog.current_oplog_index().await, committed);
+        let item = reader.next().await.unwrap().unwrap();
+        assert_eq!(
+            item.payload,
+            CommittedProducerStreamEventPayloadV1::PackedU8(1)
+        );
+        let terminal = reader.next().await.unwrap().unwrap();
+        assert_eq!(terminal.producer_sequence, 1);
+        assert_eq!(
+            terminal.payload,
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::InputProducer,
+                reason: StreamCancelReasonV1::Cancelled,
+                details: None,
+            }
+        );
+        assert!(reader.next().await.unwrap().is_none());
+        assert!(
+            producer
+                .input_high_water(handle.stream_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .terminal
+        );
+
+        for (index, output) in outputs.into_iter().enumerate() {
+            let mut output_reader = producer.catch_up(output, None).await.unwrap();
+            let terminal = output_reader.next().await.unwrap().unwrap();
+            assert_eq!(
+                terminal.payload,
+                if index == 0 {
+                    CommittedProducerStreamEventPayloadV1::Cancel {
+                        role: StreamCancelRoleV1::OutputConsumer,
+                        reason: StreamCancelReasonV1::Cancelled,
+                        details: None,
+                    }
+                } else {
+                    CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+                }
+            );
+            assert!(output_reader.next().await.unwrap().is_none());
+        }
+
+        let mut unknown_key = streams.session_key.clone();
+        unknown_key.idempotency_key =
+            golem_common::model::IdempotencyKey::new("unknown-session".into());
+        let unknown = DurableSessionStreams::new(producer, streams.oplog.clone(), unknown_key, []);
+        assert!(!unknown.cancel_session_streams().await.unwrap());
+        assert_eq!(streams.oplog.current_oplog_index().await, committed);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn late_output_cancellation_selects_fields_and_preserves_replay_drains() {
+        for target in [
+            None,
+            Some(SessionStreamRoleV1::Input),
+            Some(SessionStreamRoleV1::Output),
+        ] {
+            let (producer, streams, reader, _) = backpressured_session_input().await;
+            drop(reader);
+            match target {
+                None => {
+                    streams.cancel_session_streams().await.unwrap();
+                }
+                Some(role) => {
+                    streams
+                        .append_record(StreamSessionRecordV1::Tombstoned(
+                            StreamSlotTombstonedRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: streams.session_key.clone(),
+                                slot: "right".into(),
+                                role,
+                            },
+                        ))
+                        .await
+                }
+            }
+            let root = SchemaType::record(
+                ["left", "right"]
+                    .into_iter()
+                    .map(|name| NamedFieldType {
+                        name: name.into(),
+                        body: SchemaType::stream(Some(SchemaType::u8())),
+                        metadata: Default::default(),
+                    })
+                    .collect(),
+            );
+            for replay in [false, true] {
+                let (left_sender, left) = test_output_stream_pair(1).unwrap();
+                let (right_sender, right) = test_output_stream_pair(1).unwrap();
+                let value = SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(left)),
+                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(right)),
+                    ],
+                };
+                let session = streams.clone();
+                let root = root.clone();
+                let (_, drains) = producer
+                    .run_lifecycle(0, move |_| async move {
+                        session
+                            .materialize_result_owned(
+                                value,
+                                SchemaGraph::anonymous(root.clone()),
+                                root,
+                                ComponentRevision::INITIAL,
+                            )
+                            .await
+                    })
+                    .await
+                    .unwrap();
+                let expected_cancelled = match target {
+                    None => 2,
+                    Some(SessionStreamRoleV1::Output) => 1,
+                    _ => 0,
+                };
+                assert_eq!(
+                    drains.len(),
+                    if replay { 2 } else { 2 - expected_cancelled }
+                );
+                let result = streams.remote_result_record().await.unwrap().unwrap();
+                for (position, handle) in result.output_streams.iter().enumerate() {
+                    assert_eq!(
+                        producer
+                            .input_high_water(handle.stream_id)
+                            .await
+                            .unwrap()
+                            .is_some_and(|watermark| watermark.terminal),
+                        target.is_none()
+                            || (target == Some(SessionStreamRoleV1::Output) && position == 1)
+                    );
+                }
+                drop(drains);
+                drop((left_sender, right_sender));
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn cancelled_forwarded_result_persists_intent_without_remote_activation() {
+        let (producer, streams, reader, _) = backpressured_session_input().await;
+        drop(reader);
+        streams.cancel_session_streams().await.unwrap();
+        let mut remote = identity();
+        remote.agent_id.agent_id.push_str("-remote");
+        remote.invocation.callee = remote.agent_id.clone();
+        let remote_oplog = Arc::new(TestOplog::default());
+        let remote_producer = DurableStreamProducer::load(
+            remote_oplog.clone(),
+            remote.environment_id,
+            remote.agent_id.clone(),
+            remote.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let root = SchemaType::stream(Some(SchemaType::u8()));
+        let graph = SchemaGraph::anonymous(root.clone());
+        let mut request = registration(
+            &remote,
+            StreamRegistrationCoordinateV1::Root {
+                invocation_id: remote.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: vec![],
+            },
+            StreamSourceKindV1::InvocationOutput,
+        );
+        request.element_schema_fingerprint =
+            schema_fingerprint_v1(&graph, Some(&SchemaType::u8())).unwrap();
+        let handle = remote_producer.register(request).await.unwrap().value;
+        let before = remote_oplog.current_oplog_index().await;
+        for _ in 0..2 {
+            let result = SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                ForwardedDurableInput {
+                    handle: handle.clone(),
+                },
+            ));
+            streams
+                .materialize_result(result, &graph, &root, ComponentRevision::INITIAL)
+                .await
+                .unwrap();
+        }
+        let metadata = streams.current_control_metadata().await.unwrap();
+        let intent = metadata.cancel_intents.get(&handle.stream_id).unwrap();
+        assert_eq!(intent.role, StreamCancelRoleV1::OutputConsumer);
+        assert_eq!(intent.reason, StreamCancelReasonV1::Cancelled);
+        assert_eq!(metadata.topologies.len(), 0);
+        assert!(
+            metadata
+                .persisted_mappings
+                .iter()
+                .any(|(_, saved, role)| saved == &handle && *role == SessionStreamRoleV1::Output)
+        );
+        assert_eq!(remote_oplog.current_oplog_index().await, before);
+        drop(metadata);
+        assert_eq!(
+            streams
+                .remote_result_record()
+                .await
+                .unwrap()
+                .unwrap()
+                .output_streams,
+            vec![handle]
+        );
+        producer
+            .run_lifecycle(0, |_| async { Ok::<_, String>(()) })
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn slot_tombstone_persists_without_cancelling_other_slots() {
+        for pending_output in [false, true] {
+            let (producer, streams, reader, handle) = backpressured_session_input().await;
+            let slot = if pending_output { "$result" } else { "input" };
+            for first in [true, false] {
+                let session = streams.clone();
+                let stream =
+                    (!pending_output).then(|| (handle.clone(), SessionStreamRoleV1::Input));
+                let before = streams.oplog.current_oplog_index().await;
+                let changed = producer
+                    .run_lifecycle(0, move |_| async move {
+                        let lock = session.producer.session_lock(&session.session_key);
+                        let guard = lock.lock().await;
+                        session
+                            .tombstone_slot_owned(slot.into(), stream, guard)
+                            .await
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(changed, first);
+                if !first {
+                    assert_eq!(streams.oplog.current_oplog_index().await, before);
+                }
+            }
+            assert_eq!(
+                producer
+                    .input_high_water(handle.stream_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .terminal,
+                !pending_output
+            );
+            let oplog = streams.oplog.clone();
+            let key = streams.session_key.clone();
+            drop(reader);
+            drop(streams);
+            drop(producer);
+            let identity = identity();
+            let recovered_producer = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let recovered = DurableSessionStreams::new(recovered_producer, oplog, key, []);
+            let metadata = recovered.current_control_metadata().await.unwrap();
+            assert_eq!(
+                metadata.tombstoned_slots,
+                HashMap::from([(
+                    slot.to_string(),
+                    if pending_output {
+                        SessionStreamRoleV1::Output
+                    } else {
+                        SessionStreamRoleV1::Input
+                    }
+                )])
+            );
+            assert!(!metadata.cancellation_requested);
+            assert_eq!(metadata.cancel_intents.len(), usize::from(!pending_output));
+        }
+    }
+
+    #[test]
+    async fn local_cancellation_recovery_does_not_wait_for_live_reader_capacity() {
+        let (producer, streams, reader, handle) = backpressured_session_input().await;
+        producer
+            .append_session_record(StreamSessionRecordV1::ConsumerCancelIntent(
+                StreamConsumerCancelIntentRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: streams.session_key.clone(),
+                    stream_id: handle.stream_id,
+                    epoch: 1,
+                    role: StreamCancelRoleV1::InputConsumer,
+                    reason: StreamCancelReasonV1::GuestDrop,
+                    details: None,
+                },
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            streams.reconcile_local_cancellation_intents(),
+        )
+        .await
+        .expect("recovery waited for a backpressured live reader")
+        .unwrap();
+        wait_for_terminal_commit(&producer, handle.stream_id).await;
+        assert!(streams.session_lock.try_lock().is_ok());
+        drop(reader);
     }
 
     #[test]
@@ -8701,6 +9852,7 @@ mod tests {
         .with_rpc(Arc::new(AttachedProducerRpc {
             producer: remote_producer.clone(),
             cancellation_owner: None,
+            stall_next_cancel: Default::default(),
             scripted_reads: Mutex::default(),
             pending_read: Mutex::default(),
             read_requests: Mutex::default(),
@@ -9934,6 +11086,7 @@ mod tests {
         .with_rpc(Arc::new(AttachedProducerRpc {
             producer: remote_producer.clone(),
             cancellation_owner: None,
+            stall_next_cancel: Default::default(),
             scripted_reads: Mutex::default(),
             pending_read: Mutex::default(),
             read_requests: Mutex::default(),
@@ -10086,6 +11239,108 @@ mod tests {
                 nested_mapping.transport_stream_id,
             ])
         );
+    }
+
+    #[test]
+    fn session_control_metadata_keeps_cancellation_scoped_to_its_session() {
+        use golem_common::model::durable_stream::{
+            StreamSessionCancelRequestedRecordV1, StreamSlotTombstonedRecordV1,
+        };
+
+        let key = identity().invocation;
+        let mut other = key.clone();
+        other.idempotency_key = golem_common::model::IdempotencyKey::new("other-session".into());
+        let mut metadata = SessionControlMetadata::default();
+        let owner = golem_common::model::OwnedAgentId::new(key.callee_environment_id, &key.callee);
+        metadata.finished = Some(OplogIndex::INITIAL);
+        assert!(!metadata.needs_recovery(&owner, &key));
+        for (position, session_key) in [other, key.clone()].into_iter().enumerate() {
+            metadata.apply(
+                OplogIndex::from_u64(1 + position as u64 * 2),
+                &key,
+                &StreamSessionRecordV1::CancelRequested(StreamSessionCancelRequestedRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: session_key.clone(),
+                }),
+            );
+            metadata.apply(
+                OplogIndex::from_u64(2 + position as u64 * 2),
+                &key,
+                &StreamSessionRecordV1::Tombstoned(StreamSlotTombstonedRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key,
+                    slot: "$result".into(),
+                    role: SessionStreamRoleV1::Output,
+                }),
+            );
+            assert_eq!(metadata.cancellation_requested, position == 1);
+            assert_eq!(
+                metadata.tombstoned_slots.contains_key("$result"),
+                position == 1
+            );
+            assert!(!metadata.needs_recovery(&owner, &key));
+        }
+        let encoded = golem_common::serialization::serialize(&metadata).unwrap();
+        let restored: SessionControlMetadata =
+            golem_common::serialization::deserialize(&encoded).unwrap();
+        assert!(restored.cancellation_requested);
+        assert_eq!(
+            restored.tombstoned_slots,
+            HashMap::from([("$result".into(), SessionStreamRoleV1::Output)])
+        );
+        assert_eq!(restored.covered_through, OplogIndex::from_u64(4));
+    }
+
+    #[test]
+    fn cancellation_applied_receipt_clears_only_the_exact_intent() {
+        let key = identity().invocation;
+        let owner = golem_common::model::OwnedAgentId::new(key.callee_environment_id, &key.callee);
+        let intent = StreamConsumerCancelIntentRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: key.clone(),
+            stream_id: golem_common::model::StreamId(uuid::Uuid::new_v4()),
+            epoch: 3,
+            role: StreamCancelRoleV1::OutputConsumer,
+            reason: StreamCancelReasonV1::Cancelled,
+            details: None,
+        };
+        let mut metadata = SessionControlMetadata {
+            finished: Some(OplogIndex::INITIAL),
+            ..Default::default()
+        };
+        metadata.apply(
+            OplogIndex::from_u64(1),
+            &key,
+            &StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+        );
+        assert!(metadata.needs_recovery(&owner, &key));
+
+        let mut stale = intent.clone();
+        stale.epoch += 1;
+        metadata.apply(
+            OplogIndex::from_u64(2),
+            &key,
+            &StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                intent: stale,
+            }),
+        );
+        assert!(metadata.needs_recovery(&owner, &key));
+        metadata.apply(
+            OplogIndex::from_u64(3),
+            &key,
+            &StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                intent,
+            }),
+        );
+        assert!(!metadata.needs_recovery(&owner, &key));
+        let encoded = golem_common::serialization::serialize(&metadata).unwrap();
+        let restored: SessionControlMetadata =
+            golem_common::serialization::deserialize(&encoded).unwrap();
+        assert!(!restored.needs_recovery(&owner, &key));
+        assert_eq!(restored.cancel_intents.len(), 1);
+        assert_eq!(restored.applied_cancel_intents.len(), 1);
     }
 
     #[test]

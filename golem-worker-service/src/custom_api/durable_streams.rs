@@ -15,6 +15,7 @@ use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    DurableStreamAttachmentControlRequest, ExportStreamControl, ExportStreamControlResult,
     ReadStreamSlotRequest, ReadStreamSlotSuccess, stream_slot_item,
 };
 use golem_common::model::IdempotencyKey;
@@ -72,13 +73,6 @@ impl DurableStreamsHandler {
         if suffix.reserved {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        if matches!(*request.underlying.method(), Method::POST | Method::DELETE) {
-            let mut result = response(StatusCode::METHOD_NOT_ALLOWED);
-            result
-                .headers
-                .insert(http::header::ALLOW, "PUT, HEAD, GET".into());
-            return Ok(result);
-        }
         if has_header(request, "stream-ttl") || has_header(request, "stream-expires-at") {
             return Ok(response(StatusCode::BAD_REQUEST));
         }
@@ -109,7 +103,51 @@ impl DurableStreamsHandler {
             }
         });
         let agent_id = self.call_agent.build_agent_id(route, behaviour, phantom)?;
+        if request.underlying.method() == Method::POST {
+            if let (Some(session), Some(slot)) = (&suffix.session, &suffix.slot)
+                && self
+                    .read_slot(route, &agent_id, session, slot, Vec::new(), 0, 0)
+                    .await?
+                    .is_some_and(|metadata| metadata.tombstoned)
+            {
+                return Ok(response(StatusCode::GONE));
+            }
+            let mut result = response(StatusCode::METHOD_NOT_ALLOWED);
+            result
+                .headers
+                .insert(http::header::ALLOW, "PUT, HEAD, GET, DELETE".into());
+            return Ok(result);
+        }
         match (request.underlying.method(), suffix.session, suffix.slot) {
+            (&Method::DELETE, Some(session), slot) => {
+                let result = self
+                    .worker_service
+                    .control_export_stream(
+                        &agent_id,
+                        DurableStreamAttachmentControlRequest {
+                            producer_agent_id: Some(agent_id.clone().into()),
+                            producer_environment_id: Some(route.route.environment_id.into()),
+                            auth_ctx: Some(AuthCtx::System.into()),
+                            export_control: Some(ExportStreamControl {
+                                session,
+                                slot,
+                                expected_method: route_method(route).to_owned(),
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(response(match result {
+                    ExportStreamControlResult::Applied => StatusCode::NO_CONTENT,
+                    ExportStreamControlResult::NotFound => StatusCode::NOT_FOUND,
+                    ExportStreamControlResult::Gone => StatusCode::GONE,
+                    ExportStreamControlResult::Unspecified => {
+                        return Err(
+                            anyhow::anyhow!("unspecified export stream control result").into()
+                        );
+                    }
+                }))
+            }
             (&Method::PUT, Some(session), None) if generated_session => {
                 let created = self
                     .create(request, route, behaviour, &agent_id, &session)
@@ -154,7 +192,9 @@ impl DurableStreamsHandler {
                         .read_slot(route, &agent_id, &session, slot, Vec::new(), 0, 0)
                         .await?
                     {
-                        if content_type_mismatch(request, &metadata.content_type)? {
+                        if metadata.tombstoned
+                            || content_type_mismatch(request, &metadata.content_type)?
+                        {
                             return Ok(response(StatusCode::CONFLICT));
                         }
                         if args_from_url {
@@ -188,6 +228,9 @@ impl DurableStreamsHandler {
                         .read_slot(route, &agent_id, &session, slot, Vec::new(), 0, 0)
                         .await?
                     {
+                        Some(metadata) if metadata.tombstoned => {
+                            return Ok(response(StatusCode::CONFLICT));
+                        }
                         Some(metadata) => metadata_response(&metadata, true)?,
                         None => return Ok(response(StatusCode::NOT_FOUND)),
                     },
@@ -220,8 +263,8 @@ impl DurableStreamsHandler {
                     else {
                         return Ok(response(StatusCode::NOT_FOUND));
                     };
-                    closed &= metadata.closed;
-                    streams.push(serde_json::json!({"name":slot,"contentType":metadata.content_type,"nextOffset":offset_text(&metadata.head_offset)?,"closed":metadata.closed,"cancelled":metadata.cancelled}));
+                    closed &= metadata.closed || metadata.tombstoned;
+                    streams.push(serde_json::json!({"name":slot,"contentType":metadata.content_type,"nextOffset":offset_text(&metadata.head_offset)?,"closed":metadata.closed,"cancelled":metadata.cancelled,"deleted":metadata.tombstoned}));
                 }
                 let body = serde_json::to_vec(
                     &serde_json::json!({"session":session,"streams":streams,"closed":closed}),
@@ -389,6 +432,9 @@ impl DurableStreamsHandler {
                 else {
                     return Ok(response(StatusCode::NOT_FOUND));
                 };
+                if head.tombstoned {
+                    return Ok(response(StatusCode::GONE));
+                }
                 head.next_offset = head.head_offset.clone();
                 head.up_to_date = true;
                 let from = head.head_offset.clone();
@@ -434,6 +480,9 @@ impl DurableStreamsHandler {
                 None => return Ok(response(StatusCode::NOT_FOUND)),
             },
         };
+        if read.tombstoned {
+            return Ok(response(StatusCode::GONE));
+        }
         if live == Some("long-poll") && read.items.is_empty() {
             let mut r = metadata_response(&read, false)?;
             r.status = StatusCode::NO_CONTENT;
@@ -488,6 +537,9 @@ impl DurableStreamsHandler {
                                 None => return Ok(None),
                             },
                         };
+                        if batch.tombstoned {
+                            return Ok(None);
+                        }
                         let closed = batch.closed && batch.up_to_date;
                         request.from_offset = batch.next_offset.clone();
                         let data = sse_batch(&batch, &mut cursor).map_err(std::io::Error::other)?;
@@ -760,6 +812,9 @@ fn metadata_response(
     r: &ReadStreamSlotSuccess,
     head: bool,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
+    if r.tombstoned {
+        return Ok(response(StatusCode::GONE));
+    }
     let mut out = response(StatusCode::OK);
     headers(&mut out, r, head)?;
     out.headers

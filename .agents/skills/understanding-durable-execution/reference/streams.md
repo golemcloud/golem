@@ -91,6 +91,33 @@ context, then appends `Finished`; a protocol terminal fences any later guest ter
 failing locally does not fail sibling streams or the invocation
 (`tests/rpc.rs::stream_local_output_failure_does_not_fail_sibling_or_invocation`).
 
+### External cancellation and deleted URLs
+
+HTTP export controls reuse `ControlDurableStreamAttachment`, with a system-only export request
+carrying the route-authorized method and optional canonical slot. They do not use worker
+interruption or the pending-invocation cancellation API.
+
+Session DELETE commits `CancelRequested` and cancellation intents for open stream mappings.
+It retains readable history and leaves existing terminal outcomes unchanged. Pending output
+streams immediately read as cancelled; later result materialization commits their cancellation
+in the same batch as registration and the result, without starting new drains. Replay still
+reconstructs historical drains and journaled observations. Cancellation is cooperative: code
+independent of the streams can continue changing state, doing I/O, and returning a result.
+
+Slot DELETE resolves the canonical schema slot under the session lock shared with result
+materialization, then atomically commits its cancellation intent and `Tombstoned` record. The
+tombstone records input/output role so a same-named input does not cancel a later output. The
+URL subsequently returns 410 for GET/HEAD/POST/DELETE and 409 for PUT. Oplog history is retained;
+recreating a stream requires a new session. Session inspection still lists deleted slots.
+
+`ConsumerCancelApplied` acknowledges the exact persisted intent after local producer commit or
+an acknowledged remote cancellation. It is not a guest `ConsumerTerminal`. A crash between
+producer commit and this receipt retries cancellation idempotently. Pending intents are folded
+into `AgentStatusRecord` and keep even idle workers in assignment recovery, including caller-side
+sessions without local `Prepared`. Applied intents no longer keep the recovery catalogue alive;
+the original intent remains available for authorization and replay. Remote retry and receipt
+writing acquire lifecycle admission separately, never while holding the session lock across RPC.
+
 ### Tests
 
 `tests/rpc.rs::{durable_streaming_output_recovers_after_executor_restart,

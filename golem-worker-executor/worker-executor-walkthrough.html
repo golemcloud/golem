@@ -1506,6 +1506,19 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <h3>Terminals</h3>
 <p>Terminals are guest-authored (<code>StreamEnd</code> with the guest's result, <code>StreamCancel</code> with <code>GuestDrop</code>/<code>Cancelled</code>) or protocol-authored. When the producing invocation completes or fails with streams still open, the protocol cancels open inputs, ends open outputs with an error context, then appends <code>Finished</code>; a protocol terminal <em>fences</em> any later guest terminal so consumers observe exactly one. A stream failing locally does not fail sibling streams or the invocation. Both sides recover independently: a producer that restarts continues its output after the last committed item, and a consumer that restarts resumes draining from its own journal, whether the restart happened before or after the RPC result itself was committed.</p>
 
+<section id="stream-delete">
+<h3>HTTP cancellation closes streams, not agent execution</h3>
+<p><code>DELETE /invocations/{session}</code> commits <code>CancelRequested</code> and stream cancellation intents through the shared <code>ControlDurableStreamAttachment</code> RPC. It preserves readable history and existing terminal outcomes. Pending outputs read as cancelled immediately; later output materialization commits cancellation with registration and the result, rather than starting new drains.</p>
+<p>This is <strong>cooperative cancellation</strong>. Independent agent code can continue computing, changing state, performing I/O, and returning. It does not interrupt the worker or roll back effects. Replay reconstructs historical drains and guest observations unchanged.</p>
+<p><code>DELETE /invocations/{session}/streams/{slot}</code> instead commits a cancellation intent and a <code>Tombstoned</code> record atomically, under the same session lock used for result materialization. The deleted URL returns <strong>410</strong> for GET, HEAD, POST, and repeated DELETE; PUT returns <strong>409</strong>. Session DELETE itself returns 204 on both first and repeated calls. Oplog history remains; recreating a deleted stream requires a new session.</p>
+<h4>Crash windows for cancellation</h4>
+<ol>
+  <li><strong>Intent committed, producer not yet cancelled:</strong> recovery retries the cancellation. Pending intents keep even idle workers discoverable through the assignment recovery index.</li>
+  <li><strong>Producer cancelled, acknowledgment not recorded:</strong> recovery may retry, but exactly-once terminal handling preserves the original terminal.</li>
+  <li><strong><code>ConsumerCancelApplied</code> committed:</strong> the exact intent is acknowledged and no longer needs recovery. This receipt does not claim that the guest observed a <code>ConsumerTerminal</code>; those are different facts.</li>
+</ol>
+</section>
+
 <!-- ===================== 14. TOOLS ===================== -->
 <h2 id="s-tools"><span class="num">14</span>Tool invocations &amp; entity bodies</h2>
 <p><code>durable_host/tool/mod.rs</code> implements <code>golem:tool/host@0.1.0</code>. Tool discovery is a durable read of environment state; authorisation is enforced before any backend runs. What makes tools different from every other host call is <em>where the body runs and where it records</em>.</p>

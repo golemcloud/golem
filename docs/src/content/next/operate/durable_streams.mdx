@@ -49,6 +49,47 @@ Use the worker-executor metrics and traces to inspect attachment activity:
 
 See [Metrics](/next/operate/metrics) and [Logs](/next/operate/logs) for endpoint and exporter setup.
 
+## Cancelling a session
+
+Delete an invocation session to cooperatively cancel all of its open streams:
+
+```http
+DELETE {base}/invocations/{session}
+```
+
+The first request returns `204 No Content`. Repeating the request also returns `204`; an unknown session returns `404 Not Found`. Cancellation closes open streams and fences output slots that have not materialized yet, so later output cannot reopen them. Streams that were already terminal keep their existing outcome.
+
+Session cancellation retains stream history. Readers can consume recorded and buffered items before reaching the cancellation terminal. At EOF, a cancelled stream reports both `Stream-Closed: true` and `Stream-Cancelled: true`. Recorded guest observations also replay unchanged.
+
+<Callout type="warning">
+  Session deletion does not interrupt or terminate the agent invocation. It does
+  not roll back state or external effects. Agent code can continue computing,
+  changing state, performing I/O, and producing a result if it does not stop in
+  response to cancelled stream operations. A `204` acknowledges durable stream
+  cancellation only.
+</Callout>
+
+The upstream Durable Streams protocol's [stream deletion semantics](https://github.com/durable-streams/durable-streams/blob/main/PROTOCOL.md#54-delete-stream) delete a stream URL; they do not terminate the producer's computation. The invocation-session URL and its cooperative cancellation behavior are Golem extensions.
+
+## Deleting a stream URL
+
+Deleting an individual stream URL atomically cancels that stream slot and writes a durable tombstone:
+
+```http
+DELETE {base}/invocations/{session}/streams/{slot}
+```
+
+For an input slot, cancellation closes the external producer side; the Rust agent's input reader observes EOF after any already-buffered items. For an output slot or `$result`, cancellation records that the consumer has gone away. A write already accepted by the guest transport can still report success without being added to durable history; subsequent writes fail when the producer observes the closed consumer. Transport acceptance is not an acknowledgment of durable publication.
+
+Every stream deletion is a soft delete. After the successful deletion, all later requests to that URL use these statuses:
+
+| Method                       | Status         |
+| ---------------------------- | -------------- |
+| `GET`, `HEAD`, `POST`, `DELETE` | `410 Gone`     |
+| `PUT`                        | `409 Conflict` |
+
+The tombstone and oplog history survive recovery; deleting a stream never removes its durable history. Because the URL remains reserved, it cannot be recreated at the same path. Create a new invocation session to obtain new stream URLs.
+
 ## Deletion failures
 
 Normal producer deletion is fail-closed while a prepared or active attachment may still need producer history. A blocked deletion reports the dependent attachment, stream, epoch, consumer identity, and consumer incarnation fingerprint. Do not force-delete the oplog or use fork/revert to bypass this check.

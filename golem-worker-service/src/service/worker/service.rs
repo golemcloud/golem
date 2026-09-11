@@ -33,7 +33,8 @@ use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionSuccess, ReadStreamSlotRequest, ReadStreamSlotSuccess,
+    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControlResult,
+    ReadStreamSlotRequest, ReadStreamSlotSuccess,
 };
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
@@ -1813,6 +1814,25 @@ impl WorkerService {
 
         self.worker_client
             .create_stream_session(agent_id, request)
+            .await
+    }
+
+    pub async fn control_export_stream(
+        &self,
+        agent_id: &AgentId,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("control authorized Durable Streams export")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .control_export_stream(agent_id, request)
             .await
     }
 

@@ -38,10 +38,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
     CreateStreamSessionSuccess, CreateWorkerRequest, DeactivatePluginRequest,
     DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
-    DurableStreamSegmentReadRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    ProcessOplogEntriesRequest, ReadStreamSlotRequest, ReadStreamSlotSuccess,
-    ResolveRevertLastInvocationsRequest, ResumeWorkerRequest, RevertWorkerRequest,
-    SearchOplogResponse, UpdateWorkerRequest,
+    DurableStreamSegmentReadRequest, ExportStreamControlResult, ForkWorkerRequest,
+    InterruptWorkerRequest, ProcessOplogEntriesRequest, ReadStreamSlotRequest,
+    ReadStreamSlotSuccess, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
+    RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -512,6 +512,16 @@ pub trait WorkerClient: Send + Sync {
     ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
         Err(WorkerServiceError::Internal(
             "durable stream slot reads are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn control_export_stream(
+        &self,
+        _agent_id: &AgentId,
+        _request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        Err(WorkerServiceError::Internal(
+            "export stream control is not supported by this worker client".to_string(),
         ))
     }
 
@@ -1927,6 +1937,27 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         Ok(Box::pin(response.into_inner()))
     }
 
+    async fn control_export_stream(
+        &self,
+        agent_id: &AgentId,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        use workerexecutor::v1::durable_stream_attachment_control_response::Result;
+        self.call_worker_executor(
+            agent_id.clone(),
+            "control_export_stream",
+            move |client| Box::pin(client.control_durable_stream_attachment(request.clone())),
+            |response| match response.into_inner().result {
+                Some(Result::ExportResult(result)) => ExportStreamControlResult::try_from(result)
+                    .map_err(|_| "Invalid export stream control result".into()),
+                Some(Result::Failure(error)) => Err(error.into()),
+                _ => Err("Invalid export stream control response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
     async fn control_durable_stream_attachment(
         &self,
         producer_agent_id: &AgentId,
@@ -1952,6 +1983,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         consumer_environment_id: Some(consumer_environment_id.into()),
                         expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
+                        export_control: None,
                     },
                 ))
             },
