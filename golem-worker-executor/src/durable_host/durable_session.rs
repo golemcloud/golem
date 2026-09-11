@@ -80,6 +80,10 @@ const PACKED_U8_OUTPUT_FLUSH_DELAY: Duration = Duration::from_millis(50);
 #[async_trait::async_trait]
 pub(crate) trait DurableStreamConsumerJournal: Send + Sync {
     async fn commit(&self) -> Result<(), String>;
+    async fn committed_finished_index(
+        &self,
+        session: &StreamSessionKeyV1,
+    ) -> Result<Option<OplogIndex>, String>;
 }
 
 #[derive(Clone)]
@@ -3261,13 +3265,44 @@ impl DurableSessionStreams {
         result: Result<(), Vec<u8>>,
         input_cancel_reason: StreamCancelReasonV1,
     ) -> Result<(), String> {
-        let session_guard = self.session_lock.lock().await;
-        self.validate_topology_complete().await?;
-        drop(session_guard);
-        self.producer
-            .finish_session(self.session_key.clone(), result, input_cancel_reason)
-            .await
-            .map_err(|error| error.to_string())
+        if self.has_committed_finished().await? {
+            return Ok(());
+        }
+        let outcome = async {
+            let session_guard = self.session_lock.lock().await;
+            self.validate_topology_complete().await?;
+            drop(session_guard);
+            self.producer
+                .finish_session(self.session_key.clone(), result, input_cancel_reason)
+                .await
+                .map_err(|error| error.to_string())
+        }
+        .await;
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(error) => match self.has_committed_finished().await {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(error),
+                Err(lookup_error) => Err(format!(
+                    "{error}; committed finish lookup failed: {lookup_error}"
+                )),
+            },
+        }
+    }
+
+    async fn has_committed_finished(&self) -> Result<bool, String> {
+        let Some(journal) = &self.consumer_journal else {
+            return Ok(false);
+        };
+        let Some(index) = journal.committed_finished_index(&self.session_key).await? else {
+            return Ok(false);
+        };
+        match self.session_record_at(index).await? {
+            StreamSessionRecordV1::Finished(record) if record.session_key == self.session_key => {
+                Ok(true)
+            }
+            _ => Err("committed finished metadata points at a different session record".into()),
+        }
     }
 
     async fn validate_topology_complete(&self) -> Result<(), String> {
@@ -5278,6 +5313,13 @@ mod tests {
             self.0.commit(CommitLevel::Always).await;
             Ok(())
         }
+
+        async fn committed_finished_index(
+            &self,
+            _session: &StreamSessionKeyV1,
+        ) -> Result<Option<OplogIndex>, String> {
+            Ok(None)
+        }
     }
 
     async fn append_prepared_pending(
@@ -6415,6 +6457,13 @@ mod tests {
             self.oplog.commit(CommitLevel::Always).await;
             self.commits.fetch_add(1, Ordering::Relaxed);
             Ok(())
+        }
+
+        async fn committed_finished_index(
+            &self,
+            _session: &StreamSessionKeyV1,
+        ) -> Result<Option<OplogIndex>, String> {
+            Ok(None)
         }
     }
 
@@ -9840,6 +9889,92 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    async fn finalization_after_retirement_requires_matching_committed_finished() {
+        struct FinishedJournal {
+            index: Option<OplogIndex>,
+            hide_first: bool,
+            reads: AtomicU64,
+        }
+
+        #[async_trait::async_trait]
+        impl DurableStreamConsumerJournal for FinishedJournal {
+            async fn commit(&self) -> Result<(), String> {
+                panic!("a repeated finalization must not commit buffered entries")
+            }
+
+            async fn committed_finished_index(
+                &self,
+                _session: &StreamSessionKeyV1,
+            ) -> Result<Option<OplogIndex>, String> {
+                let first = self.reads.fetch_add(1, Ordering::Relaxed) == 0;
+                Ok(if first && self.hide_first {
+                    None
+                } else {
+                    self.index
+                })
+            }
+        }
+
+        for (committed, hide_first, same_fingerprint) in [
+            (true, false, true),
+            (true, true, true),
+            (false, false, true),
+            (true, false, false),
+        ] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let producer = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let mut finished_key = identity.invocation.clone();
+            if !same_fingerprint {
+                finished_key.callee_fingerprint = AgentFingerprint::default();
+                assert_ne!(finished_key, identity.invocation);
+            }
+            let index = oplog
+                .add(OplogEntry::StreamSession {
+                    timestamp: Timestamp::now_utc(),
+                    record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::Finished(
+                        StreamSessionFinishedRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: finished_key,
+                            result: Err(vec![1, 2, 3]),
+                        },
+                    ))),
+                })
+                .await;
+            if committed {
+                oplog.commit(CommitLevel::Always).await;
+            }
+            producer.poison();
+            let journal = Arc::new(FinishedJournal {
+                index: committed.then_some(index),
+                hide_first,
+                reads: AtomicU64::new(0),
+            });
+            let streams =
+                DurableSessionStreams::new(producer, oplog.clone(), identity.invocation, [])
+                    .with_consumer_journal(journal.clone());
+            let result = streams.fail_invocation("execution failed".into()).await;
+            assert_eq!(result.is_ok(), committed && same_fingerprint, "{result:?}");
+            assert_eq!(oplog.current_oplog_index().await, index);
+            assert_eq!(
+                journal.reads.load(Ordering::Relaxed),
+                if hide_first || !committed { 2 } else { 1 }
+            );
+            if !committed {
+                assert_eq!(oplog.commit(CommitLevel::Always).await.len(), 1);
+            }
+        }
     }
 
     #[test]

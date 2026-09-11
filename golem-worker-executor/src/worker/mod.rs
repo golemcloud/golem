@@ -671,6 +671,10 @@ impl Drop for DurableStreamAttachmentReconciler {
 
 struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
     state_actor: Arc<state_actor::WorkerStateActor<Ctx>>,
+    status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    worker_service: Arc<dyn WorkerService>,
+    owner: OwnedAgentId,
+    mode: AgentMode,
 }
 
 #[async_trait::async_trait]
@@ -685,6 +689,22 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
             self.state_actor.notify_status_changed();
         }
         Ok(())
+    }
+
+    async fn committed_finished_index(
+        &self,
+        session: &StreamSessionKeyV1,
+    ) -> Result<Option<OplogIndex>, String> {
+        let status = self.status.load_full();
+        self.worker_service
+            .lookup_durable_stream_session(
+                &self.owner,
+                self.mode,
+                &status,
+                &session.idempotency_key,
+            )
+            .await
+            .map(|session| session.and_then(|session| session.finished))
     }
 }
 
@@ -724,6 +744,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
         Arc::new(WorkerDurableStreamConsumerJournal {
             state_actor: self.state_actor.clone(),
+            status: self.last_known_status.clone(),
+            worker_service: self.worker_service(),
+            owner: self.owned_agent_id.clone(),
+            mode: self.agent_mode(),
         })
     }
 
