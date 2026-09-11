@@ -107,6 +107,7 @@ pub mod p2_monotonic_clock {
         path: r"../wit",
         world: "wasi:clocks/imports@0.2.6",
         imports: {
+            "wasi:clocks/monotonic-clock.now": async | trappable,
             "wasi:clocks/monotonic-clock": store | async | trappable,
             default: async | trappable,
         },
