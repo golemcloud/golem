@@ -49,7 +49,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
-    AttachedStreamSegmentRequestV1, StreamAttachmentControlRequestV1,
+    DurableStreamReadRequestV1, StreamAttachmentControlRequestV1,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -159,13 +159,14 @@ pub trait Rpc: Send + Sync {
 
     async fn read_durable_stream_segment(
         &self,
-        _request: AttachedStreamSegmentRequestV1,
+        _request: DurableStreamReadRequestV1,
         _auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, RpcError> {
+    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         Err(RpcError::ProtocolError {
             details: "durable stream segment reads are not supported by this RPC implementation"
                 .to_string(),
-        })
+        }
+        .into())
     }
 
     async fn invoke(
@@ -187,6 +188,40 @@ pub trait Rpc: Send + Sync {
 pub struct DurableRpcInvocationResult {
     pub value: ProtoSchemaValue,
     pub output_mappings: Vec<DurableStreamMapping>,
+}
+
+/// Read transport failure, kept separate from durable invocation errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DurableStreamReadError<E> {
+    Unavailable,
+    Other(E),
+}
+
+impl<E> From<E> for DurableStreamReadError<E> {
+    fn from(error: E) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl<E> DurableStreamReadError<E> {
+    pub fn map_other<F>(self, map: impl FnOnce(E) -> F) -> DurableStreamReadError<F> {
+        match self {
+            Self::Unavailable => DurableStreamReadError::Unavailable,
+            Self::Other(error) => DurableStreamReadError::Other(map(error)),
+        }
+    }
+
+    pub(crate) fn from_producer(
+        error: crate::durable_host::durable_stream::DurableStreamProducerError,
+        map: impl FnOnce(String) -> E,
+    ) -> Self {
+        match error {
+            crate::durable_host::durable_stream::DurableStreamProducerError::RecoveryRequired => {
+                Self::Unavailable
+            }
+            error => Self::Other(map(error.to_string())),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -653,13 +688,13 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn read_durable_stream_segment(
         &self,
-        request: AttachedStreamSegmentRequestV1,
+        request: DurableStreamReadRequestV1,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, RpcError> {
+    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         self.worker_proxy
             .read_durable_stream_segment(request, auth_ctx)
             .await
-            .map_err(Into::into)
+            .map_err(|error| error.map_other(Into::into))
     }
 
     async fn invoke(
@@ -1637,11 +1672,19 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn read_durable_stream_segment(
         &self,
-        request: AttachedStreamSegmentRequestV1,
+        request: DurableStreamReadRequestV1,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, RpcError> {
-        let key = &request.attachment;
-        let producer = OwnedAgentId::new(key.producer_environment_id, &key.producer);
+    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+        let producer = match &request {
+            DurableStreamReadRequestV1::AttachedConsumer(request) => OwnedAgentId::new(
+                request.attachment.producer_environment_id,
+                &request.attachment.producer,
+            ),
+            DurableStreamReadRequestV1::AuthorizedExport(request) => OwnedAgentId::new(
+                request.handle.producer_environment_id,
+                &request.handle.producer,
+            ),
+        };
         if self
             .shard_service()
             .check_worker(&producer.agent_id)
@@ -1656,18 +1699,28 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
         debug!(producer = %producer, "Routing durable stream segment read within the local shard");
 
-        self.direct_invocation_auth
-            .check(
-                auth_ctx.actor_account_id(),
-                &producer,
-                AgentVerb::View,
-                AgentResourcePattern::Any,
-                auth_ctx,
-            )
-            .await?;
+        match &request {
+            DurableStreamReadRequestV1::AttachedConsumer(_) => {
+                self.direct_invocation_auth
+                    .check(
+                        auth_ctx.actor_account_id(),
+                        &producer,
+                        AgentVerb::View,
+                        AgentResourcePattern::Any,
+                        auth_ctx,
+                    )
+                    .await?;
+            }
+            DurableStreamReadRequestV1::AuthorizedExport(_) => auth_ctx
+                .authorize_system_only("read authorized durable stream export")
+                .map_err(|error| RpcError::Denied {
+                    details: error.to_string(),
+                })?,
+        }
         Worker::<Ctx>::get_latest_metadata(self, &producer)
             .await
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(producer.agent_id()))?;
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(producer.agent_id()))
+            .map_err(RpcError::from)?;
         let worker = Worker::get_or_create_suspended(
             self,
             &producer,
@@ -1678,11 +1731,24 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             &InvocationContextStack::fresh(),
             Principal::anonymous(),
         )
-        .await?;
-        let events = worker.read_durable_stream_segment(request).await?;
-        golem_common::serialization::serialize(&events)
-            .map_err(WorkerExecutorError::runtime)
-            .map_err(Into::into)
+        .await
+        .map_err(RpcError::from)?;
+        match request {
+            DurableStreamReadRequestV1::AttachedConsumer(request) => {
+                let events = worker
+                    .read_durable_stream_segment(*request)
+                    .await
+                    .map_err(|error| error.map_other(RpcError::from))?;
+                golem_common::serialization::serialize(&events)
+                    .map_err(WorkerExecutorError::runtime)
+                    .map_err(RpcError::from)
+                    .map_err(Into::into)
+            }
+            DurableStreamReadRequestV1::AuthorizedExport(request) => worker
+                .read_durable_stream_by_handle(*request)
+                .await
+                .map_err(|error| error.map_other(RpcError::from)),
+        }
     }
 
     async fn invoke(

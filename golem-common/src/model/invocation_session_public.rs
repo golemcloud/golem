@@ -31,6 +31,26 @@ pub const MAX_STREAM_MAPPINGS: usize = 4096;
 pub const MAX_TOKEN_SIZE: usize = 8192;
 pub const MAX_IDEMPOTENCY_KEY_SIZE: usize = 1024;
 
+pub fn new_durable_stream_session_id() -> String {
+    ulid::Ulid::new().to_string()
+}
+
+/// Validates an invocation idempotency key used as a Durable Streams URL segment.
+pub fn validate_durable_stream_session_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(
+            "Durable Streams session id must contain 1–128 ASCII letters, digits, '.', '_' or '-'"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicErrorCode {
     UnsupportedSubprotocol,
@@ -1209,7 +1229,8 @@ mod tests {
     use super::{
         BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicClientMessage, PublicErrorCode,
         PublicServerMessage, decode_binary_message, decode_client_text, decode_server_text,
-        encode_text, validate_message_size,
+        encode_text, new_durable_stream_session_id, validate_durable_stream_session_id,
+        validate_message_size,
     };
     use serde::Deserialize;
     use test_r::test;
@@ -1344,5 +1365,25 @@ mod tests {
                 .code,
             PublicErrorCode::ResourceExhausted
         );
+    }
+
+    #[test]
+    fn durable_stream_session_ids_are_ulids() {
+        let first = new_durable_stream_session_id();
+        let second = new_durable_stream_session_id();
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 26);
+        assert!(first.parse::<ulid::Ulid>().is_ok());
+        assert!(validate_durable_stream_session_id(&first).is_ok());
+    }
+
+    #[test]
+    fn durable_stream_session_id_url_alphabet_and_length() {
+        for id in ["a", "Session_42.v1-retry", &"a".repeat(128)] {
+            assert!(validate_durable_stream_session_id(id).is_ok(), "{id:?}");
+        }
+        for id in ["", "a/b", "a?b", "a#b", "a%b", "a b", "é", &"a".repeat(129)] {
+            assert!(validate_durable_stream_session_id(id).is_err(), "{id:?}");
+        }
     }
 }

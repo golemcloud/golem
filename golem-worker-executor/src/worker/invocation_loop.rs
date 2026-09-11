@@ -514,6 +514,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
 
+            if cleanup_ephemeral_worker {
+                self.parent.fence_oplog_forwarding();
+            }
             let retry_was_live = {
                 let store = agent.runtime.store.lock().await;
                 store.data().durable_ctx().begin_stream_runtime_teardown();
@@ -594,7 +597,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     )
                     .await;
                     if cleanup_ephemeral_worker {
-                        self.parent.remove_from_active_agents().await;
                         self.archive_ephemeral_oplog();
                     }
                     break;
@@ -874,9 +876,54 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     fn archive_ephemeral_oplog(&self) {
-        let oplog = self.parent.oplog.clone();
+        let worker = self.parent.clone();
+        worker.durable_stream_producer.fence();
+        let forwarding = worker.fence_oplog_forwarding();
         tokio::spawn(async move {
-            let _ = EphemeralOplog::try_archive_background(&oplog).await;
+            let mut cleanup = worker.owner_cleanup.lock().await;
+            if *cleanup != super::OwnerCleanupState::PreRemoval
+                || !worker.is_current_cached_owner().await
+            {
+                return;
+            }
+            let result: Result<(), WorkerExecutorError> = async {
+                let retirement = worker.retire_durable_stream_producer();
+                worker
+                    .stop_internal(
+                        false,
+                        None,
+                        UnloadRequest::ordinary(UnloadReason::Idle),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: None,
+                        },
+                        PendingLiveInvocationDisposition::Fail,
+                    )
+                    .await;
+                if let super::WorkerInstance::CleanupFailed(error) = &*worker.instance.lock().await
+                {
+                    return Err(error.clone());
+                }
+                worker.durable_stream_attachment_reconciler.stop().await;
+                retirement.await?;
+                worker.state_actor.drain_lifecycle().await?;
+                if let Some(forwarding) = &forwarding {
+                    forwarding.drain_forwarding().await;
+                }
+                worker.durable_stream_commit()(None).await;
+                worker.status_flusher.begin_delete().await;
+                worker.status_checkpointer.begin_delete().await;
+                while EphemeralOplog::try_archive_blocking(&worker.oplog).await == Some(true) {}
+                if let Some(forwarding) = &forwarding {
+                    forwarding.forget_retired_wrapper();
+                }
+                worker.remove_from_active_agents().await;
+                *cleanup = super::OwnerCleanupState::Retired;
+                Ok(())
+            }
+            .await;
+            if let Err(error) = result {
+                tracing::error!(agent_id = %worker.agent_id(), error = %error, "Failed to retire ephemeral worker before archival");
+            }
         });
     }
 

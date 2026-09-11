@@ -1522,23 +1522,39 @@ impl WorkerService {
         &self,
         producer_agent_id: &AgentId,
         producer_environment_id: EnvironmentId,
-        consumer_agent_id: &AgentId,
-        consumer_environment_id: EnvironmentId,
-        expected_consumer_fingerprint: AgentFingerprint,
+        consumer_agent_id: Option<&AgentId>,
+        consumer_environment_id: Option<EnvironmentId>,
+        expected_consumer_fingerprint: Option<AgentFingerprint>,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
-        let component = self
-            .component_service
-            .get_current_by_id_uncached(producer_agent_id.component_id)
-            .await?;
-        authorize_agent_permission(
-            &auth_ctx,
-            &component,
-            producer_agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
-        )?;
+        let read: golem_common::model::durable_stream::DurableStreamReadRequestV1 =
+            golem_common::serialization::deserialize(&payload)
+                .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
+        match read {
+            golem_common::model::durable_stream::DurableStreamReadRequestV1::AttachedConsumer(
+                _,
+            ) => {
+                let component = self
+                    .component_service
+                    .get_current_by_id_uncached(producer_agent_id.component_id)
+                    .await?;
+                authorize_agent_permission(
+                    &auth_ctx,
+                    &component,
+                    producer_agent_id,
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )?;
+            }
+            golem_common::model::durable_stream::DurableStreamReadRequestV1::AuthorizedExport(
+                _,
+            ) => {
+                auth_ctx
+                    .authorize_system_only("read authorized durable stream export")
+                    .map_err(AuthServiceError::Unauthorized)?;
+            }
+        }
         self.worker_client
             .read_durable_stream_segment(
                 producer_agent_id,

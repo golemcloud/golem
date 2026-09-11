@@ -268,8 +268,41 @@ impl Display for StreamOffsetV1 {
     }
 }
 
+impl std::str::FromStr for StreamOffsetV1 {
+    type Err = StreamOffsetError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 48 {
+            return Err(StreamOffsetError::InvalidTextLength(value.len()));
+        }
+
+        let mut bytes = [0u8; 24];
+        for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+            let high = decode_lowercase_hex_digit(pair[0])?;
+            let low = decode_lowercase_hex_digit(pair[1])?;
+            bytes[index] = (high << 4) | low;
+        }
+        Self::from_bytes(bytes)
+    }
+}
+
+fn decode_lowercase_hex_digit(byte: u8) -> Result<u8, StreamOffsetError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Err(StreamOffsetError::NonCanonicalHex),
+        _ => Err(StreamOffsetError::InvalidHexCharacter(byte)),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum StreamOffsetError {
+    #[error("stream offset text must have 48 characters, got {0}")]
+    InvalidTextLength(usize),
+    #[error("stream offset text must use lowercase hexadecimal characters")]
+    NonCanonicalHex,
+    #[error("invalid stream offset hexadecimal character {0:?}")]
+    InvalidHexCharacter(u8),
     #[error("unsupported stream offset format version {0}")]
     UnsupportedVersion(u8),
     #[error("stream offset reserved bits are set")]
@@ -674,6 +707,24 @@ impl AttachedStreamSegmentRequestV1 {
     }
 }
 
+/// Internal delegation after the exporting worker has authorized and resolved a slot.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct StreamHandleReadRequestV1 {
+    pub handle: DurableStreamHandleV1,
+    pub after: Option<StreamOffsetV1>,
+    pub max_items: u32,
+    pub max_bytes: u64,
+    pub wait_millis: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum DurableStreamReadRequestV1 {
+    AttachedConsumer(Box<AttachedStreamSegmentRequestV1>),
+    AuthorizedExport(Box<StreamHandleReadRequestV1>),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamAttachmentControlOperationV1 {
@@ -899,6 +950,19 @@ pub struct StreamSessionInputHighWaterRecordV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamExternalProducerStateRecordV1 {
+    pub format_version: u8,
+    pub session_key: StreamSessionKeyV1,
+    pub stream_id: StreamId,
+    pub producer_id: String,
+    pub epoch: u64,
+    pub sequence: u64,
+    pub resulting_offset: StreamOffsetV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerItemValueRecordV1 {
     pub format_version: u8,
     pub session_key: StreamSessionKeyV1,
@@ -1017,6 +1081,7 @@ pub enum StreamSessionRecordV1 {
     TopologyPrepared(StreamTopologyPreparedRecordV1),
     TopologyActivated(StreamTopologyActivatedRecordV1),
     InputHighWater(StreamSessionInputHighWaterRecordV1),
+    ExternalProducerState(StreamExternalProducerStateRecordV1),
     ConsumerItemValue(StreamConsumerItemValueRecordV1),
     ConsumerCancelIntent(StreamConsumerCancelIntentRecordV1),
     ConsumerTerminal(StreamConsumerTerminalRecordV1),
@@ -1044,6 +1109,7 @@ impl StreamSessionRecordV1 {
             Self::TopologyPrepared(record) => record.format_version,
             Self::TopologyActivated(record) => record.format_version,
             Self::InputHighWater(record) => record.format_version,
+            Self::ExternalProducerState(record) => record.format_version,
             Self::ConsumerItemValue(record) => record.format_version,
             Self::ConsumerCancelIntent(record) => record.format_version,
             Self::ConsumerTerminal(record) => record.format_version,
@@ -1144,6 +1210,10 @@ impl StreamSessionRecordV1 {
             }
             Self::InputHighWater(record) => {
                 StreamOffsetV1::from_bytes(record.high_water.resulting_offset.0).is_ok()
+            }
+            Self::ExternalProducerState(record) => {
+                !record.producer_id.is_empty()
+                    && StreamOffsetV1::from_bytes(record.resulting_offset.0).is_ok()
             }
             Self::ConsumerItemValue(record) => {
                 let unique_transport_ids = record
@@ -1294,6 +1364,7 @@ mod tests {
     use crate::base_model::environment::EnvironmentId;
     use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
     use golem_schema::schema::SchemaFingerprintV1;
+    use proptest::prelude::*;
     use test_r::test;
     use uuid::Uuid;
 
@@ -1351,6 +1422,73 @@ mod tests {
         invalid[23] = 1;
         assert_eq!(
             StreamOffsetV1::from_bytes(invalid),
+            Err(StreamOffsetError::ReservedBitsSet)
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn stream_offset_display_from_str_roundtrip(oplog_index: u64, sub_index: u32) {
+            let offset = StreamOffsetV1::new(OplogIndex::from_u64(oplog_index), sub_index);
+            let displayed = offset.to_string();
+
+            prop_assert_eq!(displayed.len(), 48);
+            prop_assert!(displayed.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')));
+            prop_assert_eq!(displayed.parse::<StreamOffsetV1>()?, offset);
+        }
+
+        #[test]
+        fn stream_offset_display_preserves_lexical_order(
+            left_oplog_index: u64,
+            left_sub_index: u32,
+            right_oplog_index: u64,
+            right_sub_index: u32,
+        ) {
+            let left = StreamOffsetV1::new(OplogIndex::from_u64(left_oplog_index), left_sub_index);
+            let right = StreamOffsetV1::new(OplogIndex::from_u64(right_oplog_index), right_sub_index);
+
+            prop_assert_eq!(left.cmp(&right), left.to_string().cmp(&right.to_string()));
+        }
+    }
+
+    #[test]
+    fn stream_offset_from_str_rejects_invalid_text() {
+        let canonical = StreamOffsetV1::new(OplogIndex::from_u64(42), 7).to_string();
+
+        assert_eq!(
+            canonical[..47].parse::<StreamOffsetV1>(),
+            Err(StreamOffsetError::InvalidTextLength(47))
+        );
+        assert_eq!(
+            format!("{canonical}0").parse::<StreamOffsetV1>(),
+            Err(StreamOffsetError::InvalidTextLength(49))
+        );
+
+        let mut uppercase = canonical.clone().into_bytes();
+        uppercase[31] = b'A';
+        assert_eq!(
+            String::from_utf8(uppercase)
+                .unwrap()
+                .parse::<StreamOffsetV1>(),
+            Err(StreamOffsetError::NonCanonicalHex)
+        );
+
+        let mut nonhex = canonical.clone().into_bytes();
+        nonhex[31] = b'g';
+        assert_eq!(
+            String::from_utf8(nonhex).unwrap().parse::<StreamOffsetV1>(),
+            Err(StreamOffsetError::InvalidHexCharacter(b'g'))
+        );
+
+        let unsupported_version = format!("02{}", &canonical[2..]);
+        assert_eq!(
+            unsupported_version.parse::<StreamOffsetV1>(),
+            Err(StreamOffsetError::UnsupportedVersion(2))
+        );
+
+        let reserved_bits = format!("0101{}", &canonical[4..]);
+        assert_eq!(
+            reserved_bits.parse::<StreamOffsetV1>(),
             Err(StreamOffsetError::ReservedBitsSet)
         );
     }

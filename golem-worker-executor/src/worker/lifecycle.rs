@@ -144,22 +144,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
+        if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
+            return worker.delete_owned().await;
+        }
         Self::existing_metadata(deps, owned_agent_id).await?;
         let worker = Self::get_existing_suspended(deps, owned_agent_id, None, principal).await?;
 
-        info!("Interrupting worker before deletion");
-        worker
-            .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-            .await;
-        info!("Marking worker for deletion");
-        worker.start_deleting_internal().await?;
-
-        worker.worker_service().remove(owned_agent_id).await?;
-        worker.remove_from_active_agents().await;
-
-        // Keep the worker alive until durable metadata and cache cleanup has completed.
-        drop(worker);
-        Ok(())
+        worker.delete_owned().await
     }
 
     pub async fn interrupt<T>(
@@ -203,13 +194,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             InterruptDecision::Restart => InterruptKind::Restart,
             InterruptDecision::Ignore => unreachable!(),
         };
-        if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
-            await_interruption.recv().await.unwrap();
-        }
-
         if decision == InterruptDecision::Interrupt {
-            // Dropping the resident worker also closes live connections associated with it.
-            worker.remove_from_active_agents().await;
+            worker.interrupt_and_retire(interrupt_kind).await?;
+        } else if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
+            await_interruption.recv().await.unwrap();
         }
         Ok(())
     }

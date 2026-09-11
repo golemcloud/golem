@@ -16,6 +16,7 @@ use crate::durable_host::durable_session::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{
     ProducerMetadataKey, ProducerMetadataRow, project_producer_metadata,
 };
+use crate::services::activity::spawn_with_activity;
 use crate::services::oplog::{OplogService, OplogServiceOps};
 use crate::services::worker::DurableStreamRecoveryMetadata;
 use crate::storage::keyvalue::{
@@ -156,7 +157,7 @@ impl StreamSessionIndexService {
     ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, horizon).await?;
@@ -199,7 +200,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, horizon).await?;
@@ -224,7 +225,7 @@ impl StreamSessionIndexService {
     ) -> Result<DurableStreamRecoveryMetadata, String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, horizon).await?;
@@ -433,7 +434,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this
                 .oplog
                 .upgrade()
@@ -497,7 +498,7 @@ impl StreamSessionIndexService {
     ) -> Result<(), String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move { this.catch_up_inner(&id, mode, horizon).await })
+        spawn_with_activity(async move { this.catch_up_inner(&id, mode, horizon).await })
             .await
             .map_err(|err| format!("stream session index task failed: {err}"))?
     }
@@ -512,7 +513,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             this.lookup_inner(&id, mode, &key, SessionLookup::Exact(horizon))
                 .await
         })
@@ -532,7 +533,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             this.lookup_inner(&id, mode, &key, SessionLookup::Offsets(horizon))
                 .await
         })
@@ -549,7 +550,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             this.lookup_inner(&id, mode, &key, SessionLookup::Latest)
                 .await
         })
@@ -560,7 +561,7 @@ impl StreamSessionIndexService {
     pub async fn clear(&self, id: &OwnedAgentId) -> Result<(), String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let lock = this.index_lock(&id);
             let _guard = lock.inner.lock().await;
             this.clear_inner(&id).await

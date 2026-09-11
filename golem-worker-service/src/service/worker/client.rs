@@ -512,9 +512,9 @@ pub trait WorkerClient: Send + Sync {
         &self,
         _producer_agent_id: &AgentId,
         _producer_environment_id: EnvironmentId,
-        _consumer_agent_id: &AgentId,
-        _consumer_environment_id: EnvironmentId,
-        _expected_consumer_fingerprint: AgentFingerprint,
+        _consumer_agent_id: Option<&AgentId>,
+        _consumer_environment_id: Option<EnvironmentId>,
+        _expected_consumer_fingerprint: Option<AgentFingerprint>,
         _payload: Vec<u8>,
         _auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
@@ -522,6 +522,7 @@ pub trait WorkerClient: Send + Sync {
             "durable stream segment reads are not supported by this worker client".to_string(),
         ))
     }
+
     async fn deliver_card_transfer(
         &self,
         target_agent_id: &AgentId,
@@ -1843,9 +1844,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         payload: payload.clone(),
                         consumer_agent_id: Some(consumer_agent_id.clone().into()),
                         consumer_environment_id: Some(consumer_environment_id.into()),
-                        expected_consumer_fingerprint: Some(
-                            expected_consumer_fingerprint.0.into(),
-                        ),
+                        expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
@@ -1876,14 +1875,14 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         producer_agent_id: &AgentId,
         producer_environment_id: EnvironmentId,
-        consumer_agent_id: &AgentId,
-        consumer_environment_id: EnvironmentId,
-        expected_consumer_fingerprint: AgentFingerprint,
+        consumer_agent_id: Option<&AgentId>,
+        consumer_environment_id: Option<EnvironmentId>,
+        expected_consumer_fingerprint: Option<AgentFingerprint>,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
         let producer_agent_id = producer_agent_id.clone();
-        let consumer_agent_id = consumer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.cloned();
         self.call_worker_executor(
             producer_agent_id.clone(),
             "read_durable_stream_segment",
@@ -1893,11 +1892,10 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         producer_agent_id: Some(producer_agent_id.clone().into()),
                         producer_environment_id: Some(producer_environment_id.into()),
                         payload: payload.clone(),
-                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
-                        consumer_environment_id: Some(consumer_environment_id.into()),
-                        expected_consumer_fingerprint: Some(
-                            expected_consumer_fingerprint.0.into(),
-                        ),
+                        consumer_agent_id: consumer_agent_id.clone().map(Into::into),
+                        consumer_environment_id: consumer_environment_id.map(Into::into),
+                        expected_consumer_fingerprint: expected_consumer_fingerprint
+                            .map(|fingerprint| fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
@@ -2503,6 +2501,23 @@ mod rejection_mapping_tests {
             Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send>>;
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
+
+        type ReadStreamSlotStream = Pin<Box<dyn Stream<Item = Result<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotResponse, Status>> + Send>>;
+        unimplemented_unary!(
+            read_stream_slot,
+            golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotRequest,
+            Self::ReadStreamSlotStream
+        );
+        unimplemented_unary!(
+            append_to_stream_slot,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse
+        );
+        unimplemented_unary!(
+            create_stream_session,
+            golem_api_grpc::proto::golem::worker::InvocationStart,
+            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionResponse
+        );
 
         unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
         unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);

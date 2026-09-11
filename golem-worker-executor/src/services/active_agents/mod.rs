@@ -799,19 +799,26 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .and_then(|active_agent| active_agent.entity_slot_metadata(entity_id))
     }
 
-    pub async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+    pub async fn remove(&self, worker: &Worker<Ctx>) {
+        let owned_agent_id = worker.owned_agent_id();
         if let Some(active_agent) = self.agents.get(owned_agent_id).await {
+            if !std::ptr::eq(active_agent.primary.as_ref(), worker) {
+                return;
+            }
             active_agent
                 .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
                     Timestamp::now_utc(),
                 )))
                 .await;
-            let worker = active_agent.primary();
             self.card_interest_index
-                .set_card_interest(worker.owned_agent_id().clone(), &[])
+                .clear_agent_interest_if(
+                    owned_agent_id,
+                    self.agents.remove_if_cached(owned_agent_id, |current| {
+                        Arc::ptr_eq(current, &active_agent)
+                    }),
+                )
                 .await;
         }
-        self.agents.remove(owned_agent_id).await
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
@@ -874,14 +881,16 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// running workers stop promptly.
     pub async fn unload_environment(&self, environment_id: EnvironmentId) {
         for (_agent_id, worker) in self.snapshot().await {
-            if worker.get_initial_worker_metadata().environment_id == environment_id {
-                if let Some(mut await_interrupted) = worker
-                    .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+            if worker.get_initial_worker_metadata().environment_id == environment_id
+                && let Err(error) = worker
+                    .interrupt_and_retire(InterruptKind::Interrupt(Timestamp::now_utc()))
                     .await
-                {
-                    await_interrupted.recv().await.unwrap();
-                }
-                self.remove(worker.owned_agent_id()).await;
+            {
+                tracing::error!(
+                    agent_id = %worker.owned_agent_id(),
+                    error = %error,
+                    "Failed to retire worker from deleted environment"
+                );
             }
         }
     }
@@ -1019,14 +1028,24 @@ async fn evict_expired_unloaded_agents<Ctx: WorkerCtx>(
             .clear_agent_interest_if(
                 &owned_agent_id,
                 agents.remove_if_cached_older_than(&owned_agent_id, ttl, |current| {
-                    Arc::ptr_eq(current, &active_agent)
-                        // `entries_older_than` owns the only reference besides the cache.
-                        && Arc::strong_count(current) == 2
-                        // The cached ActiveAgent must be the Worker's only strong owner.
-                        && Arc::strong_count(&current.primary) == 1
-                        // Fence entity work only after all final removal checks pass while
-                        // concurrent cache lookups are excluded by the cache entry lock.
-                        && current.try_fence_idle_entity_bodies().is_some()
+                    // The snapshot and cache must be the only owners; producer tasks may
+                    // separately own producer Arcs, so their quiescence is checked below.
+                    if !Arc::ptr_eq(current, &active_agent)
+                        || Arc::strong_count(current) != 2
+                        || Arc::strong_count(&current.primary) != 1
+                    {
+                        return false;
+                    }
+                    let Some(reopen_generation) = current.try_fence_idle_entity_bodies() else {
+                        return false;
+                    };
+                    if current.primary.try_retire_durable_stream_producer() {
+                        return true;
+                    }
+                    if let Some(generation) = reopen_generation {
+                        current.reopen_entity_admission_if_generation(generation);
+                    }
+                    false
                 }),
             )
             .await;

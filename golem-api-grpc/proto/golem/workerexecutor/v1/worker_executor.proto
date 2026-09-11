@@ -30,6 +30,7 @@ import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_metadata.proto";
 import "golem/worker/worker_status.proto";
+import "golem/schema/schema.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -64,6 +65,9 @@ service WorkerExecutor {
 
   rpc ControlDurableStreamAttachment(DurableStreamAttachmentControlRequest) returns (DurableStreamAttachmentControlResponse);
   rpc ReadDurableStreamSegment(DurableStreamSegmentReadRequest) returns (DurableStreamSegmentReadResponse);
+  rpc CreateStreamSession(golem.worker.InvocationStart) returns (CreateStreamSessionResponse);
+  rpc ReadStreamSlot(ReadStreamSlotRequest) returns (stream ReadStreamSlotResponse);
+  rpc AppendToStreamSlot(AppendToStreamSlotRequest) returns (AppendToStreamSlotResponse);
   rpc ProcessOplogEntries(ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
   rpc DeliverCardTransfer(DeliverCardTransferRequest) returns (DeliverCardTransferResponse);
 }
@@ -516,6 +520,107 @@ message DurableStreamSegmentReadResponse {
   oneof result {
     bytes payload = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message CreateStreamSessionSuccess {
+  string session = 1;
+  bool replayed = 2;
+  uint64 component_revision = 3;
+}
+
+message CreateStreamSessionResponse {
+  oneof result {
+    CreateStreamSessionSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+// A read-only, unattached view of one root stream in a durable invocation session.
+// `from_offset` is empty at the start of the stream and otherwise contains the
+// canonical 24-byte StreamOffsetV1 representation. A zero max_items performs a
+// metadata-only HEAD operation. Implementations cap both limits independently.
+message ReadStreamSlotRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  string session = 4;
+  string slot = 5;
+  bytes from_offset = 6;
+  uint32 max_items = 7;
+  uint64 max_bytes = 8;
+  uint64 wait_millis = 9;
+}
+
+message StreamSlotItem {
+  bytes offset = 1;
+  // Canonical SchemaValue protobuf bytes for ordinary typed values. A packed
+  // byte stream sets packed_u8 instead, with one logical item per byte.
+  oneof content {
+    bytes value = 2;
+    bytes packed_u8 = 3;
+  }
+}
+
+message ReadStreamSlotSuccess {
+  repeated StreamSlotItem items = 1;
+  bytes next_offset = 2;
+  bool closed = 3;
+  bool cancelled = 4;
+  // Executor-resolved schema; callers must not supply or override it.
+  golem.schema.SchemaGraph element_schema = 5;
+  string content_type = 6;
+  bool up_to_date = 7;
+  bytes head_offset = 8;
+}
+
+message ReadStreamSlotResponse {
+  oneof result {
+    ReadStreamSlotSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+    golem.common.Empty not_found = 3;
+  }
+}
+
+message ExternalStreamProducer {
+  string id = 1;
+  uint64 epoch = 2;
+  uint64 sequence = 3;
+}
+
+message AppendToStreamSlotRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  string session = 4;
+  string slot = 5;
+  oneof payload {
+    // Each entry is a canonically encoded SchemaValue protobuf message.
+    TypedStreamSlotItems values = 6;
+    bytes packed_u8 = 7;
+  }
+  bool close = 8;
+  optional ExternalStreamProducer producer = 9;
+}
+
+message TypedStreamSlotItems {
+  repeated bytes values = 1;
+}
+
+message AppendAccepted { bytes offset = 1; }
+message AppendDuplicate { bytes offset = 1; }
+message AppendEpochFenced { uint64 current_epoch = 1; }
+message AppendSequenceGap { uint64 expected = 1; uint64 received = 2; }
+
+message AppendToStreamSlotResponse {
+  oneof result {
+    AppendAccepted accepted = 1;
+    AppendDuplicate duplicate = 2;
+    AppendEpochFenced epoch_fenced = 3;
+    AppendSequenceGap sequence_gap = 4;
+    golem.common.Empty closed = 5;
+    golem.common.Empty not_found = 6;
+    golem.worker.v1.WorkerExecutionError failure = 7;
   }
 }
 
