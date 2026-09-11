@@ -52,6 +52,7 @@ import './schema/effect';
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
+export type { ParsedAgentIdCreateOptions, ParsedAgentIdParts } from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
@@ -75,6 +76,8 @@ export * from './host/durable';
 export { defineAgent } from './defineAgent';
 export type {
   AgentDefinition,
+  AgentClientBindingDefinition,
+  AgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -102,6 +105,8 @@ export type {
 } from './schema/markers';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { SchemaCodec, SchemaWalker } from './schema/codec';
+export { SchemaRef, SchemaRenderError } from './schema/ref';
+export type { JsonValue, SchemaIssue, SchemaValidationResult } from './schema/ref';
 export {
   c,
   command,
@@ -167,12 +172,16 @@ export type {
   UniversalToolUnderlying,
   UniversalToolUnderlyingInvoke,
 } from './tool';
+export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
-export { clientFor, RemoteCallError } from './client';
 export type {
+  AgentClientFactory,
+  AgentClientSpec,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
+  RemoteAgentError,
+  RemoteCallErrorCause,
   RemoteCallOptions,
   RemoteClient,
   RemoteClientFactory,
@@ -187,6 +196,20 @@ export * from './websocket';
 export * from './rdbms';
 export * as http from './http';
 export * as bridge from './bridge';
+export * as reflection from './reflection';
+export {
+  AgentMethod as ReflectedAgentMethodDefinition,
+  AgentType as ReflectedAgentType,
+  DynamicAgentClient,
+  DynamicAgentMethod,
+  ReflectedAgentClient,
+  ReflectedAgentClientFactory,
+  ReflectedAgentMethod,
+  getAgentTypeByAgentId,
+  getAllAgentTypes,
+  getAgentType as getReflectedAgentType,
+} from './reflection';
+export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
 export type { StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 

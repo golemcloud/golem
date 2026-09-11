@@ -156,6 +156,7 @@ Load these skills for guided workflows on complex tasks:
 | `adding-dependencies` | Adding or updating crate dependencies (covers workspace dependency management, versioning, features) |
 | `testing` | Running and debugging tests (covers test filtering, debugging failures, test components, timeouts) |
 | `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
+| `understanding-durable-execution` | Changing, reviewing, or debugging worker executor replay, oplog, durable host calls, RPC exactly-once, streaming invocations, tool/entity invocations, snapshots, or worker lifecycle |
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-cli-manifest-schema` | Adding or changing application manifest JSON schema versions and aligning CLI schema references |

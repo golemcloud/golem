@@ -200,15 +200,27 @@ fn encode(
         (SchemaType::Quantity { .. }, SchemaValue::Quantity(q)) => {
             Ok(canonical::quantity::to_json(q))
         }
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
         (SchemaType::Secret { .. }, SchemaValue::Secret(p)) => {
             canonical::secret::to_json(p).map_err(RenderError::from)
         }
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
         (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(p)) => {
             canonical::quota_token::to_json(p).map_err(RenderError::from)
         }
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
         (SchemaType::PermissionCard { .. }, SchemaValue::PermissionCard(p)) => {
             canonical::permission_card::to_json(p).map_err(RenderError::from)
         }
+        #[cfg(all(feature = "guest", not(feature = "host")))]
+        (
+            SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. },
+            SchemaValue::Secret(_) | SchemaValue::QuotaToken(_) | SchemaValue::PermissionCard(_),
+        ) => Err(RenderError::Unsupported(
+            "opaque host-managed capabilities cannot be rendered by a guest",
+        )),
 
         (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {
             if fields.len() != vs.len() {
@@ -623,18 +635,27 @@ fn from_json_body(
             let q = canonical::quantity::from_json(json)?;
             Ok(SchemaValue::Quantity(q))
         }
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
         SchemaType::Secret { .. } => {
             let p = canonical::secret::from_json(json)?;
             Ok(SchemaValue::Secret(p))
         }
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
         SchemaType::QuotaToken { .. } => {
             let p = canonical::quota_token::from_json(json)?;
             Ok(SchemaValue::QuotaToken(p))
         }
+        #[cfg(not(all(feature = "guest", not(feature = "host"))))]
         SchemaType::PermissionCard { .. } => {
             let p = canonical::permission_card::from_json(json)?;
             Ok(SchemaValue::PermissionCard(p))
         }
+        #[cfg(all(feature = "guest", not(feature = "host")))]
+        SchemaType::Secret { .. }
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => Err(RenderError::Unsupported(
+            "opaque host-managed capabilities cannot be constructed by a guest",
+        )),
 
         SchemaType::Record { fields, .. } => {
             let obj = json

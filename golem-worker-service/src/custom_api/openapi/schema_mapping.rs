@@ -18,10 +18,10 @@
 //! entries, and provides the handful of fixed JSON schemas the emitter needs.
 
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::render::{
+use golem_common::schema::schema_type::SchemaType;
+use golem_schema::schema::render::{
     to_external_input_openapi_components, to_external_output_openapi_components,
 };
-use golem_common::schema::schema_type::SchemaType;
 use serde_json::{Map, Value, json};
 
 /// Render a schema for an untrusted external request. Host-managed capability

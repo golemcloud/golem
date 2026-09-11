@@ -392,22 +392,6 @@ impl PromiseService for DefaultPromiseService {
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
 
-        // Intended to start tracking the promise locally so the first poll does not need to go to
-        // storage. It does not currently achieve that, and the entry is dead before this function
-        // returns: the registry holds `Weak<PromiseHandleInner>`, `get_or_insert` hands back the
-        // only strong reference, and discarding it here drops the strong count to zero - so the
-        // `Weak` can never upgrade and `PromiseRegistry::get` always misses for this promise.
-        //
-        // The effect is limited rather than absent: the first `poll` still pays an `exists()` read
-        // against storage, but it then registers a handle it *keeps*, so later polls hit the fast
-        // path for as long as some caller holds one. Making this pre-registration work would mean
-        // giving the handle an owner with a defined lifetime, which is a design question rather
-        // than a missing line.
-        {
-            let mut reg = self.registry.lock().await;
-            reg.get_or_insert(&promise_id);
-        };
-
         Ok(promise_id)
     }
 
@@ -760,6 +744,41 @@ mod tests {
             },
             oplog_idx: OplogIndex::from_u64(1),
         }
+    }
+
+    #[test]
+    async fn create_leaves_registration_to_poll() {
+        let service = DefaultPromiseService::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            Arc::new(NoopPromiseWorkerAccess),
+        );
+        let expected_id = promise_id();
+        let id = service
+            .create(&expected_id.agent_id, expected_id.oplog_idx)
+            .await
+            .unwrap();
+
+        assert_eq!(id, expected_id);
+        assert!(service.registry.lock().await.handles.is_empty());
+
+        let payload = vec![3, 17, 42];
+        assert!(service.complete(id.clone(), payload.clone()).await.unwrap());
+        assert!(service.registry.lock().await.handles.is_empty());
+
+        let handle = service.poll(id.clone()).await.unwrap();
+        assert_eq!(handle.get().await, Some(payload));
+        let second_handle = service.poll(id.clone()).await.unwrap();
+        assert!(Arc::ptr_eq(&handle.inner, &second_handle.inner));
+
+        let weak = handle.downgrade();
+        drop(handle);
+        service.cleanup().await;
+        assert!(service.registry.lock().await.get(&id).is_some());
+
+        drop(second_handle);
+        assert!(weak.upgrade().is_none());
+        service.cleanup().await;
+        assert!(service.registry.lock().await.handles.is_empty());
     }
 
     #[test]
