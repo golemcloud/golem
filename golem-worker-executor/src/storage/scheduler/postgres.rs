@@ -19,8 +19,8 @@ use super::{
 use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
+use golem_common::serialization::deserialize;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -74,10 +74,8 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         shard_id: ShardId,
-        action: &ScheduledAction,
+        action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
-        let action = serialize(action)?;
-
         let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
             "INSERT INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, shard_id, action) VALUES ($1, $2, $2, $3, $4) ON CONFLICT (schedule_id) DO NOTHING;",

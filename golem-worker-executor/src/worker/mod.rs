@@ -490,7 +490,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     snapshot_policy: SnapshotPolicy,
 
     last_resume_request: Mutex<Timestamp>,
-    pub(crate) snapshot_recovery_disabled: AtomicBool,
+    pub(crate) rejected_periodic_snapshot_through: AtomicU64,
+    pub(crate) unavailable_periodic_snapshot_through: AtomicU64,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_limit_interrupt_queued: AtomicBool,
@@ -1118,7 +1119,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_flusher,
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
-            snapshot_recovery_disabled: AtomicBool::new(false),
+            rejected_periodic_snapshot_through: AtomicU64::new(0),
+            unavailable_periodic_snapshot_through: AtomicU64::new(0),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_limit_interrupt_queued: AtomicBool::new(false),
@@ -1386,6 +1388,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Unloaded { .. } => {
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
+                if start_attempt.is_none() {
+                    this.unavailable_periodic_snapshot_through
+                        .store(0, Ordering::Release);
+                }
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
                     Err(error) => {
@@ -7210,6 +7216,19 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
+        if let Some(rejected) = parent
+            .worker_service()
+            .get_rejected_periodic_snapshot_through(
+                &parent.owned_agent_id,
+                parent.initial_worker_metadata.fingerprint,
+            )
+            .await?
+        {
+            parent
+                .rejected_periodic_snapshot_through
+                .fetch_max(rejected.into(), Ordering::AcqRel);
+        }
+
         let automatic_snapshot = worker_metadata
             .last_known_status
             .last_automatic_snapshot_index
@@ -7221,9 +7240,17 @@ impl RunningWorker {
             .filter(|(_, snapshot_revision)| {
                 *snapshot_revision == worker_metadata.last_known_status.component_revision
             })
-            .filter(|_| {
+            .filter(|(index, _)| {
                 pending_update.is_none()
-                    && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
+                    && u64::from(*index)
+                        > parent
+                            .rejected_periodic_snapshot_through
+                            .load(Ordering::Acquire)
+                            .max(
+                                parent
+                                    .unavailable_periodic_snapshot_through
+                                    .load(Ordering::Acquire),
+                            )
             });
 
         let component_version_for_replay = automatic_snapshot.map_or_else(
@@ -7270,8 +7297,8 @@ impl RunningWorker {
             .last_manual_update_snapshot_index;
         let mut last_snapshot_source = last_snapshot_index.map(|_| SnapshotSource::ManualUpdate);
 
-        // Automatic snapshots are only considered until the first failure and while they match
-        // the active component revision. Pending updates temporarily ignore them so compatibility
+        // Only snapshots newer than the rejection watermark and matching the active revision
+        // are eligible. Pending updates temporarily ignore them so compatibility
         // is established by replaying from the authoritative manual-update baseline.
         if let Some((snapshot_idx, _)) = automatic_snapshot {
             let snapshot_skip =
