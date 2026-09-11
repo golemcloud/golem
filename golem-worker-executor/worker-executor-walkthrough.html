@@ -1289,7 +1289,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 </div>
 
 <p>The runtime property this relies on holds even with bare Wasmtime and no oplog: the order in which a guest <em>initiates</em> concurrent host calls is stable across re-executions, while the order in which the host <em>completes</em> them is not, and the guest observes exactly the completion order. Recording the completion order as <code>CompletionDelivered</code> markers is what turns the second, nondeterministic order into a replayable one.</p>
-<p>Spawned store tasks that outlive an invocation are safe only while parked at a guest-driven wait (<code>tail_work.rs</code> "safe park points"); pending durable work must finish before <code>AgentInvocationFinished</code>.</p>
+<p>Spawned store tasks may park across invocation settlement at guest-driven waits or passive markerless-completion replay-tail waits after durable finalization (<code>tail_work.rs</code>). Cursor operations and recorded-marker waits remain active; durable <code>Start</code>/<code>End</code> work must finish before <code>AgentInvocationFinished</code>.</p>
 
 <!-- ===================== 11. RETRIES ===================== -->
 <h2 id="s-retries"><span class="num">11</span>Retries: in-function versus trap-based</h2>
@@ -1348,13 +1348,19 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <li>The caller appends <code>Start { rpc/invoke-and-await, request }</code>; its index <code>begin_index</code> is the call identity.</li>
   <li><code>derive_idempotency_key(begin_index)</code> yields <code>IdempotencyKey::derived(current_key, current_idempotency_key_oplog_index(begin_index))</code>. Inside an atomic region the index is the outermost region's <em>logical</em> counter, not the physical index (see below).</li>
   <li>Caller state the target may depend on is committed before the first dispatch.</li>
-  <li>The target persists <code>PendingAgentInvocation { key }</code> — durable acceptance — then eventually <code>AgentInvocationFinished</code>. Any same-key arrival attaches to that one invocation.</li>
+  <li>If execution is needed, the target persists <code>PendingAgentInvocation { key }</code> — durable acceptance — then eventually <code>AgentInvocationFinished</code>. Any same-key arrival attaches to that one invocation. A settled read-only cache hit or coalesced follower instead returns the shared result and intentionally persists no separate invocation, result, or alias; only the executing miss owner uses normal durable admission.</li>
   <li>Caller replay of a completed call returns the recorded <code>End</code>. Replay of an incomplete call re-dispatches with the <strong>same</strong> key (<code>InvocationFreshnessDisposition::MayExist</code>, the default) — allowed because RPC is <code>WriteRemote</code> and <code>assume_idempotence</code> defaults to <code>true</code>. With <code>set-idempotence-mode(false)</code> the incomplete remote write fails instead.</li>
 </ol>
 
+<p>RPC preparation does not acquire target execution capacity. For an execution-needing call, the target durably enqueues the acceptance prefix before reporting acceptance, and caller cancellation cannot tear that prefix apart.</p>
+
+<h3>Pending RPCs can yield the resident Store</h3>
+<p>A pending durable RPC registers a suspendable wait when the operation starts. After <code>rpc_suspend_after</code> (default 30s), its await checks the same voluntary-sleep predicate as other suspendable waits. If outgoing HTTP transmission or other live work defers yielding, it retries eligibility after <code>wait_suspend_check_interval</code> (default 10s). Once eligible, it first persists a scheduler wakeup <code>rpc_resume_after</code> later (default 5s); mixed waits select the earliest wakeup. The worker then suspends and returns through ordinary reconstruction with the same logical RPC key.</p>
+<div class="callout"><span class="label">Scheduling, not recovery</span>This proactive yield is never a gate on explicit interruption or arbitrary Store loss. It introduces no new recovery mechanism, RPC deadline, Wasmtime change, phase query, overcommit, or immediate restart.</div>
+
 <div class="widget" id="tl-rpc">
   <h4>Crash-window walkthrough: caller C invokes target T's <code>increment</code> <span class="pill js-only">interactive</span></h4>
-  <p>Two oplogs, two lanes. Choose where the <em>caller's</em> executor dies. Count T's mutations, not C's attempts.</p>
+  <p>Two oplogs, two lanes for an executing cache miss. Choose where the <em>caller's</em> executor dies. Count T's mutations, not C's attempts; settled cache hits and coalesced followers bypass this target-oplog sequence.</p>
   <div class="controls js-only">
     <label class="grow">Crash point <input type="range" min="0" max="6" value="0" step="1" data-tl-slider="rpc" aria-valuetext="no crash"></label>
     <button class="btn small" type="button" data-tl-reset="rpc">Reset</button>
@@ -1781,7 +1787,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <tbody>
     <tr><td><strong>Interrupt</strong> (API)</td><td><code>Worker::set_interrupting(InterruptKind::Interrupt(ts))</code>; the running invocation is aborted at the next host-call boundary</td><td><code>Interrupted</code> (h)</td><td>An explicit resume; status stays <code>Interrupted</code> until then</td></tr>
     <tr><td><strong>Restart</strong> (simulated crash, API)</td><td><code>InterruptKind::Restart</code></td><td><code>Restart</code> (h) — or nothing at all for a real crash</td><td>Immediately: the outer loop reconstructs at once</td></tr>
-    <tr><td><strong>Suspend</strong></td><td><code>InterruptKind::Suspend(ts)</code>, used when the guest sleeps or waits for a promise long enough to unload</td><td><code>Suspend</code> (h)</td><td>On demand: a new invocation, a promise completion, or a <code>ScheduledAction::Resume</code></td></tr>
+    <tr><td><strong>Suspend</strong></td><td><code>InterruptKind::Suspend(ts)</code>, used when the guest sleeps, waits for a promise, or has a pending durable RPC long enough to unload. RPC waits check after 30s and retry every 10s while other live work defers voluntary yielding.</td><td><code>Suspend</code> (h)</td><td>On demand: a new invocation, a promise completion, or a durable <code>ScheduledAction::Resume</code> (RPC default: 5s later; mixed waits choose the earliest wakeup)</td></tr>
     <tr><td><strong>Jump</strong></td><td><code>InterruptKind::Jump</code> ("jumping back in time"): atomic-region rollback or <code>set-oplog-index</code></td><td><code>Jump { region }</code> (positional)</td><td>Immediately, replaying with the region skipped</td></tr>
     <tr><td><strong>Eviction</strong> (memory / filesystem pressure)</td><td><code>EvictionClass</code> ordering: <code>LoadedIdle</code> first (cheapest), then <code>WarmRunnable</code> (has durable pending invocations). Executing workers and workers with non-durable in-memory work (internal queue, <code>ResumeReplay</code>, interrupt) are <em>never</em> evicted.</td><td>none</td><td>On the next invocation or scheduled action</td></tr>
     <tr><td><strong>Resharding</strong></td><td><code>on_shard_assignment_changed</code>: workers whose shard moved away are unloaded here and reconstructed by the new owner</td><td>none</td><td>When the new owner is asked for the worker</td></tr>

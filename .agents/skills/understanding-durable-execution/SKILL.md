@@ -39,10 +39,10 @@ and entity bodies) and `retries.md` (in-function versus trap-based retries).
    Owner: `worker/invocation_loop.rs::run` (outer loop: create instance → recover → run →
    suspend/retry) and `durable_host/mod.rs::prepare_instance`.
 
-3. **Durable agent RPC is exactly-once at the logical callee-invocation level.** The caller may
-   attempt a dispatch many times (replay, transport retry, atomic-region rollback), but every
-   attempt carries the same durable idempotency key, the target persists one invocation, and one
-   durable result exists. Attempts are not executions. Owner: `durable_host/wasm_rpc/mod.rs`
+3. **Durable agent RPC is exactly-once at the logical callee-invocation level.** Dispatch attempts
+   (replay, transport retry, atomic rollback) share a durable key. An executing target persists one
+   invocation and result; read-only cache hits/followers persist neither. Attempts are not executions. Owner:
+   `durable_host/wasm_rpc/mod.rs`
    (`derive_idempotency_key(begin_index)`), `worker/mod.rs::enqueue_worker_invocation_with_effect`
    (`lookup_invocation_result` dedupe before appending `PendingAgentInvocation`).
 
@@ -254,7 +254,6 @@ cursor drains (`await_natural_tail_end`) with a live-armed delivery token
 without re-executing.
 
 ## Invocation queue and results
-
 `enqueue_worker_invocation_with_effect` (`worker/mod.rs`): dedupe via `lookup_invocation_result`
 (anything other than `LookupResult::New` returns without appending), then append
 `PendingAgentInvocation` and commit before the caller learns the invocation was accepted. The
@@ -269,11 +268,12 @@ result and commits with `CommitLevel::Always` *before* waiters are notified; fai
 `Finished`: `invocation_loop.rs::agent_invocation_finished` completes the streaming session
 (protocol terminals, `StreamSession { Finished }`) after `on_agent_invocation_success`.
 
+This execution-needing path acquires no capacity during preparation; cancellation cannot split its
+durably enqueued acceptance prefix. Read-only hits/followers persist no invocation/result/alias.
 Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart` — after an
 executor restart, an old key returns the recorded result without re-running the guest.
 
 ## Durable RPC exactly-once
-
 1. The caller opens a durable call; its `Start` index `begin_index` is the call identity.
 2. `derive_idempotency_key(begin_index)` (`durable_host/mod.rs`) yields
    `IdempotencyKey::derived(current_key, current_idempotency_key_oplog_index(begin_index))`. Inside
@@ -297,10 +297,11 @@ executor restart, an old key returns the recorded result without re-running the 
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
    never random.
 
-Exactly-once describes the *target's logical execution and effect*. It does not describe caller
-attempts, packets, or replay spans. Tests: `tests/rpc.rs::counter_resource_test_2_with_restart`
-(counter continues 1 → 2 across a caller restart, so the recorded call is not re-executed),
-`failed_ephemeral_invocation_retry_does_not_reexecute`,
+### Pending RPC waits and proactive suspension
+Pending durable RPCs proactively suspend after a grace period, then reconstruct with the same key;
+this never gates recovery. See `reference/rpc-suspension.md` for timing and admission details.
+Exactly-once describes the *target's logical execution and effect*, not attempts or packets. Tests:
+`tests/rpc.rs::counter_resource_test_2_with_restart`, `failed_ephemeral_invocation_retry_does_not_reexecute`,
 `ephemeral_rpc_invocations_get_distinct_final_identities`,
 `reacquire_permits_restart_preserves_accepted_queued_live_invocation`, and
 `tests/api.rs::lost_card_transfer_response_converges_after_source_and_target_restart` (a wrapped
@@ -353,8 +354,8 @@ delivery must be the tail operation of a host function. Tests: `tests/concurrent
 is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
-Spawned store tasks that outlive an invocation are safe only while parked at a guest-driven wait
-(`tail_work.rs` "safe park points"); pending durable work must finish before `AgentInvocationFinished`.
+Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
+Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
 
 ## Streaming invocations
 
@@ -422,12 +423,11 @@ stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
 
 ## Wrong model → right model
-
 | Wrong | Right | Fails under wrong model |
 |---|---|---|
 | "HashMap iteration / poll order makes the guest nondeterministic, so replay must tolerate different calls." | Guest inputs are recorded; same inputs ⇒ same calls. Different calls = executor bug. | `no matching Start` / `unexpected_oplog_entry` errors in replay tests |
 | "Cursor reached the end, so I can do the live effect now." | Liveness is `store_is_live(...)`: the primary needs `switch_to_live` to publish after reconstruction fences; an entity Store needs its own `local_live_tail`. Cursor exhaustion is neither. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
-| "Suspension needs a feature-specific safety gate proving the guest is parked." | Arbitrary unload is the baseline; every obligation must be durable or reconstructible. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
+| "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
 | "A retried RPC attempt executed the target again." | Same key ⇒ same target invocation; count target mutations, not attempts. | Provider-side counter tests in `tests/rpc.rs` |
 | "Atomic rollback should generate a fresh RPC key." | Logical counter is owned by the outermost atomic region; keys survive `Jump`. | `tests/transactions.rs`, `tests/revert.rs` |
