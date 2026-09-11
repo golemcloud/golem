@@ -2578,7 +2578,8 @@ mod tests {
 
         service
             .set_assignment_tracking(&owned_agent_id, &status)
-            .await;
+            .await
+            .unwrap();
 
         assert_eq!(
             assignment_tracking_members(&key_value_storage, &owned_agent_id, number_of_shards)
@@ -2599,7 +2600,8 @@ mod tests {
 
         service
             .set_assignment_tracking(&owned_agent_id, &status)
-            .await;
+            .await
+            .unwrap();
 
         assert!(
             assignment_tracking_members(&key_value_storage, &owned_agent_id, number_of_shards)
