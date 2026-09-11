@@ -49,7 +49,7 @@ use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
@@ -472,7 +472,7 @@ pub trait WorkerClient: Send + Sync {
         method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        idempotency_key: IdempotencyKey,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -1148,7 +1148,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             },
                         )),
                 } => {
-                    let entries: Vec<PublicOplogEntry> = entries
+                    let entries: Vec<PublicOplogEntryWithIndex> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -1158,16 +1158,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             ))
                         })?;
                     Ok(GetOplogResponse {
-                        entries: entries
-                            .into_iter()
-                            .enumerate()
-                            .map(|(idx, entry)| PublicOplogEntryWithIndex {
-                                oplog_index: OplogIndex::from_u64(
-                                    (first_index_in_chunk) + idx as u64,
-                                ),
-                                entry,
-                            })
-                            .collect(),
+                        entries,
                         next: next.map(|c| c.into()),
                         first_index_in_chunk,
                         last_index,
@@ -1720,7 +1711,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        idempotency_key: IdempotencyKey,
         invocation_context: Option<InvocationContext>,
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
@@ -1746,7 +1737,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         agent_id: Some(agent_id_clone.clone().into()),
                         method_name: method_name.clone(),
                         input: method_parameters.clone(),
-                        idempotency_key: idempotency_key.clone().map(Into::into),
+                        idempotency_key: Some(idempotency_key.clone().into()),
                         context: invocation_context.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
                         principal: Some(principal.clone()),
@@ -2821,9 +2812,7 @@ mod rejection_mapping_tests {
                 }),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                Some(golem_common::model::IdempotencyKey::new(
-                    "session-key".to_string(),
-                )),
+                golem_common::model::IdempotencyKey::new("session-key".to_string()),
                 None,
                 InvocationFreshnessDisposition::MayExist,
                 vec![],

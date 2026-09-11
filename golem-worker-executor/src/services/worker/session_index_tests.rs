@@ -223,6 +223,7 @@ async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn 
             AgentMode::Durable,
             OplogEntry::NoOp {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
             },
             agent_metadata(id),
             stale_status(),
@@ -233,7 +234,7 @@ async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn 
 
 async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecordV1) -> OplogIndex {
     oplog
-        .add(DurableStreamOplogRecord::Session(Box::new(record)).into_inline_entry())
+        .add(DurableStreamOplogRecord::Session(None, Box::new(record)).into_inline_entry())
         .await
 }
 
@@ -241,6 +242,7 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
     oplog
         .add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         })
         .await
 }
@@ -1233,6 +1235,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
             OplogIndex::INITIAL,
             OplogEntry::NoOp {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
             },
         )]),
         &RetryConfig::default(),
@@ -1264,10 +1267,13 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
         }),
     ];
     for (offset, record) in records.into_iter().enumerate() {
-        let entry = OplogEntry::stream_session(OplogPayload::SerializedInline {
-            bytes: serialize(&record).unwrap(),
-            cached: None,
-        });
+        let entry = OplogEntry::stream_session(
+            None,
+            OplogPayload::SerializedInline {
+                bytes: serialize(&record).unwrap(),
+                cached: None,
+            },
+        );
         status = update_status_with_new_entries(
             AgentMode::Durable,
             status,

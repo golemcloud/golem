@@ -67,7 +67,7 @@ use golem_common::schema::public_json::{
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FieldSource, InputSchema, NamedFieldType, ResultValuePayload, SchemaGraph, SchemaType,
-    SchemaValue, TypedSchemaValue, UnionValuePayload, VariantValuePayload,
+    SchemaValue, TypedSchemaValue, UnionValuePayload, VariantValuePayload, find_host_managed_type,
     schema_value_to_proto_with_streams,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -2339,7 +2339,7 @@ impl WorkerService {
                 method_parameters,
                 mode,
                 schedule_at,
-                Some(idempotency_key.clone()),
+                idempotency_key.clone(),
                 invocation_context,
                 freshness_disposition,
                 config,
@@ -2413,7 +2413,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2510,7 +2510,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2604,8 +2604,24 @@ impl WorkerService {
                 ))
             })?;
 
+        if let Some(output_schema) = method.output_schema.schema()
+            && let Some(occurrence) = find_host_managed_type(
+                &invocation_agent_type.schema,
+                output_schema,
+            )
+            .map_err(|error| {
+                WorkerServiceError::Internal(format!("Invalid agent method output schema: {error}"))
+            })?
+        {
+            return Err(WorkerServiceError::TypeChecker(format!(
+                "Agent method output schema contains host-managed capability {} at {}; this method cannot be invoked through external REST",
+                occurrence.kind.kind_name(),
+                occurrence.path,
+            )));
+        }
+
         let method_parameters = json_input_schema_value_to_typed_schema_value(
-            request.method_parameters,
+            request.method_parameters.into_inner(),
             &invocation_agent_type.schema,
             &method.input_schema,
         )
@@ -2694,6 +2710,11 @@ impl WorkerService {
                     .cloned()
                     .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
                 let typed_output = TypedSchemaValue::new(output_graph, output_value);
+                let typed_output = typed_output.try_into().map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "Agent method result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?;
                 Ok(AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
@@ -2773,15 +2794,15 @@ mod tests {
     use golem_common::schema::public_json::PublicStreamReference;
     use golem_common::schema::stream::SchemaValueStream;
     use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
-        OutputSchema, SchemaGraph, SchemaType, SchemaValue,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, ExternalSchemaValue,
+        InputSchema, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
     };
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -3636,7 +3657,7 @@ mod tests {
             _: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
             _: i32,
             _: Option<::prost_types::Timestamp>,
-            idempotency_key: Option<IdempotencyKey>,
+            idempotency_key: IdempotencyKey,
             _: Option<InvocationContext>,
             freshness_disposition: InvocationFreshnessDisposition,
             _: Vec<AgentConfigEntryDto>,
@@ -3648,7 +3669,7 @@ mod tests {
         ) -> WorkerResult<AgentInvocationOutput> {
             self.invocations.lock().unwrap().push((
                 agent_id.clone(),
-                idempotency_key.expect("worker service should supply an idempotency key"),
+                idempotency_key,
                 freshness_disposition,
             ));
             self.invocation_environments
@@ -4081,8 +4102,8 @@ mod tests {
         }
     }
 
-    fn empty_json_tuple() -> SchemaValue {
-        SchemaValue::Record { fields: vec![] }
+    fn empty_json_tuple() -> ExternalSchemaValue {
+        ExternalSchemaValue::try_from(SchemaValue::Record { fields: vec![] }).unwrap()
     }
 
     fn test_card() -> StoredCard {
@@ -5091,6 +5112,70 @@ mod tests {
     }
 
     #[test]
+    async fn rest_capability_outputs_are_rejected_before_worker_dispatch() {
+        for capability in [
+            SchemaType::secret(Default::default()),
+            SchemaType::quota_token(Default::default()),
+            SchemaType::permission_card(Default::default()),
+        ] {
+            for output in [capability.clone(), SchemaType::option(capability)] {
+                let harness = RestHarness::new_with_output(
+                    AgentMode::Durable,
+                    OutputSchema::Single(Box::new(output)),
+                );
+                for (mode, schedule_at) in [
+                    (AgentInvocationMode::Await, None),
+                    (AgentInvocationMode::Schedule, None),
+                    (AgentInvocationMode::Schedule, Some(Utc::now())),
+                ] {
+                    let mut request = harness.invoke_request();
+                    request.mode = mode;
+                    request.schedule_at = schedule_at;
+                    request.idempotency_key = None;
+                    let error = harness
+                        .worker_service
+                        .invoke_agent_rest(request, AuthCtx::system())
+                        .await
+                        .expect_err("capability outputs must be rejected before execution");
+                    assert!(matches!(error, WorkerServiceError::TypeChecker(_)));
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("output schema contains host-managed capability")
+                    );
+                }
+                assert!(harness.worker_client.invocations().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    async fn rest_capability_output_preflight_uses_existing_worker_revision() {
+        let capability_output =
+            OutputSchema::Single(Box::new(SchemaType::secret(Default::default())));
+        let pinned_capability = RestHarness::new_with_pinned_and_latest_output(
+            capability_output.clone(),
+            OutputSchema::Unit,
+        );
+        let error = pinned_capability
+            .worker_service
+            .invoke_agent_rest(pinned_capability.invoke_request(), AuthCtx::system())
+            .await
+            .expect_err("the pinned capability-bearing revision must be rejected");
+        assert!(matches!(error, WorkerServiceError::TypeChecker(_)));
+        assert!(pinned_capability.worker_client.invocations().is_empty());
+
+        let pinned_plain =
+            RestHarness::new_with_pinned_and_latest_output(OutputSchema::Unit, capability_output);
+        pinned_plain
+            .worker_service
+            .invoke_agent_rest(pinned_plain.invoke_request(), AuthCtx::system())
+            .await
+            .expect("the pinned ordinary output must remain dispatchable");
+        assert_eq!(pinned_plain.worker_client.invocations().len(), 1);
+    }
+
+    #[test]
     async fn non_attached_classification_uses_the_existing_workers_component_revision() {
         let stream_output =
             OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u8()))));
@@ -5241,6 +5326,61 @@ mod tests {
         assert_eq!(invocations[0].0, agent_id);
         assert_eq!(invocations[0].1, idempotency_key);
         assert_eq!(invocations[0].2, InvocationFreshnessDisposition::MayExist);
+    }
+
+    /// A keyless invocation is given a key, and never a shared one.
+    ///
+    /// `call_worker_executor` retries on `InvalidShardId` and on transport
+    /// failure, re-sending the request as it stands, and `invoke_agent_internal`
+    /// mints a fresh key for any request that arrives without one. So a keyless
+    /// invocation that got retried used to look like work nobody had started and
+    /// run a second time on its new owner. `WorkerClient::invoke_agent` no longer
+    /// accepts an absent key, so the decision happens once, in
+    /// `normalize_agent_invocation_identity`, above the retry loop.
+    ///
+    /// What this checks is that a key is always minted and that unrelated
+    /// invocations never share one. That every *attempt* of a single invocation
+    /// carries the same key is structural rather than covered here: the key is
+    /// bound before the retry closure is built and the closure only clones what
+    /// it captured. `RecordingWorkerClient` stands above `call_worker_executor`,
+    /// so no test at this seam can see a second attempt at all.
+    ///
+    /// Both REST invocation modes go through the same mint and both are checked,
+    /// since a mint that covered only `Await` would look correct from one call.
+    #[test]
+    async fn keyless_invocations_are_each_given_their_own_key() {
+        let harness = RestHarness::new(AgentMode::Durable);
+
+        // Twice per mode, not once each: a mint that handed every request of one
+        // mode the same constant would still look fine across two different
+        // modes, and only collides with itself.
+        for mode in [AgentInvocationMode::Await, AgentInvocationMode::Schedule] {
+            for _ in 0..2 {
+                let mut request = harness.invoke_request();
+                request.mode = mode.clone();
+                harness
+                    .worker_service
+                    .invoke_agent_rest(request, AuthCtx::system())
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let keys: Vec<IdempotencyKey> = harness
+            .worker_client
+            .invocations()
+            .into_iter()
+            .map(|(_, key, _)| key)
+            .collect();
+
+        assert_eq!(keys.len(), 4);
+        let distinct: BTreeSet<&str> = keys.iter().map(|key| key.value.as_str()).collect();
+        assert_eq!(
+            distinct.len(),
+            4,
+            "unrelated invocations must not be handed the same key, or one would \
+             join another instead of running: {keys:?}"
+        );
     }
 
     #[test]

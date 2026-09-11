@@ -47,7 +47,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
@@ -55,10 +55,10 @@ use golem_common::model::worker::{
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::AgentTypeSchema;
-use golem_common::schema::render::from_json_value;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_common::widen_infallible;
+use golem_schema::schema::render::from_json_value;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -715,17 +715,7 @@ impl TestDsl for TestWorkerExecutor {
                                 chunk
                                     .entries
                                     .into_iter()
-                                    .enumerate()
-                                    .map(|(chunk_idx, entry)| {
-                                        PublicOplogEntry::try_from(entry).map(
-                                            |public_oplog_entry| PublicOplogEntryWithIndex {
-                                                entry: public_oplog_entry,
-                                                oplog_index: OplogIndex::from_u64(
-                                                    chunk.first_index_in_chunk + chunk_idx as u64,
-                                                ),
-                                            },
-                                        )
-                                    })
+                                    .map(PublicOplogEntryWithIndex::try_from)
                                     .collect::<Result<Vec<_>, _>>()
                                     .map_err(|err| {
                                         anyhow!("Failed to convert oplog entry: {err}")

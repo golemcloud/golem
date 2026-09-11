@@ -121,10 +121,14 @@ impl UpdateTest for UpdateTestImpl {
         11
     }
 
-    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
         if bytes.len() >= 8 {
-            self.last = u64::from_be_bytes(bytes[..8].try_into().unwrap());
-            Ok(())
+            Ok(Self {
+                last: u64::from_be_bytes(bytes[..8].try_into().unwrap()),
+            })
         } else {
             Err("Invalid snapshot - not enough bytes to read u64".to_string())
         }
@@ -159,8 +163,11 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
         Ok(Vec::new())
     }
 
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        Ok(())
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Ok(Self)
     }
 }
 
@@ -205,13 +212,66 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
         Ok(vec![2])
     }
 
-    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-        self.loaded_snapshot_revision = bytes
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let loaded_snapshot_revision = bytes
             .first()
             .copied()
             .map(u32::from)
             .ok_or_else(|| "Missing snapshot revision".to_string())?;
-        Ok(())
+        Ok(Self {
+            loaded_snapshot_revision,
+            replay_revision: std::env::var("GOLEM_COMPONENT_REVISION")
+                .ok()
+                .and_then(|revision| revision.parse().ok())
+                .unwrap_or_default(),
+        })
+    }
+}
+
+/// `SnapshotUpdateTest` with a snapshot larger than the executor's default
+/// `max_payload_size`, so it is stored outside the oplog and read back through a
+/// download. Only the first byte carries information.
+#[agent_definition(snapshotting = "enabled")]
+pub trait ExternalSnapshotUpdateTest {
+    fn new() -> Self;
+    fn loaded_snapshot_revision(&self) -> u32;
+}
+
+struct ExternalSnapshotUpdateTestImpl {
+    loaded_snapshot_revision: u32,
+}
+
+#[agent_implementation]
+impl ExternalSnapshotUpdateTest for ExternalSnapshotUpdateTestImpl {
+    fn new() -> Self {
+        Self {
+            loaded_snapshot_revision: 0,
+        }
+    }
+
+    fn loaded_snapshot_revision(&self) -> u32 {
+        self.loaded_snapshot_revision
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(vec![2; 128 * 1024])
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let loaded_snapshot_revision = bytes
+            .first()
+            .copied()
+            .map(u32::from)
+            .ok_or_else(|| "Missing snapshot revision".to_string())?;
+        Ok(Self {
+            loaded_snapshot_revision,
+        })
     }
 }
 

@@ -32,6 +32,7 @@ fn fake_agent_stream(id : Int) -> AgentStream[Int] {
     handle: @model.GuestSchemaValueStreamHandle::from_wrapped(
       @types.SchemaValueStream::SchemaValueStream(id),
     ),
+    decode: from_value_as,
   }
 }
 
@@ -39,6 +40,11 @@ fn fake_agent_stream(id : Int) -> AgentStream[Int] {
 priv enum EncodeProbe {
   EncodeCapability(AgentStream[Int])
   EncodeInvalid
+}
+
+///|
+impl FromSchema for EncodeProbe with fn from_value(value) {
+  EncodeCapability(from_value_as(value))
 }
 
 ///|
@@ -362,7 +368,9 @@ test "read distinguishes ownership wire and item failures" {
     }
     assert_true(wire_sink.write_all([malformed][:]))
     wire_sink.close()
-    let wire_stream : AgentStream[Int] = AgentStream::from_reader(wire_reader)
+    let wire_stream : AgentStream[Int] = AgentStream::from_reader(
+      wire_reader, from_value_as,
+    )
     try wire_stream.read() catch {
       AgentStreamReadError::WireDecode(_) => ()
       error => fail("unexpected wire error: \{Repr(error)}")
@@ -382,7 +390,9 @@ test "read distinguishes ownership wire and item failures" {
     }
     assert_true(item_sink.write_all([wrong_item][:]))
     item_sink.close()
-    let item_stream : AgentStream[Int] = AgentStream::from_reader(item_reader)
+    let item_stream : AgentStream[Int] = AgentStream::from_reader(
+      item_reader, from_value_as,
+    )
     try item_stream.read() catch {
       AgentStreamReadError::ItemDecode(ShapeMismatch(..)) => ()
       error => fail("unexpected item error: \{Repr(error)}")
@@ -405,7 +415,7 @@ test "read distinguishes ownership wire and item failures" {
     assert_true(partial_sink.write_all([partial_item][:]))
     partial_sink.close()
     let partial_stream : AgentStream[(AgentStream[Int], Int)] = AgentStream::from_reader(
-      partial_reader,
+      partial_reader, from_value_as,
     )
     try partial_stream.read() catch {
       AgentStreamReadError::ItemDecode(ShapeMismatch(..)) => ()
@@ -494,4 +504,82 @@ test "unwrap and reader failures report transport errors" {
     }
     read_failure.drop()
   })
+}
+
+///|
+priv struct CodecItem {
+  stream : AgentStream[Int]
+  value : Int
+}
+
+///|
+test "fallible item codec releases prefix failing item and unconverted suffix" {
+  reset_resource_drop_counts()
+  let encoded = Ref(0)
+  let released = Ref(0)
+  run_agent_stream_async(async fn() {
+    let (writer, stream) : (
+      AgentStreamWriter[CodecItem],
+      AgentStream[CodecItem],
+    ) = AgentStream::new_with_codec(
+      item => {
+        encoded.val += 1
+        let first = item.stream.to_schema_value()
+        if item.value > 127 {
+          raise FromSchemaError::Custom("original narrow integer failure")
+        }
+        @model.Tuple([first, @model.S8(item.value)])
+      },
+      _ => raise FromSchemaError::Custom("not read"),
+      item => {
+        released.val += 1
+        item.stream.drop()
+      },
+    )
+    let items = [
+      CodecItem::{ stream: fake_agent_stream(300), value: 1, },
+      CodecItem::{ stream: fake_agent_stream(301), value: 999, },
+      CodecItem::{ stream: fake_agent_stream(302), value: 2, },
+    ]
+    try writer.write_all(items) catch {
+      FromSchemaError::Custom(message) =>
+        assert_eq(message, "original narrow integer failure")
+      error => fail("wrong error: \{Repr(error)}")
+    } noraise {
+      _ => fail("expected item conversion failure")
+    }
+    assert_eq(encoded.val, 2)
+    assert_eq(released.val, 2)
+    assert_eq(resource_drop_count(3), 3)
+    writer.close()
+    stream.drop()
+  })
+}
+
+///|
+test "codec-bound producer forwards unread without running either item codec" {
+  let calls = Ref(0)
+  let unstarted = Ref(0)
+  let stream : AgentStream[Int] = AgentStream::produce_with_codec(
+    _ => calls.val += 1,
+    _ => {
+      calls.val += 1
+      @model.S8(1)
+    },
+    _ => {
+      calls.val += 1
+      1
+    },
+    _ => (),
+    on_unstarted_drop=() => unstarted.val += 1,
+  )
+  let model = stream.to_schema_value()
+  let forwarded : AgentStream[Int] = AgentStream::from_value_with_codec(
+    model, from_value_as,
+  )
+  assert_eq(calls.val, 0)
+  forwarded.drop()
+  stream.drop()
+  assert_eq(calls.val, 0)
+  assert_eq(unstarted.val, 1)
 }

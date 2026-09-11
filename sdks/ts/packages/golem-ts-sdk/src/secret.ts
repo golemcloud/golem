@@ -21,6 +21,8 @@
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import { reveal } from 'golem:secrets/reveal@0.1.0';
 import { SchemaValue, schemaGraphToWit, schemaValueFromWit } from './internal/schema-model';
+import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
+import { peekGuestSecretHandle } from './internal/schema-model/secretHandle';
 import type { ConfigDeclaration } from './config';
 
 /**
@@ -55,10 +57,11 @@ export class Secret<T> {
       throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
     }
     const handle = (sv as Extract<SchemaValue, { tag: 'secret' }>).handle;
-    const revealedTree = handle.withHandle((raw) => reveal(raw, schemaGraphToWit(d.codec.graph)));
-    if (revealedTree === undefined) {
+    const raw = peekGuestSecretHandle(SECRET_INTERNAL, handle);
+    if (raw === undefined) {
       throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
     }
+    const revealedTree = reveal(raw, schemaGraphToWit(d.codec.graph));
     return d.codec.fromValue(schemaValueFromWit(revealedTree)) as T;
   }
 

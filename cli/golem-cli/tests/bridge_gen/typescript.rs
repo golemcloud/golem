@@ -14,7 +14,8 @@
 
 use crate::bridge_gen::fixtures::{
     agent, code_first_snippets_agent_type, def, field, local_config, method,
-    multi_agent_wrapper_2_types, named_field, ref_to, single_agent_wrapper_types,
+    multi_agent_wrapper_2_types, multimodal, named_field, ref_to, single_agent_wrapper_types,
+    variant_case,
 };
 use crate::bridge_gen::scala::grep_tool;
 use crate::bridge_gen::type_naming::test_type_naming;
@@ -172,6 +173,58 @@ fn code_first_snippets_ts_foo_agent_compiles(
 #[test]
 fn guest_durable_agent_compiles() {
     compile_guest_durable_agent();
+}
+
+#[test]
+fn guest_native_streams_compile() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("guest-streaming-agent-guest-client");
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        crate::bridge_gen::fixtures::guest_streaming_agent_type("typescript"),
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+    let source =
+        std::fs::read_to_string(package_dir.join("guest-streaming-agent-guest-client.ts")).unwrap();
+    assert!(source.contains("base.agentStreamToHandle"));
+    assert!(source.contains("base.agentStreamFromHandle"));
+    assert!(source.contains("satisfies base.SchemaCodec"));
+    assert!(source.contains("get graph()"));
+    assert!(source.contains("toValue: (item: any): base.SchemaValue => base.withCapabilityAdoptionTransaction((): base.SchemaValue =>"));
+    assert!(!source.contains("createStreamingRemoteMethod"));
+    std::fs::write(
+        package_dir.join("usage.ts"),
+        r#"
+import { guest as base } from '@golemcloud/golem-ts-sdk';
+import { GuestStreamingAgent } from './guest-streaming-agent-guest-client';
+async function exercise() {
+  const client = GuestStreamingAgent.get('native');
+  const items = base.AgentStream.from([{ label: 'root', children: [] }]);
+  const nested = await client.nested(base.AgentStream.from([items]));
+  await client.nested(nested); // unread direct forwarding
+  const bundle = await client.exchange('label', await client.produce());
+  await client.forward(bundle);
+  await client.recursive({ tag: 'branch', val: [{ tag: 'leaf', val: await client.produce() }] });
+  for await (const item of await client.produce()) { const label: string = item.label; void label; }
+  await client.consume.abortable(new AbortController().signal, base.AgentStream.from(['x']));
+  client.status.trigger();
+  // @ts-expect-error native streams only support awaited RPC
+  client.consume.trigger(base.AgentStream.from(['x']));
+  // @ts-expect-error native stream outputs cannot be scheduled
+  client.produce.schedule({ seconds: 0n, nanoseconds: 0 });
+  // @ts-expect-error recursive stream methods cannot be scheduled
+  client.recursive.scheduleCancelable({ seconds: 0n, nanoseconds: 0 }, { tag: 'branch', val: [] });
+}
+void exercise;
+"#,
+    )
+    .unwrap();
+    install_and_build(&package_dir);
 }
 
 #[test]
@@ -766,6 +819,77 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(!source.contains("LegacySchemaValue"));
     assert!(!source.contains("toGuestSchemaValue"));
     assert!(!source.contains("fromGuestSchemaValue"));
+}
+
+#[test]
+fn guest_generation_compiles_host_managed_capability_methods() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("capability-envelope"))],
+                Some(ref_to("capability-envelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("capability-envelope", envelope)],
+        AgentMode::Durable,
+    );
+    generate_and_compile_with_mode(agent_type, target, TypeScriptBridgeMode::GuestWasmRpc);
+
+    let source = std::fs::read_to_string(
+        target.join("capability-agent-guest-client/capability-agent-guest-client.ts"),
+    )
+    .unwrap();
+    for capability_type in [
+        "base.SecretHandle",
+        "base.QuotaToken",
+        "base.PermissionCardHandle",
+    ] {
+        assert!(
+            source.contains(capability_type),
+            "missing generated capability type {capability_type}:\n{source}"
+        );
+    }
+    for codec in [
+        "base.secretHandleToSchemaValue(",
+        "base.secretHandleFromSchemaValue(",
+        "base.quotaTokenToSchemaValue(",
+        "base.quotaTokenFromSchemaValue(",
+        "base.permissionCardHandleToSchemaValue(",
+        "base.permissionCardHandleFromSchemaValue(",
+    ] {
+        assert!(
+            source.contains(codec),
+            "missing generated capability codec {codec}:\n{source}"
+        );
+    }
 }
 
 #[test]
