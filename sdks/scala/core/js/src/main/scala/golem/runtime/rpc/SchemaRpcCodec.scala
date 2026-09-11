@@ -60,8 +60,11 @@ private[golem] object SchemaRpcCodec {
   def decodeValue(tree: JsSchemaValueTree): SchemaValue =
     SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree))
 
-  def encodeValueAsync(value: SchemaValue): Future[JsSchemaValueTree] =
-    SchemaWireInterop.valueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
+  def encodeValueAsync(value: => SchemaValue): Future[JsSchemaValueTree] =
+    SchemaPayload.encodeValueAsync(value)
+
+  def decodeResultAsync[A](decode: => A): Future[A] =
+    SchemaPayload.decodeResultAsync(decode)
 
   def encodeUByte(v: UByte): SchemaValue = {
     val x = v.value

@@ -46,4 +46,13 @@ export type AgentInitiator = {
     constructorParams: SchemaValueTree,
     principal: Principal,
   ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
+
+  /** Constructs a complete agent directly from snapshot data, without calling the initializer. */
+  loadSnapshot(
+    constructorParams: SchemaValue,
+    principal: Principal,
+    bytes: Uint8Array,
+    mimeType: string | undefined,
+    databases: Array<{ name: string; bytes: Uint8Array }>,
+  ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 };

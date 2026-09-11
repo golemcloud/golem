@@ -47,7 +47,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
@@ -715,17 +715,7 @@ impl TestDsl for TestWorkerExecutor {
                                 chunk
                                     .entries
                                     .into_iter()
-                                    .enumerate()
-                                    .map(|(chunk_idx, entry)| {
-                                        PublicOplogEntry::try_from(entry).map(
-                                            |public_oplog_entry| PublicOplogEntryWithIndex {
-                                                entry: public_oplog_entry,
-                                                oplog_index: OplogIndex::from_u64(
-                                                    chunk.first_index_in_chunk + chunk_idx as u64,
-                                                ),
-                                            },
-                                        )
-                                    })
+                                    .map(PublicOplogEntryWithIndex::try_from)
                                     .collect::<Result<Vec<_>, _>>()
                                     .map_err(|err| {
                                         anyhow!("Failed to convert oplog entry: {err}")

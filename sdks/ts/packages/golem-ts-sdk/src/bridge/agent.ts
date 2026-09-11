@@ -2,6 +2,7 @@
 // Licensed under the Golem Source License v1.1
 
 import { makeAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type {
   CancellationToken,
   CancelableScheduledInvocationReceipt,
@@ -45,6 +46,25 @@ function isRpcError(error: unknown): error is RpcError {
       return true;
     default:
       return false;
+  }
+}
+
+function disposeOwnedWitResources(tree: SchemaValueTree): void {
+  for (const node of tree.valueNodes) {
+    switch (node.tag) {
+      case 'stream-value':
+      case 'secret-value':
+      case 'quota-token-handle':
+      case 'permission-card-handle':
+        try {
+          // Native lowering spends the wrapper handle. Disposal releases only
+          // resources still owned here, including after partial lowering.
+          const resource = node.val as { [Symbol.dispose]?: () => void };
+          resource[Symbol.dispose]?.();
+        } catch {
+          // Attempt every resource while preserving the failed-start error.
+        }
+    }
   }
 }
 
@@ -101,11 +121,15 @@ export function resolveRemoteAgent(
     signal?: AbortSignal,
   ): Promise<RemoteInvocationResult> => {
     throwIfAborted(signal);
-    const invocation = rpc.asyncInvokeAndAwait(
-      method,
-      await schemaValueToWitAsync(params),
-      undefined,
-    );
+    const input = await schemaValueToWitAsync(params);
+    let invocation;
+    try {
+      throwIfAborted(signal);
+      invocation = rpc.asyncInvokeAndAwait(method, input, undefined);
+    } catch (error) {
+      disposeOwnedWitResources(input);
+      throw error;
+    }
     const future = invocation.future;
     let result;
     try {
