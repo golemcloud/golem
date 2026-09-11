@@ -193,6 +193,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             retry_from: start_idx,
             durable_scope: None,
             observational_owner: None,
+            entity_parent_start_index: None,
             atomic_lease: unregistered_atomic_lease(atomic_region, true),
         },
         retry: InFunctionRetryController::new(
@@ -465,6 +466,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     seed_oplog
         .add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         })
         .await;
     let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
@@ -678,6 +680,7 @@ async fn tail_gated_token_over_crash_tail(
     oplog
         .add(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         })
         .await;
     oplog
@@ -849,6 +852,7 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
         vec![
             OplogEntry::BeginAtomicRegion {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
             },
             OplogEntry::CompletionDelivered {
                 timestamp: Timestamp::now_utc(),
@@ -856,6 +860,7 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
             },
             OplogEntry::NoOp {
                 timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
             },
         ],
         None,
@@ -909,6 +914,7 @@ async fn completion_delivery_ordered_append_lands_before_marker() {
         let mut token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
         token.append_ordered(OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         });
         drop(token);
     }
@@ -1581,6 +1587,7 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
 
@@ -1597,6 +1604,7 @@ fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
     };
 
@@ -1613,6 +1621,7 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1637,12 +1646,14 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
 
@@ -1684,12 +1695,14 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
     };
 
@@ -1751,6 +1764,7 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
@@ -1785,12 +1799,14 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
@@ -1900,6 +1916,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: None,
+        entity_parent_start_index: None,
     };
 
     let lease = unregistered_atomic_lease(begun.atomic_region, true);
@@ -1916,6 +1933,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
         parent_start_index: None,
         atomic_region: None,
         observational_owner: None,
+        entity_parent_start_index: None,
     };
 
     let scope = begun.finish(idx(12), None);
@@ -1931,6 +1949,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
         observational_owner: Some(idx(7)),
+        entity_parent_start_index: None,
     };
 
     let lease = unregistered_atomic_lease(begun.atomic_region, true);
@@ -1949,6 +1968,7 @@ fn call_execution_scope_owns_call_retry_point() {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
+        entity_parent_start_index: None,
         atomic_lease: None,
     };
 

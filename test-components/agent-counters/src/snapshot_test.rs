@@ -6,6 +6,9 @@ trait SnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
     fn get(&self) -> u32;
+    /// Differs between agent-counters and agent-counters-v2, so a replay across
+    /// a build change is detectable.
+    fn component_version(&self) -> u32;
 }
 
 struct SnapshotCounterImpl {
@@ -16,10 +19,7 @@ struct SnapshotCounterImpl {
 #[agent_implementation]
 impl SnapshotCounter for SnapshotCounterImpl {
     fn new(id: String) -> Self {
-        Self {
-            _id: id,
-            count: 0,
-        }
+        Self { _id: id, count: 0 }
     }
 
     fn increment(&mut self) -> u32 {
@@ -31,17 +31,33 @@ impl SnapshotCounter for SnapshotCounterImpl {
         self.count
     }
 
+    fn component_version(&self) -> u32 {
+        1
+    }
+
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
         Ok(self.count.to_le_bytes().to_vec())
     }
 
-    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-        if bytes.len() == 4 {
-            self.count = u32::from_le_bytes(bytes.try_into().unwrap());
-            Ok(())
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let count = if bytes.len() == 4 {
+            u32::from_le_bytes(bytes.try_into().unwrap())
         } else {
-            Err(format!("Invalid snapshot size: {}", bytes.len()))
-        }
+            return Err(format!("Invalid snapshot size: {}", bytes.len()));
+        };
+        let golem_rust::SchemaValue::Record { fields } = context.parameters else {
+            return Err("Invalid snapshot restore parameters".to_string());
+        };
+        let [golem_rust::SchemaValue::String(id)] = fields.as_slice() else {
+            return Err("Invalid snapshot restore parameters".to_string());
+        };
+        Ok(Self {
+            count,
+            _id: id.clone(),
+        })
     }
 }
 

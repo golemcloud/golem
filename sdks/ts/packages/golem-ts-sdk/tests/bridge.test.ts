@@ -2,6 +2,7 @@
 // Licensed under the Golem Source License v1.1
 
 import { WasmRpc } from 'golem:agent/host@2.0.0';
+import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
 import { createStdin, ToolRpc, type ByteStreamFailure, type RpcError } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
@@ -521,6 +522,95 @@ describe('public bridge runtime', () => {
     });
   });
 
+  it('keeps bridge capability conversions opaque and affine', () => {
+    const assertOpaque = (handle: unknown) => {
+      expect((handle as { take?: unknown }).take).toBeUndefined();
+      expect((handle as { withHandle?: unknown }).withHandle).toBeUndefined();
+      expect((handle as { isPresent?: unknown }).isPresent).toBeUndefined();
+    };
+
+    const secretRaw = { id: 'secret' } as never;
+    const secret = bridge.secretHandleToSchemaValue(secretRaw);
+    assertOpaque(secret.handle);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'secret-value', val: secretRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    expect(bridge.secretHandleFromSchemaValue(secret)).toBe(secretRaw);
+    expect(() => bridge.secretHandleFromSchemaValue(secret)).toThrow(/already consumed/);
+    expect(() => bridge.secretHandleToSchemaValue(secretRaw)).not.toThrow();
+
+    const cardRaw = { id: 'permission-card' } as never;
+    const card = bridge.permissionCardHandleToSchemaValue(cardRaw);
+    assertOpaque(card.handle);
+    expect(() => bridge.permissionCardHandleToSchemaValue(cardRaw)).toThrow(/already owned/);
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'permission-card-handle', val: cardRaw }],
+        root: 0,
+      }),
+    ).toThrow(/already owned/);
+    expect(bridge.permissionCardHandleFromSchemaValue(card)).toBe(cardRaw);
+    expect(() => bridge.permissionCardHandleFromSchemaValue(card)).toThrow(/already consumed/);
+
+    const quotaRaw = { id: 'quota-token' } as never;
+    const quotaValue = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+      root: 0,
+    });
+    expect(quotaValue.tag).toBe('quota-token');
+    if (quotaValue.tag !== 'quota-token') throw new Error('expected quota-token');
+    assertOpaque(quotaValue.handle);
+    const quotaAliasTree = {
+      valueNodes: [{ tag: 'quota-token-handle' as const, val: quotaRaw }],
+      root: 0,
+    };
+    expect(() => bridge.schemaValueFromWit(quotaAliasTree)).toThrow(/already owned/);
+
+    let fakeKey: unknown;
+    const fakeToken = {
+      _toSchemaValue: (key: unknown) => {
+        fakeKey = key;
+        return quotaValue;
+      },
+    } as never;
+    expect(() => bridge.quotaTokenToSchemaValue(fakeToken)).toThrow(/invalid quota token/);
+    expect(fakeKey).toBeUndefined();
+
+    let intercepted = false;
+    const quotaClass = bridge.QuotaToken as unknown as Record<string, unknown>;
+    const quotaPrototype = bridge.QuotaToken.prototype as unknown as Record<string, unknown>;
+    quotaClass._fromSchemaValue = () => {
+      intercepted = true;
+    };
+    quotaPrototype._toSchemaValue = () => {
+      intercepted = true;
+    };
+    try {
+      const token = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const alias = bridge.quotaTokenFromSchemaValue(quotaValue);
+      const encoded = bridge.quotaTokenToSchemaValue(token);
+      expect(intercepted).toBe(false);
+      const wire = bridge.schemaValueToWit(encoded);
+      expect(() =>
+        bridge.schemaValueFromWit({
+          valueNodes: [{ tag: 'quota-token-handle', val: quotaRaw }],
+          root: 0,
+        }),
+      ).toThrow(/already owned/);
+      expect(bridge.schemaValueFromWit(wire).tag).toBe('quota-token');
+      expect(() => bridge.schemaValueToWit(bridge.quotaTokenToSchemaValue(alias))).toThrow(
+        /already transferred/,
+      );
+    } finally {
+      delete quotaClass._fromSchemaValue;
+      delete quotaPrototype._toSchemaValue;
+    }
+  });
+
   it('rejects custom-error payloads whose rich value records are malformed', () => {
     const payload = {
       graph: bridge.schemaGraphToWit({
@@ -666,6 +756,118 @@ describe('public bridge runtime', () => {
     expect(streamNode).toMatchObject({ tag: 'stream-value' });
     expect(streamNode.val).toMatchObject({ reader: source });
   });
+
+  it('aborts during native wrapping before starting RPC and disposes the wrapped input', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const dispose = vi.fn();
+    const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
+    let release!: (stream: SchemaValueStream) => void;
+    const wrap = vi.spyOn(SchemaValueStream, 'wrap').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const reason = new Error('aborted while wrapping');
+    const stream = bridge.AgentStream.from<number>([]);
+    const codec: bridge.SchemaCodec = {
+      graph: graph(bridge.t.u32()),
+      toValue: (value) => bridge.v.u32(value as number),
+      fromValue: () => 0,
+    };
+    try {
+      const pending = bridge.withNativeStreamScope(
+        () => bridge.v.stream(bridge.agentStreamToHandle(stream, codec)),
+        (value) => remote.invokeAndAwait('consume', value, controller.signal),
+      );
+      await vi.waitFor(() => expect(wrap).toHaveBeenCalledOnce());
+      controller.abort(reason);
+      release(wrapped);
+      await expect(pending).rejects.toBe(reason);
+      expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      await expect(stream.next()).rejects.toThrow('transferred');
+    } finally {
+      wrap.mockRestore();
+    }
+  });
+
+  it('disposes all still-owned WIT resources after partial RPC start lowering fails', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const resources = Array.from({ length: 4 }, () => ({
+      owned: true,
+      drop: vi.fn(),
+      [Symbol.dispose]() {
+        if (this.owned) {
+          this.owned = false;
+          this.drop();
+        }
+      },
+    }));
+    // A cleanup failure must not prevent disposal of later siblings.
+    resources[1].drop.mockImplementation(() => {
+      throw new Error('cleanup');
+    });
+    const params = bridge.schemaValueFromWit({
+      valueNodes: [
+        { tag: 'stream-value', val: resources[0] },
+        { tag: 'secret-value', val: resources[1] },
+        { tag: 'quota-token-handle', val: resources[2] },
+        { tag: 'permission-card-handle', val: resources[3] },
+        { tag: 'record-value', val: [0, 1, 2, 3] },
+      ],
+      root: 4,
+    } as unknown as SchemaValueTree);
+    const reason = new Error('native lowering failed');
+    rpc.asyncInvokeAndAwait.mockImplementation(() => {
+      resources[0].owned = false; // Native take_handle's consumed sentinel.
+      throw reason;
+    });
+    const unwrap = vi.spyOn(SchemaValueStream, 'unwrap');
+    try {
+      await expect(remote.invokeAndAwait('consume', params)).rejects.toBe(reason);
+      expect(resources[0].drop).not.toHaveBeenCalled();
+      for (const resource of resources.slice(1)) expect(resource.drop).toHaveBeenCalledOnce();
+      expect(unwrap).not.toHaveBeenCalled();
+    } finally {
+      unwrap.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    'cleans prewrapped forwarded inputs only when RPC start fails (%s)',
+    async (fails) => {
+      const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+      const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+        asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      };
+      const dispose = vi.fn();
+      const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
+      const params = bridge.v.stream(
+        new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: wrapped }),
+      );
+      const reason = new Error('start failed');
+      rpc.asyncInvokeAndAwait.mockImplementation(() => {
+        if (fails) throw reason;
+        return { metadata: {}, future: { get: async () => undefined, cancel: vi.fn() } };
+      });
+      const pending = remote.invokeAndAwait('forward', params);
+      if (fails) {
+        await expect(pending).rejects.toBe(reason);
+        expect(dispose).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).resolves.toBeUndefined();
+        expect(dispose).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(['invoke', 'schedule'] as const)(
     'rejects native streams at the non-awaited %s boundary',
