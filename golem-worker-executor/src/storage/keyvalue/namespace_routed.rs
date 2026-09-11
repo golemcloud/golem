@@ -351,7 +351,9 @@ mod tests {
             &storage.persistent,
         ));
         assert!(Arc::ptr_eq(
-            storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatus { agent_id }),
+            storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatus {
+                agent_id: agent_id.into(),
+            }),
             &storage.cache,
         ));
     }
