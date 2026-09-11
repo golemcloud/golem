@@ -386,12 +386,21 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             agent_id!("StreamingRpcTarget", "output-restart"),
         )
         .await?;
+    let gate = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id!("StreamingRpcTarget", "output-restart"),
+            "create_output_gate",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<PromiseId>()?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let (_, input) = data_value!().into_parts();
+    let (_, input) = data_value!(gate.clone()).into_parts();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
             agent_id: Some(worker_agent_id.into()),
-            method_name: Some("produce_siblings".to_string()),
+            method_name: Some("produce_gated_siblings".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             idempotency_key: Some(IdempotencyKey::fresh().into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -453,6 +462,7 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             observed_output_items += 1;
         }
     }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(requests);
     drop(responses);
     drop(executor);
@@ -470,7 +480,7 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: start.expected_callee_fingerprint,
             expected_epoch: accepted.epoch,
-            operation: ResumeOperation::Resume as i32,
+            operation: ResumeOperation::Takeover as i32,
             cursors: cursors.into_values().collect(),
             auth_ctx: start.auth_ctx.clone(),
             principal: start.principal.clone(),
@@ -497,7 +507,10 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Accepted(resumed)) => {
+                assert_eq!(resumed.epoch, accepted.epoch + 1);
+                executor.complete_promise(&gate, Vec::new()).await?;
+            }
             Some(invocation_response::Response::Result(result)) => {
                 mapped_outputs = result.new_stream_mappings.len();
             }

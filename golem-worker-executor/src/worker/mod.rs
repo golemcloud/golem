@@ -7411,6 +7411,7 @@ impl RunningWorker {
             LinearMemoryGrantRegistration::new(parent.clone(), memory_grant);
 
         let panic_parent = Arc::clone(&parent);
+        let shutdown_parent = Arc::clone(&parent);
         let invocation_loops = parent.active_agents().invocation_loops();
         let invocation_loop_task = async move {
             RunningWorker::invocation_loop(
@@ -7433,24 +7434,34 @@ impl RunningWorker {
             .await;
             drop((memory_grant_registration, component_charge));
         };
-        let handle = invocation_loops.spawn(async move {
-            run_invocation_loop_task(
-                invocation_loop_task,
-                move |error: WorkerExecutorError| async move {
-                    panic_parent.complete_startup(start_attempt, Err(error.clone()));
-                    panic_parent
-                        .stop_internal(
-                            true,
-                            Some(error.clone()),
-                            UnloadRequest::ordinary(UnloadReason::Panic),
-                            FinalWorkerState::CleanupFailed(error),
-                            PendingLiveInvocationDisposition::Fail,
-                        )
-                        .await;
-                },
-            )
-            .await;
-        });
+        let handle = invocation_loops.spawn(
+            async move {
+                run_invocation_loop_task(
+                    invocation_loop_task,
+                    move |error: WorkerExecutorError| async move {
+                        panic_parent.complete_startup(start_attempt, Err(error.clone()));
+                        panic_parent
+                            .stop_internal(
+                                true,
+                                Some(error.clone()),
+                                UnloadRequest::ordinary(UnloadReason::Panic),
+                                FinalWorkerState::CleanupFailed(error),
+                                PendingLiveInvocationDisposition::Fail,
+                            )
+                            .await;
+                    },
+                )
+                .await;
+            },
+            move || {
+                let retirement = shutdown_parent.retire_durable_stream_producer();
+                Box::pin(async move {
+                    retirement
+                        .await
+                        .expect("Failed to drain durable streams during executor shutdown");
+                })
+            },
+        );
 
         RunningWorker {
             handle: Some(handle),

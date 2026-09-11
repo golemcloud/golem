@@ -308,6 +308,8 @@ pub trait StreamingRpcTarget {
         &self,
     ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>);
     fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
+    fn create_output_gate(&self) -> PromiseId;
+    fn produce_gated_siblings(&self, gate: PromiseId) -> (AgentStream<String>, AgentStream<u32>);
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>);
     fn produce_error(&self) -> AgentStream<u32>;
     fn ping(&self) -> u64;
@@ -530,6 +532,20 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             agent_stream(vec!["a".to_string(), "b".to_string()]),
             agent_stream((0..64).collect()),
         )
+    }
+
+    fn create_output_gate(&self) -> PromiseId {
+        golem_rust::create_promise()
+    }
+
+    fn produce_gated_siblings(&self, gate: PromiseId) -> (AgentStream<String>, AgentStream<u32>) {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_all(0..16).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            writer.write_all(16..64).await.unwrap();
+        });
+        (agent_stream(vec!["a".to_string(), "b".to_string()]), stream)
     }
 
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>) {

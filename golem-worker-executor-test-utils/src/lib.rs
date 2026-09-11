@@ -581,6 +581,16 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    pub async fn shutdown_and_wait_for_invocation_loops(&self) -> anyhow::Result<()> {
+        self._run_details.shutdown.cancel();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            self._run_details.invocation_loops.wait_for_exit(),
+        )
+        .await
+        .map_err(|_| anyhow!("executor invocation loops did not retire within 10s"))
+    }
+
     /// Returns a weak reference that can be used to verify that the
     /// service graph (`All`) was properly deallocated after the executor
     /// is dropped. If `upgrade()` returns `Some`, services have leaked.

@@ -453,11 +453,10 @@ const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// The worker invocation loops spawned by one executor.
 ///
-/// Every loop is bound to the executor's lifetime: when the executor's shutdown token is
-/// cancelled, the loop task is abandoned at its next await point, which stops the worker from
-/// touching storage exactly as if the executor process had died there. The oplog is designed to
-/// be reopened after such an interruption. Cloning shares the same set of loops; a clone does not
-/// keep any task alive.
+/// Every loop is bound to the executor's lifetime. Shutdown fences producer mutations before
+/// abandoning the loop and drains admitted writes before reporting its exit. The oplog can then
+/// be reopened without racing writes from the old owner. Cloning shares the same set of loops;
+/// a clone does not keep any task alive.
 #[derive(Clone, Debug)]
 pub struct InvocationLoops {
     shutdown_token: CancellationToken,
@@ -475,6 +474,7 @@ impl InvocationLoops {
     pub(crate) fn spawn(
         &self,
         invocation_loop: impl Future<Output = ()> + Send + 'static,
+        on_shutdown: impl FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
     ) -> JoinHandle<()> {
         let shutdown_token = self.shutdown_token.clone();
         self.tracker.spawn(async move {
@@ -482,9 +482,11 @@ impl InvocationLoops {
             tokio::select! {
                 biased;
                 _ = shutdown_token.cancelled() => {
+                    let drain = on_shutdown();
                     // Suspended Wasmtime calls form a deeply nested future tree whose destructor
                     // can exhaust Tokio's default worker-thread stack.
                     stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(invocation_loop));
+                    drain.await;
                 }
                 _ = crate::worker::invocation::with_invocation_stack(&mut invocation_loop) => {}
             }
