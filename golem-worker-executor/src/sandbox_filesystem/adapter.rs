@@ -953,7 +953,7 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     #[allow(dead_code)]
     fn capture_tree(
         &self,
-        excluded: Arc<CaptureExclusions>,
+        excluded: Arc<TreeExclusions>,
     ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send;
 
     /// Puts a scratch tree into the root of this filesystem.
@@ -1704,7 +1704,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
 
     fn capture_tree(
         &self,
-        excluded: Arc<CaptureExclusions>,
+        excluded: Arc<TreeExclusions>,
     ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send {
         let operation_path = self.root().to_path_buf();
         let scratch = self.scratch.clone();
@@ -2923,7 +2923,7 @@ mod scripted {
 
         fn capture_tree(
             &self,
-            excluded: Arc<CaptureExclusions>,
+            excluded: Arc<TreeExclusions>,
         ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send {
             let mut excluded = excluded
                 .paths()
@@ -3806,7 +3806,7 @@ mod tests {
         let filesystem = create_scripted(provisioning).await;
 
         let gate = control.block("capture_tree");
-        let excluded = Arc::new(CaptureExclusions::new([
+        let excluded = Arc::new(TreeExclusions::new([
             PathBuf::from("lib/b.txt"),
             PathBuf::from("a.txt"),
         ]));
@@ -3821,7 +3821,7 @@ mod tests {
         let capture = capture.await.unwrap().unwrap();
         assert_eq!(capture.root(), captured_root);
         let unsupported = filesystem
-            .capture_tree(Arc::new(CaptureExclusions::default()))
+            .capture_tree(Arc::new(TreeExclusions::default()))
             .await
             .unwrap_err();
         assert!(unsupported.capture_is_unsupported());
@@ -3897,7 +3897,7 @@ mod tests {
         assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
 
         let unsupported = filesystem
-            .capture_tree(Arc::new(CaptureExclusions::default()))
+            .capture_tree(Arc::new(TreeExclusions::default()))
             .await
             .unwrap_err();
         assert!(unsupported.capture_is_unsupported());

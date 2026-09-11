@@ -32,16 +32,17 @@ pub(super) enum TreeEntryKind {
     Symlink(PathBuf),
 }
 
-/// The root-relative paths that a tree capture does not copy.
+/// The root-relative paths that a tree walk skips.
 ///
-/// The set does not change after it is made. A lookup compares paths by their components, so a
-/// redundant separator in a stored path does not stop a match.
+/// The walk also skips the contents of a skipped directory. The set does not change after it is
+/// made. A lookup compares paths by their components, so a redundant separator in a stored path
+/// does not stop a match.
 #[derive(Debug, Default)]
-pub(crate) struct CaptureExclusions {
+pub(crate) struct TreeExclusions {
     paths: HashSet<PathBuf>,
 }
 
-impl CaptureExclusions {
+impl TreeExclusions {
     /// Makes the set from root-relative paths.
     ///
     /// A path that has only normal components stays as it is. A leading root component and
@@ -90,7 +91,7 @@ fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
 /// Entries of one directory are in name order.
 pub(super) fn list_tree(
     root: &cap_std::fs::Dir,
-    excluded: &CaptureExclusions,
+    excluded: &TreeExclusions,
 ) -> std::io::Result<Vec<TreeEntry>> {
     let mut entries = Vec::new();
     list_directory(root, &PathBuf::new(), excluded, &mut entries)?;
@@ -100,7 +101,7 @@ pub(super) fn list_tree(
 fn list_directory(
     directory: &cap_std::fs::Dir,
     relative: &Path,
-    excluded: &CaptureExclusions,
+    excluded: &TreeExclusions,
     entries: &mut Vec<TreeEntry>,
 ) -> std::io::Result<()> {
     let mut names = directory
@@ -152,7 +153,7 @@ fn list_directory(
 pub(super) fn capture(
     source: &cap_std::fs::Dir,
     destination: &Path,
-    excluded: &CaptureExclusions,
+    excluded: &TreeExclusions,
     copy_mode: FileCopyMode,
 ) -> std::io::Result<()> {
     let entries = list_tree(source, excluded)?;
@@ -214,7 +215,7 @@ pub(super) fn seed(
 ) -> std::io::Result<()> {
     let source_directory =
         cap_std::fs::Dir::open_ambient_dir(source, cap_std::ambient_authority())?;
-    let entries = list_tree(&source_directory, &CaptureExclusions::default())?;
+    let entries = list_tree(&source_directory, &TreeExclusions::default())?;
     for entry in &entries {
         match &entry.kind {
             TreeEntryKind::Directory => destination.create_dir(&entry.relative)?,
@@ -382,8 +383,8 @@ mod tests {
         items.iter().map(PathBuf::from).collect()
     }
 
-    fn exclusions(items: &[&str]) -> CaptureExclusions {
-        CaptureExclusions::new(items.iter().map(PathBuf::from))
+    fn exclusions(items: &[&str]) -> TreeExclusions {
+        TreeExclusions::new(items.iter().map(PathBuf::from))
     }
 
     fn open(path: &Path) -> cap_std::fs::Dir {
@@ -518,14 +519,14 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
         let destination = tempfile::tempdir().unwrap();
 
-        let error = list_tree(&open(source.path()), &CaptureExclusions::default()).unwrap_err();
+        let error = list_tree(&open(source.path()), &TreeExclusions::default()).unwrap_err();
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("pipe"), "{error}");
         let error = capture(
             &open(source.path()),
             destination.path(),
-            &CaptureExclusions::default(),
+            &TreeExclusions::default(),
             FileCopyMode::Buffered,
         )
         .unwrap_err();
@@ -545,7 +546,7 @@ mod tests {
         std::fs::write(source.path().join("real/file"), b"contents").unwrap();
         std::os::unix::fs::symlink("real", source.path().join("alias")).unwrap();
 
-        let entries = list_tree(&open(source.path()), &CaptureExclusions::default()).unwrap();
+        let entries = list_tree(&open(source.path()), &TreeExclusions::default()).unwrap();
 
         let relatives = entries
             .iter()

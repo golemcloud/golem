@@ -2124,7 +2124,7 @@ mod tests {
         };
         let allocation_before = filesystem.observe_allocation().await.unwrap().unwrap();
 
-        let excluded = Arc::new(CaptureExclusions::new([
+        let excluded = Arc::new(TreeExclusions::new([
             PathBuf::from("static/asset.bin"),
             PathBuf::from("data/nested"),
         ]));
@@ -2228,7 +2228,7 @@ mod tests {
         std::fs::write(&agent_file, vec![0x11; FILE_BYTES]).unwrap();
         let capture = <SandboxFilesystem as SandboxFilesystemAdapter>::capture_tree(
             &filesystem,
-            Arc::new(CaptureExclusions::default()),
+            Arc::new(TreeExclusions::default()),
         )
         .await
         .unwrap();
