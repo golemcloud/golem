@@ -231,10 +231,11 @@ struct ProducerStreamIndex {
     open_session_streams: HashMap<StreamSessionKeyV1, HashSet<StreamId>>,
     invocation_results: HashMap<StreamSessionKeyV1, OplogIndex>,
     finished_sessions: HashSet<StreamSessionKeyV1>,
-    attachments: HashMap<(AttachmentId, StreamId), IndexedStreamAttachment>,
+    attachments: HashMap<(AttachmentId, StreamId, EnvironmentId, AgentId), IndexedStreamAttachment>,
+    active_attachments_by_session_stream: HashMap<(StreamSessionKeyV1, StreamId), u64>,
     active_attachment_count: u64,
-    attachment_pages: HashMap<u64, Vec<(AttachmentId, StreamId)>>,
-    attachment_positions: HashMap<(AttachmentId, StreamId), Option<u64>>,
+    attachment_pages: HashMap<u64, Vec<(AttachmentId, StreamId, EnvironmentId, AgentId)>>,
+    attachment_positions: HashMap<(AttachmentId, StreamId, EnvironmentId, AgentId), Option<u64>>,
     batch_positions: HashMap<(StreamId, OplogIndex), (u64, u64)>,
     complete_for_deletion: bool,
     cascade_outbox: HashMap<StreamAttachmentKeyV1, StreamCascadeDependentResultV1>,
@@ -1239,8 +1240,14 @@ impl ProducerStreamIndex {
             _ => return Ok(AttachmentApplyOutcome::Replayed),
         };
         self.validate_attachment_key(key, environment_id, producer, producer_fingerprint)?;
-        let slot = (key.attachment_id, key.stream_id);
+        let slot = attachment_slot(key);
         let existing = self.attachments.get(&slot);
+        let was_active = existing.is_some_and(|attachment| {
+            matches!(
+                attachment.state,
+                IndexedStreamAttachmentState::Active { .. }
+            )
+        });
 
         if self.deleting
             && matches!(
@@ -1274,6 +1281,15 @@ impl ProducerStreamIndex {
                         && matches!(existing.state, IndexedStreamAttachmentState::Active { .. })
                         && attachment_identity_matches_except_epoch(&existing.key, key)
                     {
+                        let count = self
+                            .active_attachments_by_session_stream
+                            .entry((key.session_key.clone(), key.stream_id))
+                            .or_default();
+                        *count = count.checked_sub(1).ok_or_else(|| {
+                            DurableStreamProducerError::CorruptHistory(
+                                "active attachment session count underflow".into(),
+                            )
+                        })?;
                         self.attachments.insert(
                             slot,
                             IndexedStreamAttachment {
@@ -1330,6 +1346,25 @@ impl ProducerStreamIndex {
             _ => unreachable!("non-attachment records returned before state application"),
         };
         if outcome == AttachmentApplyOutcome::Changed {
+            let is_active = matches!(state, IndexedStreamAttachmentState::Active { .. });
+            if was_active != is_active {
+                let count_key = (key.session_key.clone(), key.stream_id);
+                let count = self
+                    .active_attachments_by_session_stream
+                    .entry(count_key)
+                    .or_default();
+                if is_active {
+                    *count = count
+                        .checked_add(1)
+                        .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                } else {
+                    *count = count.checked_sub(1).ok_or_else(|| {
+                        DurableStreamProducerError::CorruptHistory(
+                            "active attachment session count underflow".into(),
+                        )
+                    })?;
+                }
+            }
             self.attachments.insert(
                 slot,
                 IndexedStreamAttachment {
@@ -1406,7 +1441,9 @@ impl ProducerStreamIndex {
                 }
             })
             .collect::<Vec<_>>();
-        views.sort_by_key(|view| (view.key.stream_id, view.key.attachment_id, view.key.epoch));
+        views.sort_by(|left, right| {
+            attachment_sort_key(&left.key).cmp(&attachment_sort_key(&right.key))
+        });
         views
     }
 
@@ -1422,7 +1459,8 @@ impl ProducerStreamIndex {
                 .then_some(attachment.key.clone())
             })
             .collect::<Vec<_>>();
-        dependents.sort_by_key(|key| (key.stream_id, key.attachment_id, key.epoch));
+        dependents
+            .sort_by(|left, right| attachment_sort_key(left).cmp(&attachment_sort_key(right)));
         dependents
     }
 
@@ -1432,6 +1470,29 @@ impl ProducerStreamIndex {
             .filter(|key| !self.cascade_outbox.contains_key(key))
             .collect()
     }
+}
+
+fn attachment_slot(
+    key: &StreamAttachmentKeyV1,
+) -> (AttachmentId, StreamId, EnvironmentId, AgentId) {
+    (
+        key.attachment_id,
+        key.stream_id,
+        key.consumer_environment_id,
+        key.consumer.clone(),
+    )
+}
+
+fn attachment_sort_key(
+    key: &StreamAttachmentKeyV1,
+) -> (StreamId, AttachmentId, EnvironmentId, &AgentId, u64) {
+    (
+        key.stream_id,
+        key.attachment_id,
+        key.consumer_environment_id,
+        &key.consumer,
+        key.epoch,
+    )
 }
 
 fn validate_attachment_epoch(
@@ -5861,32 +5922,30 @@ impl DurableStreamProducer {
         session: &StreamSessionKeyV1,
         handle: &DurableStreamHandleV1,
     ) -> Result<bool, DurableStreamProducerError> {
-        let attachment = AttachmentId::primary(
-            session.callee_environment_id,
-            &session.callee,
-            &session.idempotency_key,
-        )
-        .map_err(|error| DurableStreamProducerError::InvalidOffset(error.to_string()))?;
         let index = self
-            .index_for([ProducerMetadataKey::Attachment(
-                attachment,
-                handle.stream_id,
-            )])
+            .index_for([
+                ProducerMetadataKey::Stream(handle.stream_id),
+                ProducerMetadataKey::ActiveAttachmentCount(session.clone(), handle.stream_id),
+            ])
             .await?;
-        Ok(index
-            .attachments
-            .get(&(attachment, handle.stream_id))
-            .is_some_and(|attachment| {
-                attachment.key.session_key == *session
-                    && attachment.key.producer_environment_id == handle.producer_environment_id
-                    && attachment.key.producer == handle.producer
-                    && attachment.key.expected_producer_fingerprint
+        if !index
+            .registrations
+            .get(&handle.stream_id)
+            .is_some_and(|registration| {
+                registration.handle.producer_environment_id == handle.producer_environment_id
+                    && registration.handle.producer == handle.producer
+                    && registration.handle.expected_producer_fingerprint
                         == handle.expected_producer_fingerprint
-                    && matches!(
-                        attachment.state,
-                        IndexedStreamAttachmentState::Active { .. }
-                    )
-            }))
+            })
+        {
+            return Err(DurableStreamProducerError::InvalidHandle);
+        }
+        Ok(index
+            .active_attachments_by_session_stream
+            .get(&(session.clone(), handle.stream_id))
+            .copied()
+            .unwrap_or_default()
+            > 0)
     }
 
     pub(crate) async fn deletion_started(&self) -> bool {
@@ -5903,7 +5962,9 @@ impl DurableStreamProducer {
             .iter()
             .map(|(key, result)| (key.clone(), result.clone()))
             .collect::<Vec<_>>();
-        cascade_completed.sort_by_key(|(key, _)| (key.stream_id, key.attachment_id, key.epoch));
+        cascade_completed.sort_by(|(left, _), (right, _)| {
+            attachment_sort_key(left).cmp(&attachment_sort_key(right))
+        });
         Ok(StreamDeletionDiagnosticsV1 {
             deleting: index.deleting,
             attachments: index.attachment_views(),
@@ -6194,6 +6255,8 @@ impl DurableStreamProducer {
         self.index_for([ProducerMetadataKey::Attachment(
             key.attachment_id,
             key.stream_id,
+            key.consumer_environment_id,
+            key.consumer.clone(),
         )])
         .await?
         .attachment_views()
@@ -6662,6 +6725,8 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
             .index_for([ProducerMetadataKey::Attachment(
                 attachment.attachment_id,
                 attachment.stream_id,
+                attachment.consumer_environment_id,
+                attachment.consumer.clone(),
             )])
             .await?;
         index.validate_attachment_key(
@@ -6672,7 +6737,7 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
         )?;
         let indexed_attachment = index
             .attachments
-            .get(&(attachment.attachment_id, attachment.stream_id))
+            .get(&attachment_slot(attachment))
             .ok_or(DurableStreamProducerError::InvalidAttachmentState)?;
         validate_attachment_epoch(indexed_attachment, attachment)?;
         if indexed_attachment.key != *attachment {
@@ -8118,6 +8183,182 @@ pub(crate) mod tests {
             StreamAttachmentStateV1::Finalized(
                 StreamAttachmentFinalizationReasonV1::ConsumerFinalized
             )
+        );
+    }
+
+    #[test]
+    async fn attachment_slots_are_isolated_by_consumer_identity() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let first = attachment_key(&identity, handle.stream_id);
+        let mut second = first.clone();
+        second.consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
+        second.consumer = AgentId {
+            component_id: ComponentId(Uuid::from_u128(22)),
+            agent_id: "second-consumer".to_string(),
+        };
+        second.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
+        second.consumer_invocation.callee_environment_id = second.consumer_environment_id;
+        second.consumer_invocation.callee = second.consumer.clone();
+        second.consumer_invocation.callee_fingerprint = second.expected_consumer_fingerprint;
+
+        for key in [&first, &second] {
+            assert!(
+                !live
+                    .prepare_attachment(key.clone(), 100)
+                    .await
+                    .unwrap()
+                    .replayed
+            );
+            assert!(
+                live.prepare_attachment(key.clone(), 101)
+                    .await
+                    .unwrap()
+                    .replayed
+            );
+            assert!(
+                !live
+                    .activate_attachment(key.clone(), 110)
+                    .await
+                    .unwrap()
+                    .replayed
+            );
+            assert!(
+                live.activate_attachment(key.clone(), 111)
+                    .await
+                    .unwrap()
+                    .replayed
+            );
+        }
+
+        let mut invalid_identity = first.clone();
+        invalid_identity.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(99));
+        invalid_identity.consumer_invocation.callee_fingerprint =
+            invalid_identity.expected_consumer_fingerprint;
+        assert_eq!(
+            live.prepare_attachment(invalid_identity, 120).await,
+            Err(DurableStreamProducerError::InvalidAttachmentState)
+        );
+        let mut invalid_epoch = second.clone();
+        invalid_epoch.epoch = 2;
+        assert_eq!(
+            live.activate_attachment(invalid_epoch, 120).await,
+            Err(DurableStreamProducerError::InvalidEpoch {
+                current: 1,
+                actual: 2,
+            })
+        );
+
+        live.finalize_attachment(
+            first.clone(),
+            StreamAttachmentFinalizationReasonV1::ConsumerFinalized,
+            130,
+        )
+        .await
+        .unwrap();
+        assert!(
+            live.read_attached_segment(&second, &handle, 131, None, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        drop(live);
+
+        let restarted = producer(oplog, &identity, None).await;
+        let attachments = restarted.inspect_attachments().await;
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments[0].key, first);
+        assert_eq!(
+            attachments[0].state,
+            StreamAttachmentStateV1::Finalized(
+                StreamAttachmentFinalizationReasonV1::ConsumerFinalized
+            )
+        );
+        assert_eq!(attachments[1].key, second);
+        assert_eq!(attachments[1].state, StreamAttachmentStateV1::Active);
+        assert!(
+            restarted
+                .activate_attachment(second, 140)
+                .await
+                .unwrap()
+                .replayed
+        );
+    }
+
+    #[test]
+    async fn active_attachment_count_spans_distinct_consumer_slots() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog, &identity, None).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let mut first = attachment_key(&identity, handle.stream_id);
+        first.session_key = identity.invocation.clone();
+        first.attachment_id = AttachmentId::primary(
+            first.session_key.callee_environment_id,
+            &first.session_key.callee,
+            &first.session_key.idempotency_key,
+        )
+        .unwrap();
+        let mut second = first.clone();
+        second.consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
+        second.consumer = AgentId {
+            component_id: ComponentId(Uuid::from_u128(22)),
+            agent_id: "second-consumer".to_string(),
+        };
+        second.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
+        second.consumer_invocation.callee_environment_id = second.consumer_environment_id;
+        second.consumer_invocation.callee = second.consumer.clone();
+        second.consumer_invocation.callee_fingerprint = second.expected_consumer_fingerprint;
+
+        live.prepare_attachment(first.clone(), 100).await.unwrap();
+        assert!(
+            !live
+                .has_active_attachment(&first.session_key, &handle)
+                .await
+                .unwrap()
+        );
+        live.activate_attachment(first.clone(), 110).await.unwrap();
+        live.prepare_attachment(second.clone(), 100).await.unwrap();
+        live.activate_attachment(second.clone(), 110).await.unwrap();
+        assert!(
+            live.has_active_attachment(&first.session_key, &handle)
+                .await
+                .unwrap()
+        );
+        live.finalize_attachment(
+            first.clone(),
+            StreamAttachmentFinalizationReasonV1::ConsumerFinalized,
+            120,
+        )
+        .await
+        .unwrap();
+        assert!(
+            live.has_active_attachment(&first.session_key, &handle)
+                .await
+                .unwrap()
+        );
+        live.finalize_attachment(
+            second,
+            StreamAttachmentFinalizationReasonV1::ConsumerFinalized,
+            120,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !live
+                .has_active_attachment(&first.session_key, &handle)
+                .await
+                .unwrap()
         );
     }
 

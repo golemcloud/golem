@@ -27,6 +27,7 @@
 pub mod mbt_writer;
 #[allow(clippy::module_inception)]
 pub mod moonbit;
+mod streams;
 pub mod tool;
 pub mod type_name;
 
@@ -219,6 +220,15 @@ impl MoonBitBridgeGenerator {
     ) -> anyhow::Result<Self> {
         validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type.source_language.eq_ignore_ascii_case("moonbit");
+        if mode == MoonBitBridgeMode::GuestWasmRpc
+            && user_supplied_fields(&agent_type.constructor.input_schema)
+                .iter()
+                .any(|field| contains_stream_in_graph(&agent_type.schema, &field.schema))
+        {
+            bail!(
+                "MoonBit guest agent constructors cannot contain streams; client construction is synchronous"
+            );
+        }
 
         let mut reserved_names = RESERVED_TYPE_NAMES
             .iter()
@@ -427,6 +437,7 @@ impl MoonBitBridgeGenerator {
                         "\"golemcloud/golem_sdk/interface/wasi/clocks/system-clock\" @systemClock",
                     ),
                     ("@rpc.", "\"golemcloud/golem_sdk/rpc\""),
+                    ("@schema.", "\"golemcloud/golem_sdk/schema\""),
                     ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
                     ("@schema.", "\"golemcloud/golem_sdk/schema\""),
                     ("@quota.", "\"golemcloud/golem_sdk/quota\""),
@@ -474,6 +485,9 @@ impl MoonBitBridgeGenerator {
         }
         self.write_codecs(&mut writer)?;
         self.write_multimodals(&mut writer)?;
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+            self.write_guest_stream_support(&mut writer)?;
+        }
         match self.mode {
             MoonBitBridgeMode::ExternalRest => self.write_agent_struct(&mut writer)?,
             MoonBitBridgeMode::GuestWasmRpc => self.write_guest_agent_client(&mut writer)?,
@@ -516,8 +530,7 @@ impl MoonBitBridgeGenerator {
         name: &str,
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
-        let derives = if (self.mode == MoonBitBridgeMode::ExternalRest
-            && contains_stream_in_graph(&self.agent_type.schema, resolved))
+        let derives = if contains_stream_in_graph(&self.agent_type.schema, resolved)
             || (self.mode == MoonBitBridgeMode::GuestWasmRpc
                 && golem_common::schema::find_host_managed_type(&self.agent_type.schema, resolved)?
                     .is_some())
@@ -841,7 +854,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
         if self.mode == MoonBitBridgeMode::GuestWasmRpc {
-            writer.line("#warnings(\"-unused_error_type\")");
+            writer.line("#warnings(\"-unused_error_type-unused_errdefer\")");
         }
         let context = if self.mode == MoonBitBridgeMode::ExternalRest
             && contains_stream_in_graph(self.type_naming.graph(), resolved)
@@ -859,6 +872,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             "pub fn encode_{name}({context}value : {name}) -> @runtime.SchemaValue{raise_clause} {{"
         ));
         writer.indent();
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc
+            && contains_stream_in_graph(&self.agent_type.schema, resolved)
+        {
+            writer.line(format!("errdefer release_{name}(value)"));
+        }
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let field_names = self.record_field_idents(fields);
@@ -959,6 +977,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             "pub fn decode_{name}(value : @runtime.SchemaValue) -> {name} raise {{"
         ));
         writer.indent();
+        if self.mode == MoonBitBridgeMode::GuestWasmRpc
+            && contains_stream_in_graph(&self.agent_type.schema, resolved)
+        {
+            writer.line("errdefer value.release_resources(@model_host.resource_drops())");
+        }
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let n = fields.len();
@@ -1429,6 +1452,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let fields = user_supplied_fields(input);
         let names = self.input_param_idents(&fields);
         let mut values = Vec::new();
+        let uses_streams = fields
+            .iter()
+            .any(|f| contains_stream_in_graph(&self.agent_type.schema, &f.schema));
+        if uses_streams {
+            writer.line("errdefer {");
+            writer.indent();
+            for (field, name) in fields.iter().zip(&names) {
+                writer.line(self.release_expr(name, &field.schema, 0)?);
+            }
+            writer.dedent();
+            writer.line("}");
+        }
         if let Some(mm) = self.multimodal_input(input)? {
             writer.line(format!(
                 "let f0 = encode_{}({}) catch {{",
@@ -1463,8 +1498,13 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 values.push(format!("f{idx}"));
             }
         }
+        let encoder = if uses_streams {
+            "encode_invocation_input_async"
+        } else {
+            "encode_invocation_input"
+        };
         writer.line(format!(
-            "let {local_name} = @agents.encode_invocation_input([{}])",
+            "let {local_name} = @agents.{encoder}([{}])",
             values.join(", ")
         ));
         Ok(())
@@ -1529,6 +1569,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 ));
                 writer.dedent();
                 writer.line("}");
+                if method.uses_streams(&self.agent_type.schema) {
+                    writer.line("errdefer value.release_resources(@model_host.resource_drops())");
+                }
                 if ephemeral {
                     writer.line(format!("let decoded = {decode} catch {{"));
                 } else {
@@ -1558,6 +1601,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.line("}");
         writer.blank();
 
+        if method.uses_streams(&self.agent_type.schema) {
+            return Ok(());
+        }
         let trigger_ret_ty = if ephemeral {
             "@rpc.InvocationMetadata"
         } else {
@@ -2652,6 +2698,12 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     "@runtime.register_input_stream(stream_context, {val}, ({e}) => {encoded}, {element_codec}, wire_kind={wire_kind:?})"
                 )
             }
+            SchemaType::Stream { inner, .. } => {
+                inner
+                    .as_deref()
+                    .context("MoonBit guest streams require an element schema")?;
+                format!("{val}.to_schema_value()")
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no MoonBit bridge encoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
@@ -2669,8 +2721,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::Future { .. } => {
                 bail!(
                     "Cannot encode unsupported schema variant in the MoonBit bridge: {resolved:?}"
                 )
@@ -2833,6 +2884,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     "@runtime.open_output_stream({val}, ({e}) => {decoded}, {element_codec}, wire_kind={wire_kind:?})"
                 )
             }
+            SchemaType::Stream { inner, .. } => {
+                let inner = inner
+                    .as_deref()
+                    .context("MoonBit guest streams require an element schema")?;
+                let decoded = self.decode_expr(&e, inner, next)?;
+                format!(
+                    "@schema.AgentStream::from_value_with_codec({val}, ({e}) => {{ {decoded} catch {{ error => raise @schema.FromSchemaError::custom(repr(error)) }} }})"
+                )
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no MoonBit bridge decoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
@@ -2854,8 +2914,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => {
+            | SchemaType::Future { .. } => {
                 bail!(
                     "Cannot decode unsupported schema variant in the MoonBit bridge: {resolved:?}"
                 )
@@ -3029,6 +3088,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     self.type_reference(inner)?
                 ))
             }
+            SchemaType::Stream { inner, .. } => {
+                let inner = inner
+                    .as_deref()
+                    .context("MoonBit guest streams require an element schema")?;
+                Ok(format!(
+                    "@schema.AgentStream[{}]",
+                    self.type_reference(inner)?
+                ))
+            }
             SchemaType::Text { .. } | SchemaType::Binary { .. } => bail!(
                 "Bare text/binary rich scalars have no MoonBit bridge type; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
@@ -3046,8 +3114,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
             | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => bail!(
+            | SchemaType::Future { .. } => bail!(
                 "Cannot emit MoonBit type reference for unsupported schema variant: {resolved:?}"
             ),
         }

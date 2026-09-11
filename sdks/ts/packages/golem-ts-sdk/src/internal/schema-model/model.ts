@@ -456,6 +456,7 @@ export interface SchemaMapEntry {
 interface SchemaValueStreamHandle {
   peek(): GuestSchemaValueStream | undefined;
   take(): GuestSchemaValueStream | undefined;
+  close(): Promise<void>;
 }
 
 export type SchemaResult = { tag: 'ok'; value?: SchemaValue } | { tag: 'err'; value?: SchemaValue };
