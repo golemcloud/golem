@@ -15,6 +15,7 @@
 use crate::command::plugin::PluginSubcommand;
 use crate::command::shared_args::AccountScopeOptionalArgs;
 use crate::command_handler::Handlers;
+use crate::command_handler::account::AccountScope;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, LogIndent, log_action};
@@ -143,16 +144,25 @@ impl PluginCommandHandler {
                 .await
                 .map_service_error()?
         } else {
-            let account_id = self
+            let name = name.unwrap();
+            let version = version.unwrap();
+            match self
                 .ctx
                 .account_handler()
-                .select_account_id_or_err(account)
-                .await?;
-            client
-                .plugin
-                .get_account_plugin(&account_id.0, &name.unwrap(), &version.unwrap())
-                .await
-                .map_service_error()?
+                .select_account_scope_or_err(account)
+                .await?
+            {
+                AccountScope::Email(email) => client
+                    .plugin
+                    .get_account_plugin_by_email(&email, &name, &version)
+                    .await
+                    .map_service_error()?,
+                AccountScope::Id(account_id) => client
+                    .plugin
+                    .get_account_plugin(&account_id.0, &name, &version)
+                    .await
+                    .map_service_error()?,
+            }
         };
 
         self.ctx
@@ -238,18 +248,26 @@ impl PluginCommandHandler {
         let id = if let Some(id) = id {
             id
         } else {
-            let account_id = self
+            let name = name.unwrap();
+            let version = version.unwrap();
+            let plugin = match self
                 .ctx
                 .account_handler()
-                .select_account_id_or_err(account)
-                .await?;
-            clients
-                .plugin
-                .get_account_plugin(&account_id.0, &name.unwrap(), &version.unwrap())
-                .await
-                .map_service_error()?
-                .id
-                .0
+                .select_account_scope_or_err(account)
+                .await?
+            {
+                AccountScope::Email(email) => clients
+                    .plugin
+                    .get_account_plugin_by_email(&email, &name, &version)
+                    .await
+                    .map_service_error()?,
+                AccountScope::Id(account_id) => clients
+                    .plugin
+                    .get_account_plugin(&account_id.0, &name, &version)
+                    .await
+                    .map_service_error()?,
+            };
+            plugin.id.0
         };
 
         let result = clients

@@ -602,6 +602,24 @@ impl AccountCommandHandler {
         }
     }
 
+    /// Resolves the account scope *without* turning an email into an id up front.
+    ///
+    /// Commands backed by a resource endpoint that also accepts the owner email (e.g. the
+    /// by-email plugin lookup) should use this and dispatch on the result, so that
+    /// `--account <email>` does not require `AccountVerb::View` the way resolving through
+    /// `get_account_by_email` would — keeping it on par with `--account-id`.
+    pub async fn select_account_scope_or_err(
+        &self,
+        account: AccountScopeOptionalArgs,
+    ) -> anyhow::Result<AccountScope> {
+        match (account.account, account.account_id) {
+            (Some(email), None) => Ok(AccountScope::Email(email)),
+            (None, Some(account_id)) => Ok(AccountScope::Id(account_id)),
+            (None, None) => Ok(AccountScope::Id(self.account_id_or_err().await?)),
+            (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
+        }
+    }
+
     pub async fn select_account_or_err(
         &self,
         account: AccountScopeOptionalArgs,
@@ -626,6 +644,13 @@ impl AccountCommandHandler {
             (Some(_), Some(_)) => unreachable!("clap rejects conflicting account scope flags"),
         }
     }
+}
+
+/// An account scope that has not been collapsed to an id, so callers can pick a by-email or
+/// by-id resource endpoint. See [`AccountHandler::select_account_scope_or_err`].
+pub enum AccountScope {
+    Email(String),
+    Id(AccountId),
 }
 
 fn permission_share_data(grants: PermissionShareGrantArgs) -> PermissionShareData {
