@@ -108,8 +108,12 @@ function declarations(input, output) {
 
 export default defineConfig([
   javascript('src/index.ts', 'dist/index.mjs'),
+  javascript('src/schema/public.ts', 'dist/schema.mjs'),
+  javascript('src/reflection.ts', 'dist/reflection.mjs'),
   javascript('src/middleware.ts', 'dist/middleware.mjs', { hostNeutral: true }),
   javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs', { hostNeutral: true }),
   declarations('src/index.ts', 'dist/index.d.mts'),
+  declarations('src/schema/public.ts', 'dist/schema.d.mts'),
+  declarations('src/reflection.ts', 'dist/reflection.d.mts'),
   declarations('src/middleware.ts', 'dist/middleware.d.mts'),
 ]);

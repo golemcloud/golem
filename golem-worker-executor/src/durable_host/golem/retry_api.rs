@@ -143,7 +143,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::set_retry_policy(named_policy.clone()))
+                .add_and_commit_oplog(OplogEntry::set_retry_policy(
+                    self.entity_parent_start_index(),
+                    named_policy.clone(),
+                ))
                 .await;
         }
 
@@ -169,7 +172,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::remove_retry_policy(name.clone()))
+                .add_and_commit_oplog(OplogEntry::remove_retry_policy(
+                    self.entity_parent_start_index(),
+                    name.clone(),
+                ))
                 .await;
         }
 

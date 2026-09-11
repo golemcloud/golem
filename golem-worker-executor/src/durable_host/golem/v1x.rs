@@ -123,7 +123,7 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
     }
 }
 
-async fn resolve_agent_owner<Ctx: WorkerCtx>(
+pub(super) async fn resolve_agent_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     component_id: &ComponentId,
     agent: Option<&str>,
@@ -155,7 +155,7 @@ async fn resolve_agent_owner<Ctx: WorkerCtx>(
     Ok((owner, environment_id))
 }
 
-async fn agent_operation_denied<Ctx: WorkerCtx>(
+pub(super) async fn agent_operation_denied<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     agent_id: &AgentId,
     verb: AgentVerb,
@@ -278,6 +278,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         .worker_service
         .get_agent_mode(&entry.owned_agent_id)
         .await
+        .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
@@ -315,6 +316,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .worker_service
         .get_agent_mode(&entry.owned_agent_id)
         .await
+        .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
@@ -475,7 +477,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .public_state
                 .promise_service
                 .create(&self.owned_agent_id.agent_id, oplog_idx)
-                .await;
+                .await?;
             handle
                 .complete(self, HostResponseGolemApiPromiseId { promise_id })
                 .await?
@@ -619,7 +621,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
             // discard writes and return `NONE` from `add`; fall back to the session's replay
             // target there so the guest never observes an invalid index.
-            let marker = match self.state.oplog.add(OplogEntry::no_op()).await {
+            let marker = match self
+                .state
+                .oplog
+                .add(OplogEntry::no_op(self.entity_parent_start_index()))
+                .await
+            {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
             };
@@ -651,7 +658,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             });
             oplog_index
         } else {
-            let marker = match self.state.oplog.add(OplogEntry::no_op()).await {
+            let marker = match self
+                .state
+                .oplog
+                .add(OplogEntry::no_op(self.entity_parent_start_index()))
+                .await
+            {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
             };
@@ -718,7 +730,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // Write an oplog entry with the new jump and then restart the worker
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::jump(jump))
+                .add_and_commit_oplog(OplogEntry::jump(self.entity_parent_start_index(), jump))
                 .await;
 
             debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
@@ -773,7 +785,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let begin_index = match self
                 .state
                 .oplog
-                .add(OplogEntry::begin_atomic_region())
+                .add(OplogEntry::begin_atomic_region(
+                    self.entity_parent_start_index(),
+                ))
                 .await
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
@@ -838,7 +852,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
                     self.public_state
                         .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                        .add_and_commit_oplog(OplogEntry::jump(
+                            self.entity_parent_start_index(),
+                            deleted_region,
+                        ))
                         .await;
 
                     // TODO: this recomputation should not be necessary.
@@ -859,7 +876,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let begin_index = match self
                 .state
                 .oplog
-                .add(OplogEntry::begin_atomic_region())
+                .add(OplogEntry::begin_atomic_region(
+                    self.entity_parent_start_index(),
+                ))
                 .await
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
@@ -921,7 +940,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // append leaves the region uncommitted and replay retries it as a whole.
             self.state
                 .oplog
-                .add(OplogEntry::end_atomic_region(begin_index))
+                .add(OplogEntry::end_atomic_region(
+                    self.entity_parent_start_index(),
+                    begin_index,
+                ))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
@@ -1153,7 +1175,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
                 let owned_agent_id =
                     OwnedAgentId::new(ctx.owned_agent_id.environment_id, &agent_id);
-                let result = ctx.state.worker_service.get(&owned_agent_id).await;
+                let result = ctx.state.worker_service.get(&owned_agent_id).await?;
                 let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
                     let mut metadata = result.initial_worker_metadata;
                     if let Some(last_known_status) = &result.last_known_status {
@@ -1509,7 +1531,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = loop {
                 let owned_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
                 let result = Ok(
-                    if self.state.worker_service.get(&owned_id).await.is_some() {
+                    if self.state.worker_service.get(&owned_id).await?.is_some() {
                         Some(agent_id.clone())
                     } else {
                         None
@@ -1761,8 +1783,13 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             let result = get_oplog_chunk(self, &entry).await;
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    let entries = chunk
+                        .entries
+                        .into_iter()
+                        .map(|entry| entry.entry)
+                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&chunk.entries)
+                        result: serde_json::to_vec(&entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
@@ -1901,7 +1928,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
         let promise_handle = match entry.get_handle().await {
             Ok(handle) => handle,
             Err(err) => {
-                return Err(handle.trap(WorkerExecutorError::runtime(err.clone())));
+                return Err(handle.trap(err.clone()));
             }
         };
         let (wait_context, interrupt) = accessor.with(|mut access| {
@@ -2119,8 +2146,13 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             let result = get_search_oplog_chunk(self, &entry).await;
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    let entries = chunk
+                        .entries
+                        .into_iter()
+                        .map(|entry| (entry.oplog_index, entry.entry))
+                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&chunk.entries)
+                        result: serde_json::to_vec(&entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
@@ -2361,6 +2393,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                     .worker_service
                     .get_agent_mode(&owned_agent_id)
                     .await
+                    .map_err(|err| err.to_string())?
                     .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
 
                 let mut result = Vec::with_capacity(entries.len());
@@ -2639,7 +2672,7 @@ impl GetAgentsEntry {
 pub struct GetPromiseResultEntry {
     promise_id: PromiseId,
     promise_service: Arc<dyn PromiseService>,
-    handle: Arc<OnceCell<Result<PromiseHandle, String>>>,
+    handle: Arc<OnceCell<PromiseHandle>>,
 }
 
 impl GetPromiseResultEntry {
@@ -2651,26 +2684,20 @@ impl GetPromiseResultEntry {
         }
     }
 
-    pub async fn get_handle(&self) -> Result<&PromiseHandle, &String> {
+    /// Resolves the backing promise handle, memoizing only success.
+    ///
+    /// A failed `poll` is deliberately not cached. Polling reads the key-value storage, so a
+    /// transient storage failure would otherwise poison this pollable for the rest of the
+    /// resource's lifetime; every call retries until a handle is resolved.
+    pub async fn get_handle(&self) -> Result<&PromiseHandle, WorkerExecutorError> {
         self.handle
-            .get_or_init(|| async {
-                self.promise_service
-                    .poll(self.promise_id.clone())
-                    .await
-                    .map_err(|err| {
-                        format!(
-                            "Failed constructing backing promise handle for {}: {err}",
-                            self.promise_id
-                        )
-                    })
-            })
+            .get_or_try_init(|| self.promise_service.poll(self.promise_id.clone()))
             .await
-            .as_ref()
     }
 
     /// Returns true if the underlying promise handle is ready, OR if constructing the
-    /// handle failed (so that the pollable resolves immediately and the cached error
-    /// is surfaced on the next `get` call).
+    /// handle failed (so that the pollable resolves immediately and the error is
+    /// surfaced on the next `get` call, which retries the poll).
     pub async fn is_ready(&self) -> bool {
         match self.get_handle().await {
             Ok(handle) => handle.is_ready().await,
@@ -2682,10 +2709,163 @@ impl GetPromiseResultEntry {
 #[async_trait]
 impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
     async fn ready(&mut self) {
-        // A cached error is treated as immediately ready so that the pollable
+        // A failed poll is treated as immediately ready so that the pollable
         // resolves and the subsequent `get` surfaces the error to the agent.
         if let Ok(handle) = self.get_handle().await {
             handle.await_ready().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GetPromiseResultEntry;
+    use crate::services::promise::{
+        DefaultPromiseService, PromiseHandle, PromiseService, PromiseWorkerAccess,
+    };
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use async_trait::async_trait;
+    use golem_common::base_model::component::ComponentId;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{AgentId, PromiseId};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use test_r::test;
+    use uuid::Uuid;
+
+    test_r::enable!();
+
+    struct NoopPromiseWorkerAccess;
+
+    #[async_trait]
+    impl PromiseWorkerAccess for NoopPromiseWorkerAccess {
+        async fn activate_worker_if_needed(
+            &self,
+            _promise_id: &PromiseId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+    }
+
+    /// Fails the first `remaining_failures` polls the way a key-value storage outage would, then
+    /// delegates to a working promise service.
+    struct FlakyPromiseService {
+        inner: DefaultPromiseService,
+        remaining_failures: AtomicU32,
+        polls: AtomicU32,
+    }
+
+    impl FlakyPromiseService {
+        fn new(failures: u32) -> Self {
+            Self {
+                inner: DefaultPromiseService::new(
+                    Arc::new(InMemoryKeyValueStorage::new()),
+                    Arc::new(NoopPromiseWorkerAccess),
+                ),
+                remaining_failures: AtomicU32::new(failures),
+                polls: AtomicU32::new(0),
+            }
+        }
+
+        fn polls(&self) -> u32 {
+            self.polls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl PromiseService for FlakyPromiseService {
+        async fn create(
+            &self,
+            agent_id: &AgentId,
+            oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
+            self.inner.create(agent_id, oplog_idx).await
+        }
+
+        async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
+            if self
+                .remaining_failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(WorkerExecutorError::runtime(
+                    "key-value storage unavailable",
+                ));
+            }
+            self.inner.poll(promise_id).await
+        }
+
+        async fn complete(
+            &self,
+            promise_id: PromiseId,
+            data: Vec<u8>,
+        ) -> Result<bool, WorkerExecutorError> {
+            self.inner.complete(promise_id, data).await
+        }
+
+        async fn cleanup(&self) {
+            self.inner.cleanup().await
+        }
+    }
+
+    fn agent_id() -> AgentId {
+        AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "promise-pollable-test".to_string(),
+        }
+    }
+
+    #[test]
+    async fn transient_poll_failure_is_not_memoized() {
+        let promise_service = Arc::new(FlakyPromiseService::new(1));
+        let promise_id = promise_service
+            .create(&agent_id(), OplogIndex::from_u64(1))
+            .await
+            .unwrap();
+        let entry = GetPromiseResultEntry::new(
+            promise_id.clone(),
+            promise_service.clone() as Arc<dyn PromiseService>,
+        );
+
+        assert!(entry.get_handle().await.is_err());
+        // The failure must not be cached: the next call retries and resolves the handle.
+        assert!(entry.get_handle().await.is_ok());
+        assert_eq!(promise_service.polls(), 2);
+
+        // And once resolved, the handle is memoized rather than re-polled.
+        assert!(entry.get_handle().await.is_ok());
+        assert_eq!(promise_service.polls(), 2);
+    }
+
+    #[test]
+    async fn resolved_handle_observes_completion() {
+        let promise_service = Arc::new(FlakyPromiseService::new(1));
+        let promise_id = promise_service
+            .create(&agent_id(), OplogIndex::from_u64(1))
+            .await
+            .unwrap();
+        let entry = GetPromiseResultEntry::new(
+            promise_id.clone(),
+            promise_service.clone() as Arc<dyn PromiseService>,
+        );
+
+        assert!(entry.get_handle().await.is_err());
+        assert!(!entry.is_ready().await);
+
+        assert!(
+            promise_service
+                .complete(promise_id, vec![42])
+                .await
+                .unwrap()
+        );
+        assert!(entry.is_ready().await);
+        assert_eq!(
+            entry.get_handle().await.unwrap().get().await,
+            Some(vec![42])
+        );
     }
 }

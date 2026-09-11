@@ -542,7 +542,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
                         None
                     } else {
-                        Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+                        Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
                     };
                 let component_revision = existing_metadata.as_ref().map(|metadata| {
                     let status = &metadata.last_known_status;
@@ -1984,6 +1984,7 @@ pub(crate) fn build_durable_streaming_request(
                 registrations.push((
                     transport_stream_id,
                     ProducerRegistrationRequestV1 {
+                        entity_parent_start_index: None,
                         coordinate: StreamRegistrationCoordinateV1::Root {
                             invocation_id: session_key.clone(),
                             root_kind: StreamRootKindV1::MethodInput,
@@ -2064,6 +2065,21 @@ pub(crate) fn build_durable_streaming_request(
     execution.attempt_id = None;
     execution.expected_callee_fingerprint = None;
     execution.durable_input_mappings.clear();
+    // The first accepted invocation retains its tracing context; a new attempt's spans do
+    // not change its logical identity. Environment values do, but protobuf HashMap encoding
+    // is not canonical, so encode them separately in key order.
+    let mut environment = execution.context.as_mut().map(|context| {
+        context.tracing = None;
+        std::mem::take(&mut context.env)
+            .into_iter()
+            .collect::<Vec<_>>()
+    });
+    if let Some(environment) = environment.as_mut() {
+        environment.sort();
+    }
+    let execution_config =
+        golem_common::serialization::serialize(&(execution.encode_to_vec(), environment))
+            .map_err(WorkerExecutorError::runtime)?;
     let effective_identity = effective_session_identity(&request.auth_ctx, &request.principal)?;
     let attempt = StartAttemptDescriptorV1 {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -2078,7 +2094,7 @@ pub(crate) fn build_durable_streaming_request(
             method_name,
             invocation_value: canonical_input.encode_to_vec(),
             stream_handles: Vec::new(),
-            execution_config: execution.encode_to_vec(),
+            execution_config,
             effective_identity: effective_identity.clone(),
         },
         effective_identity,
@@ -3212,6 +3228,65 @@ mod freshness_tests {
                 element_schema_fingerprint,
             },
             role: SessionStreamRoleV1::Input,
+        }
+    }
+
+    #[test]
+    fn durable_request_identity_ignores_tracing_but_preserves_execution_config() {
+        let (mut request, metadata, invocation) = builder_fixture();
+        request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+            parent: request.agent_id.clone(),
+            env: (0..16)
+                .map(|n| (format!("key-{n}"), format!("value-{n}")))
+                .collect(),
+            tracing: Some(InvocationContextStack::fresh().into()),
+        });
+        let descriptor = |request: &InvocationStart| {
+            let (accepted, _) = tokio::sync::oneshot::channel();
+            build_durable_streaming_request(
+                request,
+                &metadata,
+                ComponentRevision::INITIAL,
+                AgentFingerprint(uuid::Uuid::from_u128(3)),
+                invocation.clone(),
+                1,
+                accepted,
+                8,
+            )
+            .unwrap()
+            .attempt
+            .invocation
+        };
+        let original = descriptor(&request);
+        for _ in 0..16 {
+            let mut retry = request.clone();
+            let context = retry.context.as_mut().unwrap();
+            context.tracing = Some(InvocationContextStack::fresh().into());
+            context.env = (0..16)
+                .rev()
+                .map(|n| (format!("key-{n}"), format!("value-{n}")))
+                .collect();
+            assert_eq!(descriptor(&retry), original);
+        }
+        assert!(request.context.as_ref().unwrap().tracing.is_some());
+        for change in 0..5 {
+            let mut changed = request.clone();
+            match change {
+                0 => changed.context.as_mut().unwrap().parent = None,
+                1 => {
+                    changed
+                        .context
+                        .as_mut()
+                        .unwrap()
+                        .env
+                        .insert("key-3".into(), "different".into());
+                }
+                2 => changed.mode = 1,
+                3 => changed.config.push(Default::default()),
+                4 => changed.scope_card = Some(Default::default()),
+                _ => unreachable!(),
+            }
+            assert_ne!(descriptor(&changed), original, "execution field {change}");
         }
     }
 

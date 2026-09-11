@@ -65,10 +65,14 @@ pub(all) struct AgentStream[T] {
   // private fields
 }
 pub fn[T] AgentStream::drop(Self[T]) -> Unit
-pub fn[T] AgentStream::new() -> (AgentStreamWriter[T], Self[T])
-pub fn[T] AgentStream::produce(async (AgentStreamWriter[T]) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
-pub async fn[T : FromSchema] AgentStream::read(Self[T]) -> T?
-pub impl[T] FromSchema for AgentStream[T]
+pub fn[T] AgentStream::from_value_with_codec(@schema_model.SchemaValue, (@schema_model.SchemaValue) -> T raise FromSchemaError) -> Self[T] raise FromSchemaError
+pub fn[T : IntoSchema + FromSchema] AgentStream::new() -> (AgentStreamWriter[T], Self[T])
+pub fn[T] AgentStream::new_with_codec((T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit) -> (AgentStreamWriter[T], Self[T])
+pub fn[T : IntoSchema + FromSchema] AgentStream::produce(async (AgentStreamWriter[T]) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
+pub fn[T] AgentStream::produce_with_codec(async (AgentStreamWriter[T]) -> Unit, (T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
+pub async fn[T] AgentStream::read(Self[T]) -> T?
+pub fn[T] AgentStream::to_schema_value(Self[T]) -> @schema_model.SchemaValue
+pub impl[T : FromSchema] FromSchema for AgentStream[T]
 pub impl[T : IntoSchema] IntoSchema for AgentStream[T]
 
 pub(all) enum AgentStreamWriteOutcome {
@@ -80,8 +84,8 @@ pub struct AgentStreamWriter[T] {
   // private fields
 }
 pub async fn[T] AgentStreamWriter::close(Self[T]) -> Unit
-pub async fn[T : IntoSchema] AgentStreamWriter::write_all(Self[T], Array[T]) -> AgentStreamWriteOutcome
-pub async fn[T : IntoSchema] AgentStreamWriter::write_one(Self[T], T) -> AgentStreamWriteOutcome
+pub async fn[T] AgentStreamWriter::write_all(Self[T], Array[T]) -> AgentStreamWriteOutcome
+pub async fn[T] AgentStreamWriter::write_one(Self[T], T) -> AgentStreamWriteOutcome
 
 pub(all) struct Duration {
   nanoseconds : Int64

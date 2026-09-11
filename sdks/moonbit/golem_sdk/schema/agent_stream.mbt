@@ -8,6 +8,7 @@
 #warnings("-unused_type_variable")
 pub(all) struct AgentStream[T] {
   priv handle : @model.GuestSchemaValueStreamHandle
+  priv decode : (@model.SchemaValue) -> T raise FromSchemaError
 }
 
 ///|
@@ -15,6 +16,8 @@ pub(all) struct AgentStream[T] {
 #warnings("-unused_type_variable")
 pub struct AgentStreamWriter[T] {
   priv sink : @async-core.Sink[@types.SchemaValueTree]
+  priv encode : (T) -> @model.SchemaValue raise
+  priv release : (T) -> Unit
 }
 
 ///|
@@ -43,18 +46,37 @@ pub suberror AgentStreamReadError {
 ///|
 fn[T] AgentStream::from_reader(
   reader : @async-core.Stream[@types.SchemaValueTree],
+  decode : (@model.SchemaValue) -> T raise FromSchemaError,
 ) -> AgentStream[T] {
-  { handle: @model.GuestSchemaValueStreamHandle::from_native(reader), }
+  { handle: @model.GuestSchemaValueStreamHandle::from_native(reader), decode, }
 }
 
 ///|
 /// Creates an explicit writer and readable stream endpoint. The writer owns
 /// every value passed to it, including values rejected after the reader drops.
-pub fn[T] AgentStream::new() -> (AgentStreamWriter[T], AgentStream[T]) {
+pub fn[T : IntoSchema + FromSchema] AgentStream::new() -> (
+  AgentStreamWriter[T],
+  AgentStream[T],
+) {
+  AgentStream::new_with_codec(value => to_value_as(value), from_value_as, value => {
+    to_value_as(value).release_resources(@model_host.resource_drops())
+  })
+}
+
+///|
+/// Creates native endpoints with codecs for a specific schema occurrence.
+/// `release` must be infallible and release every owned capability in a typed
+/// item without invoking its encoder. Encoding retains shared affine holders
+/// until wire lowering transfers them.
+pub fn[T] AgentStream::new_with_codec(
+  encode : (T) -> @model.SchemaValue raise,
+  decode : (@model.SchemaValue) -> T raise FromSchemaError,
+  release : (T) -> Unit,
+) -> (AgentStreamWriter[T], AgentStream[T]) {
   let (reader, sink) = @async-core.Stream::new_with_cleanup(
     @model.drop_wit_capabilities,
   )
-  ({ sink, }, AgentStream::from_reader(reader))
+  ({ sink, encode, release, }, AgentStream::from_reader(reader, decode))
 }
 
 ///|
@@ -63,29 +85,51 @@ pub fn[T] AgentStream::new() -> (AgentStreamWriter[T], AgentStream[T]) {
 /// terminal behavior and are not converted to clean EOF. When the producer
 /// captures explicitly owned capabilities, `on_unstarted_drop` must release
 /// them if the readable endpoint is dropped before the producer first runs.
-pub fn[T] AgentStream::produce(
+pub fn[T : IntoSchema + FromSchema] AgentStream::produce(
   producer : async (AgentStreamWriter[T]) -> Unit,
+  on_unstarted_drop? : () -> Unit,
+) -> AgentStream[T] {
+  AgentStream::produce_with_codec(
+    producer,
+    value => to_value_as(value),
+    from_value_as,
+    value => to_value_as(value).release_resources(@model_host.resource_drops()),
+    on_unstarted_drop?,
+  )
+}
+
+///|
+/// Creates a lazy native producer with occurrence-specific codecs. The release
+/// callback has the same ownership contract as `new_with_codec`.
+pub fn[T] AgentStream::produce_with_codec(
+  producer : async (AgentStreamWriter[T]) -> Unit,
+  encode : (T) -> @model.SchemaValue raise,
+  decode : (@model.SchemaValue) -> T raise FromSchemaError,
+  release : (T) -> Unit,
   on_unstarted_drop? : () -> Unit,
 ) -> AgentStream[T] {
   let reader = @async-core.Stream::produce(
     async fn(sink) {
-      let writer : AgentStreamWriter[T] = { sink, }
+      let writer : AgentStreamWriter[T] = { sink, encode, release, }
       producer(writer)
       writer.close()
     },
     cleanup=@model.drop_wit_capabilities,
     on_unstarted_drop?,
   )
-  AgentStream::from_reader(reader)
+  AgentStream::from_reader(reader, decode)
 }
 
 ///|
-async fn[T : IntoSchema] encode_stream_items(
+async fn[T] encode_stream_items(
   items : Array[T],
+  encode : (T) -> @model.SchemaValue raise,
+  release : (T) -> Unit,
 ) -> Array[@types.SchemaValueTree] {
   let drops = @model_host.resource_drops()
-  let values = items.map(to_value_as)
+  let values : Array[@model.SchemaValue] = []
   let encoded : Array[@types.SchemaValueTree] = []
+  let mut converted = 0
   errdefer {
     for value in encoded {
       @model.drop_wit_capabilities(value)
@@ -93,6 +137,13 @@ async fn[T : IntoSchema] encode_stream_items(
     for value in values {
       value.release_resources(drops)
     }
+    for i in converted..<items.length() {
+      release(items[i])
+    }
+  }
+  for item in items {
+    values.push(encode(item))
+    converted += 1
   }
   for value in values {
     encoded.push(@model.schema_value_to_wit_async(value))
@@ -103,7 +154,7 @@ async fn[T : IntoSchema] encode_stream_items(
 ///|
 /// Writes one value and waits until the transport accepts it or the reader has
 /// dropped. In both cases ownership of `value` is consumed.
-pub async fn[T : IntoSchema] AgentStreamWriter::write_one(
+pub async fn[T] AgentStreamWriter::write_one(
   self : AgentStreamWriter[T],
   value : T,
 ) -> AgentStreamWriteOutcome {
@@ -114,11 +165,11 @@ pub async fn[T : IntoSchema] AgentStreamWriter::write_one(
 /// Writes all values in order. On `PeerDropped`, failure, or cancellation,
 /// every value not accepted by the peer is recursively released exactly once;
 /// callers must not retry a suffix.
-pub async fn[T : IntoSchema] AgentStreamWriter::write_all(
+pub async fn[T] AgentStreamWriter::write_all(
   self : AgentStreamWriter[T],
   values : Array[T],
 ) -> AgentStreamWriteOutcome {
-  let encoded = encode_stream_items(values)
+  let encoded = encode_stream_items(values, self.encode, self.release)
   if self.sink.write_all(encoded[:]) {
     Accepted
   } else {
@@ -149,7 +200,7 @@ pub fn[T] AgentStream::drop(self : AgentStream[T]) -> Unit {
 /// `AgentStreamReadError`; canonical operation cancellation is propagated
 /// unchanged. Use `AgentStream[Result[T, E]]` when individual items need
 /// recoverable application errors.
-pub async fn[T : FromSchema] AgentStream::read(self : AgentStream[T]) -> T? {
+pub async fn[T] AgentStream::read(self : AgentStream[T]) -> T? {
   for ;; {
     let chunk = self.handle.read_native() catch {
       @async-core.Cancelled::Cancelled as err => raise err
@@ -175,7 +226,7 @@ pub async fn[T : FromSchema] AgentStream::read(self : AgentStream[T]) -> T? {
         }
         errdefer value.release_resources(drops)
         return Some(
-          from_value_as(value) catch {
+          (self.decode)(value) catch {
             e => raise AgentStreamReadError::ItemDecode(e)
           },
         )
@@ -200,9 +251,27 @@ pub impl[T : IntoSchema] IntoSchema for AgentStream[T] with fn to_value(self) {
 }
 
 ///|
-pub impl[T] FromSchema for AgentStream[T] with fn from_value(value) {
+pub impl[T : FromSchema] FromSchema for AgentStream[T] with fn from_value(value) {
+  AgentStream::from_value_with_codec(value, from_value_as)
+}
+
+///|
+/// Exposes the original affine holder without reading or converting items.
+pub fn[T] AgentStream::to_schema_value(
+  self : AgentStream[T],
+) -> @model.SchemaValue {
+  @model.SchemaValue::Stream(self.handle)
+}
+
+///|
+/// Lifts a native stream with a decoder for its precise item schema. Decoding
+/// remains lazy; forwarding transfers the original holder without using it.
+pub fn[T] AgentStream::from_value_with_codec(
+  value : @model.SchemaValue,
+  decode : (@model.SchemaValue) -> T raise FromSchemaError,
+) -> AgentStream[T] raise FromSchemaError {
   match value {
-    @model.SchemaValue::Stream(handle) => { handle, }
+    @model.SchemaValue::Stream(handle) => { handle, decode, }
     other =>
       raise FromSchemaError::shape_mismatch(
         "stream",

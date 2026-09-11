@@ -249,6 +249,15 @@ struct StartupComponentChargeRequirement {
     reserved_linear_memory_bytes: u64,
 }
 
+/// How often a caller parked in [`Worker::wait_for_invocation_result`] re-checks
+/// that this executor still owns the agent it is waiting for.
+///
+/// Reached only when the wait is otherwise idle. A tick that finds the agent
+/// still owned costs one set lookup for the ownership check, then re-enters the
+/// loop and re-runs `lookup_invocation_result`, which loads the published status
+/// record. Cheap, but not free, so this is not a millisecond knob.
+pub const INVOCATION_OWNERSHIP_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
 /// `create_instance` can still load it. Only a definitely-absent target
@@ -893,34 +902,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_latest_metadata<T: HasAll<Ctx>>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Option<AgentMetadata> {
+    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-            Some(worker.get_latest_worker_metadata().await)
+            Ok(Some(worker.get_latest_worker_metadata().await))
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = deps.worker_service().get(owned_agent_id).await
+        }) = deps.worker_service().get(owned_agent_id).await?
         {
             // update with latest data from oplog
             let agent_mode = initial_worker_metadata.agent_mode;
-            let last_known_status = calculate_last_known_status_with_checkpoint(
+            // `Ok(None)` means the oplog is gone - a delete raced this read - and the agent is
+            // reported as absent. A status that cannot be *recomputed* is a different thing and
+            // is propagated: every caller treats absence as "not here", and reporting a storage
+            // outage that way turns it into a not-found, or into validation against the deployed
+            // component revision for an agent that is pinned to an older one.
+            let Some(last_known_status) = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
                 agent_mode,
                 last_known_status,
             )
             .await
-            .map_err(|error| {
-                tracing::error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status");
-                error
-            })
-            .ok()??;
+            .map_err(WorkerExecutorError::runtime)?
+            else {
+                return Ok(None);
+            };
 
             initial_worker_metadata.last_known_status = last_known_status;
 
-            Some(initial_worker_metadata)
+            Ok(Some(initial_worker_metadata))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -3694,6 +3707,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let foreign_mappings = request.foreign_mappings.clone();
+        for mapping in &foreign_mappings {
+            if producer.owns_handle_identity(&mapping.handle) {
+                producer
+                    .validate_handle(&mapping.handle)
+                    .await
+                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            }
+        }
 
         let prepared = if let Some(prepared) = existing_prepared {
             let mut requested_attempt = request.attempt.clone();
@@ -3843,7 +3864,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let already_attached = attached.is_some();
 
         let streams = DurableSessionStreams::new(
-            producer,
+            producer.clone(),
             self.oplog.clone(),
             session_key,
             prepared.stream_mappings.iter().map(|mapping| {
@@ -3864,10 +3885,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             request.input_element_types,
         );
         for mapping in &foreign_mappings {
-            if streams
-                .has_journaled_consumer_terminal(mapping)
-                .await
-                .map_err(WorkerExecutorError::runtime)?
+            if producer.owns_handle_identity(&mapping.handle)
+                || streams
+                    .has_journaled_consumer_terminal(mapping)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?
             {
                 continue;
             }
@@ -3889,16 +3911,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .add_pair(
                     pending,
                     Box::new(move |pending_invocation_oplog_index| {
-                        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
-                            StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
-                                format_version: 1,
-                                session_key: attached_attempt.session_key,
-                                attachment_id: attached_attempt.attachment_id,
-                                attempt_id: attached_attempt.attempt_id,
-                                epoch: 1,
-                                pending_invocation_oplog_index,
-                            }),
-                        )))
+                        OplogEntry::stream_session(
+                            None,
+                            OplogPayload::Inline(Box::new(StreamSessionRecordV1::Attached(
+                                StreamSessionAttachedRecordV1 {
+                                    format_version: 1,
+                                    session_key: attached_attempt.session_key,
+                                    attachment_id: attached_attempt.attachment_id,
+                                    attempt_id: attached_attempt.attempt_id,
+                                    epoch: 1,
+                                    pending_invocation_oplog_index,
+                                },
+                            ))),
+                        )
                     }),
                 )
                 .await;
@@ -3908,10 +3933,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(WorkerExecutorError::runtime)?;
         }
         for mapping in &foreign_mappings {
-            if streams
-                .has_journaled_consumer_terminal(mapping)
-                .await
-                .map_err(WorkerExecutorError::runtime)?
+            if producer.owns_handle_identity(&mapping.handle)
+                || streams
+                    .has_journaled_consumer_terminal(mapping)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?
             {
                 continue;
             }
@@ -4447,7 +4473,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         if requires_attachment {
-            streams = streams.require_attachment_before_production();
+            streams = streams.require_root_attachment_before_production();
         }
         streams
             .materialize_result(value, graph, root, component_revision)
@@ -5120,9 +5146,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queued_event_indices = Vec::with_capacity(card_ids.len());
         for card_id in card_ids {
             queued_event_indices.push(
-                self.add_to_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
-                    card_id,
-                )))
+                self.add_to_oplog(OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::revoke(card_id),
+                ))
                 .await,
             );
         }
@@ -5182,11 +5209,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
         self.state_actor
             .append_and_commit_attached(
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    card,
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card),
+                ),
                 self.clone(),
                 instance_guard,
                 boundary_guard,
@@ -5426,24 +5452,85 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         key: &IdempotencyKey,
         mut subscription: EventsSubscription,
     ) -> Result<LookupResult, RecvError> {
+        // A deadline, so how often the check runs is a property of the check
+        // rather than of how often this loop happens to restart. Both `continue`
+        // paths below re-enter it, and a sleep started fresh each time would
+        // measure the interval from the last restart instead of running every
+        // interval. A receiver that keeps falling
+        // `invocation_result_broadcast_capacity` events behind restarts this
+        // loop every 100ms, and with a fresh sleep each time the check would
+        // never run at all.
+        let mut next_ownership_check =
+            tokio::time::Instant::now() + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
                 LookupResult::New | LookupResult::Pending => {
-                    let wait_result = subscription
-                        .wait_for(|event| match event {
-                            Event::InvocationCompleted {
-                                agent_id,
-                                idempotency_key,
-                                result,
-                            } if *agent_id == self.owned_agent_id.agent_id
-                                && idempotency_key == key =>
+                    let waiting = subscription.wait_for(|event| match event {
+                        Event::InvocationCompleted {
+                            agent_id,
+                            idempotency_key,
+                            result,
+                        } if *agent_id == self.owned_agent_id.agent_id
+                            && idempotency_key == key =>
+                        {
+                            Some(LookupResult::Complete(result.clone()))
+                        }
+                        _ => None,
+                    });
+
+                    // The deadline is polled first, and `biased` makes that an
+                    // order rather than a coin toss. A receiver that has fallen
+                    // behind the bus is ready at once, with `Lagged`, and a
+                    // select that polled it first would take that arm every
+                    // time and never look at the timer. Under sustained lag
+                    // that starves the ownership check for as long as the lag
+                    // lasts, and a caller whose agent has moved is back to
+                    // waiting out its own timeout. Polling the deadline first
+                    // costs nothing while it is in the future, and when it is
+                    // due, a result that arrived in the same instant is not
+                    // lost: the check either re-enters the loop, whose lookup
+                    // finds it, or reads it before rerouting.
+                    let wait_result = tokio::select! {
+                        biased;
+                        () = tokio::time::sleep_until(next_ownership_check) => {
+                            next_ownership_check = tokio::time::Instant::now()
+                                + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+
+                            // An agent whose shard has moved is resumed by whoever owns
+                            // it now, and its `InvocationCompleted` is published on that
+                            // executor's bus. Nothing will ever arrive on ours, and the
+                            // only other way out of this loop is the result turning up in
+                            // this `Worker`'s own memory, which it never will either. So
+                            // hand the caller the error that makes worker-service
+                            // invalidate its routing table and retry against the new
+                            // owner, rather than leave it to find out by timing out.
+                            //
+                            // Only `InvalidShardId` ends the wait. An executor whose
+                            // shard assignment is not set yet fails this check too, with
+                            // an `Unknown` from `sharding_not_ready_error`, and that one
+                            // has to fall through and keep waiting: an assignment is on
+                            // its way, and the agent may well still be ours.
+                            if let Err(error @ WorkerExecutorError::InvalidShardId { .. }) =
+                                self.shard_service().check_worker(&self.owned_agent_id.agent_id)
                             {
-                                Some(LookupResult::Complete(result.clone()))
+                                // The invocation can have finished while we were deciding
+                                // that. `store_invocation_success` fills `invocation_results`
+                                // before it publishes, so the result is already readable
+                                // here, and a real result always beats a reroute.
+                                match self.lookup_invocation_result(key).await {
+                                    LookupResult::New | LookupResult::Pending => {
+                                        debug!("Agent is no longer owned by this executor, ending the wait for its invocation result");
+                                        break Ok(LookupResult::Complete(Err(error)));
+                                    }
+                                    settled => break Ok(settled),
+                                }
                             }
-                            _ => None,
-                        })
-                        .await;
+                            continue;
+                        }
+                        result = waiting => result,
+                    };
                     match wait_result {
                         Ok(result) => break Ok(result),
                         Err(RecvError::Lagged(_)) => {
@@ -6092,7 +6179,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 None
             } else {
                 // Note: this also checks the oplog for the existence of the create entry.
-                this.worker_service().get(owned_agent_id).await
+                this.worker_service().get(owned_agent_id).await?
             };
 
         match existing_worker_metadata {
@@ -6354,7 +6441,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_status_value = initial_status.load_full().as_ref().clone();
                 this.worker_service()
                     .update_cached_status(owned_agent_id, None, initial_status_value.clone())
-                    .await;
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
@@ -7340,7 +7428,7 @@ impl RunningWorker {
                 );
             }
         };
-        let context = match Ctx::create(
+        let mut context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
             parent.parsed_agent_id.clone(),
@@ -7420,6 +7508,12 @@ impl RunningWorker {
                 );
             }
         };
+        if last_snapshot_index.is_some() {
+            // Core initializers run before load-snapshot, but their recorded host calls are
+            // already inside the skipped snapshot history. Recreate that runtime state with
+            // the same durability suppression as snapshot loading, without consuming the tail.
+            context.begin_call_snapshotting_function();
+        }
         let mut hosted = match instance_host.instantiate(context, &component).await {
             Ok(hosted) => hosted,
             Err(error) => {
@@ -7435,6 +7529,9 @@ impl RunningWorker {
             );
         }
         let (instance, mut store) = hosted.into_parts();
+        if last_snapshot_index.is_some() {
+            store.data_mut().end_call_snapshotting_function();
+        }
         if let Some((active_agent, generation)) = entity_generation {
             let interrupt_state = parent.interrupt_signal.lock().await;
             if !interrupt_state.has_interrupt() {
