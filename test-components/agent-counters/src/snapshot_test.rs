@@ -6,6 +6,9 @@ trait SnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
     fn get(&self) -> u32;
+    /// Differs between agent-counters and agent-counters-v2, so a replay across
+    /// a build change is detectable.
+    fn component_version(&self) -> u32;
 }
 
 struct SnapshotCounterImpl {
@@ -29,6 +32,10 @@ impl SnapshotCounter for SnapshotCounterImpl {
 
     fn get(&self) -> u32 {
         self.count
+    }
+
+    fn component_version(&self) -> u32 {
+        1
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
