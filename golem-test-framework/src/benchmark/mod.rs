@@ -63,12 +63,25 @@ impl BenchmarkRecorder {
     pub fn durations(&self) -> HashMap<ResultKey, Vec<Duration>> {
         self.state.lock().unwrap().durations.clone()
     }
+
+    /// Records one failed attempt belonging to the measurement `key`. Failures
+    /// are aggregated into the benchmark result next to the durations, so a
+    /// run that needed retries is visible in the report and in the results
+    /// JSON instead of only in the logs.
+    pub fn failure(&self, key: &ResultKey, message: impl Into<String>) {
+        self.state.lock().unwrap().failure(key, message.into());
+    }
+
+    pub fn failures(&self) -> HashMap<ResultKey, Vec<String>> {
+        self.state.lock().unwrap().failures.clone()
+    }
 }
 
 #[derive(Debug)]
 pub struct BenchmarkRecorderState {
     durations: HashMap<ResultKey, Vec<Duration>>,
     counts: HashMap<ResultKey, Vec<u64>>,
+    failures: HashMap<ResultKey, Vec<String>>,
 }
 
 impl Default for BenchmarkRecorderState {
@@ -82,6 +95,7 @@ impl BenchmarkRecorderState {
         Self {
             durations: HashMap::new(),
             counts: HashMap::new(),
+            failures: HashMap::new(),
         }
     }
 
@@ -91,6 +105,10 @@ impl BenchmarkRecorderState {
 
     pub fn duration(&mut self, key: &ResultKey, value: Duration) {
         self.durations.entry(key.clone()).or_default().push(value);
+    }
+
+    pub fn failure(&mut self, key: &ResultKey, message: String) {
+        self.failures.entry(key.clone()).or_default().push(message);
     }
 }
 
