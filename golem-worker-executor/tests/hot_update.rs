@@ -1183,7 +1183,7 @@ async fn automatic_snapshot_download_failure_recreates_replay_context(
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn failed_snapshot_load_during_auto_update_does_not_retry_automatic_snapshot(
+async fn failed_snapshot_load_during_auto_update_reuses_healthy_periodic_snapshot(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
@@ -1231,12 +1231,21 @@ async fn failed_snapshot_load_during_auto_update_does_not_retry_automatic_snapsh
         )
         .await?;
     assert_eq!(loaded_manual_snapshot.into_typed::<u32>()?, 1);
-    let snapshots_after_invocation = executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await?
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
+    let snapshots_after_invocation = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let count = executor
+                .get_oplog(&worker_id, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+                .count();
+            if count > snapshots_before_invocation {
+                break Ok::<_, anyhow::Error>(count);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
     assert_eq!(snapshots_after_invocation, snapshots_before_invocation + 1);
 
     let revision_four = executor
@@ -1258,7 +1267,8 @@ async fn failed_snapshot_load_during_auto_update_does_not_retry_automatic_snapsh
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 1);
+    // The target's rejection of the manual baseline does not invalidate the old revision's snapshot.
+    assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 2);
     assert_eq!(metadata.component_revision, revision_two.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 1));
     executor.check_oplog_is_queryable(&worker_id).await?;

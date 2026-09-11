@@ -1044,6 +1044,7 @@ impl InvokeResult {
                 error: OplogAgentError::DeterministicTrap(_)
                     | OplogAgentError::PermanentError(_)
                     | OplogAgentError::InternalError(_)
+                    | OplogAgentError::ReadOnlyViolation(_)
                     | OplogAgentError::StackOverflow,
                 ..
             }
@@ -1523,6 +1524,16 @@ mod tests {
             ),
             (
                 OplogAgentError::DeterministicTrap("unreachable".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::ReadOnlyViolation(
+                    golem_common::model::oplog::ReadOnlyViolationError {
+                        method: "load-snapshot".into(),
+                        host_function: "keyvalue.set".into(),
+                    },
+                ),
                 false,
                 true,
             ),

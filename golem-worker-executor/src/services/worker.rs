@@ -2100,7 +2100,7 @@ mod tests {
             None
         );
 
-        service.remove_cached_status(&owned_agent_id).await;
+        service.remove_cached_status(&owned_agent_id).await.unwrap();
         assert_eq!(
             service
                 .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
