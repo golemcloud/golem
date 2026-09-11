@@ -28,21 +28,11 @@ pub fn[C : @schema.IntoSchema] CallerCodecClient::create(
 ///|
 pub fn CallerCodecClient::bind(
   agent_id : ParsedAgentId,
-  type_name : String,
 ) -> CallerCodecClient raise ReflectError {
   let parts = agent_id.parts()
-  guard parts.type_name == type_name else {
-    raise Identity(
-      "caller-codec contract '" +
-      type_name +
-      "' cannot bind '" +
-      parts.type_name +
-      "'",
-    )
-  }
   {
     transport: Transport::create(
-      type_name,
+      parts.type_name,
       parts.constructor_value,
       parts.phantom_id,
     ),
