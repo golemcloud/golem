@@ -22,7 +22,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::{IdempotencyKey, invocation_context};
 use golem_common::schema::SchemaGraph;
-use golem_common::schema::render::from_json_value;
+use golem_common::schema::render::from_untrusted_json_value;
 use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_service_base::custom_api::RequestBodySchema;
 use golem_service_base::headers::TraceContextHeaders;
@@ -148,11 +148,10 @@ impl RichRequest {
                         error: err.to_string(),
                     })?;
                 let parsed_body =
-                    from_json_value(&expected.graph, &expected.graph.root, &json_body).map_err(
-                        |err| RequestHandlerError::JsonBodyParsingFailed {
+                    from_untrusted_json_value(&expected.graph, &expected.graph.root, &json_body)
+                        .map_err(|err| RequestHandlerError::JsonBodyParsingFailed {
                             errors: vec![err.to_string()],
-                        },
-                    )?;
+                        })?;
                 Ok(ParsedRequestBody::JsonBody(parsed_body))
             }
 
@@ -570,6 +569,21 @@ mod request_body_tests {
         let err = request.parse_request_body(&schema).await.unwrap_err();
 
         assert!(let RequestHandlerError::JsonBodyParsingFailed { .. } = err);
+    }
+
+    #[test]
+    async fn json_body_rejects_host_managed_capability_values() {
+        let mut request = json_request(json!("forged"));
+        let schema = json_body(SchemaType::secret(Default::default()));
+
+        let err = request.parse_request_body(&schema).await.unwrap_err();
+
+        let_assert!(RequestHandlerError::JsonBodyParsingFailed { errors } = err);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("host-managed capability `secret`"))
+        );
     }
 
     #[test]

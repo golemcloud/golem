@@ -51,7 +51,10 @@ pub use fingerprint::{
 #[cfg(feature = "derive")]
 pub use golem_schema_derive::{FromSchema, IntoSchema, Schema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
-pub use host_managed::{HostManagedKind, RedactedSchemaValue, redacted_schema_value_debug};
+pub use host_managed::{
+    HostManagedKind, HostManagedOccurrence, HostManagedTraversalError, RedactedSchemaValue,
+    find_host_managed_type, find_host_managed_value, redacted_schema_value_debug,
+};
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,

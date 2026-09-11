@@ -20,6 +20,13 @@ import {
   withNativeStreamScope,
 } from '../src/internal/schema-model/streamScope';
 import { throwIfAborted } from '../src/internal/pollableUtils';
+import {
+  secretHandleToSchemaValue,
+  secretHandleFromSchemaValue,
+  permissionCardHandleToSchemaValue,
+  permissionCardHandleFromSchemaValue,
+} from '../src/bridge/schema';
+import { withCapabilityAdoptionTransaction } from '../src/internal/schema-model/capabilityTransaction';
 import { compileSchema } from '../src/schema/adapter';
 import { s } from '../src/schema/markers';
 import { Result } from '../src/host/result';
@@ -361,6 +368,48 @@ describe('native typed conversion ownership', () => {
     expect(nested.closes()).toBe(1);
     expect(nested.pulls()).toBe(0);
   });
+
+  it.each([
+    ['secret', secretHandleToSchemaValue, secretHandleFromSchemaValue],
+    ['permission card', permissionCardHandleToSchemaValue, permissionCardHandleFromSchemaValue],
+  ] as const)(
+    'rolls back %s adoption when a generated lazy item encoder fails',
+    async (_, encode, decode) => {
+      const raw = { id: 'stream-item-capability' } as never;
+      const original = new Error('later item field');
+      let closes = 0;
+      const source = AgentStream.from(
+        (async function* () {
+          try {
+            yield {
+              capability: raw,
+              get later(): string {
+                throw original;
+              },
+            };
+          } finally {
+            closes += 1;
+          }
+        })(),
+      );
+      const outer = agentStreamToHandle(source, {
+        ...itemCodec,
+        toValue: (item) =>
+          withCapabilityAdoptionTransaction(() => {
+            const record = item as { capability: never; later: string };
+            return v.record([encode(record.capability), v.string(record.later)]);
+          }),
+      });
+      expect(closes).toBe(0);
+      const endpoint = outer.take()!;
+      if (endpoint.kind !== 'native') throw new Error('expected native');
+      const iterator = endpoint.value[Symbol.asyncIterator]();
+      await expect(iterator.next()).rejects.toBe(original);
+      await iterator.return?.();
+      expect(closes).toBe(1);
+      expect(decode(encode(raw))).toBe(raw);
+    },
+  );
 
   it('cleans nested acquisitions when a lazy item decoder fails', async () => {
     const nested = producer();

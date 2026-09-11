@@ -354,6 +354,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
+        self.check_read_only_allows("golem::rpc::wasm-rpc::new")
+            .map_err(wasmtime::Error::from)?;
+
         let span = create_rpc_connection_span(self, &remote_agent_id).await?;
 
         if agent_mode == AgentMode::Ephemeral {
@@ -2334,6 +2337,7 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
         [],
     )
     .with_consumer_invocation(consumer_invocation)
+    .with_entity_parent_start_index(ctx.entity_parent_start_index())
     .with_rpc(ctx.rpc())
     .with_consumer_journal(worker.durable_stream_consumer_journal())
     .with_auth_ctx(auth_ctx)
@@ -3832,6 +3836,7 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_point: OplogIndex,
+    entity_parent_start_index: Option<OplogIndex>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 }
 
@@ -3992,6 +3997,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     .cloned();
                 let task_ctx = crate::durable_host::durability::TaskRetryContext {
                     retry_point: retry_params.retry_point,
+                    entity_parent_start_index: retry_params.entity_parent_start_index,
                     environment_state_service: retry_params.environment_state_service,
                     environment_id: retry_params.environment_id,
                     default_retry_policy: retry_params.default_retry_policy,
@@ -4058,6 +4064,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
             max_in_function_retry_delay: ctx.durable_execution_state().max_in_function_retry_delay,
             worker: ctx.public_state.worker(),
             retry_point,
+            entity_parent_start_index: ctx.entity_parent_start_index(),
             execution_status: ctx.execution_status.clone(),
         })
     };
