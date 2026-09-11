@@ -71,7 +71,7 @@ use golem_common::model::oplog::{
     HostResponseGolemApiSelfAgentMetadata, HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, Timestamp};
+use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_common::model::{OplogIndex, PromiseId, RetryContext};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
@@ -1912,9 +1912,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
 
         match outcome {
             ParkOutcome::Ready => {}
-            ParkOutcome::SuspendWorker => {
+            ParkOutcome::SuspendWorker(suspend_at) => {
                 handle.abandon_for_trap();
-                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
+                return Err(InterruptKind::Suspend(suspend_at).into());
             }
             ParkOutcome::Interrupted(kind) => {
                 // An interrupt is non-error control flow: abandon the durable call without a

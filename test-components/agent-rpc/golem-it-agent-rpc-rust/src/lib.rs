@@ -5,6 +5,7 @@ use golem_rust::{
     FromSchema, IntoSchema, PromiseId, SchemaValue, Uuid, agent_definition, agent_implementation,
     encode_schema_value,
 };
+use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn encode_single_parameter<T: IntoSchema>(
@@ -599,6 +600,7 @@ pub trait StreamingRpcCaller {
     );
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
+    async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64;
 }
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
@@ -794,6 +796,40 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     async fn call_stream_free(&self) -> u64 {
         let mut target = StreamingRpcTargetClient::get(self.name.clone());
         target.increment_scalar().await
+    }
+
+    async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64 {
+        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        let mut rpc = Box::pin(target.increment_scalar());
+        let mut request = Box::pin(
+            wasi_fetch::Client::new()
+                .post(&format!("http://{host}:{port}/gate"))
+                .send(),
+        );
+        let mut rpc_result = None;
+        let mut request_complete = false;
+
+        std::future::poll_fn(|cx| {
+            if rpc_result.is_none()
+                && let std::task::Poll::Ready(result) = rpc.as_mut().poll(cx)
+            {
+                rpc_result = Some(result);
+            }
+            if !request_complete && request.as_mut().poll(cx).is_ready() {
+                request_complete = true;
+            }
+
+            if request_complete {
+                if let Some(result) = rpc_result {
+                    std::task::Poll::Ready(result)
+                } else {
+                    std::task::Poll::Pending
+                }
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+        .await
     }
 }
 

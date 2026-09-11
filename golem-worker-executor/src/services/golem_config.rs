@@ -734,16 +734,22 @@ pub struct SuspendConfig {
     pub wait_suspend_grace: Duration,
     #[serde(with = "humantime_serde")]
     pub wait_suspend_check_interval: Duration,
+    #[serde(with = "humantime_serde")]
+    pub rpc_suspend_after: Duration,
+    #[serde(with = "humantime_serde")]
+    pub rpc_resume_after: Duration,
 }
 
 impl SafeDisplay for SuspendConfig {
     fn to_safe_string(&self) -> String {
         format!(
-            "suspend after: {:?}, ephemeral max sleep: {:?}, wait suspend grace: {:?}, wait suspend check interval: {:?}",
+            "suspend after: {:?}, ephemeral max sleep: {:?}, wait suspend grace: {:?}, wait suspend check interval: {:?}, RPC suspend after: {:?}, RPC resume after: {:?}",
             self.suspend_after,
             self.ephemeral_max_sleep,
             self.wait_suspend_grace,
-            self.wait_suspend_check_interval
+            self.wait_suspend_check_interval,
+            self.rpc_suspend_after,
+            self.rpc_resume_after
         )
     }
 }
@@ -1966,6 +1972,8 @@ impl Default for SuspendConfig {
             ephemeral_max_sleep: Duration::from_secs(60),
             wait_suspend_grace: Duration::from_secs(1),
             wait_suspend_check_interval: Duration::from_secs(10),
+            rpc_suspend_after: Duration::from_secs(30),
+            rpc_resume_after: Duration::from_secs(5),
         }
     }
 }

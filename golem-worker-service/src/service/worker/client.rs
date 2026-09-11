@@ -286,6 +286,19 @@ where
 
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)>;
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -709,6 +722,56 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 
 #[async_trait]
 impl WorkerClient for WorkerExecutorWorkerClient {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let agent_id_clone = agent_id.clone();
+        let fingerprint = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "prepare_worker",
+                move |client| {
+                    Box::pin(client.prepare_worker(CreateWorkerRequest {
+                        agent_id: Some(agent_id_clone.clone().into()),
+                        env: environment_variables.clone(),
+                        config: config.clone().into_iter().map(Into::into).collect(),
+                        component_owner_account_id: Some(account_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        ignore_already_existing,
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: principal.clone(),
+                        invocation_context: invocation_context.clone(),
+                    }))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
+                            workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(id),
+                            },
+                        )),
+                    } => Ok(AgentFingerprint(id.into())),
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Failure(error)),
+                    } => Err(error.into()),
+                    workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        Ok((agent_id.clone(), fingerprint))
+    }
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -2620,6 +2683,7 @@ mod rejection_mapping_tests {
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
 
         unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
+        unimplemented_unary!(prepare_worker, CreateWorkerRequest, CreateWorkerResponse);
         unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
         unimplemented_unary!(
             complete_promise,

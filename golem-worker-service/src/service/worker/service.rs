@@ -717,6 +717,48 @@ impl WorkerService {
         .await
     }
 
+    pub async fn prepare_for_invocation(
+        &self,
+        agent_id: &AgentId,
+        method_name: String,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let component = self
+            .component_service
+            .get_current_by_id_uncached(agent_id.component_id)
+            .await?;
+
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Method(AgentMethodName(method_name)),
+        )?;
+
+        let (_, fingerprint) = self
+            .worker_client
+            .prepare(
+                agent_id,
+                environment_variables,
+                config,
+                ignore_already_existing,
+                component.account_id,
+                component.environment_id,
+                auth_ctx,
+                invocation_context,
+                principal,
+            )
+            .await?;
+
+        Ok((component.revision, fingerprint))
+    }
+
     // Like create, but skip fetching the component.
     pub async fn create_with_component(
         &self,
@@ -3280,6 +3322,7 @@ mod tests {
 
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
+        prepared_agent_ids: Mutex<Vec<AgentId>>,
         delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
         invocation_environments: Mutex<Vec<EnvironmentId>>,
@@ -3296,6 +3339,7 @@ mod tests {
         fn new(invocation_output: AgentInvocationOutput) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
@@ -3315,6 +3359,7 @@ mod tests {
         ) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
@@ -3371,6 +3416,25 @@ mod tests {
 
     #[async_trait]
     impl WorkerClient for RecordingWorkerClient {
+        async fn prepare(
+            &self,
+            agent_id: &AgentId,
+            _: HashMap<String, String>,
+            _: Vec<AgentConfigEntryDto>,
+            _: bool,
+            _: AccountId,
+            _: EnvironmentId,
+            _: AuthCtx,
+            _: Option<InvocationContext>,
+            _: Option<golem_api_grpc::proto::golem::component::Principal>,
+        ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+            self.prepared_agent_ids
+                .lock()
+                .unwrap()
+                .push(agent_id.clone());
+            Ok((agent_id.clone(), self.fingerprint))
+        }
+
         async fn create(
             &self,
             agent_id: &AgentId,
@@ -4225,7 +4289,22 @@ mod tests {
                 HashMap::new(),
                 Vec::new(),
                 true,
-                auth_ctx_with_permissions(vec![run_permission]),
+                auth_ctx_with_permissions(vec![run_permission.clone()]),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        harness
+            .worker_service
+            .prepare_for_invocation(
+                &agent_id,
+                "run".to_string(),
+                HashMap::new(),
+                Vec::new(),
+                true,
+                auth_ctx_with_permissions(vec![run_permission.clone()]),
                 None,
                 None,
             )
@@ -4241,6 +4320,22 @@ mod tests {
             harness
                 .worker_service
                 .create_for_invocation(
+                    &agent_id,
+                    "run".to_string(),
+                    HashMap::new(),
+                    Vec::new(),
+                    true,
+                    auth_ctx_with_permissions(vec![other_method_permission.clone()]),
+                    None,
+                    None,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            harness
+                .worker_service
+                .prepare_for_invocation(
                     &agent_id,
                     "run".to_string(),
                     HashMap::new(),
@@ -4262,6 +4357,16 @@ mod tests {
                 .len(),
             1,
             "denied target activation reached the worker client"
+        );
+        assert_eq!(
+            harness
+                .worker_client
+                .prepared_agent_ids
+                .lock()
+                .unwrap()
+                .as_slice(),
+            std::slice::from_ref(&agent_id),
+            "denied prepare reached the worker client"
         );
     }
 

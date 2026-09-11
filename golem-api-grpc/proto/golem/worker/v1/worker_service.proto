@@ -33,6 +33,9 @@ import "google/protobuf/timestamp.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
+  // Internal executor-to-executor RPC target preparation. Resolves the target without starting
+  // its instance. This does not acknowledge a method invocation.
+  rpc PrepareWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);

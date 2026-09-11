@@ -33,6 +33,9 @@ import "golem/worker/worker_status.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
+  // Internal RPC target preparation. Resolves the target without starting its instance.
+  // This does not acknowledge a method invocation.
+  rpc PrepareWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
 
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);

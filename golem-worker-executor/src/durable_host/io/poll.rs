@@ -355,14 +355,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                 // suspend: re-execute the poll, which now completes without
                                 // requesting another suspend-for-sleep.
                             }
-                            ParkOutcome::SuspendWorker => {
+                            ParkOutcome::SuspendWorker(suspend_at) => {
                                 // The worker suspends and re-executes this poll on resume; the
                                 // eager `Start` is left incomplete (resolved by incomplete-replay
                                 // re-execution), not persisted. The wakeup at the sleep deadline
                                 // was already scheduled by the park.
                                 handle.abandon_for_trap();
                                 return Err(wasmtime::Error::from_anyhow(
-                                    InterruptKind::Suspend(Timestamp::now_utc()).into(),
+                                    InterruptKind::Suspend(suspend_at).into(),
                                 ));
                             }
                             ParkOutcome::Interrupted(kind) => {

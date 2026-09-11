@@ -351,6 +351,8 @@ type = "Disabled"
 
 [suspend]
 ephemeral_max_sleep = "1m"
+rpc_resume_after = "5s"
+rpc_suspend_after = "30s"
 suspend_after = "10s"
 wait_suspend_check_interval = "10s"
 wait_suspend_grace = "1s"
@@ -763,6 +765,8 @@ without_time = false
 #
 # [suspend]
 # ephemeral_max_sleep = "1m"
+# rpc_resume_after = "5s"
+# rpc_suspend_after = "30s"
 # suspend_after = "10s"
 # wait_suspend_check_interval = "10s"
 # wait_suspend_grace = "1s"
@@ -1145,6 +1149,8 @@ without_time = false
 #
 # [suspend]
 # ephemeral_max_sleep = "1m"
+# rpc_resume_after = "5s"
+# rpc_suspend_after = "30s"
 # suspend_after = "10s"
 # wait_suspend_check_interval = "10s"
 # wait_suspend_grace = "1s"

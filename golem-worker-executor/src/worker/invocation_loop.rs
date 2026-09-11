@@ -250,6 +250,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 },
             );
 
+        let mut retry_was_live = false;
         'outer: loop {
             self.release_terminal_interrupt().await;
             if let Err(error) = self.parent.shard_service().check_worker(&agent_id) {
@@ -259,7 +260,53 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 self.stop_unloaded(None).await;
                 break;
             }
-            self.acquire_concurrent_agent_permit().await;
+            if self.permit_state.is_none() {
+                let parent = self.parent.clone();
+                let permit_agent_id = self.owned_agent_id.agent_id().clone();
+                let permit = parent
+                    .registered_concurrent_account
+                    .acquire(permit_agent_id)
+                    .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"));
+                tokio::pin!(permit);
+                loop {
+                    if let Some(interrupt) = self.pending_interrupt().await
+                        && self
+                            .handle_unloaded_interrupt(interrupt, retry_was_live)
+                            .await
+                    {
+                        break 'outer;
+                    }
+                    tokio::select! {
+                        permit = &mut permit => {
+                            self.permit_state.install_tracked(permit);
+                            break;
+                        }
+                        command = self.receiver.recv() => {
+                            let Some(command) = command else {
+                                debug!(%agent_id, "Invocation queue loop command channel closed while awaiting concurrent-agent permit");
+                                self.stop_closed(None, None).await;
+                                break 'outer;
+                            };
+                            if let Some(interrupt) = self.pending_interrupt().await
+                                && self
+                                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                                    .await
+                            {
+                                break 'outer;
+                            }
+                            match command {
+                                WorkerCommand::InternalStatusChanged => {}
+                                WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
+                                    Self::defer_wakeup(&mut deferred_wakeups, command);
+                                }
+                                WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                                    let _ = sender.send(Ok(()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let permit = self
                 .permit_state
                 .take_permit()
@@ -514,7 +561,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
 
-            let retry_was_live = {
+            retry_was_live = {
                 let store = agent.runtime.store.lock().await;
                 store.data().durable_ctx().begin_stream_runtime_teardown();
                 store.data().is_live()
@@ -758,21 +805,72 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .reset_terminal_for_new_generation();
     }
 
-    async fn acquire_concurrent_agent_permit(&mut self) {
-        if self.permit_state.is_none() {
-            let agent_id = self.owned_agent_id.agent_id();
-            let permit = self
-                .parent
-                .registered_concurrent_account
-                .acquire(agent_id)
-                .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"))
-                .await;
-            self.permit_state.install_tracked(permit);
-        }
-    }
-
     fn release_concurrent_agent_permit(&mut self) {
         self.permit_state.release();
+    }
+
+    async fn handle_unloaded_interrupt(
+        &self,
+        interrupt: PendingWorkerInterrupt,
+        retry_was_live: bool,
+    ) -> bool {
+        let kind = interrupt.kind;
+        let decision = interrupt.retry_decision();
+        debug!(
+            ?decision,
+            "Invocation queue loop interrupted while unloaded"
+        );
+        if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+            let current_idempotency_key = self
+                .parent
+                .get_non_detached_last_known_status()
+                .await
+                .current_idempotency_key;
+            match kind {
+                InterruptKind::Suspend(_) => {
+                    self.parent
+                        .add_and_commit_oplog(OplogEntry::suspend())
+                        .await;
+                }
+                InterruptKind::Interrupt(_) => {
+                    self.parent
+                        .add_and_commit_oplog(OplogEntry::interrupted())
+                        .await;
+                }
+                InterruptKind::Restart | InterruptKind::Jump => {}
+            }
+            if matches!(kind, InterruptKind::Interrupt(_))
+                && let Some(key) = current_idempotency_key
+            {
+                self.parent
+                    .store_invocation_failure(&key, &TrapType::Interrupt(kind))
+                    .await;
+                self.parent.event_service().emit_invocation_finished(
+                    "interrupted while unloaded",
+                    &key,
+                    retry_was_live,
+                );
+            }
+        }
+        match decision {
+            RetryDecision::Immediate => false,
+            RetryDecision::None => {
+                self.stop_closed(None, None).await;
+                true
+            }
+            RetryDecision::TryStop(timestamp) => {
+                if timestamp < *self.parent.last_resume_request.lock().await {
+                    self.release_terminal_interrupt().await;
+                    false
+                } else {
+                    self.stop_closed(None, None).await;
+                    true
+                }
+            }
+            RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
+                unreachable!("queued interrupts do not delay or reacquire permits")
+            }
+        }
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {

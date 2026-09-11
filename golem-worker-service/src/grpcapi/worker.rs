@@ -259,7 +259,41 @@ impl GrpcWorkerService for WorkerGrpcApi {
         );
 
         let response = match self
-            .launch_new_worker(request)
+            .launch_new_worker(request, false)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok((agent_id, component_version, fingerprint)) => record.succeed(
+                launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
+                    agent_id: Some(agent_id.into()),
+                    component_version: component_version.into(),
+                    instance_id: Some(fingerprint.0.into()),
+                }),
+            ),
+            Err(error) => record.fail(
+                launch_new_worker_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(LaunchNewWorkerResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn prepare_worker(
+        &self,
+        request: Request<LaunchNewWorkerRequest>,
+    ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "prepare_worker",
+            component_id = ComponentId::render_proto(request.component_id),
+            name = request.name
+        );
+
+        let response = match self
+            .launch_new_worker(request, true)
             .instrument(record.span.clone())
             .await
         {
@@ -712,6 +746,7 @@ impl WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
+        prepare: bool,
     ) -> Result<(AgentId, ComponentRevision, AgentFingerprint), GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
@@ -736,33 +771,48 @@ impl WorkerGrpcApi {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
-        let (latest_component_revision, fingerprint) =
-            if let Some(method_name) = request.method_name {
-                self.worker_service
-                    .create_for_invocation(
-                        &agent_id,
-                        method_name,
-                        request.env,
-                        config,
-                        request.ignore_already_existing,
-                        auth,
-                        request.context,
-                        request.principal,
-                    )
-                    .await?
-            } else {
-                self.worker_service
-                    .create(
-                        &agent_id,
-                        request.env,
-                        config,
-                        request.ignore_already_existing,
-                        auth,
-                        request.context,
-                        request.principal,
-                    )
-                    .await?
-            };
+        let (latest_component_revision, fingerprint) = if prepare {
+            let method_name = request
+                .method_name
+                .ok_or_else(|| bad_request_error("Missing method name"))?;
+            self.worker_service
+                .prepare_for_invocation(
+                    &agent_id,
+                    method_name,
+                    request.env,
+                    config,
+                    request.ignore_already_existing,
+                    auth,
+                    request.context,
+                    request.principal,
+                )
+                .await?
+        } else if let Some(method_name) = request.method_name {
+            self.worker_service
+                .create_for_invocation(
+                    &agent_id,
+                    method_name,
+                    request.env,
+                    config,
+                    request.ignore_already_existing,
+                    auth,
+                    request.context,
+                    request.principal,
+                )
+                .await?
+        } else {
+            self.worker_service
+                .create(
+                    &agent_id,
+                    request.env,
+                    config,
+                    request.ignore_already_existing,
+                    auth,
+                    request.context,
+                    request.principal,
+                )
+                .await?
+        };
 
         Ok((agent_id, latest_component_revision, fingerprint))
     }
