@@ -58,6 +58,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         },
     };
     let storage = PostgresSchedulerStorage::configured(&config)
