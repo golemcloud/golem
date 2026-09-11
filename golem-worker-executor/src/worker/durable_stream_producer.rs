@@ -55,6 +55,21 @@ impl DurableStreamProducerSlot {
         self: &Arc<Self>,
         commit: DurableStreamCommit,
     ) -> impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static {
+        self.retire_with_commit(Some(commit))
+    }
+
+    /// Fences new work and drains admitted writes without flushing unrelated buffered host calls.
+    /// An already-started retirement is joined, including its previously admitted final commit.
+    pub(super) fn shutdown(
+        self: &Arc<Self>,
+    ) -> impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static {
+        self.retire_with_commit(None)
+    }
+
+    fn retire_with_commit(
+        self: &Arc<Self>,
+        commit: Option<DurableStreamCommit>,
+    ) -> impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static {
         let retirement = {
             let mut state = self.state.lock().unwrap();
             state.retired = true;
@@ -80,7 +95,9 @@ impl DurableStreamProducerSlot {
                         if let Some(producer) = producer {
                             producer.wait_durable_drained().await;
                         }
-                        commit(None).await;
+                        if let Some(commit) = commit {
+                            commit(None).await;
+                        }
                     }))
                     .catch_unwind()
                     .await
@@ -236,6 +253,112 @@ mod tests {
 
     fn unused_commit() -> DurableStreamCommit {
         Arc::new(|_| Box::pin(async { panic!("healthy or initial load must not recovery-flush") }))
+    }
+
+    #[test]
+    async fn shutdown_fences_empty_and_idle_slots_without_flushing_buffered_entries() {
+        use crate::services::oplog::{CommitLevel, Oplog};
+        use golem_common::model::oplog::OplogEntry;
+
+        for initialized in [false, true] {
+            let slot = Arc::new(DurableStreamProducerSlot::default());
+            let oplog = Arc::new(TestOplog::default());
+            if initialized {
+                let identity = identity();
+                let source = oplog.clone();
+                slot.get_or_load(unused_commit(), move || async move {
+                    DurableStreamProducer::load(
+                        source,
+                        identity.environment_id,
+                        identity.agent_id,
+                        identity.fingerprint,
+                        None,
+                    )
+                    .await
+                })
+                .await
+                .unwrap();
+            }
+            oplog
+                .add(OplogEntry::NoOp {
+                    timestamp: golem_common::model::Timestamp::now_utc(),
+                })
+                .await;
+            let shutdown = slot.shutdown();
+            assert!(slot.is_retired());
+            shutdown.await.unwrap();
+            slot.retire(unused_commit()).await.unwrap();
+            assert_eq!(oplog.commit(CommitLevel::Always).await.len(), 1);
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
+        use crate::durable_host::durable_stream::tests::registration;
+        use crate::services::oplog::{CommitLevel, Oplog};
+        use golem_common::base_model::durable_stream::{
+            StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSourceKindV1,
+        };
+
+        let slot = Arc::new(DurableStreamProducerSlot::default());
+        let identity = identity();
+        let request = registration(
+            &identity,
+            StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: vec![],
+            },
+            StreamSourceKindV1::InvocationOutput,
+        );
+        let oplog = Arc::new(TestOplog::default());
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let commit: DurableStreamCommit = {
+            let oplog = oplog.clone();
+            let reached = reached.clone();
+            let release = release.clone();
+            Arc::new(move |receipt| {
+                let oplog = oplog.clone();
+                let reached = reached.clone();
+                let release = release.clone();
+                Box::pin(async move {
+                    oplog.commit(CommitLevel::Always).await;
+                    receipt.unwrap().send(()).unwrap();
+                    reached.notify_one();
+                    release.acquire().await.unwrap().forget();
+                })
+            })
+        };
+        let producer = slot
+            .get_or_load(unused_commit(), move || async move {
+                DurableStreamProducer::load_with_commit(
+                    oplog,
+                    identity.environment_id,
+                    identity.agent_id,
+                    identity.fingerprint,
+                    None,
+                    commit,
+                )
+                .await
+            })
+            .await
+            .unwrap();
+        let mut append = Box::pin(producer.register(request));
+        assert!(futures::poll!(append.as_mut()).is_pending());
+        reached.notified().await;
+        drop(append);
+        drop(slot.shutdown());
+        assert_eq!(
+            producer.ensure_healthy(),
+            Err(DurableStreamProducerError::RecoveryRequired)
+        );
+        let mut shutdown = Box::pin(slot.shutdown());
+        assert!(futures::poll!(shutdown.as_mut()).is_pending());
+        release.add_permits(1);
+        shutdown.await.unwrap();
+        assert!(slot.try_retire_quiescent());
     }
 
     #[test]

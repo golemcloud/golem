@@ -7478,7 +7478,7 @@ impl RunningWorker {
                 .await;
             },
             move || {
-                let retirement = shutdown_parent.retire_durable_stream_producer();
+                let retirement = shutdown_parent.durable_stream_producer.shutdown();
                 Box::pin(async move {
                     retirement
                         .await
