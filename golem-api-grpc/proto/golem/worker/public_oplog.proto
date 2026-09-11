@@ -83,6 +83,7 @@ message OplogEntry {
     DurableStreamRecordParameters StreamEnd = 62;
     DurableStreamRecordParameters StreamCancel = 63;
     DurableStreamRecordParameters StreamSession = 64;
+    SnapshotConfirmedParameters SnapshotConfirmed = 65;
   }
 }
 
@@ -474,6 +475,7 @@ message PendingAgentInvocationParameters {
 message SnapshotBasedUpdateParameters {
   bytes payload = 1;
   string mime_type = 2;
+  optional string filesystem_snapshot = 3;
 }
 
 message UpdateDescription {
@@ -591,6 +593,12 @@ message SnapshotDataParameters {
     JsonSnapshotData json = 3;
     MultipartSnapshotData multipart = 4;
   }
+  optional string filesystem_snapshot = 5;
+}
+
+message SnapshotConfirmedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string filesystem_snapshot = 2;
 }
 
 message RawSnapshotData {

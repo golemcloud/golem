@@ -374,6 +374,7 @@ pub enum PublicAgentInvocationResult {
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
     pub mime_type: String,
+    pub filesystem_snapshot: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]

@@ -404,6 +404,7 @@ pub(all) enum OplogEntry {
   StreamSession(RawDurableStreamRecordParameters)
   CompletionDiscarded(RawCompletionDiscardedParameters)
   CompletionDelivered(RawCompletionDeliveredParameters)
+  SnapshotConfirmed(SnapshotConfirmedParameters)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct OplogExternalPayload {
@@ -511,6 +512,7 @@ pub(all) enum PublicOplogEntry {
   StreamSession(DurableStreamRecordParameters)
   CompletionDiscarded(CompletionDiscardedParameters)
   CompletionDelivered(CompletionDeliveredParameters)
+  SnapshotConfirmed(SnapshotConfirmedParameters)
 } derive(Eq, @debug.Debug)
 
 pub(all) enum QueuedCardEvent {
@@ -669,12 +671,14 @@ pub(all) struct RawSnapshotBasedUpdate {
   target_revision : UInt64
   payload : OplogPayload
   mime_type : String
+  filesystem_snapshot : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawSnapshotParameters {
   timestamp : @system-clock.Instant
   data : OplogPayload
   mime_type : String
+  filesystem_snapshot : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawStartParameters {
@@ -754,9 +758,21 @@ pub(all) struct SnapshotData {
   mime_type : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct SnapshotBasedUpdateParameters {
+  payload : FixedArray[Byte]
+  mime_type : String
+  filesystem_snapshot : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct SnapshotConfirmedParameters {
+  timestamp : @system-clock.Instant
+  filesystem_snapshot : String
+} derive(Eq, @debug.Debug)
+
 pub(all) struct SnapshotParameters {
   timestamp : @system-clock.Instant
   data : SnapshotData
+  filesystem_snapshot : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum SpanData {
@@ -804,7 +820,7 @@ pub(all) struct Timestamp {
 
 pub(all) enum UpdateDescription {
   AutoUpdate
-  SnapshotBased(@host.Snapshot)
+  SnapshotBased(SnapshotBasedUpdateParameters)
 } derive(Eq, @debug.Debug)
 
 pub(all) enum WrappedFunctionType {

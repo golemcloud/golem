@@ -7,7 +7,8 @@ use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, OplogEntry, OplogPayload, QueuedCardEvent, UpdateDescription,
+    AgentError, AgentResourceId, FilesystemSnapshotName, OplogEntry, OplogPayload, QueuedCardEvent,
+    UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
@@ -580,6 +581,8 @@ fn update_status_with_precomputed_regions(
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
+        last_automatic_snapshot_filesystem_snapshot,
+        last_automatic_snapshot_confirmed,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
@@ -591,6 +594,8 @@ fn update_status_with_precomputed_regions(
         last_known.last_automatic_snapshot_index,
         last_known.last_automatic_snapshot_timestamp,
         last_known.last_automatic_snapshot_component_revision,
+        last_known.last_automatic_snapshot_filesystem_snapshot,
+        last_known.last_automatic_snapshot_confirmed,
         &deleted_regions,
         &new_entries,
     );
@@ -659,6 +664,8 @@ fn update_status_with_precomputed_regions(
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
+        last_automatic_snapshot_filesystem_snapshot,
+        last_automatic_snapshot_confirmed,
         agent_mode,
     })
 }
@@ -824,6 +831,7 @@ fn calculate_latest_worker_status(
                 current_status = AgentStatus::Running;
             }
             OplogEntry::Snapshot { .. } => {}
+            OplogEntry::SnapshotConfirmed { .. } => {}
             OplogEntry::OplogProcessorCheckpoint { .. } => {}
             OplogEntry::CardEventQueued { .. } => {}
             OplogEntry::CardInstalled { .. } => {}
@@ -1245,6 +1253,8 @@ fn calculate_update_fields(
     initial_last_automatic_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_timestamp: Option<Timestamp>,
     initial_last_automatic_snapshot_component_revision: Option<ComponentRevision>,
+    initial_last_automatic_snapshot_filesystem_snapshot: Option<FilesystemSnapshotName>,
+    initial_last_automatic_snapshot_confirmed: bool,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -1258,6 +1268,8 @@ fn calculate_update_fields(
     Option<OplogIndex>,
     Option<Timestamp>,
     Option<ComponentRevision>,
+    Option<FilesystemSnapshotName>,
+    bool,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
@@ -1270,6 +1282,9 @@ fn calculate_update_fields(
     let mut last_automatic_snapshot_timestamp = initial_last_automatic_snapshot_timestamp;
     let mut last_automatic_snapshot_component_revision =
         initial_last_automatic_snapshot_component_revision;
+    let mut last_automatic_snapshot_filesystem_snapshot =
+        initial_last_automatic_snapshot_filesystem_snapshot;
+    let mut last_automatic_snapshot_confirmed = initial_last_automatic_snapshot_confirmed;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -1332,6 +1347,8 @@ fn calculate_update_fields(
                 last_automatic_snapshot_index = None;
                 last_automatic_snapshot_timestamp = None;
                 last_automatic_snapshot_component_revision = None;
+                last_automatic_snapshot_filesystem_snapshot = None;
+                last_automatic_snapshot_confirmed = false;
 
                 if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased,
@@ -1343,10 +1360,24 @@ fn calculate_update_fields(
                     last_manual_update_snapshot_index = Some(applied_update_oplog_index);
                 }
             }
-            OplogEntry::Snapshot { timestamp, .. } => {
+            OplogEntry::Snapshot {
+                timestamp,
+                filesystem_snapshot,
+                ..
+            } => {
                 last_automatic_snapshot_index = Some(*oplog_idx);
                 last_automatic_snapshot_timestamp = Some(*timestamp);
                 last_automatic_snapshot_component_revision = Some(revision);
+                last_automatic_snapshot_filesystem_snapshot = filesystem_snapshot.clone();
+                last_automatic_snapshot_confirmed = false;
+            }
+            OplogEntry::SnapshotConfirmed {
+                filesystem_snapshot,
+                ..
+            } if last_automatic_snapshot_filesystem_snapshot.as_ref()
+                == Some(filesystem_snapshot) =>
+            {
+                last_automatic_snapshot_confirmed = true;
             }
             _ => {}
         }
@@ -1362,6 +1393,8 @@ fn calculate_update_fields(
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
+        last_automatic_snapshot_filesystem_snapshot,
+        last_automatic_snapshot_confirmed,
     )
 }
 
@@ -1729,8 +1762,8 @@ mod test {
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{
-        AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
-        OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
+        AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest, HostRequestNoInput,
+        HostResponse, OplogEntry, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
@@ -2139,6 +2172,7 @@ mod test {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         };
 
         let test_case = TestCase::builder(1)
@@ -2185,6 +2219,7 @@ mod test {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         };
 
         let test_case = TestCase::builder(1)
@@ -2231,6 +2266,7 @@ mod test {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         };
 
         let test_case = TestCase::builder(1)
@@ -2306,6 +2342,7 @@ mod test {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         };
 
         let test_case = TestCase::builder(1)
@@ -2353,11 +2390,13 @@ mod test {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         };
         let update2 = UpdateDescription::SnapshotBased {
             target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         };
 
         let test_case = TestCase::builder(1)
@@ -2543,6 +2582,150 @@ mod test {
             )
             .build();
 
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn snapshot_confirmed_with_same_name_sets_flag() {
+        let name = FilesystemSnapshotName::periodic();
+
+        let test_case = TestCase::builder(1)
+            .snapshot_with_filesystem(Some(name.clone()))
+            .grow_memory(10)
+            .snapshot_confirmed(name.clone(), true)
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(
+            final_status.last_automatic_snapshot_index,
+            Some(OplogIndex::from_u64(2))
+        );
+        assert_eq!(
+            final_status.last_automatic_snapshot_filesystem_snapshot,
+            Some(name)
+        );
+        assert!(final_status.last_automatic_snapshot_confirmed);
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn snapshot_confirmed_after_successful_update_is_ignored() {
+        let name = FilesystemSnapshotName::periodic();
+        let update = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+
+        let test_case = TestCase::builder(1)
+            .snapshot_with_filesystem(Some(name.clone()))
+            .snapshot_confirmed(name.clone(), true)
+            .pending_update(&update, |_| {})
+            .successful_update(update, 2000, &HashSet::new())
+            .snapshot_confirmed(name, false)
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(final_status.last_automatic_snapshot_index, None);
+        assert_eq!(
+            final_status.last_automatic_snapshot_filesystem_snapshot,
+            None
+        );
+        assert!(!final_status.last_automatic_snapshot_confirmed);
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn snapshot_confirmed_after_reverted_snapshot_is_ignored() {
+        let name = FilesystemSnapshotName::periodic();
+
+        let test_case = TestCase::builder(1)
+            .grow_memory(10)
+            .snapshot_with_filesystem(Some(name.clone()))
+            .snapshot_confirmed(name.clone(), true)
+            .grow_memory(20)
+            .revert(OplogIndex::from_u64(2))
+            .snapshot_confirmed(name, false)
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(final_status.last_automatic_snapshot_index, None);
+        assert_eq!(
+            final_status.last_automatic_snapshot_filesystem_snapshot,
+            None
+        );
+        assert!(!final_status.last_automatic_snapshot_confirmed);
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn snapshot_confirmed_matches_only_the_newest_snapshot() {
+        let first = FilesystemSnapshotName::periodic();
+        let second = FilesystemSnapshotName::periodic();
+
+        let test_case = TestCase::builder(1)
+            .snapshot_with_filesystem(Some(first.clone()))
+            .snapshot_with_filesystem(Some(second.clone()))
+            .snapshot_confirmed(first, false)
+            .snapshot_confirmed(second.clone(), true)
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(
+            final_status.last_automatic_snapshot_index,
+            Some(OplogIndex::from_u64(3))
+        );
+        assert_eq!(
+            final_status.last_automatic_snapshot_filesystem_snapshot,
+            Some(second)
+        );
+        assert!(final_status.last_automatic_snapshot_confirmed);
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn snapshot_after_confirmed_snapshot_starts_an_unconfirmed_candidate() {
+        let first = FilesystemSnapshotName::periodic();
+        let second = FilesystemSnapshotName::periodic();
+
+        let test_case = TestCase::builder(1)
+            .snapshot_with_filesystem(Some(first.clone()))
+            .snapshot_confirmed(first, true)
+            .snapshot_with_filesystem(Some(second.clone()))
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(
+            final_status.last_automatic_snapshot_index,
+            Some(OplogIndex::from_u64(4))
+        );
+        assert_eq!(
+            final_status.last_automatic_snapshot_filesystem_snapshot,
+            Some(second)
+        );
+        assert!(!final_status.last_automatic_snapshot_confirmed);
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn snapshot_confirmed_for_unknown_name_is_ignored() {
+        let name = FilesystemSnapshotName::periodic();
+
+        let test_case = TestCase::builder(1)
+            .snapshot_with_filesystem(Some(name))
+            .snapshot_confirmed(FilesystemSnapshotName::periodic(), false)
+            .snapshot()
+            .snapshot_confirmed(FilesystemSnapshotName::periodic(), false)
+            .build();
+        let final_status = &test_case.entries.last().unwrap().expected_status;
+
+        assert_eq!(
+            final_status.last_automatic_snapshot_index,
+            Some(OplogIndex::from_u64(4))
+        );
+        assert_eq!(
+            final_status.last_automatic_snapshot_filesystem_snapshot,
+            None
+        );
+        assert!(!final_status.last_automatic_snapshot_confirmed);
         run_test_case(test_case).await;
     }
 
@@ -2945,6 +3128,13 @@ mod test {
         }
 
         pub fn snapshot(self) -> Self {
+            self.snapshot_with_filesystem(None)
+        }
+
+        pub fn snapshot_with_filesystem(
+            self,
+            filesystem_snapshot: Option<FilesystemSnapshotName>,
+        ) -> Self {
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             let timestamp = Timestamp::now_utc().rounded();
             self.add(
@@ -2954,12 +3144,32 @@ mod test {
                     mime_type: "application/octet-stream".to_string(),
                     active_cards: Vec::new(),
                     wallet_generation: 0,
+                    filesystem_snapshot: filesystem_snapshot.clone(),
                 },
                 move |mut status| {
                     status.last_automatic_snapshot_index = Some(oplog_idx);
                     status.last_automatic_snapshot_timestamp = Some(timestamp);
                     status.last_automatic_snapshot_component_revision =
                         Some(status.component_revision);
+                    status.last_automatic_snapshot_filesystem_snapshot =
+                        filesystem_snapshot.clone();
+                    status.last_automatic_snapshot_confirmed = false;
+                    status
+                },
+            )
+        }
+
+        pub fn snapshot_confirmed(
+            self,
+            filesystem_snapshot: FilesystemSnapshotName,
+            expect_confirmed: bool,
+        ) -> Self {
+            self.add(
+                OplogEntry::snapshot_confirmed(filesystem_snapshot).rounded(),
+                move |mut status| {
+                    if expect_confirmed {
+                        status.last_automatic_snapshot_confirmed = true;
+                    }
                     status
                 },
             )
@@ -3027,6 +3237,10 @@ mod test {
                     old_status.last_automatic_snapshot_timestamp;
                 status.last_automatic_snapshot_component_revision =
                     old_status.last_automatic_snapshot_component_revision;
+                status.last_automatic_snapshot_filesystem_snapshot =
+                    old_status.last_automatic_snapshot_filesystem_snapshot;
+                status.last_automatic_snapshot_confirmed =
+                    old_status.last_automatic_snapshot_confirmed;
 
                 status
             })
@@ -3154,6 +3368,8 @@ mod test {
                 status.last_automatic_snapshot_index = None;
                 status.last_automatic_snapshot_timestamp = None;
                 status.last_automatic_snapshot_component_revision = None;
+                status.last_automatic_snapshot_filesystem_snapshot = None;
+                status.last_automatic_snapshot_confirmed = false;
 
                 if status.skipped_regions.is_overridden() {
                     status.skipped_regions.merge_override();

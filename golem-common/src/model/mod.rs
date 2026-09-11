@@ -63,7 +63,7 @@ pub use retry_policy::{
 use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
-use self::oplog::QueuedCardEvent;
+use self::oplog::{FilesystemSnapshotName, QueuedCardEvent};
 use self::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use crate::base_model::agent::AgentMode;
 use crate::base_model::agent::Principal;
@@ -1055,6 +1055,12 @@ pub struct AgentStatusRecord {
     pub last_automatic_snapshot_timestamp: Option<Timestamp>,
     /// Component revision that created the last automatic snapshot.
     pub last_automatic_snapshot_component_revision: Option<ComponentRevision>,
+    /// The filesystem snapshot name that the last automatic snapshot entry holds. `None` when
+    /// that entry has no filesystem capture.
+    pub last_automatic_snapshot_filesystem_snapshot: Option<FilesystemSnapshotName>,
+    /// True when a `SnapshotConfirmed` entry with the same name follows the last automatic
+    /// snapshot entry. The filesystem snapshot is a usable baseline only when this is true.
+    pub last_automatic_snapshot_confirmed: bool,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
     /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part
     /// of the serialized record (it is persisted separately) and defaults to `Durable` on
@@ -1095,6 +1101,8 @@ impl Default for AgentStatusRecord {
             last_automatic_snapshot_index: None,
             last_automatic_snapshot_timestamp: None,
             last_automatic_snapshot_component_revision: None,
+            last_automatic_snapshot_filesystem_snapshot: None,
+            last_automatic_snapshot_confirmed: false,
             agent_mode: AgentMode::Durable,
         }
     }

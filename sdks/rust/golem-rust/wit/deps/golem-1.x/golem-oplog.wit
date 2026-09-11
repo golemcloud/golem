@@ -5,7 +5,7 @@ interface oplog {
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value};
 
-    use host.{component-revision, oplog-index, environment-id, uuid, agent-id, snapshot};
+    use host.{component-revision, oplog-index, environment-id, uuid, agent-id};
     use wasi:clocks/types@0.3.0.{duration};
 
     /// Whether an agent is durable (persistent oplog) or ephemeral.
@@ -394,7 +394,14 @@ interface oplog {
         /// Automatic update by replaying the oplog on the new version
         auto-update,
         /// Custom update by loading a given snapshot on the new version
-        snapshot-based(snapshot)
+        snapshot-based(snapshot-based-update-parameters)
+    }
+
+    record snapshot-based-update-parameters {
+        payload: list<u8>,
+        mime-type: string,
+        /// The filesystem snapshot taken with the application snapshot, if any
+        filesystem-snapshot: option<string>,
     }
 
     record pending-update-parameters {
@@ -513,6 +520,14 @@ interface oplog {
     record snapshot-parameters {
         timestamp: datetime,
         data: snapshot-data,
+        /// The filesystem snapshot taken with the application snapshot, if any
+        filesystem-snapshot: option<string>,
+    }
+
+    /// The store holds the named filesystem snapshot from this point
+    record snapshot-confirmed-parameters {
+        timestamp: datetime,
+        filesystem-snapshot: string,
     }
 
     record oplog-processor-checkpoint-parameters {
@@ -694,7 +709,8 @@ interface oplog {
     record raw-snapshot-based-update {
         target-revision: component-revision,
         payload: oplog-payload,
-        mime-type: string
+        mime-type: string,
+        filesystem-snapshot: option<string>,
     }
 
     record raw-pending-update-parameters {
@@ -745,7 +761,8 @@ interface oplog {
     record raw-snapshot-parameters {
         timestamp: datetime,
         data: oplog-payload,
-        mime-type: string
+        mime-type: string,
+        filesystem-snapshot: option<string>,
     }
 
     record raw-oplog-processor-checkpoint-parameters {
@@ -874,7 +891,9 @@ interface oplog {
         completion-discarded(raw-completion-discarded-parameters),
         /// The successful completion of the durable host call started by the matching `start`
         /// was delivered to the agent at this point in the recorded execution
-        completion-delivered(raw-completion-delivered-parameters)
+        completion-delivered(raw-completion-delivered-parameters),
+        /// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
+        snapshot-confirmed(snapshot-confirmed-parameters)
     }
 
     variant public-oplog-entry {
@@ -994,7 +1013,9 @@ interface oplog {
         completion-discarded(completion-discarded-parameters),
         /// The successful completion of the durable host call started by the matching `start`
         /// was delivered to the agent at this point in the recorded execution
-        completion-delivered(completion-delivered-parameters)
+        completion-delivered(completion-delivered-parameters),
+        /// The store holds the named filesystem snapshot; the `snapshot` entry with the same name is usable
+        snapshot-confirmed(snapshot-confirmed-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

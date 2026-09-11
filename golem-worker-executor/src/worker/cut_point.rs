@@ -177,6 +177,7 @@ where
                 ..
             }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }

@@ -53,7 +53,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
 
   private val updateDescs: List[UpdateDescription] = List(
     UpdateDescription.AutoUpdate,
-    UpdateDescription.SnapshotBased(Array[Byte](1, 2, 3))
+    UpdateDescription.SnapshotBased(Array[Byte](1, 2, 3), Some("u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
   )
 
   private val logLevels: List[LogLevel] = List(
@@ -122,7 +122,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.PreRollbackRemoteTransaction(p) => s"pre-rollback(${p.beginIndex})"
     case OplogEntry.CommittedRemoteTransaction(p)   => s"committed(${p.beginIndex})"
     case OplogEntry.RolledBackRemoteTransaction(p)  => s"rolled-back(${p.beginIndex})"
-    case OplogEntry.Snapshot(ts, _, mime)           => s"snapshot($ts,$mime)"
+    case OplogEntry.Snapshot(ts, _, mime, fs)       => s"snapshot($ts,$mime,$fs)"
+    case OplogEntry.SnapshotConfirmed(ts, fs)       => s"snapshot-confirmed($ts,$fs)"
     case OplogEntry.OplogProcessorCheckpoint(p)     => s"checkpoint(${p.confirmedUpTo})"
   }
 
@@ -169,6 +170,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
       OplogEntry.CommittedRemoteTransaction(RemoteTransactionParameters(ts, BigInt(12))),
       OplogEntry.RolledBackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(13))),
+      OplogEntry.Snapshot(ts, Array[Byte](1), "application/octet-stream", Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")),
+      OplogEntry.SnapshotConfirmed(ts, "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, Some(sampleTyped), 1000L)),
       OplogEntry.AgentInvocationFinished(AgentInvocationFinishedParameters(ts, None, 0L)),
       OplogEntry.HostCall(
@@ -257,7 +260,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     test("UpdateDescription exhaustive match") {
       updateDescs.foreach {
         case UpdateDescription.AutoUpdate       => Predef.assert(true)
-        case UpdateDescription.SnapshotBased(d) => Predef.assert(d.nonEmpty)
+        case UpdateDescription.SnapshotBased(d, _) => Predef.assert(d.nonEmpty)
       }
       assertCompletes
     },

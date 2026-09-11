@@ -32,10 +32,10 @@ use golem_common::model::oplog::public_oplog_entry::{
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
     RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    SetSpanAttributeParams, SnapshotConfirmedParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
@@ -567,7 +567,11 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
             }),
-            PublicOplogEntry::Snapshot(SnapshotParams { timestamp, data }) => {
+            PublicOplogEntry::Snapshot(SnapshotParams {
+                timestamp,
+                data,
+                filesystem_snapshot,
+            }) => {
                 let (snapshot_bytes, mime_type) = match data {
                     PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }) => {
                         (data, mime_type)
@@ -584,8 +588,16 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                         data: snapshot_bytes,
                         mime_type,
                     },
+                    filesystem_snapshot,
                 })
             }
+            PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
+                timestamp,
+                filesystem_snapshot,
+            }) => Self::SnapshotConfirmed(oplog::SnapshotConfirmedParameters {
+                timestamp: timestamp.into(),
+                filesystem_snapshot,
+            }),
             PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                 timestamp,
                 plugin,
@@ -757,9 +769,11 @@ impl From<PublicUpdateDescription> for oplog::UpdateDescription {
             PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload,
                 mime_type,
-            }) => Self::SnapshotBased(crate::preview2::golem_api_1_x::host::Snapshot {
+                filesystem_snapshot,
+            }) => Self::SnapshotBased(oplog::SnapshotBasedUpdateParameters {
                 payload,
                 mime_type,
+                filesystem_snapshot,
             }),
         }
     }
@@ -1068,6 +1082,10 @@ impl TryFrom<oplog::RawUpdateDescription> for golem_common::model::oplog::Update
                 .map_err(|e| e.to_string())?,
                 payload: oplog_payload_from_wit(sbu.payload),
                 mime_type: sbu.mime_type,
+                filesystem_snapshot: sbu
+                    .filesystem_snapshot
+                    .map(|name| name.parse())
+                    .transpose()?,
             }),
         }
     }
@@ -1454,6 +1472,14 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 mime_type: params.mime_type,
                 active_cards: Vec::new(),
                 wallet_generation: 0,
+                filesystem_snapshot: params
+                    .filesystem_snapshot
+                    .map(|name| name.parse())
+                    .transpose()?,
+            }),
+            oplog::OplogEntry::SnapshotConfirmed(params) => Ok(Self::SnapshotConfirmed {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                filesystem_snapshot: params.filesystem_snapshot.parse()?,
             }),
             oplog::OplogEntry::OplogProcessorCheckpoint(params) => {
                 Ok(Self::OplogProcessorCheckpoint {
@@ -1827,10 +1853,12 @@ impl TryFrom<golem_common::model::oplog::UpdateDescription> for oplog::RawUpdate
                 target_revision,
                 payload,
                 mime_type,
+                filesystem_snapshot,
             } => Ok(Self::SnapshotBased(oplog::RawSnapshotBasedUpdate {
                 target_revision: target_revision.into(),
                 payload: oplog_payload_to_wit(payload)?,
                 mime_type,
+                filesystem_snapshot: filesystem_snapshot.map(String::from),
             })),
         }
     }
@@ -2338,12 +2366,23 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 data,
                 mime_type,
+                filesystem_snapshot,
                 ..
             } => Ok(Self::Snapshot(oplog::RawSnapshotParameters {
                 timestamp: timestamp.into(),
                 data: oplog_payload_to_wit(data)?,
                 mime_type,
+                filesystem_snapshot: filesystem_snapshot.map(String::from),
             })),
+            M::SnapshotConfirmed {
+                timestamp,
+                filesystem_snapshot,
+            } => Ok(Self::SnapshotConfirmed(
+                oplog::SnapshotConfirmedParameters {
+                    timestamp: timestamp.into(),
+                    filesystem_snapshot: filesystem_snapshot.into(),
+                },
+            )),
             M::OplogProcessorCheckpoint {
                 timestamp,
                 plugin_grant_id,

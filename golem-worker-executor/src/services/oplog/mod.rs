@@ -979,6 +979,7 @@ pub trait OplogOps: Oplog {
             target_revision,
             payload,
             mime_type,
+            filesystem_snapshot: None,
         })
     }
 

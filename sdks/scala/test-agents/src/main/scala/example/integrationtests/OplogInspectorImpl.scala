@@ -126,7 +126,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.PendingUpdate(p) =>
         val desc = p.updateDescription match {
           case OplogApi.UpdateDescription.AutoUpdate       => "auto"
-          case OplogApi.UpdateDescription.SnapshotBased(d) => s"snapshot(${d.length}B)"
+          case OplogApi.UpdateDescription.SnapshotBased(d, fs) =>
+            s"snapshot(${d.length}B fs=${fs.getOrElse("none")})"
         }
         s"PENDING_UPDATE @ $ts rev=${p.targetRevision} $desc"
       case OplogApi.OplogEntry.SuccessfulUpdate(p) =>
@@ -162,7 +163,9 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.PreRollbackRemoteTransaction(p) => s"PRE_ROLLBACK_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.CommittedRemoteTransaction(p)   => s"COMMITTED_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.RolledBackRemoteTransaction(p)  => s"ROLLED_BACK_TX @ $ts begin=${p.beginIndex}"
-      case OplogApi.OplogEntry.Snapshot(t, data, mime)         => s"SNAPSHOT @ ${t.seconds}s ${data.length}B mime=$mime"
+      case OplogApi.OplogEntry.Snapshot(t, data, mime, fs)     =>
+        s"SNAPSHOT @ ${t.seconds}s ${data.length}B mime=$mime fs=${fs.getOrElse("none")}"
+      case OplogApi.OplogEntry.SnapshotConfirmed(t, fs)        => s"SNAPSHOT_CONFIRMED @ ${t.seconds}s fs=$fs"
       case OplogApi.OplogEntry.OplogProcessorCheckpoint(p)     =>
         s"OPLOG_CHECKPOINT @ $ts plugin=${p.plugin.name} confirmed=${p.confirmedUpTo}"
     }

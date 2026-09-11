@@ -168,6 +168,7 @@ impl OplogEntry {
             | OplogEntry::CommittedRemoteTransaction { .. }
             | OplogEntry::RolledBackRemoteTransaction { .. }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
@@ -255,6 +256,7 @@ impl OplogEntry {
             | OplogEntry::CommittedRemoteTransaction { .. }
             | OplogEntry::RolledBackRemoteTransaction { .. }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
@@ -415,6 +417,7 @@ impl OplogScopeProjection {
                 ..
             }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }

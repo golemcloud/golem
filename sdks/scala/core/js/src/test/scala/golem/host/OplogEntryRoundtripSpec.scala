@@ -634,7 +634,11 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           targetRevision = js.BigInt("5"),
           description = js.Dynamic.literal(
             tag = "snapshot-based",
-            `val` = js.Dynamic.literal(payload = snapshotData, mimeType = "application/octet-stream")
+            `val` = js.Dynamic.literal(
+              payload = snapshotData,
+              mimeType = "application/octet-stream",
+              filesystemSnapshot = "u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+            )
           )
         )
       )
@@ -643,8 +647,50 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.PendingUpdate],
         ud.isInstanceOf[UpdateDescription.SnapshotBased],
-        ud.asInstanceOf[UpdateDescription.SnapshotBased].data.toList == List[Byte](1, 2, 3)
+        ud.asInstanceOf[UpdateDescription.SnapshotBased].data.toList == List[Byte](1, 2, 3),
+        ud.asInstanceOf[UpdateDescription.SnapshotBased].filesystemSnapshot.contains(
+          "u-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+        )
       )
+    },
+    test("Snapshot with filesystem snapshot from dynamic") {
+      val snapshotData = new scala.scalajs.js.typedarray.Uint8Array(js.Array[Short](4, 5))
+      val raw          = wrapEntry(
+        "snapshot",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          data = js.Dynamic.literal(data = snapshotData, mimeType = "application/octet-stream"),
+          filesystemSnapshot = "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Snapshot]
+      assertTrue(
+        parsed.data.toList == List[Byte](4, 5),
+        parsed.filesystemSnapshot.contains("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
+      )
+    },
+    test("Snapshot without filesystem snapshot from dynamic") {
+      val snapshotData = new scala.scalajs.js.typedarray.Uint8Array(js.Array[Short](4, 5))
+      val raw          = wrapEntry(
+        "snapshot",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          data = js.Dynamic.literal(data = snapshotData, mimeType = "application/octet-stream")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.Snapshot]
+      assertTrue(parsed.filesystemSnapshot.isEmpty)
+    },
+    test("SnapshotConfirmed from dynamic") {
+      val raw = wrapEntry(
+        "snapshot-confirmed",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          filesystemSnapshot = "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.SnapshotConfirmed]
+      assertTrue(parsed.filesystemSnapshot == "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
     },
     test("SuccessfulUpdate from dynamic") {
       val raw = wrapEntry(

@@ -215,6 +215,59 @@ impl SpanData {
     }
 }
 
+/// The name of one filesystem snapshot of an agent.
+///
+/// The name is `p-<uuid>` for a periodic snapshot and `u-<uuid>` for a manual-update snapshot.
+/// The caller chooses the name before the snapshot record is written. The record holds the name
+/// and never derives it from an oplog index.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(transparent)]
+pub struct FilesystemSnapshotName(String);
+
+impl FilesystemSnapshotName {
+    const PERIODIC_PREFIX: &'static str = "p-";
+    const UPDATE_PREFIX: &'static str = "u-";
+
+    /// Makes a new name for a periodic snapshot.
+    pub fn periodic() -> Self {
+        Self(format!("{}{}", Self::PERIODIC_PREFIX, Uuid::new_v4()))
+    }
+
+    /// Makes a new name for a manual-update snapshot.
+    pub fn update() -> Self {
+        Self(format!("{}{}", Self::UPDATE_PREFIX, Uuid::new_v4()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for FilesystemSnapshotName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::str::FromStr for FilesystemSnapshotName {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let uuid = value
+            .strip_prefix(Self::PERIODIC_PREFIX)
+            .or_else(|| value.strip_prefix(Self::UPDATE_PREFIX))
+            .ok_or_else(|| format!("Invalid filesystem snapshot name: {value}"))?;
+        Uuid::parse_str(uuid).map_err(|_| format!("Invalid filesystem snapshot name: {value}"))?;
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl From<FilesystemSnapshotName> for String {
+    fn from(value: FilesystemSnapshotName) -> Self {
+        value.0
+    }
+}
+
 /// Describes a pending update
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
@@ -227,6 +280,9 @@ pub enum UpdateDescription {
         target_revision: ComponentRevision,
         payload: OplogPayload<Vec<u8>>,
         mime_type: String,
+        /// The filesystem snapshot that was taken with this application snapshot. `None` when
+        /// no filesystem capture was made.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
     },
 }
 

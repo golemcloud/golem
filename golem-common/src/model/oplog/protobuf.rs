@@ -62,9 +62,9 @@ use crate::model::oplog::public_oplog_entry::{
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    SnapshotConfirmedParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
+    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
@@ -1152,8 +1152,15 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
                     timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
                     data,
+                    filesystem_snapshot: snapshot.filesystem_snapshot,
                 }))
             }
+            oplog_entry::Entry::SnapshotConfirmed(value) => Ok(
+                PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    filesystem_snapshot: value.filesystem_snapshot,
+                }),
+            ),
             oplog_entry::Entry::OplogProcessorCheckpoint(value) => Ok(
                 PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1827,6 +1834,17 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::SnapshotDataParameters {
                             timestamp: Some(snapshot.timestamp.into()),
                             data: Some(data),
+                            filesystem_snapshot: snapshot.filesystem_snapshot,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::SnapshotConfirmed(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::SnapshotConfirmed(
+                        golem_api_grpc::proto::golem::worker::SnapshotConfirmedParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            filesystem_snapshot: params.filesystem_snapshot,
                         },
                     )),
                 }
@@ -2621,6 +2639,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
             ) => Ok(PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: snapshot_based.payload,
                 mime_type: snapshot_based.mime_type,
+                filesystem_snapshot: snapshot_based.filesystem_snapshot,
             })),
         }
     }
@@ -2643,6 +2662,7 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
                             golem_api_grpc::proto::golem::worker::SnapshotBasedUpdateParameters {
                                 payload: snapshot_based.payload,
                                 mime_type: snapshot_based.mime_type,
+                                filesystem_snapshot: snapshot_based.filesystem_snapshot,
                             }
                         ),
                     ),
@@ -3213,8 +3233,16 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     mime_type,
                     active_cards: Vec::new(),
                     wallet_generation: 0,
+                    filesystem_snapshot: p
+                        .filesystem_snapshot
+                        .map(|name| name.parse())
+                        .transpose()?,
                 })
             }
+            PublicOplogEntry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {
+                timestamp: p.timestamp,
+                filesystem_snapshot: p.filesystem_snapshot.parse()?,
+            }),
             PublicOplogEntry::OplogProcessorCheckpoint(p) => {
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp: p.timestamp,
@@ -3644,11 +3672,13 @@ fn update_description_to_proto(
             target_revision,
             payload,
             mime_type,
+            filesystem_snapshot,
         } => Ok(RawUpdateDescription {
             description: Some(Description::SnapshotBased(RawSnapshotBasedUpdate {
                 target_revision: target_revision.into(),
                 payload: Some(oplog_payload_to_proto(payload)?),
                 mime_type,
+                filesystem_snapshot: filesystem_snapshot.map(String::from),
             })),
         }),
     }
@@ -3673,6 +3703,10 @@ fn update_description_from_proto(
                     .ok_or("Missing payload in SnapshotBasedUpdate")?,
             )?,
             mime_type: snap.mime_type,
+            filesystem_snapshot: snap
+                .filesystem_snapshot
+                .map(|name| name.parse())
+                .transpose()?,
         }),
     }
 }
@@ -3702,8 +3736,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSetSpanAttributeParameters,
-            RawSnapshotParameters, RawStartParameters, RawStartSpanParameters,
-            RawSuccessfulUpdateParameters, RawTimestampOnly,
+            RawSnapshotConfirmedParameters, RawSnapshotParameters, RawStartParameters,
+            RawStartSpanParameters, RawSuccessfulUpdateParameters, RawTimestampOnly,
         };
 
         let timestamp = value.timestamp();
@@ -4038,6 +4072,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 mime_type,
                 active_cards,
                 wallet_generation,
+                filesystem_snapshot,
                 ..
             } => Entry::Snapshot(RawSnapshotParameters {
                 data: Some(oplog_payload_to_proto(data)?),
@@ -4047,6 +4082,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .map(|card| crate::serialization::serialize(&card))
                     .collect::<Result<Vec<_>, _>>()?,
                 wallet_generation,
+                filesystem_snapshot: filesystem_snapshot.map(String::from),
+            }),
+            OplogEntry::SnapshotConfirmed {
+                filesystem_snapshot,
+                ..
+            } => Entry::SnapshotConfirmed(RawSnapshotConfirmedParameters {
+                filesystem_snapshot: filesystem_snapshot.into(),
             }),
             OplogEntry::OplogProcessorCheckpoint {
                 plugin_grant_id,
@@ -4628,8 +4670,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .map(|card| deserialize_stored_card(&card, "active card"))
                         .collect::<Result<Vec<_>, _>>()?,
                     wallet_generation: p.wallet_generation,
+                    filesystem_snapshot: p
+                        .filesystem_snapshot
+                        .map(|name| name.parse())
+                        .transpose()?,
                 })
             }
+            Entry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {
+                timestamp,
+                filesystem_snapshot: p.filesystem_snapshot.parse()?,
+            }),
             Entry::OplogProcessorCheckpoint(p) => {
                 let plugin_grant_id = p
                     .plugin_grant_id

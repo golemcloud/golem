@@ -39,9 +39,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
     PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
     RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotConfirmedParams, SnapshotParams,
+    StartParams, StartSpanParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -608,7 +608,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         PublicUpdateDescription::Automatic(Empty {})
                     }
                     UpdateDescription::SnapshotBased {
-                        payload, mime_type, ..
+                        payload,
+                        mime_type,
+                        filesystem_snapshot,
+                        ..
                     } => {
                         let bytes = oplog_service
                             .download_payload(owned_agent_id, agent_mode, payload)
@@ -616,6 +619,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                             payload: bytes,
                             mime_type,
+                            filesystem_snapshot: filesystem_snapshot.map(String::from),
                         })
                     }
                 };
@@ -865,6 +869,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 data,
                 mime_type,
+                filesystem_snapshot,
                 ..
             } => {
                 let bytes: Vec<u8> = oplog_service
@@ -879,8 +884,18 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
                     timestamp,
                     data: snapshot_data,
+                    filesystem_snapshot: filesystem_snapshot.map(String::from),
                 }))
             }
+            OplogEntry::SnapshotConfirmed {
+                timestamp,
+                filesystem_snapshot,
+            } => Ok(PublicOplogEntry::SnapshotConfirmed(
+                SnapshotConfirmedParams {
+                    timestamp,
+                    filesystem_snapshot: filesystem_snapshot.into(),
+                },
+            )),
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp,
                 plugin_grant_id,
