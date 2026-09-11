@@ -225,7 +225,8 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
 impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
     type Error = String;
 
-    fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
+    fn try_from(mut value: PublicOplogEntry) -> Result<Self, String> {
+        value.redact_host_managed_values_for_external();
         Ok(match value {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,

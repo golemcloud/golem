@@ -826,6 +826,32 @@ describe('RPC client', () => {
     expect('scheduleCancelable' in client.ping).toBe(false);
   });
 
+  it('rolls back client input record capability adoption when a later field fails', () => {
+    const def = defineAgent({
+      name: 'CapabilityInputAgent',
+      id: {},
+      methods: {
+        send: method({
+          input: { capability: s.secret(z.string()), later: z.string() },
+          returns: z.void(),
+        }),
+      },
+    });
+    const raw = { id: 'client-capability' } as never;
+    const capability = compileSchema(s.secret(z.string()));
+    const client = def.client.get({});
+
+    expect(() =>
+      client.send.trigger({
+        capability: raw,
+        get later() {
+          throw new Error('client record failed');
+        },
+      }),
+    ).toThrow('client record failed');
+    expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+  });
+
   it('uses one logical client for ephemeral invocations and returns final identity metadata', async () => {
     const ephemeralDef = defineAgentClient({
       name: 'EphemeralClientTestAgent',

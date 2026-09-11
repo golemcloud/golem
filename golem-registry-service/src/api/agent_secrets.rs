@@ -17,9 +17,12 @@ use crate::services::agent_secret::AgentSecretService;
 use crate::services::auth::AuthService;
 use golem_common::model::Page;
 use golem_common::model::agent_secret::{
-    AgentSecretCreation, AgentSecretDto, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
+    AgentSecretDto as DomainAgentSecretDto, AgentSecretId, AgentSecretRevision,
 };
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::external_agent_secret::{
+    AgentSecretCreation, AgentSecretDto, AgentSecretUpdate,
+};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
@@ -87,10 +90,12 @@ impl AgentSecretsApi {
     ) -> ApiResult<Json<AgentSecretDto>> {
         let result = self
             .agent_secret_service
-            .create(environment_id, payload, &auth)
+            .create(environment_id, payload.into(), &auth)
             .await?;
 
-        Ok(Json(result.into()))
+        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
+            .map_err(anyhow::Error::msg)?;
+        Ok(Json(result))
     }
 
     /// List all agent secrets of the environment
@@ -130,7 +135,11 @@ impl AgentSecretsApi {
             .list_in_environment(environment_id, &auth)
             .await?;
 
-        let converted = result.into_iter().map(AgentSecretDto::from).collect();
+        let converted = result
+            .into_iter()
+            .map(|value| AgentSecretDto::try_from(DomainAgentSecretDto::from(value)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::msg)?;
 
         Ok(Json(Page { values: converted }))
     }
@@ -170,7 +179,9 @@ impl AgentSecretsApi {
             .agent_secret_service
             .get(agent_secret_id, &auth)
             .await?;
-        Ok(Json(result.into()))
+        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
+            .map_err(anyhow::Error::msg)?;
+        Ok(Json(result))
     }
 
     /// Update agent secret
@@ -208,9 +219,11 @@ impl AgentSecretsApi {
     ) -> ApiResult<Json<AgentSecretDto>> {
         let result = self
             .agent_secret_service
-            .update(agent_secret_id, data, &auth)
+            .update(agent_secret_id, data.into(), &auth)
             .await?;
-        Ok(Json(result.into()))
+        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
+            .map_err(anyhow::Error::msg)?;
+        Ok(Json(result))
     }
 
     /// Delete agent secret
@@ -250,6 +263,38 @@ impl AgentSecretsApi {
             .agent_secret_service
             .delete(agent_secret_id, current_revision, &auth)
             .await?;
-        Ok(Json(result.into()))
+        let result = AgentSecretDto::try_from(DomainAgentSecretDto::from(result))
+            .map_err(anyhow::Error::msg)?;
+        Ok(Json(result))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use golem_common::model::agent_secret::{
+        AgentSecretCreation as DomainAgentSecretCreation, AgentSecretPath,
+    };
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, SecretValuePayload};
+    use test_r::test;
+
+    #[test]
+    fn agent_secret_api_rejects_forged_host_managed_values() {
+        let creation = DomainAgentSecretCreation {
+            path: AgentSecretPath(vec!["credential".to_string()]),
+            secret_type: SchemaGraph::anonymous(SchemaType::string()),
+            secret_value: Some(SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: None,
+                version: 1,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
+            })),
+        };
+
+        let json = serde_json::to_value(creation).unwrap();
+        let error = serde_json::from_value::<AgentSecretCreation>(json).unwrap_err();
+        assert!(error.to_string().contains("secret"));
     }
 }

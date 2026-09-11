@@ -402,6 +402,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )));
         }
         let config = decoded_config;
+        self.check_read_only_allows("golem::rpc::wasm-rpc::new")
+            .map_err(wasmtime::Error::from)?;
         let span = create_rpc_connection_span(self, &remote_agent_id).await?;
         let pinned_ephemeral_identity =
             agent_mode == AgentMode::Ephemeral && agent_id.phantom_id.is_some();

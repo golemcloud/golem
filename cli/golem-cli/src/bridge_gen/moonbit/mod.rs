@@ -40,7 +40,7 @@ use crate::bridge_gen::moonbit::moonbit::{
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, projected_input_schema_graph,
-    projected_schema_graph,
+    projected_schema_graph, validate_host_managed_agent_bridge_policy,
 };
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
@@ -217,6 +217,7 @@ impl MoonBitBridgeGenerator {
         mode: MoonBitBridgeMode,
         extra_reserved_names: impl IntoIterator<Item = String>,
     ) -> anyhow::Result<Self> {
+        validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type.source_language.eq_ignore_ascii_case("moonbit");
 
         let mut reserved_names = RESERVED_TYPE_NAMES
@@ -427,6 +428,8 @@ impl MoonBitBridgeGenerator {
                     ),
                     ("@rpc.", "\"golemcloud/golem_sdk/rpc\""),
                     ("@model.", "\"golemcloud/golem_sdk/schema_model\" @model"),
+                    ("@schema.", "\"golemcloud/golem_sdk/schema\""),
+                    ("@quota.", "\"golemcloud/golem_sdk/quota\""),
                     (
                         "@model_host.",
                         "\"golemcloud/golem_sdk/schema_model_host\" @model_host",
@@ -513,8 +516,11 @@ impl MoonBitBridgeGenerator {
         name: &str,
         resolved: &SchemaType,
     ) -> anyhow::Result<()> {
-        let derives = if self.mode == MoonBitBridgeMode::ExternalRest
-            && contains_stream_in_graph(&self.agent_type.schema, resolved)
+        let derives = if (self.mode == MoonBitBridgeMode::ExternalRest
+            && contains_stream_in_graph(&self.agent_type.schema, resolved))
+            || (self.mode == MoonBitBridgeMode::GuestWasmRpc
+                && golem_common::schema::find_host_managed_type(&self.agent_type.schema, resolved)?
+                    .is_some())
         {
             ""
         } else {
@@ -679,7 +685,21 @@ impl MoonBitBridgeGenerator {
                 writer.line(format!("{}({ty})", mm.case_idents[idx]));
             }
             writer.dedent();
-            writer.line(format!("}} {}", self.type_derives()));
+            let mut derives = self.type_derives();
+            if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+                for (_, payload) in &mm.cases {
+                    if golem_common::schema::find_host_managed_type(
+                        &self.agent_type.schema,
+                        payload,
+                    )?
+                    .is_some()
+                    {
+                        derives = "";
+                        break;
+                    }
+                }
+            }
+            writer.line(format!("}} {derives}"));
             writer.blank();
 
             // encode
@@ -2636,6 +2656,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "Bare text/binary rich scalars have no MoonBit bridge encoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@model.SchemaValue::Secret({val})")
+            }
+            SchemaType::QuotaToken { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@schema.to_value_as({val})")
+            }
+            SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@model.SchemaValue::PermissionCard({val})")
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
@@ -2808,6 +2837,19 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "Bare text/binary rich scalars have no MoonBit bridge decoding; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!(
+                    "match {val} {{ @model.SchemaValue::Secret(handle) => handle; other => codec_mismatch(\"secret\", other) }}"
+                )
+            }
+            SchemaType::QuotaToken { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!("@schema.from_value_as({val})")
+            }
+            SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                format!(
+                    "match {val} {{ @model.SchemaValue::PermissionCard(handle) => handle; other => codec_mismatch(\"permission-card\", other) }}"
+                )
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
@@ -2991,6 +3033,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 "Bare text/binary rich scalars have no MoonBit bridge type; \
                  wrap them in the unstructured text/binary variant ({resolved:?})"
             ),
+            SchemaType::Secret { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                Ok("@model.GuestSecretHandle".to_string())
+            }
+            SchemaType::QuotaToken { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                Ok("@quota.QuotaToken".to_string())
+            }
+            SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
+                Ok("@model.GuestPermissionCardHandle".to_string())
+            }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }

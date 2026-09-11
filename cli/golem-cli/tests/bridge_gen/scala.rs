@@ -902,6 +902,65 @@ fn guest_durable_phantom_constructors_use_replay_safe_identity() {
     compile_guest_if_enabled(dir.as_path());
 }
 
+#[test]
+fn guest_generation_compiles_nested_named_and_multimodal_host_managed_capabilities() {
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+    ]);
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "CapabilityAgent",
+            "scala",
+            vec![],
+            vec![
+                method(
+                    "transfer",
+                    vec![field("envelope", ref_to("capability-envelope"))],
+                    Some(ref_to("capability-envelope")),
+                ),
+                method(
+                    "transferMultimodal",
+                    vec![field("capabilities", capability_modalities.clone())],
+                    Some(capability_modalities),
+                ),
+            ],
+            vec![def("capability-envelope", envelope)],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/capability_agent/CapabilityAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(source.contains("_root_.golem.schema.GuestSecretHandle"));
+    assert!(source.contains("_root_.golem.host.QuotaApi.QuotaToken"));
+    assert!(source.contains("_root_.golem.schema.GuestPermissionCardHandle"));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.SecretValue("));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.QuotaTokenHandle("));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.PermissionCardHandle("));
+    assert!(source.contains("final case class CapabilityEnvelope("));
+    assert!(source.contains("sealed trait Multimodal0"));
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
 /// Generates a bridge for an agent with rich named types (record, enum,
 /// variant) and checks the emitted Scala definitions.
 #[test]
