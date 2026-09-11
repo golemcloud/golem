@@ -152,4 +152,32 @@ mod tests {
         assert!(!dropped_root.exists());
         assert!(std::fs::read_dir(space.root()).unwrap().next().is_none());
     }
+
+    #[test]
+    async fn discard_reports_a_removal_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let space = ScratchSpace::create(parent.path(), None, &RetryConfig::default()).unwrap();
+        let tree = space.create_tree_blocking().unwrap();
+        let locked = tree.root().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("file"), b"contents").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let error = tree.discard().await.unwrap_err();
+
+        assert!(error.cleanup_failed(), "{error}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("failed to discard scratch tree"),
+            "{error}"
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(locked.join("file").is_file());
+    }
 }

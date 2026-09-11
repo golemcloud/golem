@@ -1953,6 +1953,14 @@ mod tests {
                 .join(scratch::SCRATCH_DIRECTORY_NAME)
                 .exists()
         );
+        assert!(
+            !FilesystemStorageError::allocation_unsupported(Path::new("<other>"))
+                .capture_is_unsupported()
+        );
+        assert!(
+            !FilesystemStorageError::verification("other operation", Path::new("<other>"))
+                .capture_is_unsupported()
+        );
 
         SandboxFilesystem::delete_and_verify(&filesystem)
             .await
