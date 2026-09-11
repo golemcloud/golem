@@ -30,14 +30,20 @@ const MIME_TYPE_PATTERN: &str = "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$";
 
 /// Configuration for the JSON Schema renderer.
 ///
-/// The renderer always produces the same canonical structural document for
-/// every consumer; the only knob is whether to emit the `$schema` draft
-/// marker at the document root (consumers that embed the schema elsewhere,
-/// such as tool/resource schemas, omit it).
+/// The public constants select the trusted canonical representation; boundary
+/// renderers additionally select their host-managed capability policy.
 #[derive(Clone, Copy, Debug)]
 pub struct JsonSchemaConfig {
     /// Emit the `$schema` JSON Schema draft marker at the document root.
     pub include_draft_marker: bool,
+    host_managed: HostManagedSchemaPolicy,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum HostManagedSchemaPolicy {
+    TrustedSnapshot,
+    Reject,
+    Redact,
 }
 
 impl JsonSchemaConfig {
@@ -45,12 +51,24 @@ impl JsonSchemaConfig {
     /// draft marker).
     pub const CANONICAL: Self = Self {
         include_draft_marker: true,
+        host_managed: HostManagedSchemaPolicy::TrustedSnapshot,
     };
 
     /// Canonical JSON Schema document without the `$schema` draft marker, for
     /// consumers that embed the schema elsewhere (e.g. tool/resource schemas).
     pub const WITHOUT_DRAFT_MARKER: Self = Self {
         include_draft_marker: false,
+        host_managed: HostManagedSchemaPolicy::TrustedSnapshot,
+    };
+
+    pub(crate) const EXTERNAL_INPUT: Self = Self {
+        include_draft_marker: false,
+        host_managed: HostManagedSchemaPolicy::Reject,
+    };
+
+    pub(crate) const EXTERNAL_OUTPUT: Self = Self {
+        include_draft_marker: false,
+        host_managed: HostManagedSchemaPolicy::Redact,
     };
 }
 
@@ -104,6 +122,40 @@ pub fn to_json_schema_with_config(
         return Value::Object(with_schema);
     }
     root
+}
+
+/// Render a JSON Schema for untrusted external input. Host-managed capability
+/// leaves cannot be constructed by callers.
+pub fn to_external_input_json_schema(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    include_draft_marker: bool,
+) -> Value {
+    to_json_schema_with_config(
+        graph,
+        ty,
+        JsonSchemaConfig {
+            include_draft_marker,
+            ..JsonSchemaConfig::EXTERNAL_INPUT
+        },
+    )
+}
+
+/// Render a JSON Schema for externally visible output. Host-managed capability
+/// leaves expose only their redacted placeholders.
+pub fn to_external_output_json_schema(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    include_draft_marker: bool,
+) -> Value {
+    to_json_schema_with_config(
+        graph,
+        ty,
+        JsonSchemaConfig {
+            include_draft_marker,
+            ..JsonSchemaConfig::EXTERNAL_OUTPUT
+        },
+    )
 }
 
 /// Whether `ty`, after following any `Ref` chain against `graph`, is an
@@ -732,9 +784,21 @@ pub(super) fn render_type(
 
         SchemaType::Union { spec, .. } => Value::Object(union_schema(graph, spec, table, config)),
 
-        SchemaType::Secret { spec, .. } => Value::Object(secret_schema(spec)),
-        SchemaType::QuotaToken { spec, .. } => Value::Object(quota_token_schema(spec)),
-        SchemaType::PermissionCard { spec, .. } => Value::Object(permission_card_schema(spec)),
+        SchemaType::Secret { spec, .. } => {
+            host_managed_schema(config.host_managed, "secret", || {
+                Value::Object(secret_schema(spec))
+            })
+        }
+        SchemaType::QuotaToken { spec, .. } => {
+            host_managed_schema(config.host_managed, "quota-token", || {
+                Value::Object(quota_token_schema(spec))
+            })
+        }
+        SchemaType::PermissionCard { spec, .. } => {
+            host_managed_schema(config.host_managed, "permission-card", || {
+                Value::Object(permission_card_schema(spec))
+            })
+        }
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => obj([
             ("type", Value::String("null".to_string())),
@@ -751,6 +815,35 @@ pub(super) fn render_type(
     // Schema, not only named definitions.
     attach_metadata(&mut rendered, ty.metadata());
     rendered
+}
+
+fn host_managed_schema(
+    policy: HostManagedSchemaPolicy,
+    kind: &str,
+    trusted: impl FnOnce() -> Value,
+) -> Value {
+    match policy {
+        HostManagedSchemaPolicy::TrustedSnapshot => trusted(),
+        HostManagedSchemaPolicy::Reject => obj([
+            ("not", Value::Object(Map::new())),
+            (
+                "description",
+                Value::String(format!(
+                    "Host-managed {kind} capabilities cannot be supplied externally"
+                )),
+            ),
+        ]),
+        HostManagedSchemaPolicy::Redact => obj([
+            ("type", Value::String("string".to_string())),
+            ("const", Value::String(format!("<redacted: {kind}>"))),
+            (
+                "description",
+                Value::String(format!(
+                    "Host-managed {kind} capability values are redacted"
+                )),
+            ),
+        ]),
+    }
 }
 
 fn ref_pointer(id: &TypeId, _root: bool) -> String {

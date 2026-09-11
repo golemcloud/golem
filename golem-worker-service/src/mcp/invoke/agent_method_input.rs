@@ -19,7 +19,7 @@ use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{SchemaValue, VariantValuePayload};
-use golem_schema::schema::render::json_value::from_json_value;
+use golem_schema::schema::render::json_value::from_untrusted_json_value;
 use rmcp::model::JsonObject;
 use std::collections::HashMap;
 
@@ -148,7 +148,7 @@ fn extract_single_field_value(
                     }
                 }
             };
-            from_json_value(graph, &field.schema, &json_value)
+            from_untrusted_json_value(graph, &field.schema, &json_value)
                 .map_err(|e| format!("Failed to parse parameter '{}': {}", name, e))
         }
     }
@@ -263,6 +263,21 @@ mod tests {
         let args: JsonObject = json!({}).as_object().unwrap().clone();
         let err = get_agent_method_input(&args, &graph(), &schema).unwrap_err();
         assert!(err.contains("Missing parameter: city"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_host_managed_method_parameters() {
+        let schema = input(vec![NamedField::user_supplied(
+            "credential",
+            SchemaType::secret(Default::default()),
+        )]);
+        let args: JsonObject = json!({"credential": "forged"}).as_object().unwrap().clone();
+
+        let err = get_agent_method_input(&args, &graph(), &schema).unwrap_err();
+        assert!(
+            err.contains("host-managed capability `secret`"),
+            "got: {err}"
+        );
     }
 
     #[test]

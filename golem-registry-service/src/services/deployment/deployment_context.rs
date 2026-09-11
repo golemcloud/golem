@@ -1066,7 +1066,8 @@ fn compile_tool_binding(
 ///
 /// The deployment request DTO carries ergonomic, human-shaped JSON (raw
 /// scalars, field-named record objects). It is decoded directly into a
-/// schema-native [`SchemaValue`] via [`golem_schema::schema::render::from_json_value`], which both
+/// schema-native [`SchemaValue`] via
+/// [`golem_schema::schema::render::from_untrusted_json_value`], which both
 /// type-checks the payload against the agent-declared schema and produces the
 /// value in one step.
 fn parse_default_secret_value(
@@ -1076,11 +1077,15 @@ fn parse_default_secret_value(
 ) -> Result<Option<golem_common::schema::schema_value::SchemaValue>, DeployValidationError> {
     default
         .map(|sd| {
-            golem_schema::schema::render::from_json_value(schema, &schema.root, &sd.secret_value)
-                .map_err(|e| DeployValidationError::AgentSecretDefaultTypeMismatch {
-                    path: path.clone(),
-                    errors: vec![e.to_string()],
-                })
+            golem_schema::schema::render::from_untrusted_json_value(
+                schema,
+                &schema.root,
+                &sd.secret_value,
+            )
+            .map_err(|e| DeployValidationError::AgentSecretDefaultTypeMismatch {
+                path: path.clone(),
+                errors: vec![e.to_string()],
+            })
         })
         .transpose()
 }

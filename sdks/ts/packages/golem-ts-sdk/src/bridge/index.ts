@@ -30,3 +30,4 @@ export type UnstructuredBinaryType<MT extends string[] | string = string> =
 export * from './schema';
 export * from './agent';
 export * from './tool';
+export { withCapabilityAdoptionTransaction } from '../internal/schema-model/capabilityTransaction';

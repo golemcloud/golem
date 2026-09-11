@@ -39,6 +39,122 @@ pub struct PublicTypedAgentConfigEntry {
     pub value: TypedSchemaValue,
 }
 
+fn redact_typed_value(value: &mut TypedSchemaValue) {
+    *value = crate::schema::redact_host_managed_typed_value(value.clone());
+}
+
+impl PublicAgentInvocation {
+    fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::AgentInitialization(params) => {
+                redact_typed_value(&mut params.constructor_parameters)
+            }
+            Self::AgentMethodInvocation(params) => redact_typed_value(&mut params.function_input),
+            _ => {}
+        }
+    }
+}
+
+impl PublicAgentInvocationResult {
+    fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::AgentInitialization(params) | Self::AgentMethod(params) => {
+                redact_typed_value(&mut params.output)
+            }
+            _ => {}
+        }
+    }
+}
+
+impl PublicOplogEntry {
+    pub fn redact_host_managed_values_for_external(&mut self) {
+        match self {
+            Self::Create(params) => {
+                for entry in &mut params.local_agent_config {
+                    redact_typed_value(&mut entry.value);
+                }
+            }
+            Self::Start(params) => {
+                if let Some(value) = &mut params.request {
+                    redact_typed_value(value);
+                }
+            }
+            Self::End(params) => {
+                if let Some(value) = &mut params.response {
+                    redact_typed_value(value);
+                }
+            }
+            Self::Cancelled(params) => {
+                if let Some(value) = &mut params.partial {
+                    redact_typed_value(value);
+                }
+            }
+            Self::AgentInvocationStarted(params) => {
+                params.invocation.redact_host_managed_values_for_external()
+            }
+            Self::AgentInvocationFinished(params) => {
+                params.result.redact_host_managed_values_for_external()
+            }
+            Self::HostStreamFrame(params) => redact_typed_value(&mut params.payload),
+            Self::StreamRegistered(params) => redact_typed_value(&mut params.record),
+            Self::StreamItems(params) => redact_typed_value(&mut params.record),
+            Self::StreamEnd(params) => redact_typed_value(&mut params.record),
+            Self::StreamCancel(params) => redact_typed_value(&mut params.record),
+            Self::StreamSession(params) => redact_typed_value(&mut params.record),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_managed_redaction_tests {
+    use super::*;
+    use crate::base_model::oplog::public_oplog_entry::HostStreamFrameParams;
+    use crate::schema::{
+        SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
+    };
+    use chrono::{TimeZone, Utc};
+    use test_r::test;
+
+    fn secret() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::secret(Default::default())),
+            SchemaValue::Secret(SecretValuePayload {
+                secret_id: uuid::Uuid::nil(),
+                config_key: Some(vec!["credential".to_string()]),
+                version: 7,
+                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                category: None,
+            }),
+        )
+    }
+
+    #[test]
+    fn public_oplog_redacts_host_managed_stream_payloads() {
+        let mut entry = PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: OplogIndex::INITIAL,
+            kind: HostStreamKind::P3HttpRequestBody,
+            payload: secret(),
+        });
+
+        entry.redact_host_managed_values_for_external();
+
+        let PublicOplogEntry::HostStreamFrame(parameters) = entry else {
+            unreachable!()
+        };
+        assert!(find_host_managed_value(parameters.payload.value()).is_none());
+        assert!(matches!(
+            parameters.payload.value(),
+            SchemaValue::String(value) if value == "<redacted: secret>"
+        ));
+        assert!(matches!(
+            parameters.payload.root_type(),
+            SchemaType::String { .. }
+        ));
+    }
+}
+
 #[cfg(feature = "full")]
 impl TryFrom<PublicTypedAgentConfigEntry> for crate::base_model::worker::UntypedAgentConfigEntry {
     type Error = String;

@@ -155,6 +155,16 @@ pub fn[T : ConfigField] load_config(
 }
 
 ///|
+/// Loads fresh agent configuration while constructing an agent from a snapshot.
+pub fn[T : ConfigField] load_snapshot_config(
+  context : @agents.SnapshotRestoreContext,
+  tag : @schema.TypeTag[T],
+) -> Config[T] raise @common.AgentError {
+  let _ = context
+  load_config(tag)
+}
+
+///|
 /// Collect the config declarations contributed by `T` rooted at `path`.
 pub fn[T : ConfigField] collect_entries_of(
   _tag : @schema.TypeTag[T],
