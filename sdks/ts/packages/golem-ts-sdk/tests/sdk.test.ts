@@ -112,9 +112,11 @@ function remoteClientTypeChecks(): void {
   });
   void agentId.client(sharedContract).ping();
   void agentId.dynamicClient().method('ping');
+  // @ts-expect-error binding-only contracts cannot declare a name without an ID shape
+  defineAgentClient({ name: 'Named', methods: sharedContract.methods });
   // @ts-expect-error lifecycle mode belongs to exact constructor definitions, not ID bindings
   defineAgentClient({ mode: 'durable', methods: sharedContract.methods });
-  // @ts-expect-error name-only ID bindings do not carry lifecycle mode either
+  // @ts-expect-error binding-only contracts cannot declare a name or lifecycle mode
   defineAgentClient({ name: 'Named', mode: 'ephemeral', methods: sharedContract.methods });
   // @ts-expect-error binding definitions expose no synthetic lifecycle mode
   void sharedContract.mode;
@@ -650,7 +652,18 @@ describe('RPC client', () => {
         methods: { ping: method({ input: {}, returns: z.string() }) },
       } as any),
     ).toThrow(
-      'Agent ID binding contracts may only define methods and an optional name; id, config, and mode require a complete exact name + id definition',
+      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
+    );
+  });
+
+  it('rejects a type name without an ID shape on binding contracts', () => {
+    expect(() =>
+      defineAgentClient({
+        name: 'NamedBinding',
+        methods: { ping: method({ input: {}, returns: z.string() }) },
+      } as any),
+    ).toThrow(
+      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
     );
   });
 
@@ -697,9 +710,10 @@ describe('RPC client', () => {
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
 
-  it('checks an optional exact name locally before creating the remote client', () => {
+  it('checks a complete contract name locally before creating the remote client', () => {
     const contract = defineAgentClient({
       name: 'ExpectedAgent',
+      id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     const target = new ParsedAgentId('OtherAgent(one)');

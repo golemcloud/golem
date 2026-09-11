@@ -6,7 +6,7 @@ struct Query {
     text: String,
 }
 
-#[agent_client(type_name = "SearchAgent")]
+#[agent_client]
 trait SearchApi {
     fn status(&self) -> String;
     fn search(&self, query: Query, limit: u32) -> Vec<String>;

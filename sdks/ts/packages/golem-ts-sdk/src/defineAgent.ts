@@ -209,7 +209,6 @@ export interface AgentClientContract<
 export interface AgentClientBindingDefinition<
   Methods extends MethodsRecord,
 > extends AgentClientBinding<import('./client').RemoteClient<Methods>> {
-  readonly name?: string;
   readonly methods: Methods;
 }
 
