@@ -3085,6 +3085,17 @@ impl DurableSessionStreams {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
+            // A terminal output only reconstructs committed events. Its consumer may
+            // already have detached permanently, so replay cannot require an attachment.
+            if self
+                .producer
+                .input_high_water(handle.stream_id)
+                .await
+                .map_err(|error| error.to_string())?
+                .is_some_and(|high_water| high_water.terminal)
+            {
+                return Ok(());
+            }
             let active = self
                 .producer
                 .has_active_attachment(&self.session_key, handle)
@@ -5805,6 +5816,68 @@ mod tests {
         })
         .await
         .expect("stream terminal was not committed");
+    }
+
+    #[test]
+    async fn completed_output_reconstruction_does_not_require_an_attachment() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation.clone(),
+            [],
+        );
+        assert!(
+            futures::poll!(std::pin::pin!(streams.wait_for_active_attachment(&handle)))
+                .is_pending(),
+            "an open output still requires an attachment"
+        );
+        producer
+            .end(handle.stream_id, 0, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        drop(streams);
+        drop(producer);
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(producer, oplog, identity.invocation, []);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            streams.wait_for_active_attachment(&handle),
+        )
+        .await
+        .expect("a terminal output must reconstruct without a consumer attachment")
+        .unwrap();
     }
 
     #[test]
