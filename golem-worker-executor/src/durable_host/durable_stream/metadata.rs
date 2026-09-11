@@ -88,6 +88,7 @@ impl ProducerMetadataKey {
         };
         if let Some(key) = attachment {
             keys.push(Self::Attachment(key.attachment_id, key.stream_id));
+            keys.push(Self::Stream(key.stream_id));
         }
         let head = match record {
             StreamSessionRecordV1::ConsumerItemValue(record) => {
@@ -113,6 +114,7 @@ pub struct ProducerStreamMetadata {
     registration: StreamRegisteredRecordV1,
     session_key: StreamSessionKeyV1,
     role: SessionStreamRoleV1,
+    entity_parent_start_index: Option<OplogIndex>,
     first_sequence: Option<u64>,
     next_sequence: u64,
     last_offset: Option<StreamOffsetV1>,
@@ -124,6 +126,7 @@ pub struct ProducerSessionMetadata {
     mappings: HashSet<(DurableStreamHandleV1, SessionStreamRoleV1)>,
     references: HashSet<StreamId>,
     open_streams: HashSet<StreamId>,
+    entity_parent_start_index: Option<OplogIndex>,
     invocation_result: Option<OplogIndex>,
     finished: bool,
 }
@@ -164,6 +167,11 @@ impl ProducerStreamIndex {
                     registration: self.registrations.get(id)?.clone(),
                     session_key: self.stream_sessions.get(id)?.clone(),
                     role: *self.stream_roles.get(id)?,
+                    entity_parent_start_index: self
+                        .entity_parent_start_indices
+                        .get(id)
+                        .copied()
+                        .flatten(),
                     first_sequence: stream.first_sequence,
                     next_sequence: stream.next_sequence,
                     last_offset: stream.last_offset,
@@ -193,6 +201,11 @@ impl ProducerStreamIndex {
                         .get(key)
                         .cloned()
                         .unwrap_or_default(),
+                    entity_parent_start_index: self
+                        .session_entity_parent_start_indices
+                        .get(key)
+                        .copied()
+                        .flatten(),
                     invocation_result: self.invocation_results.get(key).copied(),
                     finished: self.finished_sessions.contains(key),
                 })
@@ -260,6 +273,8 @@ impl ProducerStreamIndex {
                 self.registrations.insert(id, value.registration);
                 self.stream_sessions.insert(id, value.session_key);
                 self.stream_roles.insert(id, value.role);
+                self.entity_parent_start_indices
+                    .insert(id, value.entity_parent_start_index);
                 self.streams.insert(
                     id,
                     IndexedProducerStream {
@@ -298,6 +313,8 @@ impl ProducerStreamIndex {
                     .insert(key.clone(), value.mappings);
                 self.open_session_streams
                     .insert(key.clone(), value.open_streams);
+                self.session_entity_parent_start_indices
+                    .insert(key.clone(), value.entity_parent_start_index);
                 if let Some(offset) = value.invocation_result {
                     self.invocation_results.insert(key.clone(), offset);
                 }
@@ -557,14 +574,18 @@ pub(crate) async fn project_producer_metadata(
             return Err("nested registration batch is missing its enclosing item".into());
         }
         match entry {
-            OplogEntry::StreamRegistered { record, .. } => {
+            OplogEntry::StreamRegistered {
+                entity_parent_start_index,
+                record,
+                ..
+            } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
                 projection.registration(&record).await?;
                 if matches!(
                     record.coordinate,
                     StreamRegistrationCoordinateV1::Nested { .. }
                 ) {
-                    pending.push((*index, record));
+                    pending.push((*index, *entity_parent_start_index, record));
                 } else {
                     if !pending.is_empty() {
                         return Err(
@@ -575,6 +596,7 @@ pub(crate) async fn project_producer_metadata(
                         .index
                         .apply_registration(
                             *index,
+                            *entity_parent_start_index,
                             record,
                             owner.environment_id,
                             &owner.agent_id,
@@ -583,7 +605,11 @@ pub(crate) async fn project_producer_metadata(
                         .map_err(|error| error.to_string())?;
                 }
             }
-            OplogEntry::StreamItems { record, .. } => {
+            OplogEntry::StreamItems {
+                entity_parent_start_index,
+                record,
+                ..
+            } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
                 projection.stream(record.stream_id).await?;
                 for stream in &record.nested_stream_ids {
@@ -605,6 +631,7 @@ pub(crate) async fn project_producer_metadata(
                     .index
                     .apply_item_batch(
                         *index,
+                        *entity_parent_start_index,
                         std::mem::take(&mut pending),
                         record,
                         owner.environment_id,
@@ -613,28 +640,40 @@ pub(crate) async fn project_producer_metadata(
                     )
                     .map_err(|error| error.to_string())?;
             }
-            OplogEntry::StreamEnd { record, .. } => {
+            OplogEntry::StreamEnd {
+                entity_parent_start_index,
+                record,
+                ..
+            } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
                 projection.stream(record.stream_id).await?;
                 projection
                     .index
-                    .apply_end(*index, record, fingerprint)
+                    .apply_end(*index, *entity_parent_start_index, record, fingerprint)
                     .map_err(|error| error.to_string())?;
             }
-            OplogEntry::StreamCancel { record, .. } => {
+            OplogEntry::StreamCancel {
+                entity_parent_start_index,
+                record,
+                ..
+            } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
                 projection.stream(record.stream_id).await?;
                 projection
                     .index
-                    .apply_cancel(*index, record, fingerprint)
+                    .apply_cancel(*index, *entity_parent_start_index, record, fingerprint)
                     .map_err(|error| error.to_string())?;
             }
-            OplogEntry::StreamSession { record, .. } => {
+            OplogEntry::StreamSession {
+                entity_parent_start_index,
+                record,
+                ..
+            } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
                 projection.session(&record).await?;
                 projection
                     .index
-                    .apply_session_references(&record)
+                    .apply_session_references(*entity_parent_start_index, &record)
                     .map_err(|error| error.to_string())?;
                 projection.index.apply_result_offset(*index, &record);
                 projection
@@ -1198,6 +1237,7 @@ impl DurableStreamProducer {
             let mode = service
                 .get_agent_mode(&owner)
                 .await
+                .map_err(|err| DurableStreamProducerError::Oplog(err.to_string()))?
                 .ok_or(DurableStreamProducerError::InvalidHandle)?;
             let (_, rows) = service
                 .lookup_durable_stream_producer_metadata(&owner, mode, keys)
@@ -1505,6 +1545,36 @@ mod tests {
 
     #[test]
     #[timeout("60s")]
+    async fn persisted_metadata_restores_entity_attribution() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let entity_parent_start_index = Some(OplogIndex::from_u64(42));
+        let mut request = fixture.registration(0);
+        request.entity_parent_start_index = entity_parent_start_index;
+        let handle = producer.register(request).await.unwrap().value;
+        fixture.persist().await;
+        drop(producer);
+
+        let cold = fixture.producer().await;
+        let index = cold
+            .index_for([
+                ProducerMetadataKey::Stream(handle.stream_id),
+                ProducerMetadataKey::Session(fixture.identity.invocation.clone()),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            index.entity_parent_start_index(handle.stream_id).unwrap(),
+            entity_parent_start_index
+        );
+        assert_eq!(
+            index.session_entity_parent_start_index(&fixture.identity.invocation),
+            entity_parent_start_index
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
     async fn persisted_finished_session_rejects_new_events_after_cold_load_and_eviction() {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
@@ -1514,7 +1584,12 @@ mod tests {
             .await
             .unwrap();
         producer
-            .finish_session(session.clone(), Ok(()), StreamCancelReasonV1::Protocol)
+            .finish_session(
+                session.clone(),
+                None,
+                Ok(()),
+                StreamCancelReasonV1::Protocol,
+            )
             .await
             .unwrap();
         fixture.persist().await;

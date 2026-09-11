@@ -649,7 +649,12 @@ export function cloneSchemaValue(value: SchemaValue): SchemaValue {
  * value is `undefined` are ignored, matching the WIT option lifting convention
  * (and Vitest's `toEqual`).
  */
-export function deepEqual(a: unknown, b: unknown): boolean {
+export function deepEqual(
+  a: unknown,
+  b: unknown,
+  equivalent?: (a: unknown, b: unknown) => boolean,
+): boolean {
+  if (equivalent?.(a, b)) return true;
   // Numbers use `Object.is` so that `NaN` equals `NaN` and, crucially, `-0` does
   // NOT equal `0` (a real f32/f64 round-trip difference we must not mask).
   if (typeof a === 'number' && typeof b === 'number') {
@@ -685,6 +690,17 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   if (a instanceof Map || b instanceof Map) {
     if (!(a instanceof Map) || !(b instanceof Map)) return false;
     if (a.size !== b.size) return false;
+    if (equivalent !== undefined) {
+      const unmatched = Array.from(b.entries());
+      for (const [ak, av] of a) {
+        const index = unmatched.findIndex(([bk]) => deepEqual(ak, bk, equivalent));
+        if (index < 0) return false;
+        const [, bv] = unmatched[index]!;
+        if (!deepEqual(av, bv, equivalent)) return false;
+        unmatched.splice(index, 1);
+      }
+      return true;
+    }
     for (const [k, av] of a) {
       if (!b.has(k)) return false;
       if (!deepEqual(av, b.get(k))) return false;
@@ -695,7 +711,9 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
     if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!deepEqual(a[i], b[i], equivalent)) return false;
+    }
     return true;
   }
 
@@ -705,7 +723,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   for (const k of Object.keys(ao)) if (ao[k] !== undefined) keys.add(k);
   for (const k of Object.keys(bo)) if (bo[k] !== undefined) keys.add(k);
   for (const k of keys) {
-    if (!deepEqual(ao[k], bo[k])) return false;
+    if (!deepEqual(ao[k], bo[k], equivalent)) return false;
   }
   return true;
 }

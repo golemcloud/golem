@@ -34,6 +34,7 @@ pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
 pub mod error;
+pub mod external_agent_secret;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod json;

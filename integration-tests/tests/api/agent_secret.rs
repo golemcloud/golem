@@ -17,15 +17,15 @@ use golem_client::api::{
     RegistryServiceDeleteAgentSecretError, RegistryServiceGetEnvironmentAgentSecretError,
     RegistryServiceUpdateAgentSecretError,
 };
+use golem_client::model::{AgentSecretCreation, AgentSecretUpdate};
 use golem_common::model::agent_secret::{
-    AgentSecretCreation, AgentSecretPath, AgentSecretRevision, AgentSecretUpdate,
-    CanonicalAgentSecretPath,
+    AgentSecretPath, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
 };
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::assert_eq;
@@ -33,6 +33,10 @@ use pretty_assertions::assert_matches;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
+
+fn external(value: SchemaValue) -> ExternalSchemaValue {
+    ExternalSchemaValue::try_from(value).unwrap()
+}
 
 #[test]
 #[tracing::instrument]
@@ -45,7 +49,7 @@ async fn create_agent_secret_with_value(deps: &EnvBasedTestDependencies) -> anyh
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["foo".to_string(), "bar".to_string()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let result = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -102,7 +106,7 @@ async fn granted_secret_view_works_without_environment_view(
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["foo".to_string(), "bar".to_string()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
     let secret = owner_client
         .create_agent_secret(&env.id.0, &creation)
@@ -172,7 +176,7 @@ async fn secret_path_is_canonicalized_when_reading(
             "third_path_segment".to_string(),
         ]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let result = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -240,7 +244,7 @@ async fn creating_same_path_twice_should_fail(
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["dup".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     client.create_agent_secret(&env.id.0, &creation).await?;
@@ -271,7 +275,7 @@ async fn creating_same_path_in_different_casing_should_fail(
             &AgentSecretCreation {
                 path: AgentSecretPath(vec!["secret_path".into()]),
                 secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-                secret_value: Some(SchemaValue::Bool(true)),
+                secret_value: Some(external(SchemaValue::Bool(true))),
             },
         )
         .await?;
@@ -282,7 +286,7 @@ async fn creating_same_path_in_different_casing_should_fail(
             &AgentSecretCreation {
                 path: AgentSecretPath(vec!["secretPath".into()]),
                 secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-                secret_value: Some(SchemaValue::Bool(true)),
+                secret_value: Some(external(SchemaValue::Bool(true))),
             },
         )
         .await;
@@ -306,7 +310,7 @@ async fn update_secret_increments_revision(deps: &EnvBasedTestDependencies) -> a
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["rev".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let created = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -316,12 +320,15 @@ async fn update_secret_increments_revision(deps: &EnvBasedTestDependencies) -> a
             &created.id.0,
             &AgentSecretUpdate {
                 current_revision: created.revision,
-                secret_value: OptionalFieldUpdate::Set(SchemaValue::Bool(false)),
+                secret_value: OptionalFieldUpdate::Set(external(SchemaValue::Bool(false))),
             },
         )
         .await?;
 
-    assert_eq!(updated.secret_value, Some(SchemaValue::Bool(false)));
+    assert_eq!(
+        updated.secret_value.map(ExternalSchemaValue::into_inner),
+        Some(SchemaValue::Bool(false))
+    );
     assert!(updated.revision > created.revision);
 
     Ok(())
@@ -338,7 +345,7 @@ async fn update_with_stale_revision_should_fail(
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["stale".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let created = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -348,7 +355,7 @@ async fn update_with_stale_revision_should_fail(
             &created.id.0,
             &AgentSecretUpdate {
                 current_revision: created.revision,
-                secret_value: OptionalFieldUpdate::Set(SchemaValue::Bool(false)),
+                secret_value: OptionalFieldUpdate::Set(external(SchemaValue::Bool(false))),
             },
         )
         .await?;
@@ -358,7 +365,7 @@ async fn update_with_stale_revision_should_fail(
             &created.id.0,
             &AgentSecretUpdate {
                 current_revision: created.revision,
-                secret_value: OptionalFieldUpdate::Set(SchemaValue::Bool(true)),
+                secret_value: OptionalFieldUpdate::Set(external(SchemaValue::Bool(true))),
             },
         )
         .await;
@@ -382,7 +389,7 @@ async fn unset_secret_value(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["unset".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::string()),
-        secret_value: Some(SchemaValue::String("hello".to_string())),
+        secret_value: Some(external(SchemaValue::String("hello".to_string()))),
     };
 
     let created = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -412,7 +419,7 @@ async fn delete_secret(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["delete".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let created = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -435,7 +442,7 @@ async fn delete_with_stale_revision_should_fail(
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["delete-stale".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let created = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -443,9 +450,9 @@ async fn delete_with_stale_revision_should_fail(
     client
         .update_agent_secret(
             &created.id.0,
-            &golem_common::model::agent_secret::AgentSecretUpdate {
+            &AgentSecretUpdate {
                 current_revision: created.revision,
-                secret_value: OptionalFieldUpdate::Set(SchemaValue::Bool(false)),
+                secret_value: OptionalFieldUpdate::Set(external(SchemaValue::Bool(false))),
             },
         )
         .await?;
@@ -473,7 +480,7 @@ async fn delete_and_recreate_same_path(deps: &EnvBasedTestDependencies) -> anyho
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["recreate".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let created = client.create_agent_secret(&env.id.0, &creation).await?;
@@ -502,7 +509,7 @@ async fn create_agent_secret_with_value_type_mismatch_should_fail(
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["type".into(), "creation-mismatch".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::String("not-a-bool".to_string())),
+        secret_value: Some(external(SchemaValue::String("not-a-bool".to_string()))),
     };
 
     let result = client.create_agent_secret(&env.id.0, &creation).await;
@@ -534,14 +541,16 @@ async fn update_agent_secret_with_wrong_type_should_fail(
     let creation = AgentSecretCreation {
         path: AgentSecretPath(vec!["update".into(), "type-mismatch".into()]),
         secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-        secret_value: Some(SchemaValue::Bool(true)),
+        secret_value: Some(external(SchemaValue::Bool(true))),
     };
 
     let created = client.create_agent_secret(&env.id.0, &creation).await?;
 
     let update = AgentSecretUpdate {
         current_revision: created.revision,
-        secret_value: OptionalFieldUpdate::Set(SchemaValue::String("not-a-bool".to_string())),
+        secret_value: OptionalFieldUpdate::Set(external(SchemaValue::String(
+            "not-a-bool".to_string(),
+        ))),
     };
 
     let result = client.update_agent_secret(&created.id.0, &update).await;
