@@ -194,6 +194,14 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         }
     }
 
+    async fn pause(&self, index: usize) {
+        self.worker_executors[index].pause().await;
+    }
+
+    async fn resume(&self, index: usize) {
+        self.worker_executors[index].resume().await;
+    }
+
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor>> {
         self.worker_executors.to_vec()
     }

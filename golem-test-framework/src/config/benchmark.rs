@@ -430,6 +430,7 @@ impl BenchmarkTestDependencies {
                 &build_root.join("golem-shard-manager"),
                 &workspace_root.join("golem-shard-manager"),
                 None,
+                None,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
                 rdb.clone(),

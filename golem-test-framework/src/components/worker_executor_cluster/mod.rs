@@ -46,6 +46,21 @@ pub trait WorkerExecutorCluster: Send + Sync {
     async fn stop(&self, index: usize);
     async fn start(&self, index: usize);
 
+    /// Freezes the executor at `index` in place; see [`WorkerExecutor::pause`]. It still counts
+    /// as started: only a stop takes it out of the cluster.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutorCluster` owns the processes.
+    async fn pause(&self, _index: usize) {
+        panic!("WorkerExecutorCluster::pause is only supported by SpawnedWorkerExecutorCluster");
+    }
+
+    /// Thaws the executor at `index`; see [`WorkerExecutor::resume`].
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutorCluster` owns the processes.
+    async fn resume(&self, _index: usize) {
+        panic!("WorkerExecutorCluster::resume is only supported by SpawnedWorkerExecutorCluster");
+    }
+
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor>>;
 
     async fn stopped_indices(&self) -> Vec<usize>;

@@ -53,6 +53,24 @@ pub trait WorkerExecutor: Send + Sync {
         );
     }
 
+    /// Freezes this worker executor's process in place (SIGSTOP) without killing it: it keeps its
+    /// sockets, its memory and every lease it believes it holds, but answers nothing until
+    /// [`WorkerExecutor::resume`]. This is how an executor is made to look dead to the rest of
+    /// the cluster while it still thinks it owns its shards, which a kill cannot do.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutor` owns a process to freeze.
+    async fn pause(&self) {
+        panic!("WorkerExecutor::pause is only supported by SpawnedWorkerExecutor");
+    }
+
+    /// Thaws a process frozen by [`WorkerExecutor::pause`] (SIGCONT). It carries on from exactly
+    /// where it stopped.
+    ///
+    /// Default implementation panics: only `SpawnedWorkerExecutor` owns a process to thaw.
+    async fn resume(&self) {
+        panic!("WorkerExecutor::resume is only supported by SpawnedWorkerExecutor");
+    }
+
     async fn is_running(&self) -> bool;
 }
 
