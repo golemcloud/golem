@@ -1832,7 +1832,7 @@ mod tests {
         assert_eq!(&std::fs::read(source.as_path()).unwrap()[..4], b"ZZZZ");
         assert_eq!(&std::fs::read(&copied).unwrap()[..4], b"COW!");
 
-        let before_open_unlinked = filesystem.observe_allocation().await.unwrap().unwrap();
+        let before_open_unlinked = settled_allocation(&filesystem).await;
         let open_unlinked_path = filesystem.root().join("open-unlinked");
         let mut open_unlinked = File::create(&open_unlinked_path).unwrap();
         open_unlinked.write_all(&vec![0x3c; 1024 * 1024]).unwrap();
@@ -2022,6 +2022,48 @@ mod tests {
 
     fn filesystem_block_bytes(root: &File) -> u64 {
         fstatfs(root).unwrap().f_bsize as u64
+    }
+
+    /// Reads the allocation of the project of `filesystem` after XFS frees its unlinked inodes.
+    ///
+    /// XFS keeps an unlinked inode, with its blocks, charged to its project until background
+    /// inactivation frees it. The reading is the first one whose object count equals the inodes
+    /// that are reachable from the root. The readings are 25 ms apart. After 5 s the function
+    /// panics with the last reading and the reachable count.
+    async fn settled_allocation(filesystem: &SandboxFilesystem) -> FilesystemAllocation {
+        use futures::StreamExt as _;
+
+        let reachable = reachable_inodes(filesystem.root());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let last = futures::stream::unfold(Some(Duration::ZERO), move |delay| async move {
+            tokio::time::sleep(delay?).await;
+            let reading = filesystem.observe_allocation().await.unwrap().unwrap();
+            let next = (reading.filesystem_objects != reachable
+                && tokio::time::Instant::now() < deadline)
+                .then_some(Duration::from_millis(25));
+            Some((reading, next))
+        })
+        .fold(None, |_, reading| std::future::ready(Some(reading)))
+        .await
+        .expect("the first allocation reading always happens");
+        assert_eq!(
+            last.filesystem_objects, reachable,
+            "project allocation did not settle within 5 s: last reading {last:?}, reachable inodes {reachable}"
+        );
+        last
+    }
+
+    /// Counts the root and every entry below it, without following symlinks.
+    fn reachable_inodes(root: &Path) -> u64 {
+        std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .fold(1, |count, entry| {
+                match entry.file_type().unwrap().is_dir() {
+                    true => count + reachable_inodes(&entry.path()),
+                    false => count + 1,
+                }
+            })
     }
 
     async fn available_bytes(provisioning: &SandboxFilesystemProvisioning) -> u64 {
@@ -2350,7 +2392,7 @@ mod tests {
             .await
             .unwrap();
         let project_id = filesystem.project_id_for_test();
-        let allocation_before = filesystem.observe_allocation().await.unwrap().unwrap();
+        let allocation_before = settled_allocation(&filesystem).await;
 
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
@@ -2359,7 +2401,7 @@ mod tests {
         .await
         .unwrap();
 
-        let allocation_after = filesystem.observe_allocation().await.unwrap().unwrap();
+        let allocation_after = settled_allocation(&filesystem).await;
         assert!(
             allocation_after.allocated_bytes >= allocation_before.allocated_bytes + 320 * 1024,
             "seed did not charge the agent project: before={allocation_before:?}, after={allocation_after:?}"
@@ -2395,10 +2437,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        assert_eq!(
-            filesystem.observe_allocation().await.unwrap().unwrap(),
-            allocation_after
-        );
+        assert_eq!(settled_allocation(&filesystem).await, allocation_after);
 
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
@@ -2419,7 +2458,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let allocation_replaced = filesystem.observe_allocation().await.unwrap().unwrap();
+        let allocation_replaced = settled_allocation(&filesystem).await;
         assert_eq!(
             std::fs::read(filesystem.root().join("data/small")).unwrap(),
             vec![0x33; 128 * 1024]
@@ -2459,7 +2498,7 @@ mod tests {
             vec![0x33; 128 * 1024],
             "keep must leave a file below a merged directory"
         );
-        let allocation_kept = filesystem.observe_allocation().await.unwrap().unwrap();
+        let allocation_kept = settled_allocation(&filesystem).await;
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
             Box::new([entry(
@@ -2485,7 +2524,7 @@ mod tests {
             file_project_id(&File::open(filesystem.root().join("data/small")).unwrap()).unwrap(),
             Some(project_id)
         );
-        let allocation_restored = filesystem.observe_allocation().await.unwrap().unwrap();
+        let allocation_restored = settled_allocation(&filesystem).await;
         assert!(
             allocation_restored.allocated_bytes < allocation_kept.allocated_bytes,
             "a replacement with fewer bytes must release project bytes: before={allocation_kept:?}, after={allocation_restored:?}"
