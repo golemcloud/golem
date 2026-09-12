@@ -19,7 +19,10 @@ use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use crate::model::oplog::OplogPayload;
 use crate::model::quota::ResourceName;
-use desert_rust::BinaryCodec;
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
+};
 use nonempty_collections::NEVec;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -218,28 +221,55 @@ impl SpanData {
 /// The name of one filesystem snapshot of an agent.
 ///
 /// The name is `p-<uuid>` for a periodic snapshot and `u-<uuid>` for a manual-update snapshot.
-/// The caller chooses the name before the snapshot record is written. The record holds the name
-/// and never derives it from an oplog index.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec)]
-#[desert(transparent)]
-pub struct FilesystemSnapshotName(String);
+/// The name does not depend on an oplog index.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FilesystemSnapshotName(Box<str>);
 
 impl FilesystemSnapshotName {
     const PERIODIC_PREFIX: &'static str = "p-";
     const UPDATE_PREFIX: &'static str = "u-";
 
-    /// Makes a new name for a periodic snapshot.
+    /// Makes a new name for a periodic snapshot from a random UUID. Make the name before you
+    /// write the snapshot record that holds it.
     pub fn periodic() -> Self {
-        Self(format!("{}{}", Self::PERIODIC_PREFIX, Uuid::new_v4()))
+        Self::with_prefix(Self::PERIODIC_PREFIX)
     }
 
-    /// Makes a new name for a manual-update snapshot.
+    /// Makes a new name for a manual-update snapshot from a random UUID. Make the name before
+    /// you write the snapshot record that holds it.
     pub fn update() -> Self {
-        Self(format!("{}{}", Self::UPDATE_PREFIX, Uuid::new_v4()))
+        Self::with_prefix(Self::UPDATE_PREFIX)
+    }
+
+    fn with_prefix(prefix: &str) -> Self {
+        let mut name = String::with_capacity(prefix.len() + uuid::fmt::Hyphenated::LENGTH);
+        name.push_str(prefix);
+        name.push_str(
+            Uuid::new_v4()
+                .hyphenated()
+                .encode_lower(&mut [0; uuid::fmt::Hyphenated::LENGTH]),
+        );
+        Self(name.into_boxed_str())
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+// desert has no codec for `Box<str>`. This pair writes and reads the name as a plain string.
+impl BinarySerializer for FilesystemSnapshotName {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        self.as_str().serialize(context)
+    }
+}
+
+impl BinaryDeserializer for FilesystemSnapshotName {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        String::deserialize(context).map(|name| Self(name.into_boxed_str()))
     }
 }
 
@@ -258,13 +288,13 @@ impl std::str::FromStr for FilesystemSnapshotName {
             .or_else(|| value.strip_prefix(Self::UPDATE_PREFIX))
             .ok_or_else(|| format!("Invalid filesystem snapshot name: {value}"))?;
         Uuid::parse_str(uuid).map_err(|_| format!("Invalid filesystem snapshot name: {value}"))?;
-        Ok(Self(value.to_string()))
+        Ok(Self(value.into()))
     }
 }
 
 impl From<FilesystemSnapshotName> for String {
     fn from(value: FilesystemSnapshotName) -> Self {
-        value.0
+        value.0.into_string()
     }
 }
 

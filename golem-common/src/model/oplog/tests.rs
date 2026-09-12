@@ -1162,6 +1162,21 @@ fn filesystem_snapshot_name_has_kind_prefix_and_parses_back() {
 }
 
 #[test]
+fn filesystem_snapshot_name_binary_encoding_matches_plain_string() {
+    let name = FilesystemSnapshotName::update();
+
+    let bytes = crate::serialization::serialize(&name).unwrap();
+    assert_eq!(
+        bytes,
+        crate::serialization::serialize(&name.as_str().to_string()).unwrap()
+    );
+    assert_eq!(
+        crate::serialization::deserialize::<FilesystemSnapshotName>(&bytes).unwrap(),
+        name
+    );
+}
+
+#[test]
 fn raw_snapshot_with_filesystem_snapshot_roundtrips() {
     let name = FilesystemSnapshotName::periodic();
     let entry = OplogEntry::Snapshot {
