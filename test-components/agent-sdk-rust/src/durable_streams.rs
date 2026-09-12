@@ -39,6 +39,9 @@ pub trait DurableStreamAgent {
     #[endpoint(put = "/echo")]
     fn echo(&self, input: AgentStream<String>) -> EchoOutput;
 
+    #[endpoint(put = "/sink")]
+    async fn sink(&self, input: AgentStream<String>) -> String;
+
     #[endpoint(put = "/echo-bytes")]
     fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
 
@@ -140,6 +143,14 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
             CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
         });
         EchoOutput { output }
+    }
+
+    async fn sink(&self, mut input: AgentStream<String>) -> String {
+        let mut values = Vec::new();
+        while let Some(value) = input.next().await.expect("sink input failed") {
+            values.push(value);
+        }
+        values.join("|")
     }
 
     fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8> {

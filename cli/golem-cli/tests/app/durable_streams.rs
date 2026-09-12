@@ -33,6 +33,16 @@ fn assert_success(output: std::process::Output, command: &str) {
 #[test]
 #[timeout("10 minutes")]
 async fn reference_client_reads_json_and_bytes_in_all_ds3_modes() {
+    run_reference_client(DRIVER).await;
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn reference_client_export_protocol_compatibility() {
+    run_reference_client(include_str!("durable_streams_client.mjs")).await;
+}
+
+async fn run_reference_client(driver: &str) {
     let mut ctx = TestContext::new();
     let fixture = workspace_path().join("test-components/golem_it_agent_sdk_rust_release.wasm");
     assert!(
@@ -88,7 +98,7 @@ async fn reference_client_reads_json_and_bytes_in_all_ds3_modes() {
 "#,
     )
     .unwrap();
-    fs::write_str(driver_dir.join("driver.mjs"), DRIVER).unwrap();
+    fs::write_str(driver_dir.join("driver.mjs"), driver).unwrap();
 
     let mut npm = Command::new("npm");
     npm.args(["install", "--ignore-scripts", "--no-audit", "--no-fund"])
@@ -111,10 +121,14 @@ import { DurableStream } from "@durable-streams/client";
 
 const [origin] = process.argv.slice(2);
 const liveRequests = [];
-const tracedFetch = (input, init) => {
+const tracedFetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : input);
   if (url.searchParams.has("live")) liveRequests.push(url.searchParams.get("live"));
-  return fetch(input, init);
+  const response = await fetch(input, init);
+  if (url.pathname.includes("/bytes/") && url.searchParams.get("live") === "sse") {
+    assert.equal(response.headers.get("stream-sse-data-encoding"), "base64");
+  }
+  return response;
 };
 const expectedJson = count => Array.from({ length: count }, (_, i) => `message-${String(i).padStart(4, "0")}`);
 const expectedBytes = count => Uint8Array.from({ length: count }, (_, i) => i % 251);
