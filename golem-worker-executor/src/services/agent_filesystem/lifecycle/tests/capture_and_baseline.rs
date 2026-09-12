@@ -556,6 +556,169 @@ async fn a_failed_discard_of_the_restore_directory_keeps_the_baseline_successful
 }
 
 #[test]
+async fn a_second_baseline_of_one_reconstruction_is_refused() {
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    let filesystem = materialize_baseline(filesystem, no_initial_files().await, NO_RESTORE)
+        .await
+        .unwrap();
+
+    let failure = materialize_baseline(filesystem, no_initial_files().await, NO_RESTORE)
+        .await
+        .expect_err("a second baseline of one reconstruction must be refused");
+
+    assert!(
+        matches!(failure.source, Error::RuntimeInvalidated),
+        "{}",
+        failure.source
+    );
+    control.push_delete_and_verify(Ok(()));
+    delete(failure.filesystem).await.unwrap();
+}
+
+#[test]
+async fn an_update_reads_only_what_the_initial_file_rule_needs() {
+    let store = InitialFileStore::new().await;
+    let old_directory = store
+        .declare("/directory-now", AgentFilePermissions::ReadWrite, b"old-a")
+        .await;
+    let old_same_size = store
+        .declare("/same-size", AgentFilePermissions::ReadWrite, b"old-b")
+        .await;
+    let new_directory = store
+        .declare("/directory-now", AgentFilePermissions::ReadWrite, b"new-a")
+        .await;
+    let new_same_size = store
+        .declare("/same-size", AgentFilePermissions::ReadWrite, b"new-b")
+        .await;
+    let below_a_file = store
+        .declare(
+            "/blocked/sub/file.txt",
+            AgentFilePermissions::ReadWrite,
+            b"below",
+        )
+        .await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Ok(()));
+    control.push_seed(Ok(()));
+    let resident = scripted_resident(
+        &control,
+        filesystem,
+        store
+            .prepare(&[old_directory.clone(), old_same_size.clone()])
+            .await,
+    )
+    .await;
+    let object = |kind, size| SandboxAttributes {
+        kind,
+        link_count: 1,
+        size,
+        accessed: None,
+        modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(5),
+    };
+    let reads_before = call_count(&control, "get_path_attributes(");
+    control.push_get_attributes(Ok(object(SandboxObjectKind::File, 0)));
+    control.push_get_attributes(Ok(object(SandboxObjectKind::Directory, old_directory.size)));
+    control.push_get_attributes(Ok(object(SandboxObjectKind::File, old_same_size.size)));
+
+    let updated = update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![new_directory, new_same_size, below_a_file],
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        updated.is_ok(),
+        "an update that keeps every path must read only the paths and the first object above a \
+         path that is not a directory: {updated:?}"
+    );
+    assert_eq!(
+        call_count(&control, "get_path_attributes(") - reads_before,
+        3
+    );
+    assert!(!has_call(&control, "open("));
+    delete_scripted_resident(&control, resident).await;
+}
+
+#[test]
+async fn a_failed_path_read_stops_an_update_before_its_first_change() {
+    let store = InitialFileStore::new().await;
+    let added = store
+        .declare("/added.txt", AgentFilePermissions::ReadWrite, b"added")
+        .await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    let resident = scripted_resident(&control, filesystem, store.prepare(&[]).await).await;
+    control.push_get_attributes(Err(sandbox_error(
+        "read an initial-file path",
+        std::io::ErrorKind::InvalidInput,
+    )));
+
+    let error = update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![added],
+    )
+    .unwrap()
+    .await
+    .unwrap_err();
+
+    assert!(
+        !has_call(&control, "seed("),
+        "a failed path read must stop the update before its first change: {error}"
+    );
+    assert!(matches!(error, Error::Sandbox(_)), "{error}");
+    assert!(!filesystem_activity(&resident).has_terminal_failure());
+    delete_scripted_resident(&control, resident).await;
+}
+
+#[test]
+#[timeout("60s")]
+async fn an_update_with_two_sizes_for_one_content_fails_before_any_change() {
+    let agents = UnmanagedAgents::new().await;
+    let store = &agents.store;
+    let first = store
+        .declare(
+            "/first.txt",
+            AgentFilePermissions::ReadWrite,
+            b"same content",
+        )
+        .await;
+    let second = InitialAgentFile {
+        path: AgentFilePath::from_abs_str("/second.txt").unwrap(),
+        size: first.size + 1,
+        ..first.clone()
+    };
+    let agent = agents.agent("two-sizes");
+    let resident = agents.start(&agent, &[], NO_RESTORE).await.unwrap();
+
+    let error = update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![first, second],
+    )
+    .unwrap()
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("second.txt"), "{error}");
+    let root = agents.root(&agent);
+    assert!(!root.join("first.txt").exists());
+    assert!(!root.join("second.txt").exists());
+    assert!(!filesystem_activity(&resident).has_terminal_failure());
+    delete(seal(resident)).await.unwrap();
+}
+
+#[test]
 async fn a_failed_restore_returns_the_sealed_filesystem_with_its_retryable_flag() {
     futures::stream::iter([true, false])
         .for_each(|retryable| async move {
@@ -1119,6 +1282,16 @@ async fn capture_then_restore_on_unmanaged_storage_gives_back_the_same_tree() {
         .await
         .unwrap();
     assert_eq!(read_tree(&agents.root(&restored_agent), written), expected);
+    let captured_again = capture(&restored, Duration::from_secs(5)).await.unwrap();
+    let record_again: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(captured_again.directory().join("record.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record_again["read_only_files"], record["read_only_files"],
+        "the read-only files that a restore puts in place must stay Golem's files"
+    );
+    captured_again.discard().await.unwrap();
     captured.discard().await.unwrap();
     assert!(scratch_is_empty(&agents.scratch));
     delete(seal(resident)).await.unwrap();

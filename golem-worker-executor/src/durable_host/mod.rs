@@ -6657,6 +6657,42 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn component_file_node_reports_the_write_permission_of_a_file() {
+        use crate::services::agent_filesystem as agent_fs;
+        let file = |read_only| agent_fs::Attributes {
+            kind: agent_fs::ObjectKind::File,
+            link_count: 1,
+            size: 7,
+            accessed: None,
+            modified: None,
+            read_only,
+        };
+
+        let read_only =
+            component_file_node(PathBuf::from("dir/read-only.txt"), file(true)).unwrap();
+        let writable = component_file_node(PathBuf::from("writable.txt"), file(false)).unwrap();
+
+        assert_eq!(
+            read_only,
+            ComponentFileSystemNode {
+                name: "read-only.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
+                    size: 7,
+                },
+            }
+        );
+        assert_eq!(
+            writable.details,
+            ComponentFileSystemNodeDetails::File {
+                permissions: golem_common::model::component::AgentFilePermissions::ReadWrite,
+                size: 7,
+            }
+        );
+    }
+
+    #[test]
     fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
         assert!(!store_is_live(None, false, false));
         assert!(store_is_live(None, false, true));

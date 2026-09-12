@@ -5962,6 +5962,70 @@ mod tests {
     }
 
     #[test]
+    async fn namespace_resolution_fails_when_the_parent_cannot_be_searched() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let locked = filesystem.root().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let resolved = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("locked/child"))
+            .await;
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            resolved.is_err(),
+            "a metadata error other than not found must fail the resolution"
+        );
+        drop(resolved);
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn following_a_symlink_loop_fails_and_a_dangling_symlink_is_not_read_only() {
+        let parent = tempfile::tempdir().unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        std::os::unix::fs::symlink("loop", filesystem.root().join("loop")).unwrap();
+        std::os::unix::fs::symlink("missing", filesystem.root().join("dangling")).unwrap();
+
+        let looped = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("loop"))
+            .await
+            .unwrap();
+        let dangling = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("dangling"))
+            .await
+            .unwrap();
+
+        assert!(
+            looped.is_read_only_file(SandboxFollow::Yes).is_err(),
+            "following a symlink loop must fail"
+        );
+        assert!(!looped.is_read_only_file(SandboxFollow::No).unwrap());
+        assert!(
+            !dangling
+                .is_read_only_file(SandboxFollow::Yes)
+                .expect("a dangling symlink must resolve to no file"),
+        );
+        drop(looped);
+        drop(dangling);
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
     fn namespace_resolution_final_identity_probe_is_metadata_only() {
         let source = include_str!("adapter.rs");
         let resolver = source
