@@ -24,7 +24,7 @@ steps:
       ts: *non-effect-parallel-workers-prompt
       effect: >
         In the Effect-based test-app project, add a second durable agent type called `Worker`.
-        Define it with `@golemcloud/effect-golem`, one `constructorParams` number named `id`, and a
+        Define it with `@golemcloud/effect-golem`, one `id` number named `id`, and a
         typed Effect method `compute` with one named `Schema.Number` parameter `value` and
         `success: Schema.Number`. Its handler must return `value * 2` as an Effect.
 

@@ -7,7 +7,7 @@ description: "Calling Effect-based Golem agents from external Node.js applicatio
 
 Use Golem's generated **external TypeScript bridge** for a standalone Effect/Node.js application.
 An Effect component publishes TypeScript-shaped agent metadata, so its generated bridge classes,
-constructor arguments, method names, values, and CLI references use TypeScript syntax.
+agent id values, method names, values, and CLI references use TypeScript syntax.
 
 The `client` attached to an `@golemcloud/effect-golem` agent spec is not an external network
 client. It uses the Golem `golem:agent/host` RPC binding and works only inside a deployed Golem
@@ -225,7 +225,7 @@ Use `configure`, not `globalConfig`. Keep tokens out of source control and logs.
 
 ## Durable and Phantom Instances
 
-For a durable agent, `get` creates or gets the instance identified by its constructor arguments:
+For a durable agent, `get` creates or gets the instance identified by its agent id values:
 
 ```typescript
 const getAgent = Effect.tryPromise(() => MyAgent.get("my-instance"));
@@ -247,7 +247,7 @@ const phantomProgram = Effect.gen(function* () {
 
 When the agent declares local configuration, the generated package also provides
 `getWithConfig`, `getPhantomWithConfig`, and `newPhantomWithConfig`. Read their generated
-declarations because configuration arguments follow the constructor arguments and reflect the
+declarations because configuration arguments follow the agent id values and reflect the
 agent's exact config schema.
 
 Generated remote methods are callable Promises for invoke-and-await. They also expose

@@ -1,0 +1,37 @@
+---
+name: golem-agent-reflection-effect
+description: Discovers and invokes Golem agents through Effect-native runtime reflection. Use when agent types or methods are selected dynamically or their schemas must be inspected at runtime.
+---
+
+# Runtime reflection with Effect
+
+Import `Reflection` from `@golemcloud/effect-golem`. Reflection operations are Effects and their
+host requirements flow through the agent dispatcher; compose them in `Effect.gen` rather than
+running them as promises.
+
+```ts
+import { Effect } from "effect"
+import { Reflection } from "@golemcloud/effect-golem"
+
+const callEcho = Effect.gen(function* () {
+  const types = yield* Reflection.getAllAgentTypes
+  const target = yield* Reflection.getAgentType("ReflectionTarget")
+  if (!target) return yield* Effect.fail("ReflectionTarget is not visible")
+
+  const echo = target.method("echo")
+  if (!echo) return yield* Effect.fail("echo is not registered")
+  if (target.mode !== "durable") return yield* Effect.fail("ReflectionTarget is not durable")
+  const client = yield* target.client.get({ name: "target" })
+  const method = yield* client.method("echo")
+  const result = yield* method.invoke({ message: "hello" })
+  return { listed: types.some((type) => type.name === target.name), value: result.value }
+}).pipe(Effect.scoped)
+```
+
+`getAgentType` and `getAgentTypeByAgentId` return `undefined` when the type is not visible. Agent
+identity strings are environment-scoped. Use `constructorInput` and method `input`/`output`
+`SchemaRef` values to validate, pack, unpack, or render JSON schemas. Normal reflected calls use
+JSON; use the `*Value` variants only for schema-native values. Durable factories expose `get` and
+phantom operations; ephemeral factories only allocate with `newPhantom`, which returns the client
+directly. Reflected invocation results include host metadata and a `value` except for unit-returning
+methods, which omit it.

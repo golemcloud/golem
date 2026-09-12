@@ -21,7 +21,7 @@ steps:
 
         Give `WebhookAgent` an HTTP mount under `/webhooks/{name}` and `SenderAgent`
         an HTTP mount under `/senders/{name}`. Make sure both are exposed through the
-        app HTTP API on `test-app.localhost:9006`.
+        app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         **WebhookAgent** must have mutable state fields for a `webhook_url` (string,
         initially empty) and a `result` (string, initially empty). It must expose
@@ -58,9 +58,9 @@ steps:
       effect: >
         In the Effect-based test-app project, build a webhook rendezvous demo with two durable
         agents defined using Effect and `@golemcloud/effect-golem`: `WebhookAgent` and
-        `SenderAgent`. Give each a single `constructorParams` string named `name`. Mount them with
+        `SenderAgent`. Give each a single `id` string named `name`. Mount them with
         `Http.mount("/webhooks/{name}")` and `Http.mount("/senders/{name}")`, expose both through
-        the app HTTP API on `test-app.localhost:9006`, and register their implementations from
+        the app HTTP API on `test-app.localhost:{{custom_request_port}}`, and register their implementations from
         `src/main.ts`.
 
         `WebhookAgent` must keep `webhookUrl` and `result` string state, both initially empty. Its
@@ -108,7 +108,7 @@ steps:
     only_if:
       language: "effect"
     http:
-      url: "http://test-app.localhost:9006/webhooks/w1/result"
+      url: "http://test-app.localhost:{{custom_request_port}}/webhooks/w1/result"
       method: "GET"
     expect:
       status: 200
@@ -120,7 +120,7 @@ steps:
     only_if:
       language: "effect"
     http:
-      url: "http://test-app.localhost:9006/senders/w1/send"
+      url: "http://test-app.localhost:{{custom_request_port}}/senders/w1/send"
       method: "POST"
       body: '{"message": "warmup"}'
       headers:
@@ -150,7 +150,7 @@ steps:
 
   - id: "send-webhook-message"
     http:
-      url: "http://test-app.localhost:9006/senders/w1/send"
+      url: "http://test-app.localhost:{{custom_request_port}}/senders/w1/send"
       method: "POST"
       body: '{"message": "hello from webhook"}'
       headers:
@@ -166,7 +166,7 @@ steps:
 
   - id: "verify-result"
     http:
-      url: "http://test-app.localhost:9006/webhooks/w1/result"
+      url: "http://test-app.localhost:{{custom_request_port}}/webhooks/w1/result"
       method: "GET"
     expect:
       status: 200

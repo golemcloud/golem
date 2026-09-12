@@ -1,0 +1,67 @@
+---
+name: golem-schedule-future-call-ts
+description: "Scheduling a future agent invocation in a TypeScript Golem project. Use when the user asks about delayed invocations, scheduling calls for later, or timed agent execution."
+---
+
+# Scheduling a Future Agent Invocation (TypeScript)
+
+## Overview
+
+A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call returns immediately; the target agent processes it when the scheduled time arrives.
+
+## Usage
+
+Every method on a definition RPC client has a `.schedule()` variant that
+takes a `Datetime` as the first argument, followed by the method's input record
+(omit the input for methods declared with `input: {}`). It returns a
+`CancellationToken`; ignore the token when cancellation is not needed.
+
+```typescript
+import { Counter } from './counter-agent.js';
+
+const counter = Counter.client.get({ name: 'my-counter' });
+
+// Schedule increment to run 60 seconds from now.
+const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
+
+// Schedule with arguments.
+const reporter = ReportAgent.client.get({ name: 'daily' });
+reporter.generateReport.schedule(
+    { seconds: BigInt(tomorrowMidnight), nanoseconds: 0 },
+    { kind: 'summary' },
+);
+```
+
+## Datetime Type
+
+The `Datetime` argument represents a point in time as seconds + nanoseconds since the Unix epoch. It is a plain object; construct it inline:
+
+```typescript
+const at = {
+    seconds: BigInt(1700000000),  // Unix timestamp as a BigInt
+    nanoseconds: 0,               // Sub-second precision
+};
+```
+
+Note: `seconds` is a `BigInt` in the TypeScript binding. If you want the exact
+type, import it as `import type { Datetime } from 'golem:agent/host@2.0.0'`.
+
+## Cancellation
+
+Keep the `CancellationToken` returned by `.schedule(at, input)` and call `.cancel()` any time before the scheduled time to cancel the invocation:
+
+```typescript
+const token = counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
+// …later, if the run is no longer wanted:
+token.cancel();
+```
+
+(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem agent invocation cancel` — see `golem-cancel-queued-invocation`.)
+
+## Use Cases
+
+- **Periodic tasks**: Schedule the next run at the end of each invocation
+- **Delayed processing**: Process an order after a cooling-off period
+- **Reminders and notifications**: Send a reminder at a specific time
+- **Retry with backoff**: Schedule a retry after a delay on failure

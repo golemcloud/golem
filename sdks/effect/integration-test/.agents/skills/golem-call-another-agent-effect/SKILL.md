@@ -6,7 +6,7 @@ description: "Calling another agent and awaiting its typed result in an Effect-b
 # Calling Another Agent from an Effect Golem Agent
 
 Every value returned by `defineAgent(...)` has a typed `client`. Obtain a remote handle by yielding
-`Target.client.get(constructorParams)`, then invoke one of its methods with the declared named-input
+`Target.client.get(id)`, then invoke one of its methods with the declared named-input
 record. Both operations return Effects; do not translate Promise-based SDK examples or invent an
 additional `.await()` call.
 
@@ -42,22 +42,22 @@ const RegistryEntries = Schema.Array(RegistryEntry);
 export const GlobalRegistry = defineAgent({
   name: "GlobalRegistry",
   mode: "durable",
-  constructorParams: {},
-  snapshot: Snapshot.define({
+  id: {},
+  snapshotting: Snapshot.define({
     schema: RegistryState,
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     register: method({
-      params: { name: Schema.String, count: Schema.Number },
+      input: { name: Schema.String, count: Schema.Number },
       success: Schema.Boolean,
     }),
     getAll: method({
-      params: {},
+      input: {},
       success: RegistryEntries,
     }),
   },
-}).implement((_constructorParams, snapshot) =>
+}).implement((_id, snapshot) =>
   Effect.gen(function* () {
     const state = yield* snapshot.init({});
 
@@ -89,7 +89,7 @@ const getCounter = Effect.gen(function* () {
 });
 ```
 
-For a singleton declared with `constructorParams: {}`, pass an empty record; `get()` and
+For a singleton declared with `id: {}`, pass an empty record; `get()` and
 `get(undefined)` are not the typed API:
 
 ```typescript
@@ -99,12 +99,12 @@ const getRegistry = Effect.gen(function* () {
 ```
 
 Getting a handle does not eagerly run the target constructor. The target agent is created or loaded
-when first invoked, and later calls with the same constructor parameters address the same durable
+when first invoked, and later calls with the same agent id fields address the same durable
 instance.
 
 ## Await a Remote Result in a Handler
 
-Remote method inputs are always named records. Pass `{}` when the method declares `params: {}`.
+Remote method inputs are always named records. Pass `{}` when the method declares `input: {}`.
 Yield the remote call directly to use its success value:
 
 ```typescript

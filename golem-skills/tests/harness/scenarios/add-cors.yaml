@@ -18,7 +18,7 @@ steps:
         In the test-app project, add a new durable agent type called `NoteAgent` identified by
         a single constructor parameter for the notebook name. Give it an HTTP mount under
         `/notes/{notebook-name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         NoteAgent must store a list of notes in agent state. Each note is a simple string.
 
@@ -32,9 +32,9 @@ steps:
       ts: *non-effect-add-note-agent-with-http-prompt
       effect: >
         In the Effect-based test-app project, add a durable `NoteAgent` with one
-        `constructorParams` string named `notebookName`. Use
+        `id` string named `notebookName`. Use
         `Http.mount("/notes/{notebookName}")` from `@golemcloud/effect-golem` and expose it through
-        the app HTTP API on `test-app.localhost:9006`.
+        the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         Store an initially empty durable list of note strings with Effect state and snapshot APIs.
         Define a `Note` Effect Schema with one string field named `text`.
@@ -100,7 +100,7 @@ steps:
   # Preflight on mount-level CORS endpoint — allowed origin
   - id: "preflight-add-allowed"
     http:
-      url: "http://test-app.localhost:9006/notes/work/add"
+      url: "http://test-app.localhost:{{custom_request_port}}/notes/work/add"
       method: "OPTIONS"
       headers:
         Origin: "https://frontend.example.com"
@@ -115,7 +115,7 @@ steps:
   # Preflight on wildcard CORS endpoint — any origin should work
   - id: "preflight-list-wildcard"
     http:
-      url: "http://test-app.localhost:9006/notes/work/list"
+      url: "http://test-app.localhost:{{custom_request_port}}/notes/work/list"
       method: "OPTIONS"
       headers:
         Origin: "https://other.example.com"
@@ -128,7 +128,7 @@ steps:
   # Normal request to wildcard endpoint carries CORS header
   - id: "get-list-cors-header"
     http:
-      url: "http://test-app.localhost:9006/notes/work/list"
+      url: "http://test-app.localhost:{{custom_request_port}}/notes/work/list"
       method: "GET"
       headers:
         Origin: "https://anywhere.example.com"
@@ -140,7 +140,7 @@ steps:
   # Normal POST with allowed origin carries CORS header
   - id: "post-add-cors-header"
     http:
-      url: "http://test-app.localhost:9006/notes/work/add"
+      url: "http://test-app.localhost:{{custom_request_port}}/notes/work/add"
       method: "POST"
       headers:
         Content-Type: "application/json"

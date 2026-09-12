@@ -19,6 +19,11 @@ steps:
         function sleep(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }
         and await sleep(100) inside a while(true) loop). Make sure the project builds
         and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add an Effect-based `runForever` method to the
+        existing `Counter` agent. It takes no arguments, returns void, and repeatedly increments
+        the counter state and sleeps for 100 milliseconds using Effect primitives. Preserve the
+        `Counter` runtime name, then build and deploy successfully.
       scala: >
         In the test-app project, add a new method called `runForever` to the CounterAgent
         that takes no arguments and returns nothing (Unit). It should run an infinite loop
@@ -36,7 +41,12 @@ steps:
 
   - id: "warmup"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method: "increment"
     expect:
       result_json:
@@ -45,10 +55,16 @@ steps:
 
   - id: "trigger-long-running"
     trigger:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: 'CounterAgent("c1")'
+        ts: 'CounterAgent("c1")'
+        scala: 'CounterAgent("c1")'
+        moonbit: 'CounterAgent("c1")'
       method:
         rust: "run_forever"
         ts: "runForever"
+        effect: "runForever"
         scala: "runForever"
         moonbit: "run_forever"
 
@@ -56,23 +72,36 @@ steps:
     sleep: 3
 
   - id: "interrupt-agent-via-prompt"
-    prompt: >
-      Use the CLI to interrupt the CounterAgent instance named "c1".
+    prompt:
+      effect: "Use the CLI to interrupt the Counter instance named `c1`."
+      rust: &interrupt-counter-agent 'Use the CLI to interrupt the CounterAgent instance named "c1".'
+      ts: *interrupt-counter-agent
+      scala: *interrupt-counter-agent
+      moonbit: *interrupt-counter-agent
     expectedSkills:
       - "golem-interrupt-resume-agent"
 
   - id: "verify-interrupted"
     shell:
       command: "golem"
-      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      args:
+        effect: ["agent", "get", "Counter(\"c1\")"]
+        rust: &get-counter-agent ["agent", "get", "CounterAgent(\"c1\")"]
+        ts: *get-counter-agent
+        scala: *get-counter-agent
+        moonbit: *get-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0
       stdout_contains: "Interrupted"
 
   - id: "resume-agent-via-prompt"
-    prompt: >
-      Use the CLI to resume the interrupted CounterAgent instance named "c1".
+    prompt:
+      effect: "Use the CLI to resume the interrupted Counter instance named `c1`."
+      rust: &resume-counter-agent 'Use the CLI to resume the interrupted CounterAgent instance named "c1".'
+      ts: *resume-counter-agent
+      scala: *resume-counter-agent
+      moonbit: *resume-counter-agent
     expectedSkills:
       - "golem-interrupt-resume-agent"
 
@@ -82,7 +111,12 @@ steps:
   - id: "verify-running"
     shell:
       command: "golem"
-      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      args:
+        effect: ["agent", "get", "Counter(\"c1\")"]
+        rust: *get-counter-agent
+        ts: *get-counter-agent
+        scala: *get-counter-agent
+        moonbit: *get-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0
@@ -91,7 +125,12 @@ steps:
   - id: "delete-agent"
     shell:
       command: "golem"
-      args: ["agent", "delete", "CounterAgent(\"c1\")"]
+      args:
+        effect: ["agent", "delete", "Counter(\"c1\")"]
+        rust: &delete-counter-agent ["agent", "delete", "CounterAgent(\"c1\")"]
+        ts: *delete-counter-agent
+        scala: *delete-counter-agent
+        moonbit: *delete-counter-agent
       cwd: "test-app"
     expect:
       exit_code: 0

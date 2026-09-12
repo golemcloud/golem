@@ -77,7 +77,7 @@ steps:
            `agent-type` so traces are grouped by component.
 
         2. Add a new durable agent type called `TracedAgent` with one string
-           `constructorParams` field named `instanceName`. Define and implement it with Effect v4
+           `id` field named `instanceName`. Define and implement it with Effect v4
            and `@golemcloud/effect-golem`. It must expose a method called `doTracedWork` that takes
            a string `taskName` and returns the string "traced". Inside the method:
            - Scope the work in a custom span named "process-task" using `Effect.withSpan`

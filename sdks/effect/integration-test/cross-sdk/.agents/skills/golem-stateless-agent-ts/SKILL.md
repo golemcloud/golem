@@ -1,0 +1,146 @@
+---
+name: golem-stateless-agent-ts
+description: "Creating ephemeral (stateless) agents in a TypeScript Golem project. Use when the user wants a stateless agent, a fresh instance per invocation, no shared state between calls, or a request-handler style agent."
+---
+
+# Creating Ephemeral (Stateless) Agents (TypeScript)
+
+## Overview
+
+An **ephemeral agent** is a Golem agent that gets a **fresh instance for every invocation**. Unlike the default durable agents, ephemeral agents:
+
+- **No shared state**: Each invocation starts from a fresh `init()` call — state set in one call is gone by the next
+- **No replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`), but it is never used for replay — no automatic recovery on failure
+- **No persistence**: The agent's memory is discarded after each invocation completes
+- **Same identity model**: The agent is still addressed by its `id` record, but every call behaves as if the agent was just created
+
+This makes ephemeral agents ideal for **pure request handlers**, **stateless transformers**, **adapters**, and **serverless-style functions** where each call is independent.
+
+## How to Create an Ephemeral Agent
+
+Set `mode: 'ephemeral'` on the `defineAgent(...)` spec:
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+export const RequestHandler = defineAgent({
+    name: 'RequestHandler',
+    mode: 'ephemeral',
+    id: { name: z.string() },
+    methods: {
+        handle: method({ input: { input: z.string() }, returns: z.string() }),
+    },
+});
+
+export const RequestHandlerImpl = RequestHandler.implement({
+    init: () => ({}),
+    methods: {
+        handle({ input }) {
+            return `processed: ${input}`;
+        },
+    },
+});
+```
+
+## What "Fresh Instance Per Invocation" Means
+
+Consider a durable agent vs an ephemeral one:
+
+```typescript
+// DURABLE (default) — state accumulates across calls
+export const DurableCounter = defineAgent({
+    name: 'DurableCounter',
+    id: { name: z.string() },
+    methods: { increment: method({ input: {}, returns: z.number() }) },
+});
+DurableCounter.implement({
+    init: () => ({ count: 0 }),
+    methods: {
+        increment() {
+            this.count += 1;
+            return this.count;
+        },
+    },
+});
+// Call increment() three times → returns 1, 2, 3
+
+// EPHEMERAL — state resets every call
+export const EphemeralCounter = defineAgent({
+    name: 'EphemeralCounter',
+    mode: 'ephemeral',
+    id: { name: z.string() },
+    methods: { increment: method({ input: {}, returns: z.number() }) },
+});
+EphemeralCounter.implement({
+    init: () => ({ count: 0 }),
+    methods: {
+        increment() {
+            this.count += 1;
+            return this.count;
+        },
+    },
+});
+// Call increment() three times → returns 1, 1, 1
+```
+
+Each invocation of an ephemeral agent:
+1. Creates a fresh instance via `init()`
+2. Executes the method
+3. Discards the instance entirely
+
+## Combining with HTTP Endpoints
+
+Ephemeral agents are a natural fit for HTTP request handlers. Declare an `http` mount on the agent and an `http` endpoint on each method:
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+
+export const ConverterAgent = defineAgent({
+    name: 'ConverterAgent',
+    mode: 'ephemeral',
+    id: { name: z.string() },
+    http: http.mount('/api/convert/{name}'),
+    methods: {
+        toUpper: method({ input: { input: z.string() }, returns: z.string(), http: http.post('/to-upper') }),
+        toLower: method({ input: { input: z.string() }, returns: z.string(), http: http.post('/to-lower') }),
+    },
+});
+
+export const ConverterAgentImpl = ConverterAgent.implement({
+    init: () => ({}),
+    methods: {
+        toUpper({ input }) {
+            return input.toUpperCase();
+        },
+        toLower({ input }) {
+            return input.toLowerCase();
+        },
+    },
+});
+```
+
+## When to Use Ephemeral Agents
+
+| Use Case | Why Ephemeral? |
+|----------|---------------|
+| Stateless HTTP API (REST adapter, proxy) | No state to persist between requests |
+| Data transformation / format conversion | Pure function — input in, output out |
+| Validation service | Each validation is independent |
+| Webhook receiver that forwards events | No need to remember previous webhooks |
+| Stateless computation (math, encoding) | No side effects worth persisting |
+
+## When NOT to Use Ephemeral Agents
+
+- **Counters, accumulators, shopping carts** — need state across calls → use durable (default)
+- **Workflow orchestrators, sagas** — need oplog for recovery → use durable (default)
+- **Agents calling external APIs** where at-least-once semantics matter → use durable (default)
+- **Any agent where one call's result depends on a previous call** → use durable (default)
+
+## Key Points
+
+- Ephemeral mode is set at the **agent type level** via `mode: 'ephemeral'` — all instances of the type are ephemeral
+- The `id` record still defines identity — you can have multiple ephemeral agents with different id values
+- Ephemeral agents can still call other agents via RPC, make HTTP requests, and use all Golem APIs
+- The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog` — but it is never replayed

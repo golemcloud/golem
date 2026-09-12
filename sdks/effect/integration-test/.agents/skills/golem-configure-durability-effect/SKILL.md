@@ -27,7 +27,7 @@ import { defineAgent } from "@golemcloud/effect-golem";
 export const Counter = defineAgent({
   name: "Counter",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {},
 }).implement(() => Effect.succeed({}));
 ```
@@ -58,17 +58,17 @@ const periodicSnapshot = Snapshot.define({
 });
 ```
 
-Set the chosen definition as the agent's top-level `snapshot` field. The second argument passed to
+Set the chosen definition as the agent's top-level `snapshotting` field. The second argument passed to
 `.implement(...)` is then the snapshot binding:
 
 ```typescript
 defineAgent({
   name: "Counter",
   mode: "durable",
-  constructorParams: { name: Schema.String },
-  snapshot,
+  id: { name: Schema.String },
+  snapshotting: snapshot,
   methods: {},
-}).implement((_constructorParams, snapshot) =>
+}).implement((_id, snapshot) =>
   Effect.gen(function* () {
     const state = yield* snapshot.init({ count: 0 });
     return {
@@ -91,12 +91,12 @@ recovery, such as stateless transformations or request adapters:
 export const StatelessHandler = defineAgent({
   name: "StatelessHandler",
   mode: "ephemeral",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {},
 }).implement(() => Effect.succeed({}));
 ```
 
-Ephemeral agents are not addressable by constructor parameters alone through the Effect SDK's
+Ephemeral agents are not addressable by agent id fields alone through the Effect SDK's
 generated client: their client exposes `getPhantom` and `newPhantom`, but not `get`. Do not depend
 on in-memory state surviving failures or restarts.
 

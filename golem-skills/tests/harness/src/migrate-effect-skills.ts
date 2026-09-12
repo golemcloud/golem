@@ -7,8 +7,8 @@ import * as yaml from "yaml";
 import { z } from "zod";
 
 const LANGUAGE_KEYS = new Set(["ts", "effect", "rust", "scala", "moonbit"]);
-const EXPECTED_UNIT_COUNT = 38;
-const UNSUPPORTED_EFFECT_SKILLS = new Set(["golem-mark-read-only"]);
+const EXPECTED_UNIT_COUNT = 44;
+const UNSUPPORTED_EFFECT_SKILLS = new Set<string>();
 const PROTECTED_EFFECT_SEMANTIC_REQUIREMENTS: Record<string, string[]> = {
   "add-cors": [
     "The Effect scenario must configure a mount-level explicit origin and an endpoint-level wildcard through Effect-Golem CORS metadata, then verify host-generated preflight and ordinary response headers; application OPTIONS handlers and manual CORS responses are not substitutes.",
@@ -250,7 +250,10 @@ export function validateManifestInventory(manifest: MigrationManifest): void {
     ids.add(unit.id);
     targets.add(unit.targetSkill);
 
-    if (unit.targetSkill !== "golem-add-npm-package" && !unit.targetSkill.endsWith("-effect")) {
+    if (
+      unit.targetSkill !== "golem-add-npm-package-effect" &&
+      !unit.targetSkill.endsWith("-effect")
+    ) {
       throw new Error(`Effect skill must end in -effect: ${unit.targetSkill}`);
     }
   }

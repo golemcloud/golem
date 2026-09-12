@@ -99,7 +99,7 @@ Declare the ordinary agent mount and, optionally, a custom webhook suffix togeth
 export const PaymentWatcher = defineAgent({
   name: "PaymentWatcher",
   mode: "durable",
-  constructorParams: {
+  id: {
     accountName: Schema.String,
   },
   http: Http.mount("/payments/{accountName}", {
@@ -107,7 +107,7 @@ export const PaymentWatcher = defineAgent({
   }),
   methods: {
     waitForPayment: method({
-      params: {},
+      input: {},
       success: PaymentEvent,
       http: [Http.post("/wait")],
     }),
@@ -164,7 +164,7 @@ const shareCallbackUrl = Effect.gen(function* () {
 });
 ```
 
-Define `receiveUrl` with `method({ params: { url: Schema.String }, ... })`; remote methods and
+Define `receiveUrl` with `method({ input: { url: Schema.String }, ... })`; remote methods and
 `client.get(...)` are Effects. Use the remote method's `.trigger(...)` form when URL handoff is
 fire-and-forget and the creator should enter `handle.await` immediately. A normal
 `yield* receiver.receiveUrl(...)` waits for the remote method to finish before reaching the

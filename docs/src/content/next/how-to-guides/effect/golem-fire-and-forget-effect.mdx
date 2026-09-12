@@ -11,7 +11,7 @@ Obtain the typed remote handle and yield the trigger Effect:
 ```typescript
 const counter = yield* CounterAgent.client.get({ name: "my-counter" });
 
-// A method declared with params: {} still requires an empty named-input record.
+// A method declared with input: {} still requires an empty named-input record.
 yield* counter.increment.trigger({});
 ```
 

@@ -1,0 +1,152 @@
+---
+name: golem-multi-instance-agent-ts
+description: "Using phantom agents in TypeScript to create multiple agent instances with the same constructor parameters. Use when the user needs multiple distinct agents sharing constructor values, or asks about phantom agents, phantom IDs, getPhantom/newPhantom, or multi-instance agents in TypeScript."
+---
+
+# Phantom Agents in TypeScript
+
+Phantom agents allow creating **multiple distinct agent instances** that share the same identity (`id` record) values. Normally, an agent is uniquely identified by its `id` record — addressing it with the same id values always reaches the same agent. Phantom agents add an extra **phantom ID** (a UUID) to the identity, so you can have many independent instances with identical id values.
+
+## Agent ID Format
+
+A phantom agent's ID appends the phantom UUID in square brackets:
+
+```
+agent-type(param1, param2)[a09f61a8-677a-40ea-9ebe-437a0df51749]
+```
+
+A non-phantom agent ID has no bracket suffix:
+
+```
+agent-type(param1, param2)
+```
+
+## Creating and Addressing Phantom Agents (RPC)
+
+You address another agent through the typed `client` namespace attached to its `defineAgent` definition:
+
+```typescript
+Def.client.get(id, config?)                         // non-phantom
+Def.client.getPhantom(id, phantomUuid, config?)     // known phantom
+Def.client.newPhantom(id, config?)                  // new phantom with generated identity
+```
+
+| Call | Description |
+|--------|-------------|
+| `Def.client.get(id)` | Get or create a **non-phantom** agent identified solely by its id record |
+| `Def.client.newPhantom(id)` | Create a **new phantom** agent and return `{ client, agentId, phantomId }` |
+| `Def.client.getPhantom(id, savedUuid)` | Get or create a phantom agent with a **specific** UUID |
+| `Def.client.get(id, { foo })` | Override the target's non-secret config for this call (secrets stay host-provisioned) |
+
+Each method on the client has, besides the awaited call: `.trigger(input)` (fire-and-forget) and `.schedule(at, input) → CancellationToken`. Cancel an awaited invocation with the normal call shape's trailing `{ signal }` option: `method(input, { signal })`, or `method({ signal })` for a method with no input.
+
+### Example
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method, Uuid } from '@golemcloud/golem-ts-sdk';
+
+export const Counter = defineAgent({
+    name: 'Counter',
+    id: { name: z.string() },
+    methods: { increment: method({ input: {}, returns: z.number() }) },
+});
+
+Counter.implement({
+    init: () => ({ count: 0 }),
+    methods: {
+        increment() {
+            this.count += 1;
+            return this.count;
+        },
+    },
+});
+
+// Non-phantom: always the same agent for the same name
+const shared = Counter.client.get({ name: 'shared' });
+await shared.increment();
+
+// New phantom: the call returns the client and its generated UUID.
+const { client: phantom1, phantomId: phantomId1 } = Counter.client.newPhantom({
+    name: 'shared',
+});
+const { client: phantom2 } = Counter.client.newPhantom({ name: 'shared' });
+// phantom1 and phantom2 are different agents, both with name="shared"
+
+// Reconnect to an existing phantom by its UUID.
+const samePhantom = Counter.client.getPhantom({ name: 'shared' }, phantomId1);
+
+// A persisted UUID string can be restored later.
+const restoredPhantom = Counter.client.getPhantom(
+    { name: 'shared' },
+    Uuid.parse(savedUuidString),
+);
+```
+
+Persist the phantom UUID yourself (as a string via `uuid.toString()`, reparsed with `Uuid.parse(...)`) whenever you need to reach the same phantom instance again later.
+
+### Phantoms in Another Component
+
+A generated durable guest client uses static `get`, `getPhantom`, and
+`newPhantom` methods, with flattened id parameters rather than the definition-client
+id record. For example:
+
+```typescript
+const shared = CounterAgent.get('shared');
+const existingPhantom = CounterAgent.getPhantom(savedUuid, 'shared');
+const freshPhantom = CounterAgent.newPhantom('shared');
+```
+
+When the target declares local config, the generated client also provides
+`getWithConfig`, `getPhantomWithConfig`, and `newPhantomWithConfig`. See the
+`golem-call-another-agent-ts` skill for cross-component manifest, TypeScript
+source-path, and import setup. The definition-client forms above are for calls
+within the component that defines the agent.
+
+## Querying the Phantom ID from Inside an Agent
+
+A handler can check its own phantom ID via `this.getPhantomId()`:
+
+```typescript
+export const MyAgent = defineAgent({
+    name: 'MyAgent',
+    id: { name: z.string() },
+    methods: { whoAmI: method({ input: {}, returns: z.string() }) },
+});
+
+MyAgent.implement({
+    init: () => ({}),
+    methods: {
+        whoAmI() {
+            const phantom = this.getPhantomId(); // Uuid | undefined
+            return phantom
+                ? `I am a phantom agent with ID: ${phantom.toString()}`
+                : 'I am a regular agent';
+        },
+    },
+});
+```
+
+## HTTP-Mounted Phantom Agents
+
+When an agent is mounted as an HTTP endpoint, set `phantomAgent: true` in the mount options to make every incoming HTTP request create a **new phantom instance** automatically:
+
+```typescript
+import { http } from '@golemcloud/golem-ts-sdk';
+
+export const RequestHandler = defineAgent({
+    name: 'RequestHandler',
+    id: { name: z.string() },
+    http: http.mount('/api/{name}', { phantomAgent: true }),
+    methods: { /* ... */ },
+});
+```
+
+Each HTTP request will be handled by a fresh agent instance with its own phantom ID, even though all instances share the same id values.
+
+## Key Points
+
+- Phantom agents are **fully durable** — they persist just like regular agents.
+- The phantom ID is a standard UUID; prefer `client.newPhantom(id)` for a fresh one, and use `Uuid.parse(str)` to restore a saved one or `Uuid.generate()` when the caller must choose the ID itself.
+- Reaching a phantom with the same UUID and id values always returns the same agent (idempotent).
+- Phantom and non-phantom agents with the same id values are **different agents** — they do not share state.

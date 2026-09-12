@@ -52,7 +52,7 @@ steps:
         leave an HTTP API deployment entry for the old `Counter` agent type.
 
         Add a second durable agent type called `DelayedRecorder`, defined with `defineAgent`
-        and the same string `constructorParams` field named `name` as the counter.
+        and the same string `id` field named `name` as the counter.
         `DelayedRecorder` must expose two externally invokable camelCase Effect methods:
         `recordCount` with one named numeric parameter `value`, and `recordedCounts` with no
         parameters. Keep the recorded numbers in durable snapshot state. `recordCount` must

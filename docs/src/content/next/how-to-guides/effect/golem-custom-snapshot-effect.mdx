@@ -32,20 +32,20 @@ const CounterState = Schema.Struct({
 export const CounterAgent = defineAgent({
   name: "CounterAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
-  snapshot: Snapshot.define({
+  snapshotting: Snapshot.define({
     schema: CounterState,
     policy: Snapshot.policy.everyN(1),
   }),
   methods: {
     increment: method({
-      params: {},
+      input: {},
       success: Schema.Number,
     }),
   },
-}).implement((_constructorParams, snapshot) =>
+}).implement((_id, snapshot) =>
   Effect.gen(function* () {
     const state = yield* snapshot.init({ count: 0 });
 
@@ -165,7 +165,7 @@ const CurrentCounterState = Schema.Union([SnapshotV1, SnapshotV2]).pipe(
 Use the evolved schema and current initial state in the new revision:
 
 ```typescript
-snapshot: Snapshot.define({
+snapshotting: Snapshot.define({
   schema: CurrentCounterState,
   policy: Snapshot.policy.everyN(10),
 }),
@@ -199,6 +199,6 @@ migrate the state.
 3. Select an explicit policy appropriate to recovery frequency.
 4. Call `snapshot.init(...)` once and route all state reads and writes through its `Ref`.
 5. Before deploying a schema change, make the new schema decode every supported old shape.
-6. Preserve the agent name and constructor parameter contract unless the update intentionally
+6. Preserve the agent name and agent id field contract unless the update intentionally
    changes identity.
 7. Build with `golem build`; do not edit generated files under `golem-temp/`.

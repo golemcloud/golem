@@ -29,8 +29,9 @@ const execFileAsync = promisify(execFile);
 
 function resetMigrationProgress(manifest: Awaited<ReturnType<typeof loadManifest>>): void {
   for (const unit of manifest.units) {
-    unit.state = unit.id === "golem-add-agent" ? "passed" : "pending";
-    unit.semanticStatus = unit.id === "golem-add-agent" ? "passed" : "pending";
+    const completed = unit.id === "golem-add-agent";
+    unit.state = completed ? "passed" : "pending";
+    unit.semanticStatus = completed ? "passed" : "pending";
     unit.attempts = [];
     unit.evidence = null;
   }
@@ -39,7 +40,7 @@ function resetMigrationProgress(manifest: Awaited<ReturnType<typeof loadManifest
 describe("Effect migration manifest", () => {
   test("contains the complete inventory with valid references and scenarios", async () => {
     const manifest = await loadManifest(manifestPath);
-    assert.equal(manifest.units.length, 38);
+    assert.equal(manifest.units.length, 44);
     await validateManifestFiles(repoRoot, manifest);
   });
 
@@ -61,8 +62,9 @@ describe("Effect migration manifest", () => {
     const manifest = await loadManifest(manifestPath);
     await validateManifestFiles(repoRoot, manifest);
     assert.ok(
-      manifest.units.every(({ id, targetSkill }) =>
-        !id.includes("mark-read-only") && !targetSkill.includes("mark-read-only"),
+      manifest.units.every(
+        ({ id, targetSkill }) =>
+          !id.includes("mark-read-only") && !targetSkill.includes("mark-read-only"),
       ),
     );
   });
@@ -85,7 +87,7 @@ describe("Effect migration manifest", () => {
   test("selects the first ready unit after the passed canary", async () => {
     const manifest = await loadManifest(manifestPath);
     resetMigrationProgress(manifest);
-    assert.equal(selectNextUnit(manifest)?.id, "golem-add-npm-package");
+    assert.equal(selectNextUnit(manifest)?.id, "golem-add-npm-package-effect");
   });
 
   test("selects an execution-passed unit that still has a workaround", async () => {
@@ -163,7 +165,7 @@ describe("Effect migration manifest", () => {
   test("does not select an active unit whose attempt budget is exhausted", async () => {
     const manifest = await loadManifest(manifestPath);
     resetMigrationProgress(manifest);
-    const exhausted = manifest.units.find(({ id }) => id === "golem-add-npm-package");
+    const exhausted = manifest.units.find(({ id }) => id === "golem-add-npm-package-effect");
     assert.ok(exhausted);
     exhausted.state = "editing";
     exhausted.attempts = Array.from({ length: manifest.policy.maxAttempts }, (_, index) => ({

@@ -27,16 +27,16 @@ import { defineAgent, method } from "@golemcloud/effect-golem";
 export const ProvisionedFileAgent = defineAgent({
   name: "ProvisionedFileAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   methods: {
     readConfig: method({
-      params: {},
+      input: {},
       success: Schema.String,
     }),
     fileStats: method({
-      params: {},
+      input: {},
       success: Schema.String,
     }),
   },

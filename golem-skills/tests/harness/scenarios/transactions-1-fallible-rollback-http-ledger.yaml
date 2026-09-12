@@ -17,7 +17,7 @@ steps:
       rust: &non-effect-fallible-transaction-with-http-ledger-prompt >
         In the test-app project, add a second durable agent type called `OrderLedger` identified by
         a single order id constructor parameter. Give it an HTTP mount under `/orders/{order-id}` and
-        make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+        make sure it is exposed through the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         `OrderLedger` must expose these HTTP endpoints:
         - `POST /reserve` to set `reserved = true` and append `"reserve"` to a history list
@@ -40,16 +40,16 @@ steps:
         transaction so compensation runs. On success return a successful result with no error. On
         transaction failure return an unsuccessful result with an error value.
 
-        Make sure you use test-app.localhost:9006 as the HTTP API endpoint for the OrderLedger.
+        Make sure you use test-app.localhost:{{custom_request_port}} as the HTTP API endpoint for the OrderLedger.
         If you are using TypeScript or Scala, use `fetch` for the request.
 
         Make sure the project builds and deploys successfully.
       ts: *non-effect-fallible-transaction-with-http-ledger-prompt
       effect: >
         In the Effect-based test-app project, add a second durable agent type called `OrderLedger`
-        with one `constructorParams` string named `orderId`. Declare its HTTP mount as
+        with one `id` string named `orderId`. Declare its HTTP mount as
         `/orders/{orderId}` with the `Http` API from `@golemcloud/effect-golem`, and expose it through
-        the app HTTP API on `test-app.localhost:9006`.
+        the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         Store snapshot-backed Effect state with exactly `reserved` (boolean), `charged` (boolean),
         and `history` (an array of strings). New ledger agents start with both booleans false and an
@@ -76,7 +76,7 @@ steps:
         `Saga.withFallibleCompensation` steps from `@golemcloud/effect-golem`. Implement every
         execute and compensation action as an actual outgoing HTTP request through `HttpClient`,
         `HttpClientRequest`, and `HttpClientResponse` from `effect/unstable/http`, using
-        `http://test-app.localhost:9006/orders/${encodeURIComponent(orderId)}` as the base URL. The
+        `http://test-app.localhost:{{custom_request_port}}/orders/${encodeURIComponent(orderId)}` as the base URL. The
         first step must POST to `/reserve` and compensate by sending DELETE `/reserve`; the second
         must POST to `/charge` and compensate by sending DELETE `/charge`. Execute and await every
         request, require a
@@ -137,7 +137,7 @@ steps:
 
   - id: "verify-rollback-via-http"
     http:
-      url: "http://test-app.localhost:9006/orders/order-1/state"
+      url: "http://test-app.localhost:{{custom_request_port}}/orders/order-1/state"
       method: "GET"
     expect:
       status: 200
@@ -171,7 +171,7 @@ steps:
 
   - id: "verify-success-via-http"
     http:
-      url: "http://test-app.localhost:9006/orders/order-2/state"
+      url: "http://test-app.localhost:{{custom_request_port}}/orders/order-2/state"
       method: "GET"
     expect:
       status: 200

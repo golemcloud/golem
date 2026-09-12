@@ -9,7 +9,7 @@ golem agent new <AGENT_ID> [OPTIONS]
 ```
 
 This **creates a new agent instance** without invoking any method on it. The agent is initialized
-with its constructor parameters and starts idle, ready to receive invocations. If the agent's
+with its agent id fields and starts idle, ready to receive invocations. If the agent's
 component has not been deployed and the CLI is run from an application directory, the command
 automatically builds and deploys the component first.
 
@@ -22,14 +22,14 @@ typed RPC client or `newPhantom`; those APIs serve different purposes.
 
 ## Agent ID Format
 
-The agent ID identifies the agent type and its constructor parameters:
+The agent ID identifies the agent type and its agent id fields:
 
 ```
 AgentTypeName(param1, param2, ...)
 ```
 
 For an Effect agent declared with `defineAgent`, use the exact `name` string as `AgentTypeName` and
-pass values in the declaration order of `constructorParams`. Do not infer the type name from the
+pass values in the declaration order of `id`. Do not infer the type name from the
 exported TypeScript constant, filename, or description, and do not append an `Agent` suffix unless
 it is present in `name`.
 
@@ -38,7 +38,7 @@ For example, this declaration is addressed as `Counter("c1")`, not `CounterAgent
 ```typescript
 export const Counter = defineAgent({
   name: "Counter",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   // ...
 });
 ```
@@ -56,17 +56,17 @@ The agent ID can optionally be prefixed with environment or application paths:
 | `app/env/AgentTypeName(params)` | Application and environment-specific |
 | `account/app/env/AgentTypeName(params)` | Account, application, and environment-specific |
 
-For agents with no constructor parameters, use empty parentheses: `AgentTypeName()`.
+For agents with no agent id fields, use empty parentheses: `AgentTypeName()`.
 
 ## Examples
 
-### Create an agent with no constructor parameters
+### Create an agent with no agent id fields
 
 ```shell
 golem agent new 'MyAgent()'
 ```
 
-### Create an agent with constructor parameters
+### Create an agent with agent id fields
 
 ```shell
 golem agent new 'Counter("c1")'

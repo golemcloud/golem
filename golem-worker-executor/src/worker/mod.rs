@@ -1406,6 +1406,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         return Err(error);
                     }
                 };
+                let status = this.state_actor.attached_status().await;
+                if this.agent_mode() == AgentMode::Durable
+                    && status.status == AgentStatus::Interrupted
+                    && status.current_idempotency_key.is_some()
+                {
+                    this.add_and_commit_oplog_internal(
+                        &instance_guard,
+                        OplogEntry::resumed(),
+                        None,
+                    )
+                    .await;
+                }
                 let start_attempt = this.startup_attempt.begin(start_attempt);
                 this.mark_as_loading(start_attempt);
                 crate::metrics::workers::inc_worker_waiting_for_memory();

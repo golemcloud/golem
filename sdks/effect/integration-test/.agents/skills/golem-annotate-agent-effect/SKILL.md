@@ -32,12 +32,12 @@ export const CounterAgent = defineAgent({
   name: "CounterAgent",
   description: "A test counter agent for tracking numeric values",
   mode: "durable",
-  constructorParams: {
+  id: {
     count: Schema.Number,
   },
   methods: {
     getDouble: method({
-      params: {},
+      input: {},
       success: Schema.Number,
       promptHint: "Get the doubled value of the counter",
       description:
@@ -61,7 +61,7 @@ by `.implement(...)`. Metadata belongs only on the specs; it does not change han
   `effect`.
 - Use `description` and `promptHint`, not `prompt`, decorator syntax, or helpers from
   `@golemcloud/golem-ts-sdk`.
-- Keep method `params`, `success`, and optional `error` schemas unchanged when adding metadata.
+- Keep method `input`, `success`, and optional `error` schemas unchanged when adding metadata.
 - Both metadata fields are optional; omit them for methods that should not carry discovery hints.
 - Keep the top-level `.implement(...)` registration and the implementation module's side-effect
   import from `src/main.ts`.

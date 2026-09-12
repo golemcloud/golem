@@ -43,7 +43,7 @@ steps:
         Make sure the project builds successfully.
       effect: >
         In the Effect-based test-app project, add a second durable agent type called
-        `GlobalRegistry` as a singleton with `constructorParams: {}`. Define an Effect Schema
+        `GlobalRegistry` as a singleton with `id: {}`. Define an Effect Schema
         `RegistryEntry` with `name: Schema.String` and `count: Schema.Number`. Expose two typed
         Effect methods: `register` with named parameters `name` and `count` and
         `success: Schema.Boolean`, and `getAll` with no parameters and

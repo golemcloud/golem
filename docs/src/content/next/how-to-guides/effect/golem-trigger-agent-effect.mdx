@@ -23,9 +23,9 @@ caller needs the method result or must know that the invocation finished.
 For an agent declared with `defineAgent` and `method`:
 
 - The agent type name is exactly the `name` passed to `defineAgent`.
-- Constructor arguments follow the declaration order in `constructorParams`.
+- Constructor arguments follow the declaration order in `id`.
 - The function name is exactly the key declared in `methods`, including TypeScript casing.
-- Method arguments follow the declaration order in that method's `params`.
+- Method arguments follow the declaration order in that method's `input`.
 
 Do not infer the runtime name from an exported TypeScript binding or translate method names to
 snake_case. The generated Effect starter declares its counter with the exact runtime name
@@ -34,10 +34,10 @@ snake_case. The generated Effect starter declares its counter with the exact run
 ```typescript
 export const Counter = defineAgent({
   name: "Counter",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {
     increment: method({
-      params: {},
+      input: {},
       success: Schema.Number,
     }),
   },
@@ -52,7 +52,7 @@ golem agent invoke --trigger 'Counter("c1")' increment
 
 CLI constructor and method arguments are positional values. Do not wrap them in the named input
 objects used by the Effect SDK client. For example, a method declared with
-`params: { amount: Schema.Number }` receives `5` from the CLI, not `{ amount: 5 }`. If a declared
+`input: { amount: Schema.Number }` receives `5` from the CLI, not `{ amount: 5 }`. If a declared
 parameter is itself a record, pass that record value as one shell argument.
 
 ## Examples

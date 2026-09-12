@@ -244,13 +244,13 @@ for the full replay constraints.
 ## Calling a Golem HTTP Endpoint
 
 For an incoming Golem endpoint, unbound method parameters come from a JSON object whose keys match
-the method's camelCase `params` keys. Even one body parameter requires an object.
+the method's camelCase `input` keys. Even one body parameter requires an object.
 
 Given an incoming method:
 
 ```typescript
 record: method({
-  params: { message: Schema.String },
+  input: { message: Schema.String },
   success: Schema.Void,
   http: [Http.post("/record")],
 });
@@ -275,10 +275,10 @@ import { defineAgent, method } from "@golemcloud/effect-golem";
 export const MessageForwarder = defineAgent({
   name: "MessageForwarder",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {
     recordMessageViaHttp: method({
-      params: { message: Schema.String },
+      input: { message: Schema.String },
       success: Schema.String,
     }),
   },

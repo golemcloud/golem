@@ -32,6 +32,25 @@ async fn effect_default_template_builds() {
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
+
+    ctx.start_server().await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    for (method, expected) in [("increment", "1"), ("increment", "2"), ("value", "2")] {
+        let outputs = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                "Counter(\"template-test\")",
+                method,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(
+            outputs.stdout_contains_ordered(["Invocation result in TypeScript syntax:", expected])
+        );
+    }
 }
 
 #[test]

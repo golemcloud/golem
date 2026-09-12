@@ -2956,10 +2956,11 @@ impl TypeScriptBridgeGenerator {
             SchemaType::String { .. } | SchemaType::Char { .. } => {
                 format!("((n: any) => n.value as string)({value})")
             }
+            SchemaType::U64 { .. } | SchemaType::S64 { .. } => {
+                format!("((n: any) => n.value as bigint)({value})")
+            }
             SchemaType::F64 { .. }
             | SchemaType::F32 { .. }
-            | SchemaType::U64 { .. }
-            | SchemaType::S64 { .. }
             | SchemaType::U32 { .. }
             | SchemaType::S32 { .. }
             | SchemaType::U16 { .. }
@@ -4045,13 +4046,7 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Char { .. } => Ok("string".to_string()),
                     SchemaType::F64 { .. } => Ok("number".to_string()),
                     SchemaType::F32 { .. } => Ok("number".to_string()),
-                    SchemaType::U64 { .. } | SchemaType::S64 { .. }
-                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
-                    {
-                        Ok("bigint".to_string())
-                    }
-                    SchemaType::U64 { .. } => Ok("number".to_string()),
-                    SchemaType::S64 { .. } => Ok("number".to_string()),
+                    SchemaType::U64 { .. } | SchemaType::S64 { .. } => Ok("bigint".to_string()),
                     SchemaType::U32 { .. } => Ok("number".to_string()),
                     SchemaType::S32 { .. } => Ok("number".to_string()),
                     SchemaType::U16 { .. } => Ok("number".to_string()),
@@ -4285,13 +4280,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Char { .. } => Ok("string".to_string()),
             SchemaType::F64 { .. } => Ok("number".to_string()),
             SchemaType::F32 { .. } => Ok("number".to_string()),
-            SchemaType::U64 { .. } | SchemaType::S64 { .. }
-                if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
-            {
-                Ok("bigint".to_string())
-            }
-            SchemaType::U64 { .. } => Ok("number".to_string()),
-            SchemaType::S64 { .. } => Ok("number".to_string()),
+            SchemaType::U64 { .. } | SchemaType::S64 { .. } => Ok("bigint".to_string()),
             SchemaType::U32 { .. } => Ok("number".to_string()),
             SchemaType::S32 { .. } => Ok("number".to_string()),
             SchemaType::U16 { .. } => Ok("number".to_string()),

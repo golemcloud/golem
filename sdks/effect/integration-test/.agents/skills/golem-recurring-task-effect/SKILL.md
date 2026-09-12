@@ -22,7 +22,7 @@ const scheduled = yield * self.poll.schedule(scheduledAt, {});
 The pinned Effect SDK has these exact semantics:
 
 - `client.get(...)` takes the complete named constructor-parameter record.
-- A method with `params: {}` still receives `{}` in remote calls.
+- A method with `input: {}` still receives `{}` in remote calls.
 - `.schedule(at, input)` expects a WIT wall-clock value with
   `{ seconds: bigint, nanoseconds: number }`.
 - `.schedule(...)` is already cancelable and returns `Client.ScheduledInvocation`.
@@ -59,14 +59,14 @@ import { type Client, defineAgent, method } from "@golemcloud/effect-golem";
 const TickerDefinition = defineAgent({
   name: "Ticker",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   methods: {
-    start: method({ params: {}, success: Schema.Void }),
-    tick: method({ params: {}, success: Schema.Void }),
-    cancel: method({ params: {}, success: Schema.Void }),
-    getTickCount: method({ params: {}, success: Schema.Number }),
+    start: method({ input: {}, success: Schema.Void }),
+    tick: method({ input: {}, success: Schema.Void }),
+    cancel: method({ input: {}, success: Schema.Void }),
+    getTickCount: method({ input: {}, success: Schema.Number }),
   },
 });
 

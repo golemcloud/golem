@@ -105,8 +105,8 @@ export const RpcLive: Layer.Layer<RpcClient> = Layer.succeed(
     connect: (agentTypeName, constructorValue, phantomId, agentConfig) =>
       Effect.try({
         try: () =>
-          wrapWasmRpc(new WasmRpc(agentTypeName, constructorValue, phantomId, [...agentConfig])),
-        catch: (cause) => new RpcHostError(cause, "WasmRpc.constructor"),
+          wrapWasmRpc(WasmRpc.create(agentTypeName, constructorValue, phantomId, [...agentConfig])),
+        catch: (cause) => new RpcHostError(cause, "WasmRpc.create"),
       }),
   }),
 )

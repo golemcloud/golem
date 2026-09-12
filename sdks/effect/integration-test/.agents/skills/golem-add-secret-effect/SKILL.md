@@ -40,12 +40,12 @@ export const SecureAgent = defineAgent({
   name: "SecureAgent",
   mode: "durable",
   config: SecureAgentConfig,
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   methods: {
     getInfo: method({
-      params: {},
+      input: {},
       success: Info,
     }),
   },

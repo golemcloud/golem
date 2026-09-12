@@ -96,6 +96,9 @@ export * as Datetime from "./Datetime.js"
  */
 export * as Durability from "./Durability.js"
 
+/** Schema-value RPC for callers that only have an agent identity. @since 1.6.0 @category modules */
+export * as DynamicClient from "./DynamicClient.js"
+
 /**
  * `Element` schema for tagged primitives inside `Unstructured` payloads.
  *
@@ -175,6 +178,9 @@ export * as Multimodal from "./Multimodal.js"
  */
 export * as Oplog from "./Oplog.js"
 
+/** Runtime agent-type discovery. @since 1.6.0 @category modules */
+export * as Reflection from "./Reflection.js"
+
 /**
  * Principal identity types attached to agent invocations and snapshots.
  *
@@ -219,6 +225,9 @@ export * as Saga from "./Saga.js"
  * @category modules
  */
 export * as Schema from "./Schema.js"
+
+/** Runtime schema references used by reflection. @since 1.6.0 @category modules */
+export * as SchemaRef from "./SchemaRef.js"
 
 /**
  * Accessors for the running agent's own identity (`SelfAgentId`).

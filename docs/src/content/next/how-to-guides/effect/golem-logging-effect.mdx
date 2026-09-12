@@ -19,12 +19,12 @@ import { defineAgent, method } from "@golemcloud/effect-golem";
 export const LogDemoAgent = defineAgent({
   name: "LogDemoAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     instanceName: Schema.String,
   },
   methods: {
     doWork: method({
-      params: { taskName: Schema.String },
+      input: { taskName: Schema.String },
       success: Schema.String,
     }),
   },

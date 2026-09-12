@@ -16,7 +16,7 @@ an implementation import in `src/main.ts`, or an `httpApi` deployment.
 ## Path Variables
 
 Place constructor identity fields in the mount path and method fields in endpoint paths. Variable
-names must exactly match the corresponding `constructorParams` or `params` keys, including
+names must exactly match the corresponding `id` or `input` keys, including
 TypeScript casing:
 
 ```typescript
@@ -26,13 +26,13 @@ import { defineAgent, Http, method } from "@golemcloud/effect-golem";
 export const TaskAgent = defineAgent({
   name: "TaskAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     taskName: Schema.String,
   },
   http: Http.mount("/api/tasks/{taskName}"),
   methods: {
     getItem: method({
-      params: { itemId: Schema.String },
+      input: { itemId: Schema.String },
       success: Item,
       http: [Http.get("/items/{itemId}")],
     }),
@@ -40,15 +40,15 @@ export const TaskAgent = defineAgent({
 });
 ```
 
-Every constructor parameter must appear in the mount path. This Effect SDK has no API for binding
-a mount header to a constructor parameter. Mount paths also cannot contain query parameters or
+Every agent id field must appear in the mount path. This Effect SDK has no API for binding
+a mount header to a agent id field. Mount paths also cannot contain query parameters or
 catch-all variables.
 
 An endpoint catch-all captures the remaining path and must be its final segment:
 
 ```typescript
 serveFile: method({
-  params: { path: Schema.String },
+  input: { path: Schema.String },
   success: FileContent,
   http: [Http.get("/files/{*path}")],
 }),
@@ -62,7 +62,7 @@ from the TypeScript parameter name:
 
 ```typescript
 search: method({
-  params: {
+  input: {
     query: Schema.String,
     minPrice: Schema.NullOr(Schema.Number),
     inStockOnly: Schema.NullOr(Schema.Boolean),
@@ -86,7 +86,7 @@ The endpoint options map each HTTP header name to one method parameter name:
 
 ```typescript
 submitReport: method({
-  params: {
+  input: {
     tenantId: Schema.String,
     report: Report,
   },
@@ -139,7 +139,7 @@ order:
 
 ```typescript
 collectionBindings: method({
-  params: {
+  input: {
     tags: Schema.Array(Schema.String),
     scores: Schema.Array(Schema.Number),
   },
@@ -167,7 +167,7 @@ top-level field in the JSON object, using the exact TypeScript parameter name:
 
 ```typescript
 updateItem: method({
-  params: {
+  input: {
     id: Schema.String,
     name: Schema.String,
     count: Schema.Number,
@@ -185,7 +185,7 @@ The request body is:
 
 The body is always an object keyed by method parameter name. A single unbound parameter
 `decision: Schema.String` expects `{ "decision": "approved" }`, not the bare JSON string
-`"approved"`. Likewise, `params: { item: Item }` expects `{ "item": { ... } }`; the fields of the
+`"approved"`. Likewise, `input: { item: Item }` expects `{ "item": { ... } }`; the fields of the
 `Item` struct are not flattened into the top-level body.
 
 `Http.get` and `Http.head` are bodyless, so every parameter of those methods must be bound from
@@ -270,7 +270,7 @@ import { Effect, Schema } from "effect";
 import { Http, method, Unstructured } from "@golemcloud/effect-golem";
 
 const upload = method({
-  params: {
+  input: {
     payload: Unstructured.UnstructuredBinary({
       restrictions: [{ mimeType: "image/png" }],
     }),
@@ -316,7 +316,7 @@ read `Principal.Principal` inside the handler for the current invocation. Load
 ## Key Constraints
 
 - Import Effect APIs from `effect` and Golem APIs from `@golemcloud/effect-golem`.
-- Match every placeholder and header target to an exact `params` or `constructorParams` key.
+- Match every placeholder and header target to an exact `input` or `id` key.
 - Use `Schema.NullOr(...)` and `null` for optional query/header values and 404 success results.
 - Keep GET/HEAD parameters fully bound and bodyful request bodies as named JSON objects.
 - Return Effects from handlers; do not use plain values, `async` handlers, or raw HTTP middleware.

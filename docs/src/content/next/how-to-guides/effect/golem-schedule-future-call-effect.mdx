@@ -17,7 +17,7 @@ import { Effect, Ref } from "effect";
 import { DelayedRecorderDefinition } from "./delayed-recorder.js";
 
 // In an implementation where `state` is the snapshot Ref and `name` is
-// the agent's constructor parameter:
+// the agent's agent id field:
 const scheduleReport = () =>
   Effect.gen(function* () {
     const { count: newCount } = yield* Ref.updateAndGet(state, ({ count }) => ({
@@ -44,8 +44,8 @@ scheduling failure, map it to a domain error declared in the method's `error` sc
 
 ## Exact Call Shape
 
-- `Target.client.get(...)` takes the complete named constructor-parameter record.
-- Remote method inputs are named records. Pass `{}` for a method declared with `params: {}`.
+- `Target.client.get(...)` takes the complete named agent `id` record.
+- Remote method inputs are named records. Pass `{}` for a method declared with `input: {}`.
 - `.schedule(...)` takes the absolute datetime first and the method input second.
 - Both `client.get(...)` and `.schedule(...)` are lazy Effects and must be yielded.
 - Yielding `.schedule(...)` waits only for schedule submission, not for future execution.

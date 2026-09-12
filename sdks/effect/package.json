@@ -1,6 +1,6 @@
 {
   "name": "@golemcloud/effect-golem",
-  "version": "1.5.0",
+  "version": "0.0.0",
   "publishConfig": {
     "access": "public"
   },
@@ -50,8 +50,21 @@
       "types": "./dist/effect-golem-ignite2.d.ts",
       "import": "./dist/ignite.mjs"
     },
+    "./agent-guest": {
+      "types": "./golem-types/exports.d.ts"
+    },
+    "./tool-middleware-guest": {
+      "types": "./golem-types/tool_middleware_exports.d.ts"
+    },
+    "./agent-tool-middleware-guest": {
+      "types": "./golem-types/agent_tool_middleware_exports.d.ts"
+    },
     "./internal/*": null,
     "./host/*": null,
+    "./Sqlite/internal/*": null,
+    "./Postgres/internal/*": null,
+    "./Mysql/internal/*": null,
+    "./Ignite/internal/*": null,
     "./*": {
       "types": "./dist/src/*.d.ts",
       "import": "./dist/src/*.js"
@@ -105,7 +118,9 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
     "wasm",
+    "!wasm/artifact-provenance.json",
     "golem-types"
   ],
   "scripts": {
@@ -115,6 +130,7 @@
     "check:dts": "node ./scripts/check-dts.mjs",
     "check:contracts": "node ./scripts/check-stale-contracts.mjs",
     "check:artifacts": "node ./scripts/check-artifacts.mjs",
+    "check:package": "node ./scripts/check-package.mjs",
     "clean": "node ./scripts/clean.mjs",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
     "compile-agent-template": "node ./scripts/compile-agent-templates.mjs",

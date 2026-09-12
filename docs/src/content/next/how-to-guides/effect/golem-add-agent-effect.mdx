@@ -32,32 +32,32 @@ const RepositoryState = Schema.Struct({
 export const ItemRepositoryAgent = defineAgent({
   name: "ItemRepositoryAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     repositoryName: Schema.String,
   },
-  snapshot: Snapshot.define({
+  snapshotting: Snapshot.define({
     schema: RepositoryState,
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     createItem: method({
-      params: { item: Item },
+      input: { item: Item },
       success: Item,
     }),
     getItem: method({
-      params: { id: Schema.String },
+      input: { id: Schema.String },
       success: Item,
     }),
     updateItem: method({
-      params: { item: Item },
+      input: { item: Item },
       success: Item,
     }),
     deleteItem: method({
-      params: { id: Schema.String },
+      input: { id: Schema.String },
       success: Schema.Boolean,
     }),
     listItems: method({
-      params: {},
+      input: {},
       success: Schema.Array(Item),
     }),
   },
@@ -112,12 +112,12 @@ NodeNext module resolution.
 
 ## Method Contracts and Errors
 
-`params` is a record of named method parameters. A method with one record parameter declares the
+`input` is a record of named method parameters. A method with one record parameter declares the
 record schema as that parameter's value:
 
 ```typescript
 createItem: method({
-  params: { item: Item },
+  input: { item: Item },
   success: Item,
 });
 ```
@@ -131,7 +131,7 @@ const ItemNotFound = Schema.Struct({
 });
 
 getItem: method({
-  params: { id: Schema.String },
+  input: { id: Schema.String },
   success: Item,
   error: ItemNotFound,
 });
@@ -146,7 +146,7 @@ retry the invocation. Do not use defects to represent normal business outcomes.
 ## Key Constraints
 
 - Import Effect APIs from `effect` and Golem APIs from `@golemcloud/effect-golem`.
-- Use Effect Schema values for every constructor parameter, method parameter, success, and typed
+- Use Effect Schema values for every agent id field, method parameter, success, and typed
   error.
 - Constructor parameters define durable agent identity.
 - Handlers return `Effect` values; do not implement them as plain `async` functions.

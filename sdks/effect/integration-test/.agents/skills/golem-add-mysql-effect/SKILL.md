@@ -79,7 +79,7 @@ Add the method contract to the existing definition's `methods` map:
 
 ```typescript
 checkMysql: method({
-  params: {},
+  input: {},
   success: Schema.String,
 }),
 ```

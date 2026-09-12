@@ -61,12 +61,12 @@ import { defineAgent, method } from "@golemcloud/effect-golem";
 export const TracedAgent = defineAgent({
   name: "TracedAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     instanceName: Schema.String,
   },
   methods: {
     doTracedWork: method({
-      params: { taskName: Schema.String },
+      input: { taskName: Schema.String },
       success: Schema.String,
     }),
   },

@@ -20,7 +20,7 @@ steps:
         In the test-app project, add a new durable agent type called `CatalogAgent` identified by
         a single constructor parameter for the catalog name. Give it an HTTP mount under
         `/catalogs/{catalog-name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         CatalogAgent must store a list of products in agent state. Each product has the following
         fields: `id` (string), `name` (string), `price` (f64 / number / Double), and `inStock`
@@ -58,9 +58,9 @@ steps:
       ts: *non-effect-add-catalog-agent-prompt
       effect: >
         In the Effect-based test-app project, add a durable `CatalogAgent` with one
-        `constructorParams` string named `catalogName`. Mount it with
+        `id` string named `catalogName`. Mount it with
         `Http.mount("/catalogs/{catalogName}")` from `@golemcloud/effect-golem` and expose it on
-        `test-app.localhost:9006`. Store products durably with Effect state and snapshot APIs.
+        `test-app.localhost:{{custom_request_port}}`. Store products durably with Effect state and snapshot APIs.
 
         Make changes only inside the generated `test-app`. Do not modify dependencies, linked SDK
         source or build outputs, Effect-Golem, the Golem host, or WIT. The documented optional
@@ -121,7 +121,7 @@ steps:
   # Rust uses snake_case parameter names in JSON body; TS/Scala use camelCase
   - id: "create-product-1"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -180,7 +180,7 @@ steps:
 
   - id: "create-product-2"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -198,7 +198,7 @@ steps:
 
   - id: "create-product-3"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -248,7 +248,7 @@ steps:
   # --- Path variable mapping on GET ---
   - id: "get-product-by-id"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/1"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/1"
       method: "GET"
     expect:
       status: 200
@@ -263,7 +263,7 @@ steps:
   # --- Option/undefined return → 404 ---
   - id: "get-product-not-found"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/999"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/999"
       method: "GET"
     expect:
       status: 404
@@ -271,7 +271,7 @@ steps:
   # --- Query parameter mapping: string + optional number + optional boolean ---
   - id: "search-by-name"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=lap"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=lap"
       method: "GET"
     expect:
       status: 200
@@ -281,7 +281,7 @@ steps:
 
   - id: "search-with-min-price"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=&min-price=50"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=&min-price=50"
       method: "GET"
     expect:
       status: 200
@@ -289,7 +289,7 @@ steps:
 
   - id: "search-with-min-price-excludes-cheap"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=mouse&min-price=50"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=mouse&min-price=50"
       method: "GET"
     expect:
       status: 200
@@ -299,7 +299,7 @@ steps:
 
   - id: "search-in-stock-only"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=&in-stock-only=true"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=&in-stock-only=true"
       method: "GET"
     expect:
       status: 200
@@ -307,7 +307,7 @@ steps:
 
   - id: "search-in-stock-only-excludes-keyboard"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=keyboard&in-stock-only=true"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=keyboard&in-stock-only=true"
       method: "GET"
     expect:
       status: 200
@@ -317,7 +317,7 @@ steps:
 
   - id: "search-combined-filters"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=&min-price=50&in-stock-only=true"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=&min-price=50&in-stock-only=true"
       method: "GET"
     expect:
       status: 200
@@ -328,7 +328,7 @@ steps:
   # --- PUT: path variable + body fields mixed ---
   - id: "update-product"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/2"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/2"
       method: "PUT"
       headers:
         Content-Type: "application/json"
@@ -348,7 +348,7 @@ steps:
 
   - id: "verify-update-persisted"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/2"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/2"
       method: "GET"
     expect:
       status: 200
@@ -361,7 +361,7 @@ steps:
   # --- PUT on nonexistent product → 404 ---
   - id: "update-product-not-found"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/999"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/999"
       method: "PUT"
       headers:
         Content-Type: "application/json"
@@ -377,14 +377,14 @@ steps:
   # --- DELETE: path variable, unit/void return → 204 ---
   - id: "delete-product"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/3"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/3"
       method: "DELETE"
     expect:
       status: 204
 
   - id: "verify-delete"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/3"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/3"
       method: "GET"
     expect:
       status: 404
@@ -392,7 +392,7 @@ steps:
   # --- POST with complex body (array of objects) ---
   - id: "batch-create"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/batch"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/batch"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -408,7 +408,7 @@ steps:
 
   - id: "verify-batch-products-exist"
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q="
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q="
       method: "GET"
     expect:
       status: 200
@@ -417,7 +417,7 @@ steps:
   # --- Different agent instance (mount path variable as constructor param) ---
   - id: "different-catalog-instance"
     http:
-      url: "http://test-app.localhost:9006/catalogs/books/products/search?q="
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/books/products/search?q="
       method: "GET"
     expect:
       status: 200
@@ -442,7 +442,7 @@ steps:
             "--header", "X-Weight: 10",
             "--header", "X-Weight: 20",
             "--header", "X-Weight: 10",
-            "http://test-app.localhost:9006/catalogs/electronics/bindings/collections?tag=red&tag=blue&tag=red&score=1&score=2&score=1"
+            "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/bindings/collections?tag=red&tag=blue&tag=red&score=1&score=2&score=1"
           ], { encoding: "utf8" }));
           const expected = {
             tags: ["red", "blue", "red"],
@@ -464,7 +464,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search"
       method: "GET"
     expect:
       status: 400
@@ -482,7 +482,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=mouse&min-price=not-a-number"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=mouse&min-price=not-a-number"
       method: "GET"
     expect:
       status: 400
@@ -500,7 +500,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=mouse&q=laptop"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/products/search?q=mouse&q=laptop"
       method: "GET"
     expect:
       status: 400
@@ -518,7 +518,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/catalogs/electronics/bindings/collections?tag=alpha&score=1"
+      url: "http://test-app.localhost:{{custom_request_port}}/catalogs/electronics/bindings/collections?tag=alpha&score=1"
       method: "GET"
       headers:
         X-Trace-Id: "trace"

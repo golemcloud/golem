@@ -10,7 +10,7 @@
     "@golemcloud/effect-golem": "file:../..",
     "@golemcloud/golem-ts-sdk": "file:../../../ts/packages/golem-ts-sdk",
     "effect": "4.0.0-beta.98",
-    "zod": "^4.1.5"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^28.0.6",

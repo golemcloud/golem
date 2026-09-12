@@ -5,7 +5,7 @@ description: "Creates ephemeral, stateless Effect Golem agents with fresh handle
 
 # Creating Ephemeral Agents with Effect
 
-An ephemeral agent gets a fresh implementation for every invocation. Its constructor parameters
+An ephemeral agent gets a fresh implementation for every invocation. Its agent id fields
 still describe its logical identity, but values captured by one invocation's handlers are discarded
 when that invocation completes. The oplog remains available for inspection, but Golem does not
 replay it to recover an ephemeral agent.
@@ -27,16 +27,16 @@ import { defineAgent, method } from "@golemcloud/effect-golem";
 export const TextProcessorAgent = defineAgent({
   name: "TextProcessorAgent",
   mode: "ephemeral",
-  constructorParams: {
+  id: {
     processorName: Schema.String,
   },
   methods: {
     toUpper: method({
-      params: { input: Schema.String },
+      input: { input: Schema.String },
       success: Schema.String,
     }),
     toLower: method({
-      params: { input: Schema.String },
+      input: { input: Schema.String },
       success: Schema.String,
     }),
   },
@@ -76,7 +76,7 @@ state pattern instead.
 ## Effect and CLI Conventions
 
 - Import Effect APIs from `effect` and Golem APIs from `@golemcloud/effect-golem`.
-- Use `Schema` values for constructor parameters, method parameters, successes, and typed errors.
+- Use `Schema` values for agent id fields, method parameters, successes, and typed errors.
 - Handlers receive named parameter records and return Effects; do not use plain `async` or
   Promise-returning handlers from the non-Effect TypeScript SDK.
 - Method names use TypeScript casing. For the example above, invoke `toUpper` and `toLower`, not

@@ -113,7 +113,7 @@ type ProcessOrderResult = typeof ProcessOrderResultSchema.Type;
 
 // Add this entry to the agent's methods record.
 const processOrderMethod = method({
-  params: { input: ProcessOrderInputSchema },
+  input: { input: ProcessOrderInputSchema },
   success: ProcessOrderResultSchema,
 });
 
@@ -207,7 +207,7 @@ golem agent invoke 'CounterAgent("main")' processOrder \
 ```
 
 If instead a method declares
-`params: { requestId: ..., orderId: ..., failAfterCharge: ... }`, pass three separate shell
+`input: { requestId: ..., orderId: ..., failAfterCharge: ... }`, pass three separate shell
 positionals. Do not combine multiple top-level parameters into one comma-separated argument.
 
 For rollback order `refund` then `release`, register the reserve step first and the charge step

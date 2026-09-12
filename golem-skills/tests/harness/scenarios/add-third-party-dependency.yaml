@@ -20,7 +20,7 @@ steps:
       ts:
         - "golem-add-npm-package"
       effect:
-        - "golem-add-npm-package"
+        - "golem-add-npm-package-effect"
       scala:
         - "golem-add-scala-dependency"
       moonbit:

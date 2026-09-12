@@ -468,6 +468,7 @@ jobs:
           path: |
             sdks/effect/dist
             sdks/effect/wasm
+            sdks/effect/golem-types
           key: golem-effect-sdk-${{ github.run_id }}
           fail-on-cache-miss: true
 
@@ -942,8 +943,13 @@ jobs:
       - name: Build the package and agent template
         working-directory: sdks/effect
         run: |
+          npm test
           npm run build
           npm run build-agent-template
+          npm run check:dts
+          npm run check:contracts
+          npm run check:artifacts
+          npm run check:package
 
       - name: Save built Effect SDK for CLI integration tests
         uses: actions/cache/save@v5
@@ -951,7 +957,40 @@ jobs:
           path: |
             sdks/effect/dist
             sdks/effect/wasm
+            sdks/effect/golem-types
           key: golem-effect-sdk-${{ github.run_id }}
+
+  check-golem-effect-package-windows:
+    runs-on: windows-latest
+    needs: build-golem-effect
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: sdks/effect/package-lock.json
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+      - name: Restore built Effect SDK
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+          enableCrossOsArchive: true
+      - name: Build package declarations
+        working-directory: sdks/effect
+        run: npm run build
+      - name: Smoke-test cross-platform package tooling
+        working-directory: sdks/effect
+        run: npm run check:package
 
   list-test-component-groups:
     runs-on: blacksmith

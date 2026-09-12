@@ -111,18 +111,18 @@ const PromiseIdSchema = Schema.Struct({
 export const DeciderAgent = defineAgent({
   name: "DeciderAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   http: Http.mount("/deciders/{name}"),
   methods: {
     receive: method({
-      params: { promiseId: PromiseIdSchema },
+      input: { promiseId: PromiseIdSchema },
       success: Schema.Void,
       http: [Http.post("/receive")],
     }),
     decide: method({
-      params: { decision: Schema.String },
+      input: { decision: Schema.String },
       success: Schema.Boolean,
       http: [Http.post("/decide")],
     }),
@@ -158,18 +158,18 @@ export const DeciderAgent = defineAgent({
 export const ApprovalAgent = defineAgent({
   name: "ApprovalAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   http: Http.mount("/approvals/{name}"),
   methods: {
     request: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.post("/request")],
     }),
     getResult: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/result")],
     }),

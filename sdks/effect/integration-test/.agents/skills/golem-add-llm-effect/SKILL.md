@@ -133,11 +133,11 @@ export class LlmConfig extends defineConfig("Llm.Config", {
 export const LlmAgent = defineAgent({
   name: "LlmAgent",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   config: LlmConfig,
   methods: {
     ask: method({
-      params: { question: Schema.String },
+      input: { question: Schema.String },
       success: Schema.String,
     }),
   },

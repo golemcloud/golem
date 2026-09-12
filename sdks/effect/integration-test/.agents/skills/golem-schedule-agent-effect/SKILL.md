@@ -28,9 +28,9 @@ agent state the caller expects to observe before execution.
 For an agent declared with `defineAgent`:
 
 - The agent type name is exactly the `name` passed to `defineAgent`.
-- Constructor arguments follow the declaration order in `constructorParams`.
+- Constructor arguments follow the declaration order in `id`.
 - The function name is exactly the key declared in `methods`, including its TypeScript casing.
-- Method arguments follow the declaration order in that method's `params`.
+- Method arguments follow the declaration order in that method's `input`.
 
 Do not infer an agent type from the exported TypeScript binding or translate method names to
 snake_case. The generated Effect starter currently declares its counter with the exact runtime
@@ -39,10 +39,10 @@ name `Counter`:
 ```typescript
 export const Counter = defineAgent({
   name: "Counter",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {
     increment: method({
-      params: {},
+      input: {},
       success: Schema.Number,
     }),
   },

@@ -40,7 +40,7 @@ combines these endpoint patterns with the mount-level patterns:
 ```typescript
 export const MyAgent = defineAgent({
   name: "MyAgent",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   http: Http.mount("/api/{name}", {
@@ -48,12 +48,12 @@ export const MyAgent = defineAgent({
   }),
   methods: {
     getData: method({
-      params: {},
+      input: {},
       success: Data,
       http: [Http.get("/data", { cors: ["*"] })],
     }),
     getOther: method({
-      params: {},
+      input: {},
       success: Data,
       http: [Http.get("/other")],
     }),

@@ -33,7 +33,7 @@ steps:
       ts: *non-effect-add-config-cli-prompt
       effect: >
         In the Effect-based test-app project, add a new durable agent type called
-        `GreeterAgent`, identified by a single `constructorParams` field for the instance name.
+        `GreeterAgent`, identified by a single `id` field for the instance name.
 
         Declare typed configuration with `defineConfig` and Effect Schema. It must contain a
         `greeting` string and a named nested `style` `Schema.Struct` with `uppercase` (boolean)
@@ -73,7 +73,7 @@ steps:
       cwd: "test-app"
     expect:
       exit_code: 0
-      stdout_matches: "[\\s\\S]*\"source\"\\s*:\\s*\"Local\"[\\s\\S]*greeting[\\s\\S]*uppercase[\\s\\S]*"
+      stdout_matches: "^(?=[\\s\\S]*\"source\"\\s*:\\s*\"Local\")(?=[\\s\\S]*greeting)(?=[\\s\\S]*uppercase)[\\s\\S]*$"
 
   - id: "create-agent-with-config"
     create_agent:

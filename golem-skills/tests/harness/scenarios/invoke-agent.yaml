@@ -35,23 +35,12 @@ steps:
 
   - id: "verify-counter-incremented"
     invoke_json:
-      agent: 'CounterAgent("c1")'
-      method: "increment"
-    expect:
-      rust: &non-effect-counter-incremented-expect
-        result_json:
-          - path: "$"
-            equals: 2
-      ts: *non-effect-counter-incremented-expect
-      effect: {}
-      scala: *non-effect-counter-incremented-expect
-      moonbit: *non-effect-counter-incremented-expect
-
-  - id: "verify-effect-counter-incremented"
-    only_if:
-      language: "effect"
-    invoke_json:
-      agent: 'Counter("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: &non-effect-counter-agent 'CounterAgent("c1")'
+        ts: *non-effect-counter-agent
+        scala: *non-effect-counter-agent
+        moonbit: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:

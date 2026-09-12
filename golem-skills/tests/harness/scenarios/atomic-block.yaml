@@ -18,7 +18,7 @@ steps:
         In the test-app project, add a second durable agent type called `SideEffectRecorder`
         identified by a single name constructor parameter. Give it an HTTP mount under
         `/recorder/{name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         `SideEffectRecorder` must expose these HTTP endpoints:
         - `POST /record` accepts a plain text body string and appends it to an internal event list
@@ -35,21 +35,21 @@ steps:
         wrap the first group of operations:
 
         Inside the atomic block:
-        1. HTTP POST `"a"` to `http://test-app.localhost:9006/recorder/main/record`
-        2. HTTP POST `"b"` to `http://test-app.localhost:9006/recorder/main/record`
-        3. HTTP POST to `http://test-app.localhost:9006/recorder/main/decide` and read the boolean
+        1. HTTP POST `"a"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        2. HTTP POST `"b"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        3. HTTP POST to `http://test-app.localhost:{{custom_request_port}}/recorder/main/decide` and read the boolean
            response. If the response is `true`, panic / throw / crash the agent.
-        4. HTTP POST `"c"` to `http://test-app.localhost:9006/recorder/main/record`
+        4. HTTP POST `"c"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         After the atomic block:
-        5. HTTP POST `"d"` to `http://test-app.localhost:9006/recorder/main/record`
+        5. HTTP POST `"d"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         Make sure the project builds successfully.
       ts: >
         In the test-app project, add a second durable agent type called `SideEffectRecorder`
         identified by a single name constructor parameter. Give it an HTTP mount under
         `/recorder/{name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         `SideEffectRecorder` must expose these HTTP endpoints:
         - `POST /record` accepts a plain text body string and appends it to an internal event list
@@ -66,21 +66,21 @@ steps:
         wrap the first group of operations:
 
         Inside the atomic block:
-        1. HTTP POST `"a"` to `http://test-app.localhost:9006/recorder/main/record`
-        2. HTTP POST `"b"` to `http://test-app.localhost:9006/recorder/main/record`
-        3. HTTP POST to `http://test-app.localhost:9006/recorder/main/decide` and read the boolean
+        1. HTTP POST `"a"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        2. HTTP POST `"b"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        3. HTTP POST to `http://test-app.localhost:{{custom_request_port}}/recorder/main/decide` and read the boolean
            response. If the response is `true`, panic / throw / crash the agent.
-        4. HTTP POST `"c"` to `http://test-app.localhost:9006/recorder/main/record`
+        4. HTTP POST `"c"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         After the atomic block:
-        5. HTTP POST `"d"` to `http://test-app.localhost:9006/recorder/main/record`
+        5. HTTP POST `"d"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         Make sure the project builds successfully.
       effect: >
         In the Effect-based test-app project, add a second durable agent type called
-        `SideEffectRecorder` with one `constructorParams` string named `name`. Declare its HTTP
+        `SideEffectRecorder` with one `id` string named `name`. Declare its HTTP
         mount as `/recorder/{name}` with the `Http` API from `@golemcloud/effect-golem`, and expose
-        it through the app HTTP API on `test-app.localhost:9006`.
+        it through the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         Store snapshot-backed Effect state containing `events`, an array of strings, and a numeric
         `decisionCalls` count. New recorder agents start with an empty event list and zero decision
@@ -101,7 +101,7 @@ steps:
         `@golemcloud/effect-golem`. Implement every recorder operation as an actual outgoing HTTP
         request through `HttpClient`, `HttpClientRequest`, and `HttpClientResponse` from
         `effect/unstable/http` to the routes under
-        `http://test-app.localhost:9006/recorder/main`. Send record values with
+        `http://test-app.localhost:{{custom_request_port}}/recorder/main`. Send record values with
         `HttpClientRequest.bodyJson({ event })`, execute and await every request, require a
         successful status with `HttpClientResponse.filterStatusOk`, and decode `/decide` as a JSON
         boolean with the Effect response schema helper. Provide `FetchHttpClient.layer` around the
@@ -128,7 +128,7 @@ steps:
         In the test-app project, add a second durable agent type called `SideEffectRecorder`
         identified by a single name constructor parameter. Give it an HTTP mount under
         `/recorder/{name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         `SideEffectRecorder` must expose these HTTP endpoints:
         - `POST /record` accepts a plain text body string and appends it to an internal event list
@@ -145,21 +145,21 @@ steps:
         wrap the first group of operations:
 
         Inside the atomic block:
-        1. HTTP POST `"a"` to `http://test-app.localhost:9006/recorder/main/record`
-        2. HTTP POST `"b"` to `http://test-app.localhost:9006/recorder/main/record`
-        3. HTTP POST to `http://test-app.localhost:9006/recorder/main/decide` and read the boolean
+        1. HTTP POST `"a"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        2. HTTP POST `"b"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        3. HTTP POST to `http://test-app.localhost:{{custom_request_port}}/recorder/main/decide` and read the boolean
            response. If the response is `true`, panic / throw / crash the agent.
-        4. HTTP POST `"c"` to `http://test-app.localhost:9006/recorder/main/record`
+        4. HTTP POST `"c"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         After the atomic block:
-        5. HTTP POST `"d"` to `http://test-app.localhost:9006/recorder/main/record`
+        5. HTTP POST `"d"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         Make sure the project builds successfully.
       moonbit: >
         In the test-app project, add a second durable agent type called `SideEffectRecorder`
         identified by a single name constructor parameter. Give it an HTTP mount under
         `/recorder/{name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         `SideEffectRecorder` must expose these HTTP endpoints:
         - `POST /record` accepts a plain text body string and appends it to an internal event list
@@ -176,14 +176,14 @@ steps:
         wrap the first group of operations:
 
         Inside the atomic block:
-        1. HTTP POST `"a"` to `http://test-app.localhost:9006/recorder/main/record`
-        2. HTTP POST `"b"` to `http://test-app.localhost:9006/recorder/main/record`
-        3. HTTP POST to `http://test-app.localhost:9006/recorder/main/decide` and read the boolean
+        1. HTTP POST `"a"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        2. HTTP POST `"b"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
+        3. HTTP POST to `http://test-app.localhost:{{custom_request_port}}/recorder/main/decide` and read the boolean
            response. If the response is `true`, panic / throw / crash the agent.
-        4. HTTP POST `"c"` to `http://test-app.localhost:9006/recorder/main/record`
+        4. HTTP POST `"c"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         After the atomic block:
-        5. HTTP POST `"d"` to `http://test-app.localhost:9006/recorder/main/record`
+        5. HTTP POST `"d"` to `http://test-app.localhost:{{custom_request_port}}/recorder/main/record`
 
         Make sure the project builds successfully.
     expectedSkills:
@@ -214,7 +214,7 @@ steps:
 
   - id: "verify-event-sequence"
     http:
-      url: "http://test-app.localhost:9006/recorder/main/events"
+      url: "http://test-app.localhost:{{custom_request_port}}/recorder/main/events"
       method: "GET"
     expect:
       rust:

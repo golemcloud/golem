@@ -981,6 +981,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'restart'
     val: Timestamp
   } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
+    val: Timestamp
+  } |
   /** Activates a plugin */
   {
     tag: 'activate-plugin'
@@ -1271,6 +1276,11 @@ declare module 'golem:api/oplog@1.5.0' {
   /** The agent's has been restarted, forgetting all its history */
   {
     tag: 'restart'
+    val: Timestamp
+  } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
     val: Timestamp
   } |
   /** Activates a plugin */

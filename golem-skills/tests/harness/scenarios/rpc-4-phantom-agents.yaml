@@ -85,6 +85,7 @@ steps:
 
         3. `readNonPhantomCollector` — yield the regular durable handle from
            `Collector.client.get({ name })`, not `newPhantom` or `getPhantom`, and return its total.
+           Do not declare this method read-only: obtaining an RPC handle is a host side effect.
 
         Yield every typed client and remote method Effect, use named input records including `{}`
         for no-parameter methods, and handle or convert typed RPC errors so the method contracts

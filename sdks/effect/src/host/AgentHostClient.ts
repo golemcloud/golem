@@ -36,6 +36,14 @@ import * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
 export interface AgentHostClientShape {
+  /** Construct an environment-scoped agent identity. */
+  readonly makeAgentId: typeof AgentHost.makeAgentId
+  /** Mirrors optional agent-type discovery by name. */
+  readonly getAgentType: (name: string) => AgentHost.RegisteredAgentType | undefined
+  /** Mirrors optional agent-type discovery by environment-scoped agent ID. */
+  readonly getAgentTypeByAgentId: (agentId: string) => AgentHost.RegisteredAgentType | undefined
+  /** Mirrors discovery of every visible agent type. */
+  readonly getAllAgentTypes: () => ReadonlyArray<AgentHost.RegisteredAgentType>
   /**
    * Mirrors `golem:agent/host.parseAgentId`. Errors thrown by the host
    * become Effect defects when wrapped at the call site.
@@ -111,6 +119,10 @@ export class AgentHostClient extends Context.Service<AgentHostClient, AgentHostC
 export const AgentHostLive: Layer.Layer<AgentHostClient> = Layer.succeed(
   AgentHostClient,
   AgentHostClient.of({
+    makeAgentId: (name, input, phantomId) => AgentHost.makeAgentId(name, input, phantomId),
+    getAgentType: (name) => AgentHost.getAgentType(name),
+    getAgentTypeByAgentId: (agentId) => AgentHost.getAgentTypeByAgentId(agentId),
+    getAllAgentTypes: () => AgentHost.getAllAgentTypes(),
     parseAgentId: (agentId) => AgentHost.parseAgentId(agentId),
     getSelfMetadata: () => ApiHost.getSelfMetadata(),
     createWebhook: (promiseId) => AgentHost.createWebhook(promiseId),

@@ -41,7 +41,7 @@ import { defineAgent, Http, method } from "@golemcloud/effect-golem";
 export const TaskAgent = defineAgent({
   name: "TaskAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     taskName: Schema.String,
   },
   http: Http.mount("/api/tasks/{taskName}"),
@@ -58,8 +58,8 @@ export const TaskAgent = defineAgent({
 Mount rules:
 
 - The path starts with `/` and does not end with `/` unless it is exactly `/`.
-- Every constructor parameter appears as a `{variable}` in the mount path.
-- Variable names use the exact TypeScript `constructorParams` keys, including casing.
+- Every agent id field appears as a `{variable}` in the mount path.
+- Variable names use the exact TypeScript `id` keys, including casing.
 - Mount paths cannot contain query parameters or `{*rest}` catch-all variables.
 - Use `{taskName}`, not `{task-name}`, for a constructor field named `taskName`. This changes only
   the placeholder name; both forms would match the same concrete URL segment.
@@ -81,13 +81,13 @@ Declare routes on the corresponding method. Endpoint paths are relative to the m
 ```typescript
 methods: {
   listItems: method({
-    params: {},
+    input: {},
     success: Schema.Array(Item),
     http: [Http.get("/items")],
   }),
 
   createItem: method({
-    params: {
+    input: {
       name: Schema.String,
       count: Schema.Number,
     },
@@ -96,7 +96,7 @@ methods: {
   }),
 
   updateItem: method({
-    params: {
+    input: {
       id: Schema.String,
       name: Schema.String,
     },
@@ -105,7 +105,7 @@ methods: {
   }),
 
   deleteItem: method({
-    params: { id: Schema.String },
+    input: { id: Schema.String },
     success: Schema.Void,
     http: [Http.del("/items/{id}")],
   }),
@@ -126,11 +126,11 @@ One method can have multiple routes by adding multiple entries to its `http` arr
 
 ## Parameter Mapping
 
-Bindings always refer to exact method `params` keys:
+Bindings always refer to exact method `input` keys:
 
 ```typescript
 searchItems: method({
-  params: {
+  input: {
     category: Schema.String,
     query: Schema.String,
     minPrice: Schema.NullOr(Schema.Number),
@@ -235,27 +235,27 @@ const TodoState = Schema.Struct({
 export const TodoAgent = defineAgent({
   name: "TodoAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     listName: Schema.String,
   },
   http: Http.mount("/todos/{listName}"),
-  snapshot: Snapshot.define({
+  snapshotting: Snapshot.define({
     schema: TodoState,
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     createItem: method({
-      params: { title: Schema.String },
+      input: { title: Schema.String },
       success: TodoItem,
       http: [Http.post("/items")],
     }),
     listItems: method({
-      params: {},
+      input: {},
       success: Schema.Array(TodoItem),
       http: [Http.get("/items")],
     }),
     completeItem: method({
-      params: { id: Schema.String },
+      input: { id: Schema.String },
       success: Schema.NullOr(TodoItem),
       http: [Http.post("/items/{id}/complete")],
     }),
@@ -327,7 +327,7 @@ generated OpenAPI document at `/openapi.yaml` after deployment.
 - Import Effect APIs from `effect` and `defineAgent`, `Http`, `method`, and `Snapshot` from
   `@golemcloud/effect-golem`.
 - Do not use decorators or classes from `@golemcloud/golem-ts-sdk` in an Effect component.
-- Every constructor parameter must appear in the mount path with exact TypeScript casing.
+- Every agent id field must appear in the mount path with exact TypeScript casing.
 - Every bound path, query, or header variable must match a method parameter.
 - Unbound bodyful-method parameters use same-named camelCase JSON body fields.
 - Handlers return Effects, not plain values or `async` functions.

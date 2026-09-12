@@ -14,6 +14,7 @@ import {
 import * as Datetime from "./Datetime.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "./host/RpcClient.js"
+import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./internal/rpc.js"
 import {
   compileMethodSpec,
   compileParamBindings,
@@ -35,29 +36,6 @@ export type RemoteCallError =
   | { readonly _tag: "InvalidUuidError"; readonly value: string; readonly reason: string }
   | { readonly _tag: "RemoteResponseError"; readonly reason: string }
 
-const RPC_TAGS = new Set<RpcError["tag"]>([
-  "protocol-error",
-  "denied",
-  "not-found",
-  "remote-internal-error",
-  "remote-agent-error",
-])
-const extractRpcError = (error: unknown): RpcError | undefined => {
-  const candidates = [error]
-  if (error instanceof Error) candidates.push((error as { payload?: unknown }).payload, error.cause)
-  return candidates.find((value): value is RpcError => {
-    if (value === null || typeof value !== "object") return false
-    const tag = (value as { tag?: unknown }).tag
-    return typeof tag === "string" && RPC_TAGS.has(tag as RpcError["tag"])
-  })
-}
-const wrapHostThrow = (error: unknown): RemoteCallError => ({
-  _tag: "RpcCallError",
-  cause: extractRpcError(error) ?? {
-    tag: "protocol-error",
-    val: error instanceof Error ? error.message : String(error),
-  },
-})
 const responseError = (reason: string): RemoteCallError => ({ _tag: "RemoteResponseError", reason })
 
 export type InvocationMetadata = AgentHost.InvocationMetadata
@@ -246,24 +224,6 @@ const graphUsesStreams = (graph: SchemaGraph): boolean => {
   return visit(graph.root)
 }
 
-const awaitInvocation = (rpc: RpcConnection, method: string, input: CoreTypes.SchemaValueTree) =>
-  Effect.acquireUseRelease(
-    Effect.try({ try: () => rpc.asyncInvokeAndAwait(method, input), catch: wrapHostThrow }),
-    (invocation) =>
-      Effect.tryPromise({ try: () => invocation.get(), catch: wrapHostThrow }).pipe(
-        Effect.map((result) => ({ metadata: invocation.metadata, result })),
-      ),
-    (invocation) =>
-      Effect.sync(() => {
-        try {
-          invocation.cancel()
-        } catch {
-          /* best effort */
-        }
-        invocation.drop()
-      }),
-  )
-
 const buildRemote = (
   rpc: RpcConnection,
   compiled: Pick<CompiledClient, "methods">,
@@ -303,27 +263,10 @@ const buildRemote = (
       if (streaming) return rejectNonAwaitedStream()
       return Datetime.fromInput(at).pipe(
         Effect.flatMap((time) => encode(input).pipe(Effect.map((tree) => [time, tree] as const))),
-        Effect.flatMap(([time, tree]) =>
-          Effect.acquireRelease(
-            Effect.try({
-              try: () => rpc.scheduleCancelableInvocation(time, name, tree),
-              catch: wrapHostThrow,
-            }),
-            ({ token }) =>
-              Effect.sync(() => {
-                token.drop()
-              }),
-          ),
-        ),
-        Effect.map(({ metadata, token }) => {
-          let consumed = false
+        Effect.flatMap(([time, tree]) => scheduleCancelableInvocation(rpc, time, name, tree)),
+        Effect.map(({ metadata, cancel }) => {
           const scheduled = {
-            cancel: () =>
-              Effect.sync(() => {
-                if (consumed) return
-                consumed = true
-                token.cancel()
-              }),
+            cancel: () => cancel,
           }
           return ephemeral ? { ...scheduled, metadata } : scheduled
         }),

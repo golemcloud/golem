@@ -33,12 +33,12 @@ const Numbers = Schema.Array(Schema.Number);
 export const Worker = defineAgent({
   name: "Worker",
   mode: "durable",
-  constructorParams: {
+  id: {
     id: Schema.Number,
   },
   methods: {
     compute: method({
-      params: { value: Schema.Number },
+      input: { value: Schema.Number },
       success: Schema.Number,
     }),
   },
@@ -51,12 +51,12 @@ export const Worker = defineAgent({
 export const Coordinator = defineAgent({
   name: "Coordinator",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   methods: {
     fanOut: method({
-      params: { items: Numbers },
+      input: { items: Numbers },
       success: Numbers,
     }),
   },

@@ -25,7 +25,7 @@ steps:
       ts: *non-effect-add-greeting-agent-with-http-prompt
       effect: >
         In the Effect-based test-app project, add a durable `GreetingAgent` with a single
-        `constructorParams` string named `name`. Use `Http.mount("/greetings/{name}")` from
+        `id` string named `name`. Use `Http.mount("/greetings/{name}")` from
         `@golemcloud/effect-golem` and expose an Effect method through `GET /hello`.
 
         The method must return an Effect Schema object with one `message` field whose value is
@@ -62,7 +62,7 @@ steps:
       rust: &non-effect-configure-api-domain-prompt >
         In the test-app project, configure the application HTTP API deployment in `golem.yaml` so
         that `GreetingAgent` is exposed on the local deployment subdomain `test-app`, which
-        resolves to `test-app.localhost:9006`.
+        resolves to `test-app.localhost:{{custom_request_port}}`.
 
         Add a `local` deployment under `httpApi.deployments` and include `GreetingAgent` in the
         deployed agents map. Do not change any source files or endpoint logic. After this change,
@@ -72,7 +72,7 @@ steps:
       effect: >
         In the Effect-based test-app project, configure the application HTTP API deployment in
         `golem.yaml` so `GreetingAgent` is exposed on the local deployment subdomain `test-app`,
-        which resolves to `test-app.localhost:9006`.
+        which resolves to `test-app.localhost:{{custom_request_port}}`.
 
         Add a `local` deployment under `httpApi.deployments` and include `GreetingAgent` in the
         deployed agents map. Do not change Effect source files or existing `Http` endpoint
@@ -95,7 +95,7 @@ steps:
 
   - id: "http-hello"
     http:
-      url: "http://test-app.localhost:9006/greetings/alice/hello"
+      url: "http://test-app.localhost:{{custom_request_port}}/greetings/alice/hello"
       method: "GET"
     expect:
       status: 200
@@ -105,7 +105,7 @@ steps:
 
   - id: "openapi-served"
     http:
-      url: "http://test-app.localhost:9006/openapi.yaml"
+      url: "http://test-app.localhost:{{custom_request_port}}/openapi.yaml"
       method: "GET"
     expect:
       status: 200

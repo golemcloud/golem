@@ -40,8 +40,8 @@ units:
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
         - golem-skills/tests/harness/results/p5.4/all-units/golem-add-agent/add-simple-agent/codex-effect-add-simple-agent.json
-  - id: golem-add-npm-package
-    targetSkill: golem-add-npm-package
+  - id: golem-add-npm-package-effect
+    targetSkill: golem-add-npm-package-effect
     references:
       - golem-skills/skills/ts/golem-add-npm-package/SKILL.md
       - golem-skills/skills/rust/golem-add-rust-crate/SKILL.md
@@ -1539,3 +1539,72 @@ units:
       thread: https://ampcode.com/threads/T-019f7f59-f09d-72ae-8283-2c1836131a54
       reports:
         - golem-skills/tests/harness/results/p5.4/all-units/golem-wait-for-external-input/wait-for-external-input/codex-effect-wait-for-external-input.json
+  - id: golem-agent-reflection
+    targetSkill: golem-agent-reflection-effect
+    references:
+      - golem-skills/skills/common/golem-agent-reflection/SKILL.md
+      - golem-skills/skills/ts/golem-agent-reflection-ts/SKILL.md
+    verifyScenarios: [rpc-5-runtime-reflection]
+    relatedScenarios: []
+    prerequisites: [golem-add-agent]
+    strategy: adapted
+    notes: Use Effect-native reflected discovery, schema inspection, identity binding, and RPC.
+    state: pending
+    semanticStatus: pending
+    attempts: []
+  - id: golem-permission-card
+    targetSkill: golem-permission-card-effect
+    references: []
+    verifyScenarios: [effect-phase8-capabilities]
+    relatedScenarios: []
+    prerequisites: [golem-add-agent]
+    strategy: adapted
+    state: pending
+    semanticStatus: pending
+    attempts: []
+  - id: golem-read-only-method
+    targetSkill: golem-read-only-method-effect
+    references:
+      - golem-skills/skills/rust/golem-mark-read-only-rust/SKILL.md
+      - golem-skills/skills/ts/golem-mark-read-only-ts/SKILL.md
+      - golem-skills/skills/scala/golem-mark-read-only-scala/SKILL.md
+      - golem-skills/skills/moonbit/golem-mark-read-only-moonbit/SKILL.md
+    verifyScenarios: [mark-read-only]
+    relatedScenarios: []
+    prerequisites: [golem-add-agent]
+    strategy: adapted
+    state: pending
+    semanticStatus: pending
+    attempts: []
+  - id: golem-snapshot-restoration
+    targetSkill: golem-snapshot-restoration-effect
+    references:
+      - golem-skills/skills/effect/golem-custom-snapshot-effect/SKILL.md
+    verifyScenarios: [snapshot-recovery, manual-snapshot-update-agent]
+    relatedScenarios: []
+    prerequisites: [golem-add-agent]
+    strategy: adapted
+    state: pending
+    semanticStatus: pending
+    attempts: []
+  - id: golem-streaming-agent
+    targetSkill: golem-streaming-agent-effect
+    references: []
+    verifyScenarios: [effect-phase8-capabilities]
+    relatedScenarios: []
+    prerequisites: [golem-add-agent]
+    strategy: adapted
+    state: pending
+    semanticStatus: pending
+    attempts: []
+  - id: golem-tools-middleware
+    targetSkill: golem-tools-middleware-effect
+    references: []
+    verifyScenarios: [effect-phase8-capabilities]
+    relatedScenarios: []
+    prerequisites: [golem-add-agent]
+    strategy: adapted
+    notes: Build-only until standalone middleware attachment is supported by the CLI.
+    state: pending
+    semanticStatus: pending
+    attempts: []

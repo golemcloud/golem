@@ -80,7 +80,7 @@ Add the method contract to the existing definition's `methods` map:
 
 ```typescript
 checkPostgres: method({
-  params: {},
+  input: {},
   success: Schema.String,
 }),
 ```

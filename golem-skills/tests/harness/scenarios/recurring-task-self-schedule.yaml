@@ -15,7 +15,7 @@ steps:
         In the test-app project, add a second durable agent type called `RecordingPoller`
         identified by a single name constructor parameter. Give it an HTTP mount under
         `/pollers/{name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         `RecordingPoller` must have mutable state:
         - `poll_count` (u64, initially 0): how many times `poll` has executed
@@ -45,9 +45,9 @@ steps:
       effect: >
         In the Effect-based test-app project, add a second durable agent type called
         `RecordingPoller`, defined with `defineAgent` and identified by one string
-        `constructorParams` field named `name`. Declare an HTTP mount at
+        `id` field named `name`. Declare an HTTP mount at
         `/pollers/{name}` with the `Http` API from `@golemcloud/effect-golem`, and expose
-        it through the app HTTP API on `test-app.localhost:9006`.
+        it through the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         Keep mutable logical state in an Effect `Ref`:
         - `pollCount` (number, initially 0): how many times `poll` has executed
@@ -106,7 +106,7 @@ steps:
 
   - id: "verify-first-poll-ran"
     http:
-      url: "http://test-app.localhost:9006/pollers/p1/count"
+      url: "http://test-app.localhost:{{custom_request_port}}/pollers/p1/count"
       method: "GET"
     expect:
       status: 200
@@ -124,7 +124,7 @@ steps:
 
   - id: "verify-second-poll-ran"
     http:
-      url: "http://test-app.localhost:9006/pollers/p1/count"
+      url: "http://test-app.localhost:{{custom_request_port}}/pollers/p1/count"
       method: "GET"
     expect:
       status: 200
@@ -152,7 +152,7 @@ steps:
 
   - id: "verify-count-unchanged-after-stop"
     http:
-      url: "http://test-app.localhost:9006/pollers/p1/count"
+      url: "http://test-app.localhost:{{custom_request_port}}/pollers/p1/count"
       method: "GET"
     expect:
       status: 200

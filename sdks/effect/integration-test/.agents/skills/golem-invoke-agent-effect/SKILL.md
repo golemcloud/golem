@@ -22,9 +22,9 @@ the agent are streamed live to the terminal by default.
 For an Effect agent definition:
 
 - The agent type name is exactly the `name` passed to `defineAgent`.
-- Constructor arguments follow the declaration order in `constructorParams`.
+- Constructor arguments follow the declaration order in `id`.
 - The function name is exactly the key declared in `methods`, including its TypeScript casing.
-- Method arguments follow the declaration order in that method's `params`.
+- Method arguments follow the declaration order in that method's `input`.
 
 Do not translate names to kebab-case or snake_case. For example, a `defineAgent` named `Counter`
 with a `methods` key named `incrementBy` is invoked as:
@@ -45,7 +45,7 @@ returning `void` or no value omit result fields.
 
 ## Agent ID Format
 
-The agent ID identifies the agent type and its constructor parameters:
+The agent ID identifies the agent type and its agent id fields:
 
 ```
 AgentTypeName(param1, param2, ...)
@@ -60,7 +60,7 @@ The agent ID can optionally be prefixed with environment or application paths:
 | `app/env/AgentTypeName(params)` | Application and environment-specific |
 | `account/app/env/AgentTypeName(params)` | Account, application, and environment-specific |
 
-For agents with no constructor parameters, use empty parentheses: `AgentTypeName()`.
+For agents with no agent id fields, use empty parentheses: `AgentTypeName()`.
 
 ## Examples
 
@@ -76,7 +76,7 @@ golem agent invoke 'MyAgent()' getStatus
 golem agent invoke 'MyAgent("user-123")' processOrder '"order-456"' 42
 ```
 
-### Invoke an Effect agent with constructor parameters
+### Invoke an Effect agent with agent id fields
 
 ```shell
 golem agent invoke 'ChatRoom("general")' sendMessage '"Hello, world!"'

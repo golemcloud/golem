@@ -15,7 +15,7 @@ steps:
         In the test-app project, add a new durable agent type called `VaultAgent` identified by
         a single constructor parameter for the vault name. Give it an HTTP mount under
         `/vaults/{vault-name}` with authentication enabled at the mount level (auth = true),
-        and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+        and make sure it is exposed through the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         VaultAgent must store a single string value called `secret` in agent state, initially
         set to `"none"`.
@@ -40,10 +40,10 @@ steps:
       ts: *non-effect-add-secure-agent-prompt
       effect: >
         In the Effect-based test-app project, add a durable `VaultAgent` with one
-        `constructorParams` string named `vaultName`. Use
+        `id` string named `vaultName`. Use
         `Http.mount("/vaults/{vaultName}", { auth: true })` from
         `@golemcloud/effect-golem`, and expose the agent through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         Store one durable string field named `secret`, initially `"none"`, using Effect state and
         snapshot APIs. Define an Effect Schema for the state and initialize its snapshot exactly
@@ -86,7 +86,7 @@ steps:
   # --- Public endpoint: auth=false override allows unauthenticated access ---
   - id: "health-no-auth"
     http:
-      url: "http://test-app.localhost:9006/vaults/main/health"
+      url: "http://test-app.localhost:{{custom_request_port}}/vaults/main/health"
       method: "GET"
     expect:
       status: 200
@@ -95,14 +95,14 @@ steps:
   # --- Protected endpoints: no auth header → 401 ---
   - id: "secret-no-auth-rejected"
     http:
-      url: "http://test-app.localhost:9006/vaults/main/secret"
+      url: "http://test-app.localhost:{{custom_request_port}}/vaults/main/secret"
       method: "GET"
     expect:
       status: 401
 
   - id: "store-no-auth-rejected"
     http:
-      url: "http://test-app.localhost:9006/vaults/main/store"
+      url: "http://test-app.localhost:{{custom_request_port}}/vaults/main/store"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -113,7 +113,7 @@ steps:
   # --- Protected endpoints: with test auth header → success ---
   - id: "secret-with-auth-default"
     http:
-      url: "http://test-app.localhost:9006/vaults/main/secret"
+      url: "http://test-app.localhost:{{custom_request_port}}/vaults/main/secret"
       method: "GET"
       headers:
         X-Test-Auth: '{"subject":"user1"}'
@@ -123,7 +123,7 @@ steps:
 
   - id: "store-with-auth"
     http:
-      url: "http://test-app.localhost:9006/vaults/main/store"
+      url: "http://test-app.localhost:{{custom_request_port}}/vaults/main/store"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -137,7 +137,7 @@ steps:
 
   - id: "secret-with-auth-after-store"
     http:
-      url: "http://test-app.localhost:9006/vaults/main/secret"
+      url: "http://test-app.localhost:{{custom_request_port}}/vaults/main/secret"
       method: "GET"
       headers:
         X-Test-Auth: '{"subject":"user1"}'
@@ -148,7 +148,7 @@ steps:
   # --- Different instance is isolated ---
   - id: "different-instance-isolated"
     http:
-      url: "http://test-app.localhost:9006/vaults/other/secret"
+      url: "http://test-app.localhost:{{custom_request_port}}/vaults/other/secret"
       method: "GET"
       headers:
         X-Test-Auth: '{"subject":"user2"}'

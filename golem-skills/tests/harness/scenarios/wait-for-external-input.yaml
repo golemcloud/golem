@@ -18,7 +18,7 @@ steps:
 
         Give `ApprovalAgent` an HTTP mount under `/approvals/{name}` and `DeciderAgent`
         an HTTP mount under `/deciders/{name}`. Make sure both are exposed through the
-        app HTTP API on `test-app.localhost:9006`.
+        app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         **ApprovalAgent** must have a mutable state field `result` of type string, initially
         empty. It must expose these HTTP endpoints:
@@ -57,7 +57,7 @@ steps:
 
         Give `ApprovalAgent` the HTTP mount `/approvals/{name}` and `DeciderAgent` the mount
         `/deciders/{name}` using the Effect SDK's `Http` declarations. Add both agents to the
-        existing local `httpApi` deployment on `test-app.localhost:9006` without removing existing
+        existing local `httpApi` deployment on `test-app.localhost:{{custom_request_port}}` without removing existing
         manifest entries, and import their implementation module or modules from `src/main.ts`.
 
         `ApprovalAgent` keeps a string in an Effect `Ref` named or representing `result`, initially
@@ -125,7 +125,7 @@ steps:
 
   - id: "submit-decision"
     http:
-      url: "http://test-app.localhost:9006/deciders/a1/decide"
+      url: "http://test-app.localhost:{{custom_request_port}}/deciders/a1/decide"
       method: "POST"
       body: '{"decision": "approved"}'
       headers:
@@ -141,7 +141,7 @@ steps:
 
   - id: "verify-result"
     http:
-      url: "http://test-app.localhost:9006/approvals/a1/result"
+      url: "http://test-app.localhost:{{custom_request_port}}/approvals/a1/result"
       method: "GET"
     expect:
       status: 200

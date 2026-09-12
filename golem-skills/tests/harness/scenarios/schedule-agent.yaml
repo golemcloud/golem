@@ -17,7 +17,7 @@ steps:
       effect: >
         I have the Effect-based test-app project deployed with the generated `Counter` agent. Its
         Effect v4 `defineAgent` contract has the exact runtime name `Counter`, one string
-        `constructorParams` field for the counter name, and an `increment` method. Use the Golem
+        `id` field for the counter name, and an `increment` method. Use the Golem
         CLI, not the in-agent typed client, to schedule an invocation of `increment` for the
         counter named "c1" to run 15 seconds from now. Use TypeScript constructor and method value
         syntax, and do not rename or modify the generated agent. Submit the scheduling command as
@@ -38,23 +38,12 @@ steps:
 
   - id: "invoke-before-schedule"
     invoke_json:
-      agent: 'CounterAgent("c1")'
-      method: "increment"
-    expect:
-      rust: &non-effect-before-schedule-expect
-        result_json:
-          - path: "$"
-            equals: 1
-      ts: *non-effect-before-schedule-expect
-      effect: {}
-      scala: *non-effect-before-schedule-expect
-      moonbit: *non-effect-before-schedule-expect
-
-  - id: "invoke-effect-before-schedule"
-    only_if:
-      language: "effect"
-    invoke_json:
-      agent: 'Counter("c1")'
+      agent: &counter-agent
+        effect: 'Counter("c1")'
+        rust: &non-effect-counter-agent 'CounterAgent("c1")'
+        ts: *non-effect-counter-agent
+        scala: *non-effect-counter-agent
+        moonbit: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:
@@ -66,23 +55,7 @@ steps:
 
   - id: "invoke-after-schedule"
     invoke_json:
-      agent: 'CounterAgent("c1")'
-      method: "increment"
-    expect:
-      rust: &non-effect-after-schedule-expect
-        result_json:
-          - path: "$"
-            equals: 3
-      ts: *non-effect-after-schedule-expect
-      effect: {}
-      scala: *non-effect-after-schedule-expect
-      moonbit: *non-effect-after-schedule-expect
-
-  - id: "invoke-effect-after-schedule"
-    only_if:
-      language: "effect"
-    invoke_json:
-      agent: 'Counter("c1")'
+      agent: *counter-agent
       method: "increment"
     expect:
       result_json:

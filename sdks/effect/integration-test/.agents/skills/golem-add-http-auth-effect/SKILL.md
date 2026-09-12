@@ -24,7 +24,7 @@ import { defineAgent, Http } from "@golemcloud/effect-golem";
 export const SecureAgent = defineAgent({
   name: "SecureAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   http: Http.mount("/secure/{name}", { auth: true }),
@@ -45,12 +45,12 @@ Set `auth: true` in an endpoint helper's options to protect only that route:
 ```typescript
 methods: {
   publicData: method({
-    params: {},
+    input: {},
     success: Schema.String,
     http: [Http.get("/public")],
   }),
   privateData: method({
-    params: {},
+    input: {},
     success: Schema.String,
     http: [Http.get("/private", { auth: true })],
   }),
@@ -69,18 +69,18 @@ inherit from the mount:
 export const MostlySecureAgent = defineAgent({
   name: "MostlySecureAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   http: Http.mount("/api/{name}", { auth: true }),
   methods: {
     health: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/health", { auth: false })],
     }),
     getData: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/data")],
     }),
@@ -108,13 +108,13 @@ import {
 export const CallerAgent = defineAgent({
   name: "CallerAgent",
   mode: "durable",
-  constructorParams: {
+  id: {
     name: Schema.String,
   },
   http: Http.mount("/callers/{name}", { auth: true }),
   methods: {
     whoAmI: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/whoami")],
     }),

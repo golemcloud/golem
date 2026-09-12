@@ -88,5 +88,5 @@ function versionOf(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8" })
   if (result.error) return null
   if (result.status !== 0) return null
-  return `${result.stdout}${result.stderr}`.trim()
+  return result.stdout.trim()
 }

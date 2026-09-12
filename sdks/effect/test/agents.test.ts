@@ -67,6 +67,12 @@ describe("Agents — metadata", () => {
     const ThrowingAgentHost = Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({
+        makeAgentId: () => {
+          throw new Error("not used by this test")
+        },
+        getAgentType: (() => undefined) as never,
+        getAgentTypeByAgentId: (() => undefined) as never,
+        getAllAgentTypes: (() => []) as never,
         parseAgentId: (() => {
           throw new Error("not used by this test")
         }) as never,

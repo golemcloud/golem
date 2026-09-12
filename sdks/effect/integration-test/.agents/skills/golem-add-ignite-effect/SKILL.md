@@ -80,7 +80,7 @@ Add the method to the existing agent's `methods` map and give it a string succes
 
 ```typescript
 checkIgnite: method({
-  params: {},
+  input: {},
   success: Schema.String,
   description: "Checks the Ignite connection",
 }),

@@ -18,7 +18,7 @@ steps:
         In the test-app project, add a new durable agent type called `TodoAgent` identified by
         a single constructor parameter for the list name. Give it an HTTP mount under
         `/todos/{list-name}` and make sure it is exposed through the app HTTP API on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         TodoAgent must store a list of todo items in agent state. Each item has an `id` (string),
         a `title` (string), and a `done` (boolean) field. Use a record, object type, or case class
@@ -36,9 +36,9 @@ steps:
       ts: *non-effect-add-todo-agent-with-http-prompt
       effect: >
         In the Effect-based test-app project, add a new durable agent type called `TodoAgent`
-        with a single `constructorParams` string named `listName`. Declare its HTTP mount as
+        with a single `id` string named `listName`. Declare its HTTP mount as
         `/todos/{listName}` with the `Http` API from `@golemcloud/effect-golem`, and expose it
-        through the app HTTP API on `test-app.localhost:9006`.
+        through the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         Store a durable list of todo items using Effect state and snapshot APIs. Define a
         `TodoItem` Effect Schema with `id` (string), `title` (string), and `done` (boolean).
@@ -85,7 +85,7 @@ steps:
 
   - id: "http-create-item"
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/items"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/items"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -100,7 +100,7 @@ steps:
 
   - id: "http-create-second-item"
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/items"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/items"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -115,7 +115,7 @@ steps:
 
   - id: "http-list-items"
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/items"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/items"
       method: "GET"
     expect:
       status: 200
@@ -123,7 +123,7 @@ steps:
 
   - id: "http-complete-item"
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/items/1/complete"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/items/1/complete"
       method: "POST"
     expect:
       status: 200
@@ -135,7 +135,7 @@ steps:
 
   - id: "http-different-instance"
     http:
-      url: "http://test-app.localhost:9006/todos/harness-isolation-check-7f3a/items"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/harness-isolation-check-7f3a/items"
       method: "GET"
     expect:
       status: 200
@@ -147,7 +147,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/responses/text"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/responses/text"
       method: "GET"
     expect:
       status: 200
@@ -160,7 +160,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/responses/binary"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/responses/binary"
       method: "GET"
     expect:
       status: 200
@@ -172,7 +172,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/responses/json"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/responses/json"
       method: "GET"
     expect:
       status: 200
@@ -188,7 +188,7 @@ steps:
     only_if:
       language: effect
     http:
-      url: "http://test-app.localhost:9006/todos/groceries/responses/empty"
+      url: "http://test-app.localhost:{{custom_request_port}}/todos/groceries/responses/empty"
       method: "DELETE"
     expect:
       status: 204

@@ -1,0 +1,61 @@
+---
+name: golem-add-cors-ts
+description: "Configuring CORS for TypeScript HTTP endpoints. Use when the user asks to enable CORS, allow cross-origin requests, or configure allowed origins for HTTP endpoints."
+---
+
+# Configuring CORS for TypeScript HTTP Endpoints
+
+## Mount-Level CORS
+
+Set `cors` on the mount options of `http.mount(...)` to apply allowed origins to **all** endpoints:
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+
+export const MyAgent = defineAgent({
+  name: 'MyAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}', { cors: ['https://app.example.com'] }),
+  methods: {
+    getData: method({ input: {}, returns: Data, http: http.get('/data') }),
+    // Allows https://app.example.com
+  },
+});
+```
+
+## Endpoint-Level CORS
+
+Pass `cors` in the endpoint options (the second argument to a verb builder) to add allowed origins for a specific endpoint. Origins are **unioned** with mount-level CORS:
+
+```typescript
+export const MyAgent = defineAgent({
+  name: 'MyAgent',
+  id: { name: z.string() },
+  http: http.mount('/api/{name}', { cors: ['https://app.example.com'] }),
+  methods: {
+    getData: method({ input: {}, returns: Data, http: http.get('/data', { cors: ['*'] }) }),
+    // Allows BOTH https://app.example.com AND * (all origins)
+
+    getOther: method({ input: {}, returns: Data, http: http.get('/other') }),
+    // Inherits mount-level: only https://app.example.com
+  },
+});
+```
+
+## Wildcard
+
+Use `'*'` to allow all origins:
+
+```typescript
+export const PublicAgent = defineAgent({
+  name: 'PublicAgent',
+  id: { name: z.string() },
+  http: http.mount('/public/{name}', { cors: ['*'] }),
+  methods: { /* ... */ },
+});
+```
+
+## CORS Preflight
+
+Golem automatically handles `OPTIONS` preflight requests for endpoints that have CORS configured. The preflight response includes `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, and `Access-Control-Allow-Headers` headers.

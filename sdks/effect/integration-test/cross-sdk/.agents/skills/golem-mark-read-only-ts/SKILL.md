@@ -1,0 +1,72 @@
+---
+name: golem-mark-read-only-ts
+description: "Marking TypeScript agent methods as read-only for a side-effect-free guarantee and result caching. Use when the user wants a cacheable query method, a method that must not write to the oplog, or HTTP GET endpoints that emit cache headers."
+---
+
+# Marking Agent Methods as Read-Only (TypeScript)
+
+## Overview
+
+A **read-only** agent method is one you promise is a **pure read** of the agent's already-loaded state: it must not mutate anything and its result must depend only on its inputs and the current state. Golem enforces the most important part of this contract — **writes to persistent state, outgoing HTTP, and RPC calls trap** at runtime with a `ReadOnlyViolation` agent error before they run — but it does **not** detect every source of impurity (in-memory mutation, clocks, randomness, env reads), so keeping the method pure is partly your responsibility (see [What Works in a Read-Only Method](#what-works-in-a-read-only-method)).
+
+Marking a method read-only also lets the host treat it as a side-effect-free query: it may bypass the invocation queue and agent loading, and read-only methods mapped to `GET`/`HEAD` participate in HTTP caching semantics.
+
+Mark a method read-only by setting `readOnly: true` on the `method(...)` spec.
+
+## Usage
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+export const CounterAgent = defineAgent({
+    name: 'CounterAgent',
+    id: { name: z.string() },
+    methods: {
+        // Non-read-only: writes shared state
+        increment: method({ input: {}, returns: z.number() }),
+        // Read-only: pure read over already-loaded state
+        getCount: method({ input: {}, returns: z.number(), readOnly: true }),
+    },
+});
+
+export const CounterAgentImpl = CounterAgent.implement({
+    init: () => ({ count: 0 }),
+    methods: {
+        increment() {
+            this.count += 1;
+            return this.count;
+        },
+        getCount() {
+            return this.count;
+        },
+    },
+});
+```
+
+> **Cache policy.** `readOnly: true` uses the `until-write` cache policy (the base-SDK default). For finer control, pass an object instead of the boolean:
+> `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean }` — `no-cache` never caches, `until-write` caches until a mutating (non-read-only) method runs, `{ ttlNanos }` caches for that time-to-live, and `usesPrincipal: true` keys the cache per caller principal. Reach for a regular (non-read-only) method whenever you need a side effect.
+
+## What Works in a Read-Only Method
+
+A read-only method must be a **pure function of the agent's already-loaded state and the method inputs**. The operations in the middle column go through Golem's durability layer and **trap** with a `ReadOnlyViolation` agent error *before* they run and *before* anything is persisted. The operations in the right column are **not** detected — they do not trap, but they still break the contract and must be avoided by you.
+
+| Allowed | Not allowed — traps with `ReadOnlyViolation` | Not allowed — not checked, your responsibility |
+|---|---|---|
+| Reading `this` state fields | Writing persistent state (storage, databases, …) | Mutating in-memory state |
+| Computation over inputs | Outgoing HTTP (`fetch`) | Reading the clock / `Date.now()` |
+| Returning derived values | RPC calls to other agents | Randomness (`Math.random()`) |
+| | | Reading environment variables |
+| | | Remote / blob reads |
+
+## Common Pitfalls
+
+- **Mutating state, reading a clock, randomness, or env in a read-only method is NOT detected.** These do **not** trap — but they either mutate state that should be immutable here or make the result non-deterministic. The runtime cannot catch them; keeping the method pure is your responsibility. If you need any of them, use a regular (non-read-only) method instead.
+- **Writes to persistent state, outgoing HTTP (`fetch`), and RPC do trap.** Those go through the durability layer and raise `ReadOnlyViolation` before running.
+- **A method that mutates `this` state must not be `readOnly: true`** — assigning to a state field is a plain in-memory write, not a host call, so it does **not** trap; keeping the method mutation-free is your responsibility.
+
+## Key Points
+
+- `readOnly` is per-method; an agent can mix read-only and regular methods freely.
+- Read-only methods are the natural fit for HTTP `GET`/`HEAD` endpoints (load `golem-add-http-endpoint-ts`).
+- A read-only method cannot call another agent via RPC; do read-only RPC fan-out from a regular method instead (see `golem-call-another-agent-ts`).

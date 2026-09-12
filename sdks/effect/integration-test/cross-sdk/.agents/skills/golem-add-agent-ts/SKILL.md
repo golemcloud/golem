@@ -1,0 +1,147 @@
+---
+name: golem-add-agent-ts
+description: "Adding a new TypeScript agent to a Golem component. Use when the user asks to create, add, or define a new agent type, implement an agent class, or add agent methods in a TypeScript Golem project."
+---
+
+# Adding a New Agent to a TypeScript Golem Component
+
+## Overview
+
+An **agent** is a durable, stateful unit of computation in Golem. Each agent type is declared with `defineAgent(...)` and given behaviour with `.implement(...)` from `@golemcloud/golem-ts-sdk`. Method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values (Zod is used throughout these examples; Valibot, ArkType, and Effect Schema also work).
+
+## Steps
+
+1. **Create the agent file** — add a new file `src/<agent-name>.ts`
+2. **Declare the contract** — `defineAgent({ name, id, methods })`
+3. **Supply the behaviour** — `<Def>.implement({ init, methods })`
+4. **Import from `main.ts`** — add `import './<agent-name>.js';` to `src/main.ts`
+5. **Build** — run `golem build` to verify
+
+`src/main.ts` is the entrypoint module that must import each agent module for side effects. `defineAgent` / `.implement` register the agent at module-load time, so importing the module is sufficient for discovery — no class needs to be exported.
+
+## Agent Definition
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+// The contract: `name` is the wire-level agent type, `id` is the identity record
+// (its fields form the constructor parameters), and `methods` declares the typed
+// method surface.
+export const Counter = defineAgent({
+    name: 'Counter',
+    id: { name: z.string() },
+    methods: {
+        increment: method({ input: {}, returns: z.number() }),
+        getCount: method({ input: {}, returns: z.number() }),
+    },
+});
+
+// The behaviour: `init` returns the initial state; each handler's `this` is bound
+// to that state (plus SDK helpers like `getId()`).
+export const CounterImpl = Counter.implement({
+    init: () => ({ value: 0 }),
+    methods: {
+        increment() {
+            this.value += 1;
+            return this.value;
+        },
+        getCount() {
+            return this.value;
+        },
+    },
+});
+```
+
+State lives in the object returned by `init()` and is read/written through `this` inside the handlers — there are no class fields. A method with no parameters declares `input: {}` and its handler takes no argument; a method with parameters declares one schema per named parameter and receives them as a single destructured object.
+
+## Custom Types
+
+Describe parameter and return shapes with schemas. For object types, define a schema once and derive the TypeScript type from it with `z.infer`. **TypeScript enums are not supported** — use a string-literal union (`z.enum([...])`) instead:
+
+```typescript
+const Coordinates = z.object({ lat: z.number(), lon: z.number() });
+const WeatherReport = z.object({ temperature: z.number(), description: z.string() });
+const Priority = z.enum(['low', 'medium', 'high']);
+
+export const WeatherAgent = defineAgent({
+    name: 'WeatherAgent',
+    id: { apiKey: z.string() },
+    methods: {
+        getWeather: method({ input: { coords: Coordinates }, returns: WeatherReport }),
+    },
+});
+
+export const WeatherAgentImpl = WeatherAgent.implement({
+    init: () => ({}),
+    methods: {
+        getWeather({ coords }) {
+            // ...
+            return { temperature: 21, description: 'clear' };
+        },
+    },
+});
+```
+
+## Returning Failures
+
+Agent methods should distinguish between **domain errors** (expected failure outcomes) and **uncaught errors**:
+
+- **Uncaught errors** (thrown exceptions, rejected promises) are **not** returned to the caller as a failed invocation. Golem treats them as crashes: the invocation is retried according to the agent's retry policy, and if the retries are exhausted the agent itself becomes failed.
+- **Domain errors** that the caller should observe as a normal failure result must be expressed in the method's `returns` schema as `s.result(okSchema, errSchema)`. The handler then returns `Result.ok(v)` / `Result.err(e)`, and the caller receives a decoded `Result<Ok, Err>`.
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method, s, Result } from '@golemcloud/golem-ts-sdk';
+
+const WithdrawError = z.discriminatedUnion('tag', [
+    z.object({ tag: z.literal('insufficientFunds'), available: z.number() }),
+    z.object({ tag: z.literal('accountClosed') }),
+]);
+
+export const Wallet = defineAgent({
+    name: 'Wallet',
+    id: { owner: z.string() },
+    methods: {
+        withdraw: method({
+            input: { amount: z.number() },
+            returns: s.result(z.number(), WithdrawError),
+        }),
+    },
+});
+
+export const WalletImpl = Wallet.implement({
+    init: () => ({ balance: 0, closed: false }),
+    methods: {
+        withdraw({ amount }) {
+            if (this.closed) {
+                return Result.err({ tag: 'accountClosed' as const });
+            }
+            if (amount > this.balance) {
+                return Result.err({ tag: 'insufficientFunds' as const, available: this.balance });
+            }
+            this.balance -= amount;
+            return Result.ok(this.balance);
+        },
+    },
+});
+```
+
+Returning `Result.err(...)` completes the invocation successfully — the caller receives the error as a value. Throwing (e.g. `throw new Error(...)`) or returning a rejected promise will instead trigger a retry and eventually fail the whole agent.
+
+If the throw happens **after** a durable side effect has already completed, retry replays that side effect's recorded result. A common example is `const response = await fetch(...); if (!response.ok) throw ...`: the HTTP response status/body are recorded before the exception is thrown. Wrap the fetch, body read, and status check in `atomically(...)` when the exception should make Golem re-execute the HTTP request instead of replaying the recorded response.
+
+## Related Skills
+
+- Load `golem-js-runtime` for details on the QuickJS runtime environment, available Web/Node.js APIs, and npm compatibility
+- Load `golem-file-io-ts` for reading and writing files from agent code
+
+## Key Constraints
+
+- Every agent is declared with `defineAgent({...})` and given behaviour with `<Def>.implement({...})`
+- The `id` record fields define agent identity — they must be serializable schema types
+- State is the object returned by `init()` and is accessed through `this` in the handlers — do not use class fields
+- TypeScript **enums are not supported** — use `z.enum([...])` / string-literal unions instead
+- Agents are created implicitly on first invocation — no separate creation step
+- Invocations are processed sequentially in a single thread — no concurrency within a single agent
+- Each method's `input` is a record of one schema per named parameter; `returns` is the success-value schema (use `z.void()` for no return value)

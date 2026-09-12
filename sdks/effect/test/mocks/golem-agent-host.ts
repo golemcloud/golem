@@ -11,6 +11,8 @@ export const getAllAgentTypes = (): Array<any> => registered
 export const getAgentType = (name: string): any =>
   registered.find((r) => r.agentType.typeName === name)
 
+export const getAgentTypeByAgentId = (_agentId: string): any => registered[0]
+
 export const makeAgentId = (): string => {
   throw new Error("makeAgentId not mocked")
 }

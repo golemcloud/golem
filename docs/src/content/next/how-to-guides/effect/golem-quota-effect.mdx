@@ -78,10 +78,10 @@ const QuotaCallResult = Schema.Struct({
 export const QuotaAgent = defineAgent({
   name: "QuotaAgent",
   mode: "durable",
-  constructorParams: { instanceName: Schema.String },
+  id: { instanceName: Schema.String },
   methods: {
     rateLimitedCall: method({
-      params: { input: Schema.String },
+      input: { input: Schema.String },
       success: QuotaCallResult,
     }),
   },
@@ -180,7 +180,7 @@ const SummaryResult = Schema.Struct({
 });
 
 const summarize = method({
-  params: {
+  input: {
     text: Schema.String,
     token: Quota.QuotaToken,
   },

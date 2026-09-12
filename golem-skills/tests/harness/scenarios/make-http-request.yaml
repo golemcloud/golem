@@ -17,7 +17,7 @@ steps:
       rust: &non-effect-add-request-recorder-prompt >
         In the test-app project, add a new durable agent type called `RequestRecorder` identified by
         a single constructor parameter named `name`. Give it an HTTP mount under `/requests/{name}`
-        and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+        and make sure it is exposed through the app HTTP API on `test-app.localhost:{{custom_request_port}}`.
 
         RequestRecorder must store a list of recorded messages in agent state, initially empty.
 
@@ -30,9 +30,9 @@ steps:
       ts: *non-effect-add-request-recorder-prompt
       effect: >
         In the Effect-based test-app project, add a durable `RequestRecorder` with one
-        `constructorParams` string named `name`. Mount it with
+        `id` string named `name`. Mount it with
         `Http.mount("/requests/{name}")` from `@golemcloud/effect-golem` and expose it on
-        `test-app.localhost:9006`.
+        `test-app.localhost:{{custom_request_port}}`.
 
         Store an initially empty durable list of message strings with Effect state and snapshot
         APIs. Expose `POST /record`, taking an unbound `message` string from the camelCase JSON
@@ -72,7 +72,7 @@ steps:
         The method must take a single string parameter called `message`.
 
         When called, it must make an outgoing HTTP POST request to exactly
-        `http://test-app.localhost:9006/requests/main/record`.
+        `http://test-app.localhost:{{custom_request_port}}/requests/main/record`.
 
         The request must use `Content-Type: application/json` and send the JSON body
         `{"message": <message>}` where the JSON field name matches the RequestRecorder endpoint
@@ -90,7 +90,7 @@ steps:
         invoked as `CounterAgent("main")` below.
 
         The method takes one `message` string. It must make an actual outgoing HTTP POST request to
-        exactly `http://test-app.localhost:9006/requests/main/record`, with
+        exactly `http://test-app.localhost:{{custom_request_port}}/requests/main/record`, with
         `Content-Type: application/json` and JSON body `{"message": <message>}`. Do not invoke
         `RequestRecorder` through an agent client. Keep the handler Effect-based: import
         `FetchHttpClient`, `HttpClient`, `HttpClientRequest`, and `HttpClientResponse` from
@@ -145,7 +145,7 @@ steps:
 
   - id: "verify-recorded-message"
     http:
-      url: "http://test-app.localhost:9006/requests/main/messages"
+      url: "http://test-app.localhost:{{custom_request_port}}/requests/main/messages"
       method: "GET"
     expect:
       status: 200

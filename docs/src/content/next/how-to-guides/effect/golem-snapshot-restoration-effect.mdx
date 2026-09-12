@@ -1,0 +1,12 @@
+# Snapshot restoration
+
+Set `snapshotting: Snapshot.define({ schema, policy })` and call `snapshot.init(initial)` exactly
+once in the initialization factory. A snapshotted definition requires a distinct restoration
+factory as the second argument to `.implement(initialize, restore)`. The restoration factory
+receives `(context, id, snapshot)` and constructs the handlers; after it completes, the SDK applies
+the restored automatic state and attached SQLite images. Do not assume the initialization factory
+runs during restoration.
+
+Use `Snapshot.custom({ policy })` plus `snapshot.register({ save, load })` only for user-managed bytes. For SQLite, declare database names in `Snapshot.define` and attach each database exactly once. External PostgreSQL, MySQL, and Ignite state is not included.
+
+Use host-backed `Durability` combinators around external effects. Do not add compatibility migration envelopes or assume constructors run in addition to restoration.
