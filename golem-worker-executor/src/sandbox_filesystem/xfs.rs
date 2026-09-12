@@ -236,26 +236,7 @@ impl ManagedProvisioning {
     }
 
     fn validate_scratch_has_no_project(&self) -> Result<(), FilesystemStorageError> {
-        let scratch = self.scratch.root();
-        let directory = File::open(scratch).map_err(|error| {
-            FilesystemStorageError::io("open managed XFS scratch directory", scratch, error)
-        })?;
-        let attributes = get_fsxattr(&directory).map_err(|error| {
-            FilesystemStorageError::io(
-                "inspect managed XFS scratch directory project attributes",
-                scratch,
-                error,
-            )
-        })?;
-        if attributes.fsx_projid != 0
-            || attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
-        {
-            return Err(FilesystemStorageError::verification(
-                "verify managed XFS scratch directory has no project identity",
-                scratch,
-            ));
-        }
-        Ok(())
+        verify_host_directory_has_no_project(self.scratch.root())
     }
 
     pub(super) fn root(&self) -> &Path {
@@ -718,6 +699,31 @@ fn clear_root_project_assignment(
         return Err(FilesystemStorageError::verification(
             "verify managed XFS root has neutral project identity",
             root,
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that a host directory has no project id and gives no project id to what is made in it.
+pub(super) fn verify_host_directory_has_no_project(
+    path: &Path,
+) -> Result<(), FilesystemStorageError> {
+    let directory = File::open(path).map_err(|error| {
+        FilesystemStorageError::io("open managed XFS host directory", path, error)
+    })?;
+    let attributes = get_fsxattr(&directory).map_err(|error| {
+        FilesystemStorageError::io(
+            "inspect managed XFS host directory project attributes",
+            path,
+            error,
+        )
+    })?;
+    if attributes.fsx_projid != 0
+        || attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
+    {
+        return Err(FilesystemStorageError::verification(
+            "verify managed XFS host directory has no project identity",
+            path,
         ));
     }
     Ok(())

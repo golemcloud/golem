@@ -16,6 +16,7 @@ use cap_fs_ext::DirExt as _;
 use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::num::{NonZeroU32, NonZeroU64};
@@ -25,12 +26,15 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 mod adapter;
 mod file_update;
+mod host_directory;
 mod scratch;
 mod tree_copy;
 mod unmanaged;
 
 #[allow(unused_imports)]
 pub(crate) use adapter::*;
+#[allow(unused_imports)]
+pub(crate) use host_directory::{HostDirectory, HostPath};
 use scratch::ScratchSpace;
 pub(crate) use scratch::ScratchTree;
 pub(crate) use tree_copy::TreeExclusions;
@@ -712,6 +716,7 @@ enum QuotaAuthority {
 pub(crate) struct SandboxFilesystemProvisioning {
     volume: FilesystemVolume,
     mode: SandboxFilesystemProvisioningMode,
+    host_directory_names: Arc<Mutex<HashSet<Box<OsStr>>>>,
 }
 
 #[derive(Clone)]
@@ -738,14 +743,19 @@ impl SandboxFilesystemProvisioning {
             Some(root) => configured_managed(root, &cleanup_retry),
             None => {
                 let volume = FilesystemVolume::unmanaged_development();
+                let unmanaged =
+                    unmanaged::UnmanagedProvisioning::new(deterministic_root_dir, cleanup_retry)
+                        .map_err(|error| {
+                            FilesystemStorageError::io(
+                                "create temporary host directory root",
+                                Path::new("<temp>"),
+                                error,
+                            )
+                        })?;
                 Ok(Self {
                     volume: volume.clone(),
-                    mode: SandboxFilesystemProvisioningMode::Unmanaged(
-                        unmanaged::UnmanagedProvisioning::new(
-                            deterministic_root_dir,
-                            cleanup_retry,
-                        ),
-                    ),
+                    mode: SandboxFilesystemProvisioningMode::Unmanaged(unmanaged),
+                    host_directory_names: Arc::default(),
                 })
             }
         }
@@ -761,6 +771,26 @@ impl SandboxFilesystemProvisioning {
 
     pub(crate) fn volume(&self) -> &FilesystemVolume {
         &self.volume
+    }
+
+    fn host_root(&self) -> HostRoot<'_> {
+        match &self.mode {
+            SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => HostRoot {
+                path: unmanaged.host_root(),
+                anchor: None,
+                temporary_root: unmanaged.temporary_host_root().cloned(),
+                names: &self.host_directory_names,
+                verify_no_project: false,
+            },
+            #[cfg(target_os = "linux")]
+            SandboxFilesystemProvisioningMode::Managed(managed) => HostRoot {
+                path: managed.root(),
+                anchor: self.volume.managed_root().cloned(),
+                temporary_root: None,
+                names: &self.host_directory_names,
+                verify_no_project: true,
+            },
+        }
     }
 
     /// Tells whether this storage can capture a tree by reflink. Only managed XFS can.
@@ -823,6 +853,15 @@ impl SandboxFilesystemProvisioning {
     }
 }
 
+/// Where the host directories of a provisioning are made, and what a new one must satisfy.
+struct HostRoot<'a> {
+    path: &'a Path,
+    anchor: Option<Arc<File>>,
+    temporary_root: Option<Arc<tempfile::TempDir>>,
+    names: &'a Mutex<HashSet<Box<OsStr>>>,
+    verify_no_project: bool,
+}
+
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
@@ -833,6 +872,7 @@ fn configured_managed(
     Ok(SandboxFilesystemProvisioning {
         volume,
         mode: SandboxFilesystemProvisioningMode::Managed(managed),
+        host_directory_names: Arc::default(),
     })
 }
 
@@ -860,10 +900,11 @@ impl SandboxFilesystemName {
         let components = [environment, component, filesystem];
         if components.iter().all(|component| {
             let path = Path::new(component);
-            matches!(
-                path.components().collect::<Vec<_>>().as_slice(),
-                [Component::Normal(_)]
-            )
+            !component.starts_with('.')
+                && matches!(
+                    path.components().collect::<Vec<_>>().as_slice(),
+                    [Component::Normal(_)]
+                )
         }) {
             Ok(Self { components })
         } else {
@@ -1966,6 +2007,35 @@ mod tests {
         SandboxFilesystem::delete_and_verify(&filesystem)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn native_name_rejects_a_component_that_starts_with_a_dot() {
+        [
+            [".environment", "component", "filesystem"],
+            ["environment", ".component", "filesystem"],
+            ["environment", "component", ".filesystem"],
+        ]
+        .into_iter()
+        .for_each(|[environment, component, filesystem]| {
+            assert!(
+                SandboxFilesystemName::new(
+                    environment.to_string(),
+                    component.to_string(),
+                    filesystem.to_string()
+                )
+                .is_err(),
+                "{environment}/{component}/{filesystem} must be refused"
+            );
+        });
+        assert!(
+            SandboxFilesystemName::new(
+                "environment.".to_string(),
+                "compo.nent".to_string(),
+                "filesystem".to_string()
+            )
+            .is_ok()
+        );
     }
 
     #[test]

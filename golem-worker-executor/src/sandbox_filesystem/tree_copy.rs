@@ -138,7 +138,7 @@ fn list_directory(
 /// Makes the root-relative path of an entry from the path of its directory and its name.
 ///
 /// The path is made in one allocation of its final size.
-fn child_path(relative: &Path, name: &OsStr) -> PathBuf {
+pub(super) fn child_path(relative: &Path, name: &OsStr) -> PathBuf {
     let separator = usize::from(!relative.as_os_str().is_empty());
     let mut path = PathBuf::with_capacity(relative.as_os_str().len() + separator + name.len());
     path.push(relative);
