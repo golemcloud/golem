@@ -24,7 +24,8 @@ pub(super) struct TreeEntry {
     pub(super) kind: TreeEntryKind,
     pub(super) permissions: cap_std::fs::Permissions,
     pub(super) modified: Option<SystemTime>,
-    /// The identity of a regular file that has more than one name, and `None` for another entry.
+    /// The identity of an entry that is not a directory and has more than one name, and `None` for
+    /// another entry.
     pub(super) link: Option<NativeFileIdentity>,
 }
 
@@ -169,7 +170,7 @@ fn tree_entry(
 ) -> std::io::Result<TreeEntry> {
     let metadata = directory.symlink_metadata(name)?;
     let file_type = metadata.file_type();
-    let link = (file_type.is_file() && metadata.nlink() > 1)
+    let link = (!file_type.is_dir() && metadata.nlink() > 1)
         .then(|| native_file_identity(&metadata))
         .transpose()?;
     let kind = if file_type.is_symlink() {
@@ -205,8 +206,8 @@ fn tree_entry(
 /// gives a `DirectoryNotEmpty` error. Directories and symlinks are made again. Permissions and
 /// modification times are copied. Each regular file is transferred with `copy_mode`.
 ///
-/// A regular file with more than one name is copied once, at the first name that the listing
-/// gives. The result gives the names of each such file as a [`LinkGroup`].
+/// A regular file or a symlink with more than one name is copied once, at the first name that the
+/// listing gives. The result gives the names of each such object as a [`LinkGroup`].
 pub(super) fn copy_contents(
     base: &cap_std::fs::Dir,
     source: &Path,
@@ -236,18 +237,18 @@ pub(super) fn copy_contents(
     Ok(links.into_groups())
 }
 
-/// The regular files with more than one name that a copy met.
+/// The regular files and symlinks with more than one name that a copy met.
 #[derive(Default)]
 struct CopiedLinks<'a> {
-    /// The position in `groups` of the file with each identity.
+    /// The position in `groups` of the object with each identity.
     positions: HashMap<&'a NativeFileIdentity, usize>,
-    /// The copied name of each file, with the other names that the copy met.
+    /// The copied name of each object, with the other names that the copy met.
     groups: Vec<(&'a Path, Vec<&'a Path>)>,
 }
 
 impl<'a> CopiedLinks<'a> {
-    /// Copies one listed entry, unless it is another name of a file that the copy already holds,
-    /// and gives the state back.
+    /// Copies one listed entry, unless it is another name of an object that the copy already
+    /// holds, and gives the state back.
     fn copy(
         mut self,
         source: &cap_std::fs::Dir,
@@ -269,7 +270,7 @@ impl<'a> CopiedLinks<'a> {
         Ok(self)
     }
 
-    /// Gives a group for each file that the copy met at more than one name.
+    /// Gives a group for each object that the copy met at more than one name.
     fn into_groups(self) -> Box<[LinkGroup]> {
         self.groups
             .into_iter()
@@ -1118,6 +1119,40 @@ mod tests {
         assert_eq!(
             std::fs::read(destination.path().join("data/file")).unwrap(),
             b"old"
+        );
+    }
+
+    #[test]
+    fn copy_contents_copies_a_symlink_with_several_names_once_and_reports_its_names() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("target"), b"target").unwrap();
+        std::os::unix::fs::symlink("target", source.path().join("link")).unwrap();
+        std::fs::hard_link(source.path().join("link"), source.path().join("link-name")).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let groups = copy_contents(
+            &open(source.path()),
+            Path::new(""),
+            &exclusions(&[]),
+            destination.path(),
+            FileCopyMode::Buffered,
+        )
+        .unwrap();
+
+        assert_eq!(
+            groups.as_ref(),
+            [LinkGroup {
+                first: Path::new("link").into(),
+                others: Box::new([Box::from(Path::new("link-name"))]),
+            }]
+        );
+        assert_eq!(
+            tree_listing(destination.path()),
+            ["link", "target"].map(String::from).into()
+        );
+        assert_eq!(
+            std::fs::read_link(destination.path().join("link")).unwrap(),
+            Path::new("target")
         );
     }
 

@@ -1087,7 +1087,8 @@ enum Node {
     },
 }
 
-/// What a tree holds: every path with its object, and the names of each file with several names.
+/// What a tree holds: every path with its object, and the names of each object that is not a
+/// directory and has several names.
 #[derive(Debug, Eq, PartialEq)]
 struct Tree {
     nodes: BTreeMap<String, Node>,
@@ -1121,7 +1122,7 @@ fn read_tree(root: &Path, with_modified: impl Fn(&str) -> bool) -> Tree {
         .collect();
     let links = entries
         .iter()
-        .filter(|(_, metadata)| metadata.is_file() && metadata.nlink() > 1)
+        .filter(|(_, metadata)| !metadata.is_dir() && metadata.nlink() > 1)
         .fold(
             BTreeMap::<(u64, u64), BTreeSet<String>>::new(),
             |mut groups, (path, metadata)| {
@@ -1244,6 +1245,7 @@ async fn capture_then_restore_on_unmanaged_storage_gives_back_the_same_tree() {
     std::fs::write(root.join("agent.txt"), b"agent data").unwrap();
     std::fs::hard_link(root.join("agent.txt"), root.join("agent-alias.txt")).unwrap();
     std::os::unix::fs::symlink("agent.txt", root.join("agent-link")).unwrap();
+    std::fs::hard_link(root.join("agent-link"), root.join("agent-link-name")).unwrap();
     let written = |path: &str| matches!(path, "rw-modified.txt" | "agent.txt" | "agent-alias.txt");
     let expected = read_tree(&root, written);
 

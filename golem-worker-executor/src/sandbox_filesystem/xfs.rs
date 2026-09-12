@@ -2119,6 +2119,7 @@ mod tests {
         )
         .unwrap();
         std::os::unix::fs::symlink("data/file-0", agent_root.join("link")).unwrap();
+        std::fs::hard_link(agent_root.join("link"), agent_root.join("link-name")).unwrap();
         std::fs::hard_link(
             agent_root.join("data/file-1"),
             agent_root.join("data/file-1-name"),
@@ -2189,10 +2190,16 @@ mod tests {
         });
         assert_eq!(
             groups.as_ref(),
-            [LinkGroup {
-                first: Path::new("data/file-1").into(),
-                others: Box::new([Box::from(Path::new("data/file-1-name"))]),
-            }]
+            [
+                LinkGroup {
+                    first: Path::new("data/file-1").into(),
+                    others: Box::new([Box::from(Path::new("data/file-1-name"))]),
+                },
+                LinkGroup {
+                    first: Path::new("link").into(),
+                    others: Box::new([Box::from(Path::new("link-name"))]),
+                },
+            ]
         );
         let mut expected = tree_copy::tree_listing(&agent_root);
         [
@@ -2200,6 +2207,7 @@ mod tests {
             "data/nested",
             "data/nested/hidden",
             "data/file-1-name",
+            "link-name",
         ]
         .into_iter()
         .for_each(|absent| {

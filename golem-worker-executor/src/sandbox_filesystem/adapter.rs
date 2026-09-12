@@ -620,7 +620,7 @@ pub(crate) enum OnExisting {
     Replace,
 }
 
-/// The names of one regular file that has more than one name under a copied path.
+/// The names of one regular file or symlink that has more than one name under a copied path.
 ///
 /// The names are relative to the copied path. `first` is the name that the copy holds. `others`
 /// are the other names, in the order that the copy met them, and the copy does not hold them.
@@ -998,10 +998,10 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// copy adds nothing to any quota, because a HostPath is outside every agent project. On
     /// unmanaged storage each file is copied.
     ///
-    /// A regular file with more than one name under `source` is copied once, at the first name
-    /// that the copy meets, and the result gives its names as one [`LinkGroup`]. `excluded` leaves
-    /// out paths, not files: the other names of a file with an excluded name are copied as usual,
-    /// and an excluded name is in no group.
+    /// A regular file or a symlink with more than one name under `source` is copied once, at the
+    /// first name that the copy meets, and the result gives its names as one [`LinkGroup`].
+    /// `excluded` leaves out paths, not objects: the other names of an object with an excluded
+    /// name are copied as usual, and an excluded name is in no group.
     fn copy_contents(
         &self,
         source: SandboxPath,
