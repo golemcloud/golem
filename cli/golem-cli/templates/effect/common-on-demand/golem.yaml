@@ -9,6 +9,7 @@ componentTemplates:
         - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
           sources:
           - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/bridge-sdk/effect/internal"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
           targets:
@@ -21,6 +22,7 @@ componentTemplates:
             GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
           sources:
           - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/bridge-sdk/effect/internal"
           - "{{ golemTempDir }}/common/effect/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
@@ -38,6 +40,7 @@ componentTemplates:
         - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
           sources:
           - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/bridge-sdk/effect/internal"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"
           targets:
@@ -50,6 +53,7 @@ componentTemplates:
             GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
           sources:
           - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/bridge-sdk/effect/internal"
           - "{{ golemTempDir }}/common/effect/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
           - "{{ appRootDir }}/package.json"

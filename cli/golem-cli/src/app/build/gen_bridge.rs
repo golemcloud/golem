@@ -8,6 +8,9 @@ use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
 use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode};
 use crate::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
 use crate::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode};
+use crate::bridge_gen::typescript::effect_external::EffectExternalBridgeGenerator;
+use crate::bridge_gen::typescript::effect_guest::EffectGuestBridgeGenerator;
+use crate::bridge_gen::typescript::effect_tool::EffectToolBridgeGenerator;
 use crate::bridge_gen::typescript::tool::TypeScriptToolBridgeGenerator;
 use crate::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptBridgeMode};
 use crate::bridge_gen::{
@@ -1094,14 +1097,13 @@ async fn gen_bridge_sdk_target(
                             )?)
                         }
                         (GuestLanguage::Effect, BridgeMode::External) => Box::new(
-                            TypeScriptBridgeGenerator::new(agent_type, &output_dir, false)?,
+                            EffectExternalBridgeGenerator::new(agent_type, &output_dir, false)?,
                         ),
                         (GuestLanguage::Effect, BridgeMode::Guest) => {
-                            Box::new(TypeScriptBridgeGenerator::new_with_mode(
+                            Box::new(EffectGuestBridgeGenerator::new(
                                 agent_type,
                                 &output_dir,
                                 false,
-                                TypeScriptBridgeMode::GuestWasmRpc,
                             )?)
                         }
                         (GuestLanguage::Scala, BridgeMode::External) => {
@@ -1145,9 +1147,13 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             ScalaToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
-                        (GuestLanguage::TypeScript | GuestLanguage::Effect, BridgeMode::Guest) => {
+                        (GuestLanguage::TypeScript, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
                             TypeScriptToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                        }
+                        (GuestLanguage::Effect, BridgeMode::Guest) => {
+                            fs::remove(&output_dir)?;
+                            EffectToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
                         (GuestLanguage::MoonBit, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;

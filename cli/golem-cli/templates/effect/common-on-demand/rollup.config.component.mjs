@@ -2,6 +2,7 @@ import commonjs from "@rollup/plugin-commonjs";
 import json from "@rollup/plugin-json";
 import nodeResolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
+import ts from "typescript";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -36,6 +37,17 @@ const externalPackages = (id) =>
   embeddedPackages.has(id) ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:");
+
+const tsconfigPath = path.resolve("tsconfig.json");
+const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+if (error) {
+  throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
+}
+const parsedTsConfig = ts.parseJsonConfigFileContent(config, ts.sys, process.cwd());
+if (parsedTsConfig.errors.length > 0) {
+  throw new Error(parsedTsConfig.errors.map((error) =>
+    ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n"));
+}
 
 const require = createRequire(import.meta.url);
 const effectPackageDir = path.dirname(
@@ -167,6 +179,7 @@ export default {
     json(),
     typescript({
       noEmitOnError: true,
+      include: parsedTsConfig.fileNames,
     }),
   ],
 };

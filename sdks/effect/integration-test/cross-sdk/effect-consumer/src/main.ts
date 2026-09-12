@@ -8,6 +8,8 @@ import {
   Schema as GolemSchema,
   Tool,
 } from "@golemcloud/effect-golem"
+import { TsCrossStreamingClient } from "ts-cross-streaming-tool-guest-client"
+import { TsPeer as GeneratedTsPeer } from "ts-peer-guest-client"
 
 const StreamItem = Schema.Struct({ id: Schema.Number, values: Schema.Array(Schema.Number) })
 const tsTool = Tool.toolDefinition("ts-cross-streaming").body((body) =>
@@ -64,6 +66,7 @@ defineAgent({
     }),
     scheduledMetadata: method({ input: {}, success: Schema.String }),
     callTsTool: method({ input: { payload: Schema.String }, success: Schema.String }),
+    toolRoundTrip: method({ input: { payload: Schema.String }, success: Schema.String }),
     quotaThroughTs: method({ input: {}, success: Schema.String }),
   },
 }).implement(({ name }) =>
@@ -139,7 +142,7 @@ defineAgent({
     nestedStreamRoundTrip: () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const peer = yield* TsPeer.client.get({ name })
+          const peer = yield* GeneratedTsPeer.get(name)
           let pulled = 0
           let readerClosed = false
           const source = Stream.fromIterable([
@@ -151,7 +154,7 @@ defineAgent({
             Stream.tap(() => Effect.sync(() => pulled++)),
           )
           const items = yield* AgentStream.AgentStream.fromEffect(source)
-          const output = yield* peer.nestedStream({ prefix: "fx", items })
+          const output = yield* peer.nestedStream("fx", items)
           const values = yield* output.items.toEffect(String).pipe(
             Stream.ensuring(
               Effect.sync(() => {
@@ -204,6 +207,25 @@ defineAgent({
         )
         return `${result}|${stdout}`
       }).pipe(Effect.orDie),
+    toolRoundTrip: ({ payload }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const input = Stream.make(new TextEncoder().encode(payload))
+          const invocation = yield* TsCrossStreamingClient.create().ts_cross_streaming(name, input)
+          const [result, stdout] = yield* Effect.all(
+            [
+              invocation.result,
+              invocation.stdout.pipe(
+                Stream.decodeText(),
+                Stream.runCollect,
+                Effect.map((chunks) => Array.from(chunks).join("")),
+              ),
+            ],
+            { concurrency: "unbounded" },
+          )
+          return `${result}|${stdout}`
+        }),
+      ).pipe(Effect.orDie),
     quotaThroughTs: () =>
       Effect.scoped(
         Effect.gen(function* () {

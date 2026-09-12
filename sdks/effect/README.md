@@ -204,6 +204,80 @@ cleanup. A downstream drop stops future source pulls and eventually calls the pr
 later invocation. Terminal errors are not transported; model recoverable failures as stream items
 (for example `Result<T, E>`). Streams cannot be snapshotted, triggered, or scheduled.
 
+## Generated Effect bridges
+
+Effect components receive Effect-native guest clients for their manifest `dependencies.agents`
+and `dependencies.tools` during `golem build`. These clients preserve the target's schema without
+requiring a duplicate `defineAgent` or tool definition. Generated methods take positional arguments,
+unlike definition-derived clients, which take an input object.
+
+For example, a generated guest client for a peer with a nested streaming method is used inside an
+agent handler as follows:
+
+```ts
+import { Effect, Stream } from "effect"
+import { AgentStream } from "@golemcloud/effect-golem"
+import { TsPeer } from "ts-peer-guest-client"
+
+const program = Effect.scoped(
+  Effect.gen(function* () {
+    const peer = yield* TsPeer.get("peer-1")
+    const input = yield* AgentStream.AgentStream.fromEffect(Stream.make({ id: 1, values: [9, 12] }))
+    const output = yield* peer.nestedStream("fx", input)
+    return yield* output.items.toEffect(String).pipe(Stream.runCollect)
+  }),
+)
+```
+
+Guest bridges use the same affine `AgentStream` and capability handles as the SDK. Their host
+service requirements flow through the Effect environment; the agent dispatcher supplies live
+services. Stream-free methods also expose `.trigger(...)` and `.schedule(...)`, with cancelable
+scheduling. Streaming methods cannot be triggered or scheduled.
+
+Generated tool clients expose Effect stdin/stdout streams and an Effect result. Consume stdout and
+the result concurrently when the tool can block writing its output:
+
+```ts
+import { Effect, Stream } from "effect"
+import { TsCrossStreamingClient } from "ts-cross-streaming-tool-guest-client"
+
+const program = Effect.scoped(
+  Effect.gen(function* () {
+    const invocation = yield* TsCrossStreamingClient.create().ts_cross_streaming(
+      "label",
+      Stream.make(new TextEncoder().encode("hello")),
+    )
+    return yield* Effect.all(
+      [invocation.result, invocation.stdout.pipe(Stream.decodeText(), Stream.runCollect)],
+      { concurrency: "unbounded" },
+    )
+  }),
+)
+```
+
+Scope closure cancels the invocation and releases owned output streams. Tool failures retain their
+declared payloads separately from RPC failures, and decoding validates the exact schema graph.
+
+For an external Effect application, request an external bridge in the manifest and run
+`golem generate-bridge --language effect`:
+
+```yaml
+bridge:
+  effect:
+    external:
+      agents: my-app:producer
+      outputDir: bridge/effect
+```
+
+Each generated `<agent>-client` directory is a buildable npm package. Its `configure` function uses
+the same configuration as the TypeScript bridge. Constructors and calls return Effects, streaming
+values are Effect `Stream`s (including nested streams), and streaming calls require a scope.
+Fiber interruption aborts pending calls; successful streaming calls keep their transport alive
+until scope closure. External stream-free trigger/schedule methods use generated suffixes such as
+`echotrigger(...)` and `echoschedule(...)`. External bridges use the canonical TypeScript HTTP and
+WebSocket transport and do not depend on guest WIT modules. As with the TypeScript generator,
+external bridges support agents; tool bridges are guest-only.
+
 ## Tools and permission-card transfer
 
 `Tool.toolDefinition(name)` builds nested, typed commands. `.implement(...)` registers a tool guest;

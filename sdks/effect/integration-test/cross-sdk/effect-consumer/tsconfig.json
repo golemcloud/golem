@@ -5,7 +5,20 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "ts-peer-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/ts-peer-guest-client/ts-peer-guest-client.ts"
+      ],
+      "ts-cross-streaming-tool-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/ts-cross-streaming-tool-guest-client/ts-cross-streaming-tool-guest-client.ts"
+      ]
+    }
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/ts-peer-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/ts-cross-streaming-tool-guest-client/*.ts"
+  ]
 }

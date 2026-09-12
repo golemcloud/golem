@@ -52,6 +52,21 @@ export * as AgentStream from "./AgentStream.js"
 export * as Blobstore from "./Blobstore.js"
 
 /**
+ * Runtime and schema model consumed by generated Effect guest bridges.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as Bridge from "./Bridge.js"
+
+/**
+ * Effect runtime for canonical generated tool clients.
+ * @since 1.6.0
+ * @category modules
+ */
+export * as BridgeTool from "./BridgeTool.js"
+
+/**
  * Agent and tool capability declarations.
  *
  * @since 1.6.0

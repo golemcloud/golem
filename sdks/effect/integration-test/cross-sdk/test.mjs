@@ -143,6 +143,15 @@ try {
       effectTsTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:PAYLOAD`),
       effectTsTool,
     )
+    const generatedEffectTsTool = invoke(
+      `EffectConsumer("effect-${stamp}")`,
+      "toolRoundTrip",
+      '"generated"',
+    )
+    assert.ok(
+      generatedEffectTsTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:GENERATED`),
+      generatedEffectTsTool,
+    )
     const effectQuota = invoke(`EffectConsumer("effect-${stamp}")`, "quotaThroughTs")
     assert.ok(effectQuota.includes("reserved-after-ts:true"), effectQuota)
     const rustCard = invoke(

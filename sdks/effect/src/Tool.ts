@@ -4,7 +4,7 @@ export { toolGuest } from "./internal/tool/runtime.js"
 
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
-import { Effect, Schema, Scope, Stream } from "effect"
+import { Context, Effect, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
@@ -48,6 +48,9 @@ export interface ToolTransport {
     stdout: boolean,
   ) => Effect.Effect<TransportInvocation, unknown>
 }
+
+/** Context tag for overriding the generated-client tool transport. @since 1.6.0 @category services */
+export const ToolTransport = Context.Service<ToolTransport>("effect-golem/ToolTransport")
 
 /** Application-level input and output streams. @since 1.6.0 @category models */
 export interface Streams {
@@ -103,7 +106,8 @@ const decodeByteStream = (source: AsyncIterable<Host.ByteStreamItem>) =>
 const drainByteStream = (source: AsyncIterable<Host.ByteStreamItem>) =>
   Stream.runDrain(decodeByteStream(source))
 
-const liveStart = (
+/** Start a scoped invocation using the contextual tool host. @since 1.6.0 @category constructors */
+export const liveToolStart = (
   tool: string,
   path: readonly string[],
   input: Common.TypedSchemaValue,
@@ -167,7 +171,7 @@ export function client<D extends ToolDefinition<any, any>>(
     stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
     stdout: boolean,
   ) => Effect.Effect<TransportInvocation, unknown, ToolClient | Scope.Scope> =
-    options.transport?.start ?? liveStart
+    options.transport?.start ?? liveToolStart
   const call = (
     model: CommandModel,
     path: readonly string[],
