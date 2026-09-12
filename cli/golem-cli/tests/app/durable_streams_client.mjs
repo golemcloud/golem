@@ -259,7 +259,14 @@ async function sessionCancellation() {
     });
     assert.deepEqual(await response.json(), ["retained"]);
     assert.equal(response.streamClosed, true);
-    assert.equal(response.headers.get("stream-cancelled"), "true");
+    const cancelled = response.headers.get("stream-cancelled");
+    if (slot === "input") {
+      assert.equal(cancelled, "true");
+    } else {
+      // Input cancellation delivers EOF, so echo may close its output normally
+      // before output cancellation applies. The first terminal is preserved.
+      assert.ok(cancelled === null || cancelled === "true");
+    }
   }
   // The guest reaches its continuation after observing input EOF; DELETE is not an interrupt.
   const continuationDeadline = Date.now() + 20_000;
@@ -282,6 +289,38 @@ async function sessionCancellation() {
     await (await request(`${s.agent}/mark/37`, 200, { method: "PUT" })).json(),
     37,
   );
+}
+
+async function outputSessionCancellation() {
+  for (const [count, cancelled] of [[2, "true"], [1, null]]) {
+    const s = session(`cancellation-output/${count}`);
+    // The second item waits longer than the driver's 180-second timeout, so an
+    // active producer cannot finish normally during this scenario.
+    const output = await create(`${s.slot("$result")}?delay_ms=600000`);
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const response = await output.stream({ offset: "-1", live: false });
+      const values = await response.json();
+      if (values.length > 0) {
+        assert.deepEqual(values, ["cancel-0"]);
+        break;
+      }
+      assert.ok(
+        Date.now() < deadline,
+        "output did not publish before cancellation",
+      );
+      await sleep(20);
+    }
+    if (count === 1) await closed(output);
+    assert.equal((await output.head()).streamClosed, count === 1);
+    await request(s.base, 204, { method: "DELETE" });
+    await request(s.base, 204, { method: "DELETE" });
+    const response = await output.stream({ offset: "-1", live: false });
+    assert.deepEqual(await response.json(), ["cancel-0"]);
+    assert.equal(response.streamClosed, true);
+    assert.equal(response.headers.get("stream-closed"), "true");
+    assert.equal(response.headers.get("stream-cancelled"), cancelled);
+  }
 }
 
 async function tombstoneAndExclusions() {
@@ -366,6 +405,7 @@ for (const scenario of [
   idempotentProducer,
   offsetsAndClientCancellation,
   sessionCancellation,
+  outputSessionCancellation,
   tombstoneAndExclusions,
   readerCapAndRelease,
 ]) {
