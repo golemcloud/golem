@@ -5,6 +5,7 @@
 # - `cargo make check-wit`: re-syncs the per-crate wit/deps and fails if the committed copies are out of date
 # - `cargo make build`: builds everything in debug mode
 # - `cargo make build-release`: builds everything in release mode. customizable with PLATFORM_OVERRIDE env variable for docker builds
+# - `cargo make clean`: cleans all test components, the main workspace, and every SDK
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
@@ -390,6 +391,11 @@ exec --fail-on-error %{NPX_BIN} pnpm clean
 [tasks.clean-sdk-ts.windows]
 env = { NPX_BIN = "npx.cmd" }
 
+[tasks.clean-sdk-rust]
+description = "Cleans the Rust SDK"
+command = "cargo"
+args = ["clean", "--manifest-path", "sdks/rust/Cargo.toml"]
+
 [tasks.build-sdk-scala]
 description = "Publishes the Scala SDK to local Ivy/Maven cache as 0.0.0-SNAPSHOT"
 dependencies = ["wit-sdks"]
@@ -418,11 +424,21 @@ fi
 [tasks.clean-sdk-scala]
 description = "Cleans the Scala SDK"
 cwd = "./sdks/scala"
+script_runner = "@duckscript"
 script = '''
-#!/usr/bin/env bash
-set -euo pipefail
-sbt clean
-rm -f target/.local-publish-marker
+exec --fail-on-error sbt clean
+marker_exists = is_path_exists target/.local-publish-marker
+if ${marker_exists}
+    rm target/.local-publish-marker
+end
+'''
+
+[tasks.clean-sdk-moonbit]
+description = "Cleans the MoonBit SDK workspace"
+cwd = "./sdks/moonbit"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error moon clean
 '''
 
 ## ** CHECK **
@@ -1674,10 +1690,24 @@ description = "Runs and publishes the nightly Amp orb benchmark suite"
 command = "./integration-tests/benchmark_suites/run_orb_nightly.sh"
 
 [tasks.clean-test-components]
-description = "Cleans all test WASM components"
+description = "Cleans all test WASM components while preserving copied root-level WASM files"
+script_runner = "@duckscript"
 script = '''
 cd test-components
-./build-components.sh clean
+exec --fail-on-error ./build-components.sh clean
 '''
 
-## Cleanup
+[tasks.clean]
+description = "Cleans test components, the main workspace, and every SDK"
+script_runner = "@duckscript"
+script = '''
+test_component_clean = exec cargo make clean-test-components
+echo ${test_component_clean.stdout}
+echo ${test_component_clean.stderr}
+# Cargo validates its target marker before deletion. The configured target directory may intentionally be outside the repository.
+exec --fail-on-error cargo clean
+exec --fail-on-error cargo make clean-sdk-rust
+exec --fail-on-error cargo make clean-sdk-ts
+exec --fail-on-error cargo make clean-sdk-scala
+exec --fail-on-error cargo make clean-sdk-moonbit
+'''
