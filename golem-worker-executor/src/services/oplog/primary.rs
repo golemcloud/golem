@@ -1034,6 +1034,8 @@ impl PrimaryOplog {
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
+        let account_id_label = account_id.to_string();
+        let environment_id_label = owned_agent_id.environment_id().to_string();
         let mut state = PrimaryOplogState {
             indexed_storage,
             blob_storage,
@@ -1048,6 +1050,8 @@ impl PrimaryOplog {
             owned_agent_id,
             agent_mode,
             account_id,
+            account_id_label,
+            environment_id_label,
             last_added_non_hint_entry: None,
             pending_uploads: Vec::new(),
             durable_stream_sessions: super::raw_session::RawSessionCache::default(),
@@ -1513,6 +1517,8 @@ struct PrimaryOplogState {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     account_id: AccountId,
+    account_id_label: String,
+    environment_id_label: String,
     last_added_non_hint_entry: Option<OplogIndex>,
     /// In-flight external payload uploads started by [`PrimaryOplogState::reserve_raw_payload`] but
     /// not yet known to be durable. The commit barrier in `append` waits on these before persisting
@@ -1649,18 +1655,16 @@ impl PrimaryOplogState {
         )
         .await;
 
-        let account_id = self.account_id.to_string();
-        let environment_id = self.owned_agent_id.environment_id().to_string();
         record_storage_bytes_written(
             STORAGE_TYPE_OPLOG,
-            &account_id,
-            &environment_id,
+            &self.account_id_label,
+            &self.environment_id_label,
             bytes_written,
         );
         record_storage_objects_written(
             STORAGE_TYPE_OPLOG,
-            &account_id,
-            &environment_id,
+            &self.account_id_label,
+            &self.environment_id_label,
             entry_count,
         );
 

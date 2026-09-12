@@ -1688,7 +1688,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <p>Decided at <code>Worker</code> construction (<code>worker/mod.rs</code>, <code>component_version_for_replay</code>):</p>
 <ol class="steps">
   <li>The last <em>manual-update</em> snapshot (a <code>SnapshotBased</code> update) is the baseline; if none, <code>OplogIndex::INITIAL</code>.</li>
-  <li>A revision-matching <em>automatic</em> snapshot overrides it and skips <code>INITIAL+1 ..= snapshot_idx</code> — but only while no update is pending and the resident <code>snapshot_recovery_disabled</code> flag is unset.</li>
+  <li>A revision-matching <em>automatic</em> snapshot overrides it and skips <code>INITIAL+1 ..= snapshot_idx</code> — but only while no update is pending and its index is newer than the fingerprint-scoped persistent rejection watermark and this startup attempt's temporary unavailable watermark.</li>
   <li>The component revision to instantiate comes from the same decision. A cursor cannot change it; only the outer loop can.</li>
 </ol>
 
@@ -1752,7 +1752,10 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <figcaption>Automatic update: the new revision must prove it can replay the old history before it becomes the durable truth for this agent.</figcaption>
 </figure>
 
-<p>With no update pending, <code>prepare_instance</code> calls <code>try_load_snapshot</code>; if the load <em>fails</em>, the resident <code>Worker</code>'s <code>snapshot_recovery_disabled</code> flag is set and the worker retries immediately with a full replay. The old oplog is untouched by snapshotting mode, so this fallback is always available.</p>
+<h3>Rejecting a bad automatic baseline</h3>
+<p>With no update pending, an automatic snapshot load failure — or a divergence while replaying its recorded suffix — rejects that snapshot through its index and returns <code>RetryDecision::Immediate</code>. The outer loop recreates the <em>entire</em> Store, component metadata, revision and plugin context from the authoritative manual-update baseline. This is not a cursor rewind, and it never replays history before a completed snapshot-based migration.</p>
+<p>After that authoritative fallback succeeds, and before readiness is published, <code>prepare_instance</code> persists the monotonic <code>rejected_periodic_snapshot_through</code> watermark under the worker's <code>AgentFingerprint</code>. A recreated worker with the same agent id therefore has a separate rejection record. A snapshot payload-download failure is treated more cautiously: <code>unavailable_periodic_snapshot_through</code> skips it only for the current startup attempt and is cleared after successful preparation, so a transient storage outage does not permanently reject the snapshot.</p>
+<p>A manual-update snapshot is the authoritative migration baseline and cannot be skipped. If it cannot be loaded, resume ends with a terminal error that retains the underlying cause.</p>
 
 <h3>When may a snapshot be taken?</h3>
 <p>Automatic snapshots are taken only at a <em>safe boundary</em>. <code>SnapshotBoundaryConditions::blocker</code> reports the first blocking condition in precedence order; a request at an unsafe boundary is rejected with that reason and never partially taken.</p>
