@@ -970,6 +970,8 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// reflink into the project of this filesystem, so the quota is charged here, and EDQUOT and
     /// ENOSPC appear here. On unmanaged storage each file is copied. Nothing is written outside
     /// the sandbox root. The first entry that fails stops the call. The entries before it stay.
+    /// On managed XFS, what the call wrote is on stable storage when the call returns, also when
+    /// an entry fails.
     fn seed(
         &self,
         entries: Box<[SeedEntry]>,
@@ -1698,11 +1700,10 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         async move {
             let error_path = Arc::clone(&materialization_root);
             execute_native(storage_profile, NativeOperation::TreeCopy, move || {
-                entries.iter().try_for_each(|entry| {
+                let seeded = entries.iter().try_for_each(|entry| {
                     let context = tree_copy::SeedContext {
                         mode,
                         quota_authority,
-                        materialization_root: &materialization_root,
                         access: entry.access,
                         existing: entry.existing,
                     };
@@ -1722,7 +1723,16 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                                 error,
                             )
                         })
-                })
+                });
+                let synced =
+                    tree_copy::sync_after_reflink(mode, &materialization_root).map_err(|error| {
+                        FilesystemStorageError::io(
+                            "sync seeded sandbox filesystem",
+                            &materialization_root,
+                            error,
+                        )
+                    });
+                seeded.and(synced)
             })
             .await
             .map_err(|error| task_error("seed sandbox filesystem", &error_path, error))?

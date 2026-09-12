@@ -296,10 +296,9 @@ fn set_copied_directory_attributes(destination: &Path, entry: &TreeEntry) -> std
 
 /// What a seed entry needs to make objects in one sandbox.
 #[derive(Clone, Copy)]
-pub(super) struct SeedContext<'a> {
+pub(super) struct SeedContext {
     pub(super) mode: FileCopyMode,
     pub(super) quota_authority: QuotaAuthority,
-    pub(super) materialization_root: &'a Path,
     pub(super) access: SeedAccess,
     pub(super) existing: OnExisting,
 }
@@ -311,7 +310,7 @@ pub(super) struct SeedContext<'a> {
 /// gives an `InvalidData` error. Missing parent directories of `destination` are made through
 /// the capability. A parent that is not a directory gives a `PermissionDenied` error.
 pub(super) fn seed_entry(
-    context: SeedContext<'_>,
+    context: SeedContext,
     base: &cap_std::fs::Dir,
     source: &Path,
     destination: &Path,
@@ -351,7 +350,7 @@ pub(super) fn seed_entry(
 /// gets the permissions of the source with the write permission that the access of `context`
 /// sets, and the modification time of the source.
 fn seed_file(
-    context: SeedContext<'_>,
+    context: SeedContext,
     source_directory: &cap_std::fs::Dir,
     source: &TreeEntry,
     directory: &cap_std::fs::Dir,
@@ -388,7 +387,7 @@ fn seed_file(
             result => result?,
         },
     }
-    sync_after_reflink(context)
+    Ok(())
 }
 
 /// Makes a symlink to `link_target` at `destination` under `directory`, with the modification
@@ -444,7 +443,7 @@ fn make_symlink(
 /// makes gets the permissions and the modification time of `source` after all that is under it
 /// is made.
 fn seed_directory(
-    context: SeedContext<'_>,
+    context: SeedContext,
     source: &cap_std::fs::Dir,
     source_entry: &TreeEntry,
     base: &cap_std::fs::Dir,
@@ -471,7 +470,7 @@ fn seed_directory(
 /// A directory that the walk makes gets the permissions and the modification time of its source
 /// after all that is under it is made.
 fn seed_directory_contents(
-    context: SeedContext<'_>,
+    context: SeedContext,
     source: &cap_std::fs::Dir,
     target: &cap_std::fs::Dir,
 ) -> std::io::Result<()> {
@@ -500,7 +499,7 @@ impl<'a> SeedWalk<'a> {
     /// Seeds one listed entry under `target` and gives the walk back.
     fn seed(
         mut self,
-        context: SeedContext<'_>,
+        context: SeedContext,
         source: &cap_std::fs::Dir,
         target: &cap_std::fs::Dir,
         entry: &'a TreeEntry,
@@ -644,14 +643,21 @@ fn reflink_into_project(
     }
 }
 
-/// Writes the pending changes of a managed volume to stable storage after a reflink.
-fn sync_after_reflink(context: SeedContext<'_>) -> std::io::Result<()> {
-    match context.mode {
+/// Writes the pending changes of the managed volume that holds `materialization_root` to stable
+/// storage.
+///
+/// A seed call does this once, after its last entry, also when an entry fails. Buffered copies do
+/// not sync the volume.
+pub(super) fn sync_after_reflink(
+    mode: FileCopyMode,
+    materialization_root: &Path,
+) -> std::io::Result<()> {
+    match mode {
         FileCopyMode::Buffered => Ok(()),
         FileCopyMode::Reflink => {
             #[cfg(target_os = "linux")]
             {
-                xfs::sync_volume(context.materialization_root)
+                xfs::sync_volume(materialization_root)
             }
             #[cfg(not(target_os = "linux"))]
             unreachable!("managed XFS is unavailable on this platform")
@@ -793,11 +799,10 @@ mod tests {
         cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).unwrap()
     }
 
-    fn buffered_seed(root: &Path, existing: OnExisting) -> SeedContext<'_> {
+    fn buffered_seed(existing: OnExisting) -> SeedContext {
         SeedContext {
             mode: FileCopyMode::Buffered,
             quota_authority: QuotaAuthority::Unsupported,
-            materialization_root: root,
             access: SeedAccess::FromSource,
             existing,
         }
@@ -1039,7 +1044,7 @@ mod tests {
         let destination = tempfile::tempdir().unwrap();
 
         seed_entry(
-            buffered_seed(destination.path(), OnExisting::Fail),
+            buffered_seed(OnExisting::Fail),
             &open(destination.path()),
             source.path(),
             Path::new(""),
@@ -1089,7 +1094,7 @@ mod tests {
         std::fs::write(destination.path().join("data/file"), b"old").unwrap();
 
         let error = seed_entry(
-            buffered_seed(destination.path(), OnExisting::Fail),
+            buffered_seed(OnExisting::Fail),
             &open(destination.path()),
             source.path(),
             Path::new(""),
