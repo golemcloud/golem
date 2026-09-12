@@ -455,6 +455,9 @@ async fn install_initial_files<Adapter: SandboxFilesystemAdapter>(
 }
 
 /// Restores into a new scratch directory, puts the baseline in place, and discards the directory.
+///
+/// A failure to discard the directory is logged and does not change the result. The next startup
+/// cleans the scratch directory.
 async fn restore_baseline<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
@@ -468,8 +471,10 @@ async fn restore_baseline<Adapter: SandboxFilesystemAdapter, Restore: RestoreTre
     .await
     .map_err(Error::Sandbox)?;
     let restored = restore_from(generation, sandbox, prepared, restore, directory.path()).await;
-    let discarded = directory.discard().await.map_err(Error::Sandbox);
-    restored.and_then(|state| discarded.map(|()| state))
+    if let Err(cleanup) = directory.discard().await {
+        tracing::warn!(error = %cleanup, "Failed to discard a filesystem restore directory");
+    }
+    restored
 }
 
 async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(

@@ -510,6 +510,52 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
 }
 
 #[test]
+async fn a_failed_discard_of_the_restore_directory_keeps_the_baseline_successful() {
+    let store = InitialFileStore::new().await;
+    let capture_record = record(&[], serde_json::json!([]), serde_json::json!([]));
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Ok(()));
+    let restored_into = Arc::new(Mutex::new(None));
+    let restore = FixtureRestore({
+        let restored_into = Arc::clone(&restored_into);
+        move |into: &Path| {
+            write_capture_directory(into, &[], &capture_record);
+            let locked = into.join("locked");
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::write(locked.join("inner"), b"inner").unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+            *restored_into.lock().unwrap() = Some(into.to_path_buf());
+            Ok(())
+        }
+    });
+    let prepared = store.prepare(&[]).await;
+
+    let materialized = materialize_baseline(filesystem, prepared, Some(restore)).await;
+
+    let into = restored_into.lock().unwrap().clone().unwrap();
+    let discard_failed = into.join("locked").exists();
+    if discard_failed {
+        std::fs::set_permissions(into.join("locked"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        std::fs::remove_dir_all(&into).unwrap();
+    }
+    assert!(
+        discard_failed,
+        "the locked directory must make the discard fail"
+    );
+    let filesystem = match materialized {
+        Ok(filesystem) => filesystem,
+        Err(failure) => panic!(
+            "a failed discard must not fail the baseline: {}",
+            failure.source
+        ),
+    };
+    control.push_delete_and_verify(Ok(()));
+    delete(abort_reconstruction(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn a_failed_restore_returns_the_sealed_filesystem_with_its_retryable_flag() {
     futures::stream::iter([true, false])
         .for_each(|retryable| async move {

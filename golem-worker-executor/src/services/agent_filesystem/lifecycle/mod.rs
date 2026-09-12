@@ -632,8 +632,9 @@ pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
 /// rule from the current declarations to the declarations of the new revision and the provisioned
 /// declarations. It replaces or removes only the files that the lifecycle installed for the
 /// current declarations. A conflict fails the call with an error that names the path, and changes
-/// nothing. A failure after the first change invalidates the generation. Admission errors are
-/// immediate, and loading or sandbox failures are produced by the returned call.
+/// nothing. A failure after the plan passes and the sources load invalidates the generation.
+/// Admission errors are immediate, and loading or sandbox failures are produced by the returned
+/// call.
 pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,
     file_loader: Arc<FileLoader>,

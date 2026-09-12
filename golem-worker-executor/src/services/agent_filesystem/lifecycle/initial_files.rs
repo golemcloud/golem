@@ -203,8 +203,8 @@ fn rule<'a>(
 /// `installed` holds the files that the lifecycle installed for `old`. `states` gives what is at
 /// the paths, as [`plan`] needs it. A path without a state holds nothing. The install loads every
 /// source before its first change, so a conflict or a failed load changes nothing. A failure after
-/// the first change invalidates the generation. The result gives the files that the lifecycle
-/// installed for `new`.
+/// the plan passes and the sources load invalidates the generation. The result gives the files that
+/// the lifecycle installed for `new`.
 pub(super) async fn install<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
