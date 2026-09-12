@@ -197,7 +197,7 @@ object OplogApi {
   sealed trait UpdateDescription extends Product with Serializable
   object UpdateDescription {
     case object AutoUpdate                            extends UpdateDescription
-    final case class SnapshotBased(data: Array[Byte]) extends UpdateDescription
+    final case class SnapshotBased(data: Array[Byte], filesystemSnapshot: Option[String]) extends UpdateDescription
   }
 
   final case class PendingUpdateParameters(
@@ -449,7 +449,15 @@ object OplogApi {
     final case class RolledBackRemoteTransaction(params: RemoteTransactionParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
-    final case class Snapshot(ts: ContextApi.DateTime, data: Array[Byte], mimeType: String) extends OplogEntry {
+    final case class Snapshot(
+      ts: ContextApi.DateTime,
+      data: Array[Byte],
+      mimeType: String,
+      filesystemSnapshot: Option[String]
+    ) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
+    final case class SnapshotConfirmed(ts: ContextApi.DateTime, filesystemSnapshot: String) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
     final case class OplogProcessorCheckpoint(params: OplogProcessorCheckpointParameters) extends OplogEntry {
@@ -560,8 +568,12 @@ object OplogApi {
           Snapshot(
             ts = parseDateTime(sp.timestamp),
             data = new scala.scalajs.js.typedarray.Int8Array(sp.data.data.buffer).toArray,
-            mimeType = sp.data.mimeType
+            mimeType = sp.data.mimeType,
+            filesystemSnapshot = sp.filesystemSnapshot.toOption
           )
+        case "snapshot-confirmed" =>
+          val sc = v.asInstanceOf[JsSnapshotConfirmedParameters]
+          SnapshotConfirmed(ts = parseDateTime(sc.timestamp), filesystemSnapshot = sc.filesystemSnapshot)
         case "oplog-processor-checkpoint" =>
           val cp = v.asInstanceOf[JsOplogProcessorCheckpointParameters]
           OplogProcessorCheckpoint(
@@ -882,7 +894,10 @@ object OplogApi {
       case "auto-update"    => UpdateDescription.AutoUpdate
       case "snapshot-based" =>
         val snapshot = desc.asInstanceOf[JsUpdateDescriptionSnapshotBased].value
-        UpdateDescription.SnapshotBased(new scala.scalajs.js.typedarray.Int8Array(snapshot.payload.buffer).toArray)
+        UpdateDescription.SnapshotBased(
+          new scala.scalajs.js.typedarray.Int8Array(snapshot.payload.buffer).toArray,
+          snapshot.filesystemSnapshot.toOption
+        )
       case other =>
         throw new IllegalArgumentException(s"Unknown UpdateDescription tag: $other")
     }

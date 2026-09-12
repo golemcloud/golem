@@ -51,6 +51,7 @@ import type {
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
+  SnapshotConfirmedParameters,
   Timestamp,
   PluginInstallationDescription,
   LocalAgentConfigEntry,
@@ -71,7 +72,7 @@ export type {
   SchemaValueTree,
   ComponentRevision,
   OplogIndex,
-  Snapshot,
+  SnapshotBasedUpdateParameters,
   Attribute,
   AttributeValue,
   SpanId,
@@ -125,6 +126,7 @@ export type {
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
+  SnapshotConfirmedParameters,
   Timestamp,
 } from 'golem:api/oplog@1.5.0';
 
@@ -223,6 +225,7 @@ export type PublicOplogEntry =
   | { tag: 'committed-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'rolled-back-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'snapshot'; val: SnapshotParameters }
+  | { tag: 'snapshot-confirmed'; val: SnapshotConfirmedParameters }
   | { tag: 'oplog-processor-checkpoint'; val: OplogProcessorCheckpointParameters };
 
 // Wrapping helpers

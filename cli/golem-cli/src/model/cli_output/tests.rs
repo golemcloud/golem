@@ -2007,6 +2007,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: vec![7, 8, 9],
                 mime_type: "application/octet-stream".to_string(),
+                filesystem_snapshot: Some("u-8e1a7f2c-4d3b-4e5f-9a6b-7c8d9e0f1a2b".to_string()),
             }),
         }),
         PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
@@ -2111,14 +2112,21 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: raw_snapshot(),
+            filesystem_snapshot: Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string()),
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: json_snapshot(),
+            filesystem_snapshot: None,
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: multipart_snapshot(),
+            filesystem_snapshot: None,
+        }),
+        PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
+            timestamp: timestamp(),
+            filesystem_snapshot: "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string(),
         }),
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: timestamp(),

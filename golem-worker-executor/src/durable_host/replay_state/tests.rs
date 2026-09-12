@@ -14,10 +14,11 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, HostRequest, HostRequestGolemToolInvocationRejected,
-    HostRequestNoInput, HostRequestPollCount, HostResponseMonotonicClockTimestamp,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostStreamKind, OplogPayload, PayloadId, RawOplogPayload,
+    AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest,
+    HostRequestGolemToolInvocationRejected, HostRequestNoInput, HostRequestPollCount,
+    HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogPayload, PayloadId,
+    RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::ToolName;
@@ -2140,6 +2141,35 @@ async fn error_hint_between_start_and_end_resolves() {
         .unwrap();
 
     match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn snapshot_confirmed_hint_between_start_and_end_resolves() {
+    // [NoOp, Start, SnapshotConfirmed, End] — SnapshotConfirmed is a hint, skipped transparently.
+    // A non-hint entry in that position would park the resolution, so the wait is bounded.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        OplogEntry::snapshot_confirmed(FilesystemSnapshotName::periodic()).rounded(),
+        end_for(2, 42),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    let resolution = tokio::time::timeout(Duration::from_secs(5), rs.await_resolution(handle))
+        .await
+        .expect("resolution must not block on a SnapshotConfirmed hint entry")
+        .unwrap();
+    match resolution {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }

@@ -78,6 +78,7 @@ message RawOplogEntry {
     RawDurableStreamRecordParameters stream_end = 61;
     RawDurableStreamRecordParameters stream_cancel = 62;
     RawDurableStreamRecordParameters stream_session = 63;
+    RawSnapshotConfirmedParameters snapshot_confirmed = 64;
   }
 }
 
@@ -131,6 +132,7 @@ message RawSnapshotBasedUpdate {
   uint64 target_revision = 1;
   RawOplogPayload payload = 2;
   string mime_type = 3;
+  optional string filesystem_snapshot = 4;
 }
 
 // Oplog region (start..end index range).
@@ -328,6 +330,11 @@ message RawSnapshotParameters {
   string mime_type = 2;
   repeated bytes active_cards = 3;
   uint64 wallet_generation = 4;
+  optional string filesystem_snapshot = 5;
+}
+
+message RawSnapshotConfirmedParameters {
+  string filesystem_snapshot = 1;
 }
 
 message RawOplogProcessorCheckpointParameters {

@@ -4746,6 +4746,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
       discriminator:
         propertyName: type
         mapping:
@@ -4806,6 +4807,7 @@ components:
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+          SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -5382,6 +5384,18 @@ components:
             - SetSpanAttribute
             example: SetSpanAttribute
       - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+    PublicOplogEntry_r#SnapshotConfirmedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SnapshotConfirmed
+            example: SnapshotConfirmed
+      - $ref: '#/components/schemas/r#SnapshotConfirmedParams'
     PublicOplogEntry_r#SnapshotParams:
       allOf:
       - type: object
@@ -7360,6 +7374,8 @@ components:
             format: uint8
         mimeType:
           type: string
+        filesystemSnapshot:
+          type: string
     StoredCard:
       type: object
       oneOf:
@@ -8481,6 +8497,18 @@ components:
           type: string
         value:
           $ref: '#/components/schemas/PublicAttributeValue'
+    r#SnapshotConfirmedParams:
+      type: object
+      title: r#SnapshotConfirmedParams
+      required:
+      - timestamp
+      - filesystemSnapshot
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        filesystemSnapshot:
+          type: string
     r#SnapshotParams:
       type: object
       title: r#SnapshotParams
@@ -8493,6 +8521,8 @@ components:
           format: date-time
         data:
           $ref: '#/components/schemas/PublicSnapshotData'
+        filesystemSnapshot:
+          type: string
     r#StartParams:
       type: object
       title: r#StartParams

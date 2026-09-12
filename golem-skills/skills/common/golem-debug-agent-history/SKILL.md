@@ -56,7 +56,8 @@ Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled
 | `START SPAN` / `FINISH SPAN` / `SET SPAN ATTRIBUTE` | Tracing span operations |
 | `CHANGE PERSISTENCE LEVEL` | Persistence level change |
 | `BEGIN REMOTE TRANSACTION` / `COMMITTED REMOTE TRANSACTION` / `ROLLED BACK REMOTE TRANSACTION` | Remote transaction lifecycle |
-| `SNAPSHOT` | Snapshot data — shows mime type and data (JSON or binary size) |
+| `SNAPSHOT` | Snapshot data — shows mime type and data (JSON or binary size), and the filesystem snapshot name when the record has one |
+| `SNAPSHOT CONFIRMED` | The named filesystem snapshot is in the store — shows the filesystem snapshot name |
 | `OPLOG PROCESSOR CHECKPOINT` | Plugin oplog processor checkpoint — shows plugin, target agent, confirmed/sending indices |
 | `SET RETRY POLICY` / `REMOVE RETRY POLICY` | Retry policy changes |
 | `RESTART` | Agent restart |

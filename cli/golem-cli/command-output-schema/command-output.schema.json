@@ -4610,6 +4610,7 @@
         { "$ref": "#/definitions/PublicOplogEntryCommittedRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryRolledBackRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntrySnapshot" },
+        { "$ref": "#/definitions/PublicOplogEntrySnapshotConfirmed" },
         { "$ref": "#/definitions/PublicOplogEntryOplogProcessorCheckpoint" },
         { "$ref": "#/definitions/PublicOplogEntrySetRetryPolicy" },
         { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" },
@@ -4907,7 +4908,13 @@
     "PublicOplogEntrySnapshot": {
       "type": "object",
       "required": ["type", "timestamp", "data"],
-      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" } },
+      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySnapshotConfirmed": {
+      "type": "object",
+      "required": ["type", "timestamp", "filesystemSnapshot"],
+      "properties": { "type": { "const": "SnapshotConfirmed" }, "timestamp": { "type": "string" }, "filesystemSnapshot": { "type": "string" } },
       "additionalProperties": false
     },
     "PublicOplogEntryOplogProcessorCheckpoint": {
@@ -5114,7 +5121,7 @@
     "PublicUpdateDescription": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "Automatic" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" }, "filesystemSnapshot": { "type": ["string", "null"] } }, "additionalProperties": false }
       ]
     },
     "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },

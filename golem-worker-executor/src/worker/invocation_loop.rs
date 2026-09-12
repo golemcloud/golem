@@ -2841,6 +2841,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                             snapshot.mime_type,
                                             active_cards,
                                             wallet_generation,
+                                            None,
                                         ))
                                         .await;
                                     debug!("Periodic snapshot saved successfully");

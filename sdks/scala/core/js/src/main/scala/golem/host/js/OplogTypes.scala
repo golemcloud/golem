@@ -365,14 +365,33 @@ sealed trait JsUpdateDescription extends js.Object {
 
 @js.native
 sealed trait JsUpdateDescriptionSnapshotBased extends JsUpdateDescription {
-  @JSName("val") def value: JsSnapshot = js.native
+  @JSName("val") def value: JsSnapshotBasedUpdateParameters = js.native
+}
+
+@js.native
+sealed trait JsSnapshotBasedUpdateParameters extends js.Object {
+  def payload: Uint8Array                    = js.native
+  def mimeType: String                       = js.native
+  def filesystemSnapshot: js.UndefOr[String] = js.native
+}
+
+object JsSnapshotBasedUpdateParameters {
+  def apply(
+    payload: Uint8Array,
+    mimeType: String,
+    filesystemSnapshot: js.UndefOr[String] = js.undefined
+  ): JsSnapshotBasedUpdateParameters = {
+    val obj = js.Dynamic.literal("payload" -> payload, "mimeType" -> mimeType)
+    filesystemSnapshot.foreach(name => obj.updateDynamic("filesystemSnapshot")(name))
+    obj.asInstanceOf[JsSnapshotBasedUpdateParameters]
+  }
 }
 
 object JsUpdateDescription {
   def autoUpdate: JsUpdateDescription =
     JsShape.tagOnly[JsUpdateDescription]("auto-update")
 
-  def snapshotBased(snapshot: JsSnapshot): JsUpdateDescription =
+  def snapshotBased(snapshot: JsSnapshotBasedUpdateParameters): JsUpdateDescription =
     JsShape.tagged[JsUpdateDescription]("snapshot-based", snapshot)
 }
 
@@ -531,8 +550,17 @@ sealed trait JsSnapshotData extends js.Object {
 
 @js.native
 sealed trait JsSnapshotParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def data: JsSnapshotData  = js.native
+  def timestamp: JsDatetime                  = js.native
+  def data: JsSnapshotData                   = js.native
+  def filesystemSnapshot: js.UndefOr[String] = js.native
+}
+
+// --- SnapshotConfirmedParameters ---
+
+@js.native
+sealed trait JsSnapshotConfirmedParameters extends js.Object {
+  def timestamp: JsDatetime      = js.native
+  def filesystemSnapshot: String = js.native
 }
 
 // --- OplogProcessorCheckpointParameters ---
