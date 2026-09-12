@@ -857,6 +857,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         {
                             return Err(error.clone());
                         }
+                        // An unloaded worker has no Store left to record a queued interrupt,
+                        // and retirement prevents a replacement generation from doing so.
+                        let pending = worker
+                            .interrupt_signal
+                            .lock()
+                            .await
+                            .claim_pending_terminal();
+                        if let Some(pending) = pending {
+                            let status = worker.get_attached_last_known_status().await;
+                            if matches!(
+                                status.status,
+                                AgentStatus::Running
+                                    | AgentStatus::Retrying
+                                    | AgentStatus::Suspended
+                            ) {
+                                let entry = match pending.kind {
+                                    InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
+                                    InterruptKind::Suspend(_) => OplogEntry::suspend(),
+                                    InterruptKind::Restart | InterruptKind::Jump => {
+                                        unreachable!("only terminal interrupts can be claimed")
+                                    }
+                                };
+                                worker.add_and_commit_oplog(entry).await;
+                                if matches!(pending.kind, InterruptKind::Interrupt(_))
+                                    && let Some(key) = &status.current_idempotency_key
+                                {
+                                    worker
+                                        .store_invocation_failure(
+                                            key,
+                                            &TrapType::Interrupt(pending.kind),
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
                         worker.durable_stream_attachment_reconciler.stop().await;
                         retirement.await?;
                         worker.state_actor.drain_lifecycle().await?;
@@ -2903,7 +2938,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         });
     }
 
-    // should only be called from invocation loop
+    // Called by the invocation loop, or by the retiring owner after the loop has stopped.
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
         let status = self.last_known_status.load_full();
         let keys_to_fail =

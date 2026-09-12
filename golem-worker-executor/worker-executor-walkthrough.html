@@ -1791,6 +1791,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <h2 id="s-recovery"><span class="num">18</span>Interrupt, suspend, restart, evict, recover</h2>
 <p>Everything in this section is the same operation seen from different angles: <strong>discard the Store, go round the outer loop</strong>. The hints appended beforehand annotate the history for status folding and observers; none of them changes how reconstruction works.</p>
 
+<p>An explicit interrupt retires the cached owner and fences replacement startup. If the worker already unloaded for OOM backoff or permit acquisition, the retiring owner commits the still-unclaimed <code>Interrupted</code> marker and notifies invocation waiters before removal. It does not need a new Store to do this. An interrupt already handled by the invocation loop is not recorded twice, and completed or failed invocations retain their outcome.</p>
+
 <div class="table-wrap">
 <table>
   <thead><tr><th scope="col">Trigger</th><th scope="col">Mechanism</th><th scope="col">Oplog</th><th scope="col">Comes back when</th></tr></thead>
