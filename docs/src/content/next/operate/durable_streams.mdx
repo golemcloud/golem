@@ -1,3 +1,5 @@
+import { Callout } from "nextra/components"
+
 # Operating Durable Stream Sessions
 
 Streaming agent invocations use the same durability model as other durable agent work. Stream registrations, items, terminals, attachment epochs, consumer journals, and deletion barriers are committed to agent oplogs. Losing a CLI connection, worker process, executor, or service connection does not by itself cancel the invocation.
