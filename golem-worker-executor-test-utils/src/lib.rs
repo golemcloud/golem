@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// `store_component_with` in `dsl_impl.rs` is an instrumented async fn whose
+// layout needs more depth than rustc's default of 128. On rustc 1.98 the
+// observed minimum is 129; 256 matches `golem-worker-executor/tests/lib.rs`.
+#![recursion_limit = "256"]
+
 pub mod agent_deployments_service;
 pub mod component_service;
 pub mod component_writer;
@@ -60,7 +65,8 @@ use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
-    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
+    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment, ShardId,
+    TransactionId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -145,7 +151,7 @@ use golem_worker_executor::services::resource_limits::{
 };
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand, RpcError as ServiceRpcError};
 use golem_worker_executor::services::scheduler::SchedulerService;
-use golem_worker_executor::services::shard::ShardService;
+use golem_worker_executor::services::shard::{ShardService, ShardServiceDefault};
 use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
@@ -168,7 +174,8 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
@@ -625,6 +632,45 @@ impl TestWorkerExecutor {
             .fail_next_oplog_download(agent_id.clone());
     }
 
+    pub fn fail_snapshot_download_once(&self, agent_id: &AgentId, snapshot_index: OplogIndex) {
+        self.additional_test_deps
+            .snapshot_download_failures
+            .lock()
+            .unwrap()
+            .insert((agent_id.clone(), snapshot_index), PayloadId::new());
+    }
+
+    /// Replaces only the selected snapshot's bytes on read, leaving the persisted oplog intact.
+    pub async fn return_empty_snapshot_payload(
+        &self,
+        agent_id: &AgentId,
+        snapshot_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let entry = golem_worker_executor::services::HasOplog::oplog(worker.as_ref())
+            .read(snapshot_index)
+            .await;
+        match entry {
+            OplogEntry::Snapshot { .. } => {}
+            OplogEntry::PendingUpdate {
+                description: golem_common::model::oplog::UpdateDescription::SnapshotBased { .. },
+                ..
+            } => {}
+            _ => return Err(anyhow!("{snapshot_index} is not a snapshot")),
+        }
+        self.additional_test_deps
+            .empty_snapshot_payloads
+            .lock()
+            .unwrap()
+            .insert((agent_id.clone(), snapshot_index));
+        Ok(())
+    }
+
     pub fn return_no_op_after_oplog_reads(
         &self,
         agent_id: &AgentId,
@@ -636,6 +682,39 @@ impl TestWorkerExecutor {
             oplog_index,
             reads_to_skip,
         );
+    }
+
+    pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        golem_worker_executor::services::HasOplog::oplog(worker.as_ref())
+            .commit(CommitLevel::Always)
+            .await;
+        Ok(())
+    }
+
+    /// The bus every caller parked in `Worker::wait_for_invocation_result`
+    /// subscribes to, so a test can flood it. There is one per executor, built
+    /// in `create_worker_executor_impl` and shared by `Arc`, so any loaded
+    /// agent's handle is the executor's; the agent only has to be resident at
+    /// the moment this is called, and the handle outlives it.
+    pub async fn event_bus(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Arc<golem_worker_executor::services::events::Events>> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        Ok(golem_worker_executor::services::HasEvents::events(
+            worker.as_ref(),
+        ))
     }
 
     pub async fn commit_oplog_entry_bypassing_worker_status(
@@ -683,6 +762,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         Ok(worker
             .add_to_oplog(OplogEntry::card_event_queued(
+                None,
                 golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
             ))
             .await)
@@ -701,6 +781,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         worker
             .add_and_commit_oplog(OplogEntry::card_event_queued(
+                None,
                 golem_common::base_model::oplog::QueuedCardEvent::install(card),
             ))
             .await;
@@ -784,6 +865,24 @@ impl TestWorkerExecutor {
             Some(active_agents) => active_agents.tracked_card_ids().await,
             None => Vec::new(),
         }
+    }
+
+    /// Drops an unloaded worker's shell from `ActiveAgents`, as the idle-expiry sweep would once
+    /// its TTL passed, so the next activation has to rebuild the worker from storage.
+    pub async fn retire_unloaded_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<()> {
+        let active_agents = self
+            .additional_test_deps
+            .active_agents
+            .get()
+            .ok_or_else(|| anyhow!("ActiveAgents has not been created"))?;
+        if self.worker_is_loaded(owned_agent_id).await {
+            return Err(anyhow!("worker {owned_agent_id} is still loaded"));
+        }
+        active_agents.remove(owned_agent_id).await;
+        Ok(())
     }
 
     pub async fn stop_worker_if_idle(&self, owned_agent_id: &OwnedAgentId) -> anyhow::Result<bool> {
@@ -915,8 +1014,8 @@ impl TestWorkerExecutor {
             .gate_next_entity_body_start(agent_id.clone())
     }
 
-    /// Pauses the next accessor monotonic-clock `now` call before it starts durability.
-    pub async fn gate_next_monotonic_clock_now(
+    /// Commits and pauses the next live monotonic clock call after its real Start, before End.
+    pub async fn gate_next_monotonic_clock_start(
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
@@ -927,7 +1026,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
         Ok(worker
             .owner_execution()
-            .test_gate_next_monotonic_clock_now())
+            .test_gate_next_monotonic_clock_start())
     }
 
     /// Pauses the next exclusive wall-clock `now` call before it starts durability.
@@ -941,23 +1040,6 @@ impl TestWorkerExecutor {
             .await
             .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
         Ok(worker.owner_execution().test_gate_next_wall_clock_now())
-    }
-
-    /// Makes the current generation's next monotonic-clock `now` call return its live value
-    /// without creating a durable record, so crash-tail tests can commit only earlier work.
-    pub async fn skip_next_monotonic_clock_now_durability(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<()> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
-        worker
-            .owner_execution()
-            .test_skip_next_monotonic_clock_now_durability();
-        Ok(())
     }
 
     /// Makes the current generation's next wall-clock `now` call return its live value
@@ -1413,19 +1495,32 @@ pub async fn start_with_redis_oplog_config(
 type ConfigureFn = dyn Fn(&mut GolemConfig) + Send + Sync;
 type WrapKeyValueServiceFn =
     dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
+type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> Arc<dyn KeyValueStorage + Send + Sync>
+    + Send
+    + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
+type WrapShardServiceFn = dyn Fn(Arc<dyn ShardService>) -> Arc<dyn ShardService> + Send + Sync;
 
 #[derive(Clone, Default)]
 pub struct TestExecutorOverrides {
     pub configure: Option<Arc<ConfigureFn>>,
     pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
+    /// Wraps the key-value *storage* every executor service is built on, above the retry
+    /// decorator, so injected failures reach the services as an outage that outlived the retry
+    /// budget would.
+    pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+    /// Wraps the executor's `ShardService`, so a test can observe or fake which
+    /// agents this executor owns. Everything that gates on ownership reads it,
+    /// including the periodic re-check a caller parked in
+    /// `Worker::wait_for_invocation_result` runs.
+    pub wrap_shard_service: Option<Arc<WrapShardServiceFn>>,
     pub wrap_worker_proxy: Option<Arc<WrapWorkerProxyFn>>,
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
@@ -2410,6 +2505,20 @@ impl HostWasmRpc for TestWorkerCtx {
             .await
     }
 
+    async fn create(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx
+            .create(agent_type_name, constructor, phantom_id, config)
+            .await
+    }
+
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
@@ -2592,6 +2701,16 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         }
     }
 
+    fn create_shard_service(&self) -> Arc<dyn ShardService> {
+        let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
+
+        if let Some(wrap) = &self.overrides.wrap_shard_service {
+            wrap(shard_service)
+        } else {
+            shard_service
+        }
+    }
+
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -2674,6 +2793,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             create()
         } else {
             Arc::new(NoOpDirectInvocationAuthService)
+        }
+    }
+
+    fn wrap_key_value_storage(
+        &self,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        if let Some(wrap) = &self.overrides.wrap_key_value_storage {
+            wrap(key_value_storage)
+        } else {
+            key_value_storage
         }
     }
 
@@ -3769,9 +3899,43 @@ impl Oplog for TestOplog {
             .additional_test_deps
             .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::no_op();
+            return OplogEntry::no_op(None);
         }
-        self.oplog.read(oplog_index).await
+        let mut entry = self.oplog.read(oplog_index).await;
+        if let Some(payload_id) = self
+            .additional_test_deps
+            .snapshot_download_failures
+            .lock()
+            .unwrap()
+            .get(&(self.owned_agent_id.agent_id.clone(), oplog_index))
+            && let OplogEntry::Snapshot { data, .. } = &mut entry
+        {
+            *data = OplogPayload::External {
+                payload_id: payload_id.clone(),
+                md5_hash: Vec::new(),
+                cached: None,
+            };
+        }
+        if self
+            .additional_test_deps
+            .empty_snapshot_payloads
+            .lock()
+            .unwrap()
+            .contains(&(self.owned_agent_id.agent_id.clone(), oplog_index))
+        {
+            match &mut entry {
+                OplogEntry::Snapshot { data, .. } => {
+                    *data = OplogPayload::Inline(Box::new(Vec::new()))
+                }
+                OplogEntry::PendingUpdate {
+                    description:
+                        golem_common::model::oplog::UpdateDescription::SnapshotBased { payload, .. },
+                    ..
+                } => *payload = OplogPayload::Inline(Box::new(Vec::new())),
+                _ => panic!("{oplog_index} is not a snapshot"),
+            }
+        }
+        entry
     }
 
     async fn read_exact(
@@ -3805,6 +3969,20 @@ impl Oplog for TestOplog {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
+        {
+            let mut failures = self
+                .additional_test_deps
+                .snapshot_download_failures
+                .lock()
+                .unwrap();
+            let key = failures
+                .iter()
+                .find_map(|(key, id)| (id == &payload_id).then(|| key.clone()));
+            if let Some(key) = key {
+                failures.remove(&key);
+                return Err("injected snapshot payload download failure".to_string());
+            }
+        }
         if self
             .additional_test_deps
             .take_oplog_download_failure(&self.owned_agent_id.agent_id)
@@ -4093,6 +4271,8 @@ pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
+    snapshot_download_failures: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), PayloadId>>>,
+    empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
@@ -4137,6 +4317,8 @@ impl AdditionalTestDeps {
             oplog_failures,
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
@@ -4932,6 +5114,201 @@ fn response_is_body_data_chunk(payload: &OplogPayload<HostResponse>) -> bool {
     }
 }
 
+/// What a [`FakeOwnership`] has been told to report, and what it has reported.
+///
+/// Private: tests drive it through [`OwnershipControls`], which keeps the
+/// atomics and the channel ends out of the test body.
+struct FakeOwnershipState {
+    /// Fail every check the way an executor whose shard assignment has not
+    /// arrived yet fails, with the `Unknown` that `sharding_not_ready_error`
+    /// produces. That must never be read as "the agent moved".
+    assignment_missing: AtomicBool,
+    /// Make the next check announce itself, wait, and only then report that the
+    /// agent is not ours.
+    hold_next_check: AtomicBool,
+    assignment_missing_reports: AtomicUsize,
+    agent_moved_reports: AtomicUsize,
+    at_the_gate: SyncSender<()>,
+    release: Mutex<Receiver<()>>,
+}
+
+/// A [`ShardService`] that reports what a test has told it to report, and
+/// otherwise tells the truth.
+///
+/// Blocking inside `check_worker` is the point of the paused mode. The method is
+/// synchronous, so a wrapper that waits there holds a parked caller's ownership
+/// re-check open mid-flight, which is the only way a test can land an invocation
+/// result inside the window that re-check has to cope with.
+struct FakeOwnership {
+    inner: Arc<dyn ShardService>,
+    state: Arc<FakeOwnershipState>,
+}
+
+impl ShardService for FakeOwnership {
+    fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
+        if self.state.assignment_missing.load(Ordering::SeqCst) {
+            self.state
+                .assignment_missing_reports
+                .fetch_add(1, Ordering::SeqCst);
+            return Err(WorkerExecutorError::Unknown {
+                details: "Sharding is not ready".to_string(),
+            });
+        }
+
+        // Taken, not read, so concurrent checks from other calls fall straight
+        // through to the truth while this one is held at the gate.
+        if self.state.hold_next_check.swap(false, Ordering::SeqCst) {
+            let _ = self.state.at_the_gate.send(());
+            // `check_worker` is sync and is called from async code, so waiting
+            // here occupies a runtime worker. `block_in_place` hands the worker
+            // back rather than starving a small runtime: without it this
+            // deadlocks whenever tokio has a single worker thread.
+            tokio::task::block_in_place(|| {
+                let _ = self
+                    .state
+                    .release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(60));
+            });
+            // Counted from the verdict rather than beside it, so the count says
+            // what was actually reported. A fake that quietly started reporting
+            // "still ours" would otherwise leave its tests passing vacuously.
+            let verdict = Err(WorkerExecutorError::invalid_shard_id(
+                ShardId::new(0),
+                HashSet::new(),
+            ));
+            if verdict.is_err() {
+                self.state
+                    .agent_moved_reports
+                    .fetch_add(1, Ordering::SeqCst);
+            }
+            return verdict;
+        }
+
+        self.inner.check_worker(agent_id)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.inner.is_ready()
+    }
+
+    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
+        self.inner.assign_shards(shard_ids)
+    }
+
+    fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
+        self.inner.register(number_of_shards, shard_ids)
+    }
+
+    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
+        self.inner.revoke_shards(shard_ids)
+    }
+
+    fn set_shard_assignment(
+        &self,
+        number_of_shards: usize,
+        shard_ids: &HashSet<ShardId>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.inner.set_shard_assignment(number_of_shards, shard_ids)
+    }
+
+    fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError> {
+        self.inner.current_assignment()
+    }
+
+    fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
+        self.inner.try_get_current_assignment()
+    }
+}
+
+/// A test's handle on a [`FakeOwnership`]: what it should report, when to hold
+/// a check open, and what it has reported so far.
+pub struct OwnershipControls {
+    state: Arc<FakeOwnershipState>,
+    gate_reached: Receiver<()>,
+    release: SyncSender<()>,
+}
+
+impl OwnershipControls {
+    /// Report every ownership check the way an executor whose shard assignment
+    /// has not arrived reports it. Lasts until [`Self::stop_pretending`].
+    pub fn pretend_the_assignment_is_missing(&self) {
+        self.state.assignment_missing.store(true, Ordering::SeqCst);
+    }
+
+    pub fn stop_pretending(&self) {
+        self.state.assignment_missing.store(false, Ordering::SeqCst);
+    }
+
+    /// Hold the next ownership check open, and return once one has arrived.
+    ///
+    /// The waiting happens inside the fake's synchronous `check_worker`, which
+    /// is the only way to pause a parked caller's re-check mid-flight and land
+    /// something behind it. Nothing is held after this returns until
+    /// [`Self::release_the_held_check`] is called.
+    pub async fn hold_the_next_check(&self) -> anyhow::Result<()> {
+        self.state.hold_next_check.store(true, Ordering::SeqCst);
+        tokio::task::block_in_place(|| self.gate_reached.recv_timeout(Duration::from_secs(30)))
+            .map_err(|_| anyhow::anyhow!("no ownership check arrived within 30s"))?;
+        Ok(())
+    }
+
+    pub fn release_the_held_check(&self) -> anyhow::Result<()> {
+        self.release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("the held ownership check stopped waiting"))
+    }
+
+    /// How many checks have been failed as "assignment not here yet". A test
+    /// asserts on this so it cannot quietly pass against an executor that never
+    /// had the fake installed at all.
+    pub fn assignment_missing_reports(&self) -> usize {
+        self.state.assignment_missing_reports.load(Ordering::SeqCst)
+    }
+
+    /// How many checks have reported that the agent has moved away.
+    pub fn agent_moved_reports(&self) -> usize {
+        self.state.agent_moved_reports.load(Ordering::SeqCst)
+    }
+}
+
+/// Builds overrides that put a [`FakeOwnership`] in front of the real shard
+/// service, plus the controls for it.
+pub fn fake_ownership() -> (TestExecutorOverrides, OwnershipControls) {
+    let (at_the_gate, gate_reached) = sync_channel(1);
+    let (release, released) = sync_channel(1);
+
+    let state = Arc::new(FakeOwnershipState {
+        assignment_missing: AtomicBool::new(false),
+        hold_next_check: AtomicBool::new(false),
+        assignment_missing_reports: AtomicUsize::new(0),
+        agent_moved_reports: AtomicUsize::new(0),
+        at_the_gate,
+        release: Mutex::new(released),
+    });
+
+    let for_closure = state.clone();
+    let overrides = TestExecutorOverrides {
+        wrap_shard_service: Some(Arc::new(move |inner| {
+            Arc::new(FakeOwnership {
+                inner,
+                state: for_closure.clone(),
+            })
+        })),
+        ..Default::default()
+    };
+
+    (
+        overrides,
+        OwnershipControls {
+            state,
+            gate_reached,
+            release,
+        },
+    )
+}
+
 pub struct FailingKeyValueService {
     inner: Arc<dyn KeyValueService>,
     remaining_failures: AtomicU32,
@@ -4971,7 +5348,7 @@ impl KeyValueService for FailingKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<()> {
         self.inner.delete_many(environment_id, bucket, keys).await
     }
@@ -5014,7 +5391,7 @@ impl KeyValueService for FailingKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
         self.inner.get_many(environment_id, bucket, keys).await
     }
@@ -5043,7 +5420,7 @@ impl KeyValueService for FailingKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
+        key_values: Arc<[(String, Vec<u8>)]>,
     ) -> anyhow::Result<()> {
         self.inner
             .set_many(environment_id, bucket, key_values)
@@ -5051,16 +5428,67 @@ impl KeyValueService for FailingKeyValueService {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BlobStoreMutationCall {
+    WriteData {
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_name: String,
+        data: Vec<u8>,
+    },
+    DeleteObjects {
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_names: Vec<String>,
+    },
+}
+
+#[derive(Default)]
+pub struct BlobStoreMutationRecorder {
+    calls: RwLock<Vec<BlobStoreMutationCall>>,
+}
+
+impl BlobStoreMutationRecorder {
+    pub fn calls(&self) -> Vec<BlobStoreMutationCall> {
+        self.calls.read().unwrap().clone()
+    }
+
+    fn record(&self, call: BlobStoreMutationCall) {
+        self.calls.write().unwrap().push(call);
+    }
+}
+
 pub struct FailingBlobStoreService {
     inner: Arc<dyn BlobStoreService>,
-    remaining_failures: AtomicU32,
+    remaining_get_data_failures: AtomicU32,
+    remaining_write_data_failures: AtomicU32,
+    remaining_delete_objects_failures: AtomicU32,
+    mutation_recorder: Option<Arc<BlobStoreMutationRecorder>>,
 }
 
 impl FailingBlobStoreService {
     pub fn new(inner: Arc<dyn BlobStoreService>, failure_count: u32) -> Self {
         Self {
             inner,
-            remaining_failures: AtomicU32::new(failure_count),
+            remaining_get_data_failures: AtomicU32::new(failure_count),
+            remaining_write_data_failures: AtomicU32::new(0),
+            remaining_delete_objects_failures: AtomicU32::new(0),
+            mutation_recorder: None,
+        }
+    }
+
+    pub fn with_mutation_failures(
+        inner: Arc<dyn BlobStoreService>,
+        write_data_failures: u32,
+        delete_objects_failures: u32,
+        recorder: Arc<BlobStoreMutationRecorder>,
+    ) -> Self {
+        Self {
+            inner,
+            remaining_get_data_failures: AtomicU32::new(0),
+            remaining_write_data_failures: AtomicU32::new(write_data_failures),
+            remaining_delete_objects_failures: AtomicU32::new(delete_objects_failures),
+            mutation_recorder: Some(recorder),
         }
     }
 }
@@ -5138,12 +5566,29 @@ impl BlobStoreService for FailingBlobStoreService {
     async fn delete_objects(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_names: Vec<String>,
+        container_name: &str,
+        object_names: &[String],
     ) -> Result<(), BlobStoreError> {
-        self.inner
-            .delete_objects(environment_id, container_name, object_names)
-            .await
+        if let Some(recorder) = &self.mutation_recorder {
+            recorder.record(BlobStoreMutationCall::DeleteObjects {
+                environment_id,
+                container_name: container_name.to_string(),
+                object_names: object_names.to_vec(),
+            });
+        }
+        if self
+            .remaining_delete_objects_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(BlobStoreError::TransientBackend(
+                "transient test failure".to_string(),
+            ))
+        } else {
+            self.inner
+                .delete_objects(environment_id, container_name, object_names)
+                .await
+        }
     }
 
     async fn get_container(
@@ -5165,7 +5610,7 @@ impl BlobStoreService for FailingBlobStoreService {
         end: u64,
     ) -> Result<Vec<u8>, BlobStoreError> {
         if self
-            .remaining_failures
+            .remaining_get_data_failures
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
@@ -5233,13 +5678,31 @@ impl BlobStoreService for FailingBlobStoreService {
     async fn write_data(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_name: String,
-        data: Vec<u8>,
+        container_name: &str,
+        object_name: &str,
+        data: &[u8],
     ) -> Result<(), BlobStoreError> {
-        self.inner
-            .write_data(environment_id, container_name, object_name, data)
-            .await
+        if let Some(recorder) = &self.mutation_recorder {
+            recorder.record(BlobStoreMutationCall::WriteData {
+                environment_id,
+                container_name: container_name.to_string(),
+                object_name: object_name.to_string(),
+                data: data.to_vec(),
+            });
+        }
+        if self
+            .remaining_write_data_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(BlobStoreError::TransientBackend(
+                "transient test failure".to_string(),
+            ))
+        } else {
+            self.inner
+                .write_data(environment_id, container_name, object_name, data)
+                .await
+        }
     }
 }
 

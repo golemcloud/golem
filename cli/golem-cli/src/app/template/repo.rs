@@ -441,4 +441,53 @@ mod tests {
             );
         }
     }
+
+    /// Every `wasm-tools` step must declare both `sources` and `targets`, otherwise
+    /// it re-runs on every build and keeps re-touching the component wasm, which in
+    /// turn re-triggers `add-metadata` and `gen-bridge`. Declaring only one of the
+    /// two silently degrades to the same always-run behaviour, so assert on both.
+    #[test]
+    fn moonbit_wasm_tools_commands_declare_sources_and_targets() {
+        let template_source = TEMPLATES_DIR
+            .get_file("moonbit/common-on-demand/golem.yaml")
+            .unwrap()
+            .contents_utf8()
+            .unwrap();
+        let application = Application::from_yaml_str(template_source).unwrap();
+
+        let mut checked = 0;
+        for (template_name, template) in &application.component_templates {
+            for (preset_name, preset) in &template.presets {
+                for command in &preset.build {
+                    let BuildCommand::External(command) = command else {
+                        continue;
+                    };
+                    if !command.command.starts_with("wasm-tools component ") {
+                        continue;
+                    }
+                    assert!(
+                        !command.sources.is_empty(),
+                        "{template_name}.{preset_name}: `{}` declares no sources",
+                        command.command
+                    );
+                    assert!(
+                        !command.targets.is_empty(),
+                        "{template_name}.{preset_name}: `{}` declares no targets",
+                        command.command
+                    );
+                    assert_eq!(
+                        command.targets.len(),
+                        1,
+                        "{template_name}.{preset_name}: `{}` must declare exactly one target, \
+                         because the up-to-date check takes the newest of them",
+                        command.command
+                    );
+                    checked += 1;
+                }
+            }
+        }
+
+        // 3 component templates x 2 presets x (embed + new)
+        assert_eq!(checked, 12);
+    }
 }

@@ -1784,7 +1784,7 @@ mod tests {
     #[test]
     fn activation_json_rejects_content_that_does_not_match_fingerprint() {
         let mut json = serde_json::to_value(activation()).unwrap();
-        json["fingerprint"][0] = serde_json::json!(255);
+        json["fingerprint"][0] = serde_json::json!(json["fingerprint"][0].as_u64().unwrap() ^ 1);
 
         let result = serde_json::from_value::<EntityActivation>(json);
 

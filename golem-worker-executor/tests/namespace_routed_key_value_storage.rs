@@ -82,16 +82,14 @@ async fn build_namespace_routed_kvs(
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         },
     };
 
     let postgres_storage = std::sync::Arc::new(
-        PostgresKeyValueStorage::configured(
-            &postgres_config,
-            golem_common::model::RetryConfig::max_attempts_3(),
-        )
-        .await
-        .expect("Cannot create postgres key value storage for routed kvs tests"),
+        PostgresKeyValueStorage::configured(&postgres_config)
+            .await
+            .expect("Cannot create postgres key value storage for routed kvs tests"),
     );
 
     let kvs = NamespaceRoutedKeyValueStorage::new(redis_storage.clone(), postgres_storage.clone());
@@ -110,7 +108,7 @@ async fn routes_agent_namespaces_to_redis(deps: &WorkerExecutorTestDependencies)
     let cases = [
         (
             KeyValueStorageNamespace::Worker {
-                agent_id: agent_id.clone(),
+                agent_id: std::sync::Arc::new(agent_id.clone()),
             },
             "worker-route-key",
             b"worker-route-value".as_slice(),
@@ -147,7 +145,7 @@ async fn routes_non_worker_namespace_to_postgres(deps: &WorkerExecutorTestDepend
 
     let ns = KeyValueStorageNamespace::UserDefined {
         environment_id: EnvironmentId(uuid!("2ae7a48f-84fc-4951-b9ec-87d09fcb0fa4")),
-        bucket: "route-test-bucket".to_string(),
+        bucket: "route-test-bucket".into(),
     };
     let key = "user-route-key";
     let value = b"user-route-value";

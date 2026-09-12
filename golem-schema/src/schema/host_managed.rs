@@ -25,11 +25,14 @@
 //! from one place. Adding a future capability case means adding one variant
 //! here; the consumers pick it up automatically.
 
+use crate::schema::graph::SchemaGraph;
+use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::{
     ResultValuePayload, SchemaValue, UnionValuePayload, VariantValuePayload,
 };
-use std::fmt;
+use std::collections::HashSet;
+use std::fmt::{self, Write};
 
 /// A closed set of "host-managed" capability kinds.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -79,6 +82,258 @@ impl HostManagedKind {
             Self::PermissionCard => "<redacted: permission-card>",
         }
     }
+}
+
+/// The first host-managed capability reached while traversing a schema type or
+/// value tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostManagedOccurrence {
+    pub kind: HostManagedKind,
+    pub path: String,
+}
+
+impl fmt::Display for HostManagedOccurrence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} at {}", self.kind.kind_name(), self.path)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostManagedTraversalError {
+    DanglingRef { id: TypeId, path: String },
+    DuplicateTypeId { id: TypeId, path: String },
+}
+
+impl fmt::Display for HostManagedTraversalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DanglingRef { id, path } => {
+                write!(f, "dangling schema reference {id:?} at {path}")
+            }
+            Self::DuplicateTypeId { id, path } => {
+                write!(f, "duplicate schema type id {id:?} reached at {path}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for HostManagedTraversalError {}
+
+/// Finds the first host-managed capability in `value`, including nested
+/// occurrences in every structural container.
+pub fn find_host_managed_value(value: &SchemaValue) -> Option<HostManagedOccurrence> {
+    find_host_managed_value_at(value, "$".to_string())
+}
+
+fn find_host_managed_value_at(value: &SchemaValue, path: String) -> Option<HostManagedOccurrence> {
+    if let Some(kind) = HostManagedKind::from_value(value) {
+        return Some(HostManagedOccurrence { kind, path });
+    }
+
+    match value {
+        SchemaValue::Record { fields } => fields.iter().enumerate().find_map(|(index, value)| {
+            find_host_managed_value_at(value, format!("{path}.fields[{index}]"))
+        }),
+        SchemaValue::Variant(value) => value.payload.as_deref().and_then(|payload| {
+            find_host_managed_value_at(payload, format!("{path}.variant[{}]", value.case))
+        }),
+        SchemaValue::Tuple { elements } => find_host_managed_sequence(elements, &path, "tuple"),
+        SchemaValue::List { elements } => find_host_managed_sequence(elements, &path, "list"),
+        SchemaValue::FixedList { elements } => {
+            find_host_managed_sequence(elements, &path, "fixed-list")
+        }
+        SchemaValue::Map { entries } => {
+            entries
+                .iter()
+                .enumerate()
+                .find_map(|(index, (key, value))| {
+                    find_host_managed_value_at(key, format!("{path}.map[{index}].key")).or_else(
+                        || find_host_managed_value_at(value, format!("{path}.map[{index}].value")),
+                    )
+                })
+        }
+        SchemaValue::Option { inner } => inner
+            .as_deref()
+            .and_then(|value| find_host_managed_value_at(value, format!("{path}.some"))),
+        SchemaValue::Result(ResultValuePayload::Ok { value }) => value
+            .as_deref()
+            .and_then(|value| find_host_managed_value_at(value, format!("{path}.ok"))),
+        SchemaValue::Result(ResultValuePayload::Err { value }) => value
+            .as_deref()
+            .and_then(|value| find_host_managed_value_at(value, format!("{path}.err"))),
+        SchemaValue::Union(value) => {
+            find_host_managed_value_at(&value.body, append_named_path(&path, "union", &value.tag))
+        }
+        _ => None,
+    }
+}
+
+fn find_host_managed_sequence(
+    values: &[SchemaValue],
+    path: &str,
+    kind: &str,
+) -> Option<HostManagedOccurrence> {
+    values.iter().enumerate().find_map(|(index, value)| {
+        find_host_managed_value_at(value, format!("{path}.{kind}[{index}]"))
+    })
+}
+
+/// Finds the first host-managed capability type reachable from `ty` through
+/// `graph`. Only definitions reachable from `ty` are considered. Recursive
+/// references are followed once per active path, so recursive schemas
+/// terminate without suppressing occurrences reached through sibling paths.
+pub fn find_host_managed_type(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+) -> Result<Option<HostManagedOccurrence>, HostManagedTraversalError> {
+    find_host_managed_type_at(graph, ty, "$".to_string(), &mut HashSet::new())
+}
+
+fn find_host_managed_type_at(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    path: String,
+    visiting: &mut HashSet<TypeId>,
+) -> Result<Option<HostManagedOccurrence>, HostManagedTraversalError> {
+    if let Some(kind) = HostManagedKind::from_type(ty) {
+        return Ok(Some(HostManagedOccurrence { kind, path }));
+    }
+
+    match ty {
+        SchemaType::Ref { id, .. } => {
+            if !visiting.insert(id.clone()) {
+                return Ok(None);
+            }
+            let mut definitions = graph.defs.iter().filter(|definition| definition.id == *id);
+            let definition =
+                definitions
+                    .next()
+                    .ok_or_else(|| HostManagedTraversalError::DanglingRef {
+                        id: id.clone(),
+                        path: path.clone(),
+                    })?;
+            if definitions.next().is_some() {
+                visiting.remove(id);
+                return Err(HostManagedTraversalError::DuplicateTypeId {
+                    id: id.clone(),
+                    path,
+                });
+            }
+            let result = find_host_managed_type_at(graph, &definition.body, path, visiting);
+            visiting.remove(id);
+            result
+        }
+        SchemaType::Record { fields, .. } => {
+            for field in fields {
+                if let Some(occurrence) = find_host_managed_type_at(
+                    graph,
+                    &field.body,
+                    append_named_path(&path, "field", &field.name),
+                    visiting,
+                )? {
+                    return Ok(Some(occurrence));
+                }
+            }
+            Ok(None)
+        }
+        SchemaType::Variant { cases, .. } => {
+            for case in cases {
+                if let Some(payload) = &case.payload
+                    && let Some(occurrence) = find_host_managed_type_at(
+                        graph,
+                        payload,
+                        append_named_path(&path, "variant", &case.name),
+                        visiting,
+                    )?
+                {
+                    return Ok(Some(occurrence));
+                }
+            }
+            Ok(None)
+        }
+        SchemaType::Tuple { elements, .. } => {
+            find_host_managed_type_sequence(graph, elements, &path, "tuple", visiting)
+        }
+        SchemaType::List { element, .. } => {
+            find_host_managed_type_at(graph, element, format!("{path}.list[]"), visiting)
+        }
+        SchemaType::FixedList { element, .. } => {
+            find_host_managed_type_at(graph, element, format!("{path}.fixed-list[]"), visiting)
+        }
+        SchemaType::Map { key, value, .. } => {
+            if let Some(occurrence) =
+                find_host_managed_type_at(graph, key, format!("{path}.map.key"), visiting)?
+            {
+                return Ok(Some(occurrence));
+            }
+            find_host_managed_type_at(graph, value, format!("{path}.map.value"), visiting)
+        }
+        SchemaType::Option { inner, .. } => {
+            find_host_managed_type_at(graph, inner, format!("{path}.some"), visiting)
+        }
+        SchemaType::Result { spec, .. } => {
+            if let Some(ok) = spec.ok.as_deref()
+                && let Some(occurrence) =
+                    find_host_managed_type_at(graph, ok, format!("{path}.ok"), visiting)?
+            {
+                return Ok(Some(occurrence));
+            }
+            match spec.err.as_deref() {
+                Some(err) => find_host_managed_type_at(graph, err, format!("{path}.err"), visiting),
+                None => Ok(None),
+            }
+        }
+        SchemaType::Union { spec, .. } => {
+            for branch in &spec.branches {
+                if let Some(occurrence) = find_host_managed_type_at(
+                    graph,
+                    &branch.body,
+                    append_named_path(&path, "union", &branch.tag),
+                    visiting,
+                )? {
+                    return Ok(Some(occurrence));
+                }
+            }
+            Ok(None)
+        }
+        SchemaType::Future { inner, .. } => match inner.as_deref() {
+            Some(inner) => {
+                find_host_managed_type_at(graph, inner, format!("{path}.future"), visiting)
+            }
+            None => Ok(None),
+        },
+        SchemaType::Stream { inner, .. } => match inner.as_deref() {
+            Some(inner) => {
+                find_host_managed_type_at(graph, inner, format!("{path}.stream"), visiting)
+            }
+            None => Ok(None),
+        },
+        _ => Ok(None),
+    }
+}
+
+fn find_host_managed_type_sequence(
+    graph: &SchemaGraph,
+    elements: &[SchemaType],
+    path: &str,
+    kind: &str,
+    visiting: &mut HashSet<TypeId>,
+) -> Result<Option<HostManagedOccurrence>, HostManagedTraversalError> {
+    for (index, element) in elements.iter().enumerate() {
+        if let Some(occurrence) =
+            find_host_managed_type_at(graph, element, format!("{path}.{kind}[{index}]"), visiting)?
+        {
+            return Ok(Some(occurrence));
+        }
+    }
+    Ok(None)
+}
+
+fn append_named_path(path: &str, kind: &str, name: &str) -> String {
+    let mut result = format!("{path}.{kind}[");
+    write!(&mut result, "{name:?}").expect("writing to String cannot fail");
+    result.push(']');
+    result
 }
 
 /// Replace every host-managed capability value (see [`HostManagedKind`]) with a
@@ -402,8 +657,14 @@ fn fmt_opt(value: Option<&SchemaValue>, f: &mut fmt::Formatter<'_>) -> fmt::Resu
 mod tests {
     use super::*;
     use crate::model::EnvironmentId;
-    use crate::schema::schema_type::{QuotaTokenSpec, SecretSpec};
-    use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
+    use crate::schema::graph::SchemaTypeDef;
+    use crate::schema::metadata::MetadataEnvelope;
+    use crate::schema::schema_type::{
+        NamedFieldType, PermissionCardSpec, QuotaTokenSpec, SecretSpec,
+    };
+    use crate::schema::schema_value::{
+        PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
+    };
     use chrono::{TimeZone, Utc};
     use test_r::test;
 
@@ -424,6 +685,15 @@ mod tests {
             expected_use: 1,
             last_credit: 0,
             last_credit_at: Utc.timestamp_opt(0, 0).unwrap(),
+        })
+    }
+
+    fn permission_card_value() -> SchemaValue {
+        SchemaValue::PermissionCard(PermissionCardValuePayload {
+            card_id: uuid::Uuid::nil(),
+            parent_ids: Vec::new(),
+            expires_at: None,
+            polymorphic: false,
         })
     }
 
@@ -461,6 +731,131 @@ mod tests {
         assert_eq!(
             HostManagedKind::QuotaToken.redacted_placeholder(),
             "<redacted: quota-token>"
+        );
+    }
+
+    #[test]
+    fn finds_nested_host_managed_value_with_path() {
+        let value = SchemaValue::Record {
+            fields: vec![SchemaValue::Map {
+                entries: vec![(
+                    SchemaValue::String("key".to_string()),
+                    permission_card_value(),
+                )],
+            }],
+        };
+
+        assert_eq!(
+            find_host_managed_value(&value),
+            Some(HostManagedOccurrence {
+                kind: HostManagedKind::PermissionCard,
+                path: "$.fields[0].map[0].value".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn finds_reachable_type_after_recursive_back_edge() {
+        let tree = TypeId::new("tree");
+        let graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: tree.clone(),
+                name: Some("Tree".to_string()),
+                body: SchemaType::Record {
+                    fields: vec![
+                        NamedFieldType {
+                            name: "next".to_string(),
+                            body: SchemaType::Option {
+                                inner: Box::new(SchemaType::ref_to(tree.clone())),
+                                metadata: MetadataEnvelope::default(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        },
+                        NamedFieldType {
+                            name: "token".to_string(),
+                            body: SchemaType::quota_token(QuotaTokenSpec::default()),
+                            metadata: MetadataEnvelope::default(),
+                        },
+                    ],
+                    metadata: MetadataEnvelope::default(),
+                },
+            }],
+            root: SchemaType::ref_to(tree),
+        };
+
+        assert_eq!(
+            find_host_managed_type(&graph, &graph.root),
+            Ok(Some(HostManagedOccurrence {
+                kind: HostManagedKind::QuotaToken,
+                path: "$.field[\"token\"]".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn ignores_unreachable_host_managed_definition() {
+        let graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new("unused"),
+                name: None,
+                body: SchemaType::permission_card(PermissionCardSpec::default()),
+            }],
+            root: SchemaType::string(),
+        };
+
+        assert_eq!(find_host_managed_type(&graph, &graph.root), Ok(None));
+    }
+
+    #[test]
+    fn reachable_dangling_and_duplicate_refs_fail_closed() {
+        let missing = TypeId::new("missing\nref");
+        let dangling = SchemaGraph::anonymous(SchemaType::ref_to(missing.clone()));
+        assert_eq!(
+            find_host_managed_type(&dangling, &dangling.root),
+            Err(HostManagedTraversalError::DanglingRef {
+                id: missing,
+                path: "$".to_string(),
+            })
+        );
+
+        let duplicate = TypeId::new("duplicate");
+        let duplicated = SchemaGraph {
+            defs: vec![
+                SchemaTypeDef {
+                    id: duplicate.clone(),
+                    name: None,
+                    body: SchemaType::string(),
+                },
+                SchemaTypeDef {
+                    id: duplicate.clone(),
+                    name: None,
+                    body: SchemaType::permission_card(PermissionCardSpec::default()),
+                },
+            ],
+            root: SchemaType::ref_to(duplicate.clone()),
+        };
+        assert_eq!(
+            find_host_managed_type(&duplicated, &duplicated.root),
+            Err(HostManagedTraversalError::DuplicateTypeId {
+                id: duplicate,
+                path: "$".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn escapes_union_tags_in_value_paths() {
+        let value = SchemaValue::Union(UnionValuePayload {
+            tag: "branch\"]\nforged".to_string(),
+            body: Box::new(secret_value()),
+        });
+
+        assert_eq!(
+            find_host_managed_value(&value),
+            Some(HostManagedOccurrence {
+                kind: HostManagedKind::Secret,
+                path: "$.union[\"branch\\\"]\\nforged\"]".to_string(),
+            })
         );
     }
 

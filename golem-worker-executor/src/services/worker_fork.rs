@@ -481,7 +481,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
 
-        let target_metadata = self.worker_service.get(&owned_target_agent_id).await;
+        let target_metadata = self.worker_service.get(&owned_target_agent_id).await?;
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
@@ -497,7 +497,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         self.worker_service
             .get(&owned_source_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;
@@ -1020,6 +1020,7 @@ mod tests {
         let remote = agent_id("remote");
         let entry = OplogEntry::CardTransferStarted {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: CardId::new(),
             source_holder: Some(CardHolder::Agent(AgentCardHolder {

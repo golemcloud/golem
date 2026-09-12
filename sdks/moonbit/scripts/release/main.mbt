@@ -20,16 +20,20 @@ let dev_tools_path = "{{ appRootDir }}/../golem_sdk_tools"
 let dev_sdk_path = "{{ appRootDir }}/../golem_sdk"
 
 ///|
-let dev_debug_build_path = "{{ appRootDir }}/../_build/wasm/debug/build/golemcloud/golem_sdk_example1/"
+/// In the workspace the example is a `moon.work` member, so `moon` nests its artifacts
+/// under the module name; a standalone template builds them directly under `build/`.
+/// Both forms keep the `{{ moonbitBuildPackagePath }}` suffix so that neither is a
+/// prefix of the other and `switch_path` can tell them apart.
+let dev_debug_build_path = "{{ appRootDir }}/_build/wasm/debug/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}"
 
 ///|
-let release_debug_build_path = "{{ appRootDir }}/_build/wasm/debug/build/"
+let release_debug_build_path = "{{ appRootDir }}/_build/wasm/debug/build/{{ moonbitBuildPackagePath }}"
 
 ///|
-let dev_release_build_path = "{{ appRootDir }}/../_build/wasm/release/build/golemcloud/golem_sdk_example1/"
+let dev_release_build_path = "{{ appRootDir }}/_build/wasm/release/build/golemcloud/golem_sdk_example1/{{ moonbitBuildPackagePath }}"
 
 ///|
-let release_release_build_path = "{{ appRootDir }}/_build/wasm/release/build/"
+let release_release_build_path = "{{ appRootDir }}/_build/wasm/release/build/{{ moonbitBuildPackagePath }}"
 
 ///|
 let dev_sdk_version = "0.5.1"
@@ -45,6 +49,16 @@ fn release_fail(message : String) -> Unit raise ReleaseTransformError {
 }
 
 ///|
+/// The default rendering of an error only shows its constructor path, which hides
+/// the diagnostics the transformations raise.
+fn report_error(e : Error) -> Unit {
+  match e {
+    ReleaseTransformError(message) => println("Error: \{message}")
+    _ => println("Error: \{e}")
+  }
+}
+
+///|
 fn main {
   let args = @env.args()
   if args.length() < 2 {
@@ -55,7 +69,7 @@ fn main {
   if args[1] == "--dev" {
     revert_to_dev() catch {
       e => {
-        println("Error: \{e}")
+        report_error(e)
         @sys.exit(1)
       }
     }
@@ -64,7 +78,7 @@ fn main {
     let tools_version = if args.length() >= 3 { args[2] } else { sdk_version }
     prepare_release(sdk_version, tools_version) catch {
       e => {
-        println("Error: \{e}")
+        report_error(e)
         @sys.exit(1)
       }
     }
@@ -333,18 +347,23 @@ fn transform_yaml_paths(
   } else {
     dev_release_build_path
   }
+  // 4 presets x 3 tool invocations
   let mut result = switch_path(
     yaml, from_tools, to_tools, 12, "golem_sdk_tools",
   )
+  // 4 presets x the `reexports` SDK argument
   result = switch_path(
     result, from_sdk_arg, to_sdk_arg, 4, "golem_sdk argument",
   )
-  result = switch_path(result, from_sdk_wit, to_sdk_wit, 4, "golem_sdk WIT")
+  // 4 presets x the `wasm-tools component embed` WIT argument, each also listed as a source
+  result = switch_path(result, from_sdk_wit, to_sdk_wit, 8, "golem_sdk WIT")
+  // 2 debug presets x the embedded core wasm argument, each also listed as a source
   result = switch_path(
-    result, from_debug_build, to_debug_build, 2, "debug MoonBit build",
+    result, from_debug_build, to_debug_build, 4, "debug MoonBit build",
   )
+  // 2 release presets x the embedded core wasm argument, each also listed as a source
   result = switch_path(
-    result, from_release_build, to_release_build, 2, "release MoonBit build",
+    result, from_release_build, to_release_build, 4, "release MoonBit build",
   )
   result
 }

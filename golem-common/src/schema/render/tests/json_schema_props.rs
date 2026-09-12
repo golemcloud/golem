@@ -23,9 +23,10 @@ use crate::schema::graph::SchemaTypeDef;
 use crate::schema::metadata::TypeId;
 use crate::schema::proptest_strategies::schema_graph_strategy;
 use crate::schema::render::json_schema::{
-    JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema, to_json_schema,
+    input_schema_to_json_schema, output_schema_to_json_schema,
 };
 use crate::schema::schema_type::{NamedFieldType, SchemaType};
+use golem_schema::schema::render::{JsonSchemaConfig, to_json_schema};
 use proptest::prelude::*;
 use serde_json::Value;
 use test_r::test;

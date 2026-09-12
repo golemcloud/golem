@@ -1580,10 +1580,13 @@ async fn create_append_reconciliation_oplog(
         .create_fresh(
             &owned_agent_id,
             AgentMode::Durable,
-            OplogEntry::jump(OplogRegion {
-                start: OplogIndex::NONE,
-                end: OplogIndex::NONE,
-            }),
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::NONE,
+                    end: OplogIndex::NONE,
+                },
+            ),
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
@@ -1743,10 +1746,13 @@ async fn direct_identical_append_conflict_from_second_writer_remains_fatal(_trac
         .create_fresh(
             &owned_agent_id,
             AgentMode::Durable,
-            OplogEntry::jump(OplogRegion {
-                start: OplogIndex::NONE,
-                end: OplogIndex::NONE,
-            }),
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::NONE,
+                    end: OplogIndex::NONE,
+                },
+            ),
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
@@ -1841,10 +1847,13 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
         )
         .await;
 
-    let entry1 = OplogEntry::jump(OplogRegion {
-        start: OplogIndex::from_u64(5),
-        end: OplogIndex::from_u64(12),
-    })
+    let entry1 = OplogEntry::jump(
+        None,
+        OplogRegion {
+            start: OplogIndex::from_u64(5),
+            end: OplogIndex::from_u64(12),
+        },
+    )
     .rounded();
     let entry2 = OplogEntry::suspend().rounded();
     let entry3 = OplogEntry::exited().rounded();
@@ -2063,57 +2072,69 @@ async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracin
             let end_index = item_index.next();
             let cancel_index = end_index.next();
             vec![
-                DurableStreamOplogRecord::Registered(StreamRegisteredRecordV1 {
-                    format_version: 1,
-                    coordinate: StreamRegistrationCoordinateV1::Root {
-                        invocation_id: invocation_id.clone(),
-                        root_kind: StreamRootKindV1::MethodResult,
-                        recursive_value_path: Vec::new(),
+                DurableStreamOplogRecord::Registered(
+                    None,
+                    StreamRegisteredRecordV1 {
+                        format_version: 1,
+                        coordinate: StreamRegistrationCoordinateV1::Root {
+                            invocation_id: invocation_id.clone(),
+                            root_kind: StreamRootKindV1::MethodResult,
+                            recursive_value_path: Vec::new(),
+                        },
+                        registration_oplog_index: registration_index,
+                        handle: DurableStreamHandleV1 {
+                            format_version: 1,
+                            stream_id,
+                            producer_environment_id: environment_id,
+                            producer: agent_id,
+                            expected_producer_fingerprint: producer_fingerprint,
+                            source_invocation: invocation_id,
+                            component_revision: ComponentRevision::INITIAL,
+                            element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                        },
+                        source_kind: StreamSourceKindV1::InvocationOutput,
+                        session_mapping: None,
                     },
-                    registration_oplog_index: registration_index,
-                    handle: DurableStreamHandleV1 {
+                ),
+                DurableStreamOplogRecord::Items(
+                    None,
+                    StreamItemsRecordV1 {
                         format_version: 1,
                         stream_id,
-                        producer_environment_id: environment_id,
-                        producer: agent_id,
-                        expected_producer_fingerprint: producer_fingerprint,
-                        source_invocation: invocation_id,
-                        component_revision: ComponentRevision::INITIAL,
-                        element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                        producer_fingerprint,
+                        first_sequence: 0,
+                        nested_stream_ids: Vec::new(),
+                        newly_registered_stream_ids: Vec::new(),
+                        payload: StreamItemsPayloadV1::Values(vec![vec![42; 1024]]),
+                        offsets: vec![StreamOffsetV1::new(item_index, 0)],
                     },
-                    source_kind: StreamSourceKindV1::InvocationOutput,
-                    session_mapping: None,
-                }),
-                DurableStreamOplogRecord::Items(StreamItemsRecordV1 {
-                    format_version: 1,
-                    stream_id,
-                    producer_fingerprint,
-                    first_sequence: 0,
-                    nested_stream_ids: Vec::new(),
-                    newly_registered_stream_ids: Vec::new(),
-                    payload: StreamItemsPayloadV1::Values(vec![vec![42; 1024]]),
-                    offsets: vec![StreamOffsetV1::new(item_index, 0)],
-                }),
-                DurableStreamOplogRecord::End(StreamEndRecordV1 {
-                    format_version: 1,
-                    stream_id,
-                    producer_fingerprint,
-                    sequence: 1,
-                    offset: StreamOffsetV1::new(end_index, 0),
-                    authored_by: StreamTerminalAuthorV1::Guest,
-                    result: StreamEndResultV1::Ok,
-                }),
-                DurableStreamOplogRecord::Cancel(StreamCancelRecordV1 {
-                    format_version: 1,
-                    stream_id,
-                    producer_fingerprint,
-                    sequence: 1,
-                    offset: StreamOffsetV1::new(cancel_index, 0),
-                    authored_by: StreamTerminalAuthorV1::Protocol,
-                    role: StreamCancelRoleV1::OutputConsumer,
-                    reason: StreamCancelReasonV1::Protocol,
-                    details: Some("test cancellation".to_string()),
-                }),
+                ),
+                DurableStreamOplogRecord::End(
+                    None,
+                    StreamEndRecordV1 {
+                        format_version: 1,
+                        stream_id,
+                        producer_fingerprint,
+                        sequence: 1,
+                        offset: StreamOffsetV1::new(end_index, 0),
+                        authored_by: StreamTerminalAuthorV1::Guest,
+                        result: StreamEndResultV1::Ok,
+                    },
+                ),
+                DurableStreamOplogRecord::Cancel(
+                    None,
+                    StreamCancelRecordV1 {
+                        format_version: 1,
+                        stream_id,
+                        producer_fingerprint,
+                        sequence: 1,
+                        offset: StreamOffsetV1::new(cancel_index, 0),
+                        authored_by: StreamTerminalAuthorV1::Protocol,
+                        role: StreamCancelRoleV1::OutputConsumer,
+                        reason: StreamCancelReasonV1::Protocol,
+                        details: Some("test cancellation".to_string()),
+                    },
+                ),
             ]
         }))
         .await
@@ -2196,6 +2217,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
         source_kind: StreamSourceKindV1::InvocationOutput,
         session_mapping: None,
+        entity_parent_start_index: None,
     };
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
@@ -2341,15 +2363,18 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
         )
         .await;
 
-    let entry1 = OplogEntry::jump(OplogRegion {
-        start: OplogIndex::from_u64(5),
-        end: OplogIndex::from_u64(12),
-    })
+    let entry1 = OplogEntry::jump(
+        None,
+        OplogRegion {
+            start: OplogIndex::from_u64(5),
+            end: OplogIndex::from_u64(12),
+        },
+    )
     .rounded();
     let entry2 = OplogEntry::suspend().rounded();
     let entry3 = OplogEntry::exited().rounded();
     let entry4 = OplogEntry::interrupted().rounded();
-    let entry5 = OplogEntry::no_op().rounded();
+    let entry5 = OplogEntry::no_op(None).rounded();
 
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
@@ -2448,10 +2473,13 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
         )
         .await;
 
-    let entry1 = OplogEntry::jump(OplogRegion {
-        start: OplogIndex::from_u64(5),
-        end: OplogIndex::from_u64(12),
-    })
+    let entry1 = OplogEntry::jump(
+        None,
+        OplogRegion {
+            start: OplogIndex::from_u64(5),
+            end: OplogIndex::from_u64(12),
+        },
+    )
     .rounded();
     let entry2 = OplogEntry::suspend().rounded();
     let entry3 = OplogEntry::exited().rounded();
@@ -2536,10 +2564,13 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
         )
         .await;
 
-    let entry1 = OplogEntry::jump(OplogRegion {
-        start: OplogIndex::from_u64(5),
-        end: OplogIndex::from_u64(12),
-    })
+    let entry1 = OplogEntry::jump(
+        None,
+        OplogRegion {
+            start: OplogIndex::from_u64(5),
+            end: OplogIndex::from_u64(12),
+        },
+    )
     .rounded();
     let entry2 = OplogEntry::suspend().rounded();
     let entry3 = OplogEntry::exited().rounded();
@@ -2735,6 +2766,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
     for i in 0..10 {
         let entry = OplogEntry::Error {
             timestamp,
+            entity_parent_start_index: None,
             error: AgentError::Unknown(i.to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -2837,6 +2869,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
         .map(|i| {
             OplogEntry::Error {
                 timestamp,
+                entity_parent_start_index: None,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -3780,6 +3813,7 @@ async fn read_from_archive_impl(use_blob: bool) {
         .map(|i| {
             OplogEntry::Error {
                 timestamp,
+                entity_parent_start_index: None,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4163,7 +4197,7 @@ async fn blob_write_after_archive_reopen_full(_tracing: &Tracing) {
 
 fn transfer_test_entries() -> BTreeMap<OplogIndex, OplogEntry> {
     [
-        (OplogIndex::INITIAL, OplogEntry::no_op().rounded()),
+        (OplogIndex::INITIAL, OplogEntry::no_op(None).rounded()),
         (OplogIndex::from_u64(2), OplogEntry::suspend().rounded()),
     ]
     .into_iter()
@@ -4311,6 +4345,7 @@ async fn compressed_transfer_verification_bypasses_append_cache(_tracing: &Traci
 async fn blob_transfer_verifies_the_persisted_entry_representation(_tracing: &Tracing) {
     let entry = OplogEntry::NoOp {
         timestamp: "2026-08-27T13:09:36.123456Z".parse().unwrap(),
+        entity_parent_start_index: None,
     };
     assert_ne!(entry, entry.clone().rounded());
 
@@ -4391,7 +4426,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
         .create(
             &owned_agent_id,
             AgentMode::Durable,
-            OplogEntry::no_op(),
+            OplogEntry::no_op(None),
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
@@ -4493,7 +4528,7 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
         )
         .await;
 
-    oplog.add(OplogEntry::no_op()).await;
+    oplog.add(OplogEntry::no_op(None)).await;
     oplog.commit(CommitLevel::Always).await;
     if agent_mode == AgentMode::Ephemeral {
         EphemeralOplog::try_archive(&oplog)
@@ -4593,6 +4628,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .map(|i| {
             OplogEntry::Error {
                 timestamp,
+                entity_parent_start_index: None,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4687,6 +4723,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .map(|i| {
             OplogEntry::Error {
                 timestamp,
+                entity_parent_start_index: None,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4782,6 +4819,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .add(
             OplogEntry::Error {
                 timestamp,
+                entity_parent_start_index: None,
                 error: AgentError::Unknown("last".to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4830,6 +4868,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         entry1.get(&OplogIndex::INITIAL).unwrap().clone(),
         OplogEntry::Error {
             timestamp,
+            entity_parent_start_index: None,
             error: AgentError::Unknown("0".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4841,6 +4880,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         entry2.get(&OplogIndex::from_u64(100)).unwrap().clone(),
         OplogEntry::Error {
             timestamp,
+            entity_parent_start_index: None,
             error: AgentError::Unknown("99".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4852,6 +4892,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         entry3.get(&OplogIndex::from_u64(1000)).unwrap().clone(),
         OplogEntry::Error {
             timestamp,
+            entity_parent_start_index: None,
             error: AgentError::Unknown("999".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4863,6 +4904,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         entry4.get(&OplogIndex::from_u64(1001)).unwrap().clone(),
         OplogEntry::Error {
             timestamp,
+            entity_parent_start_index: None,
             error: AgentError::Unknown("last".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4949,6 +4991,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             .map(|i| {
                 OplogEntry::Error {
                     timestamp,
+                    entity_parent_start_index: None,
                     error: AgentError::Unknown(i.to_string()),
                     retry_from: OplogIndex::NONE,
                     inside_atomic_region: false,
@@ -5074,6 +5117,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .map(|i| {
             OplogEntry::Error {
                 timestamp,
+                entity_parent_start_index: None,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -5530,10 +5574,13 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
         .create(
             &owned_agent_id,
             AgentMode::Durable,
-            OplogEntry::jump(OplogRegion {
-                start: OplogIndex::from_u64(0),
-                end: OplogIndex::from_u64(0),
-            }),
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::from_u64(0),
+                    end: OplogIndex::from_u64(0),
+                },
+            ),
             make_agent_metadata(worker_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
@@ -6122,7 +6169,14 @@ async fn scan_for_component_with_no_workers_terminates_immediately(_tracing: &Tr
 }
 
 #[test]
-async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &Tracing) {
+async fn owned_payload_upload_preserves_allocation_at_inline_threshold_and_roundtrips(
+    _tracing: &Tracing,
+) {
+    let inline = vec![1_u8; 64];
+    let max_payload_size = serialize(&inline).unwrap().len();
+    let external = vec![2_u8; 65];
+    assert!(serialize(&external).unwrap().len() > max_payload_size);
+
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(
@@ -6130,7 +6184,7 @@ async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &T
         blob_storage,
         1,
         1,
-        100,
+        max_payload_size,
         RetryConfig::default(),
     )
     .await;
@@ -6152,7 +6206,6 @@ async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &T
         )
         .await;
 
-    let inline = vec![1_u8; 8];
     let inline_ptr = inline.as_ptr();
     let inline_without_cache = match oplog.upload_payload_owned(inline).await.unwrap() {
         OplogPayload::SerializedInline {
@@ -6168,7 +6221,6 @@ async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &T
         other => panic!("expected an inline payload with a cache, got {other:?}"),
     };
 
-    let external = vec![2_u8; 1024];
     let external_ptr = external.as_ptr();
     let external_without_cache = match oplog.upload_payload_owned(external).await.unwrap() {
         OplogPayload::External {
@@ -6201,15 +6253,151 @@ async fn owned_payload_upload_moves_cache_and_roundtrips_without_it(_tracing: &T
             .download_payload::<Vec<u8>>(inline_without_cache)
             .await
             .unwrap(),
-        vec![1_u8; 8]
+        vec![1_u8; 64]
     );
     assert_eq!(
         reopened
             .download_payload::<Vec<u8>>(external_without_cache)
             .await
             .unwrap(),
-        vec![2_u8; 1024]
+        vec![2_u8; 65]
     );
+}
+
+#[test]
+async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tracing: &Tracing) {
+    let inline = vec![3_u8; 64];
+    let inline_ptr = inline.as_ptr();
+    let max_payload_size = serialize(&inline).unwrap().len();
+    let external = vec![4_u8; 65];
+    let external_ptr = external.as_ptr();
+    assert!(serialize(&external).unwrap().len() > max_payload_size);
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        max_payload_size,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "owned-snapshot-payload".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let inline_description = oplog
+        .create_snapshot_based_update_description(
+            ComponentRevision::new(2).unwrap(),
+            inline,
+            "application/inline".to_string(),
+        )
+        .await
+        .unwrap();
+    let UpdateDescription::SnapshotBased {
+        payload:
+            OplogPayload::SerializedInline {
+                cached: Some(cached),
+                ..
+            },
+        ..
+    } = &inline_description
+    else {
+        panic!("payload at the size threshold must be stored inline")
+    };
+    assert_eq!(cached.as_ptr(), inline_ptr);
+
+    let external_description = oplog
+        .create_snapshot_based_update_description(
+            ComponentRevision::new(3).unwrap(),
+            external,
+            "application/external".to_string(),
+        )
+        .await
+        .unwrap();
+    let UpdateDescription::SnapshotBased {
+        payload: OplogPayload::External {
+            cached: Some(cached),
+            ..
+        },
+        ..
+    } = &external_description
+    else {
+        panic!("payload above the size threshold must be stored externally")
+    };
+    assert_eq!(cached.as_ptr(), external_ptr);
+
+    let inline_index = oplog
+        .add(OplogEntry::PendingUpdate {
+            timestamp: Timestamp::now_utc(),
+            description: inline_description,
+        })
+        .await;
+    let external_index = oplog
+        .add(OplogEntry::PendingUpdate {
+            timestamp: Timestamp::now_utc(),
+            description: external_description,
+        })
+        .await;
+    oplog.commit(CommitLevel::Always).await;
+
+    let persisted = oplog_service
+        .read_exact(&owned_agent_id, AgentMode::Durable, inline_index, 2)
+        .await;
+    let inline_description = match persisted.get(&inline_index).unwrap() {
+        OplogEntry::PendingUpdate {
+            description:
+                UpdateDescription::SnapshotBased {
+                    payload: OplogPayload::SerializedInline { cached: None, .. },
+                    ..
+                },
+            ..
+        } => persisted.get(&inline_index).unwrap().clone(),
+        other => panic!("expected an uncached inline snapshot after persistence, got {other:?}"),
+    };
+    let external_description = match persisted.get(&external_index).unwrap() {
+        OplogEntry::PendingUpdate {
+            description:
+                UpdateDescription::SnapshotBased {
+                    payload: OplogPayload::External { cached: None, .. },
+                    ..
+                },
+            ..
+        } => persisted.get(&external_index).unwrap().clone(),
+        other => panic!("expected an uncached external snapshot after persistence, got {other:?}"),
+    };
+
+    for (entry, expected_payload, expected_mime) in [
+        (inline_description, vec![3_u8; 64], "application/inline"),
+        (external_description, vec![4_u8; 65], "application/external"),
+    ] {
+        let OplogEntry::PendingUpdate { description, .. } = entry else {
+            unreachable!()
+        };
+        let (payload, mime_type) = oplog
+            .get_upload_description_payload(description)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload, expected_payload);
+        assert_eq!(mime_type, expected_mime);
+    }
 }
 
 /// A large request reserved with [`OplogOps::add_start_with_reserved_payload`] is stored externally,

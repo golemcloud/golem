@@ -108,7 +108,7 @@ use crate::worker::agent_config::{effective_agent_config, validate_agent_config}
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, lower_invocation,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -150,7 +150,7 @@ use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
     OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
@@ -629,12 +629,6 @@ fn validate_unshared_memory_growth(
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[cfg(feature = "test-utils")]
-    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
-        self.owner_execution
-            .test_should_skip_monotonic_clock_now_durability()
-    }
-
-    #[cfg(feature = "test-utils")]
     pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
         self.owner_execution
             .test_should_skip_wall_clock_now_durability()
@@ -813,8 +807,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         debug!(
-            "Worker {} initialized with deleted regions {}",
-            owned_agent_id.agent_id, worker_config.deleted_regions
+            "Worker {} initialized with skipped regions {}",
+            owned_agent_id.agent_id, worker_config.skipped_regions
         );
 
         debug!(
@@ -979,22 +973,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let deleted_regions = if let Some(snapshot_idx) = worker_config.last_snapshot_index {
-            let mut regions = worker_config.deleted_regions.clone();
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            regions.set_override(snapshot_skip);
-            regions
-        } else {
-            worker_config.deleted_regions.clone()
-        };
+        // `skipped_regions` already carries the snapshot baseline: the status reducer opens
+        // an override at a snapshot-based `PendingUpdate` and folds it into the regions
+        // proper on `SuccessfulUpdate`. `last_snapshot_index` is kept only for reading the
+        // snapshot payload back.
         let replay_state = match &runtime {
             OwnerRuntime::Agent => {
                 owner_execution
-                    .begin_replay_generation(deleted_regions, worker_config.last_snapshot_index)
+                    .begin_replay_generation(
+                        worker_config.skipped_regions.clone(),
+                        worker_config.last_snapshot_index,
+                    )
                     .await?
             }
             OwnerRuntime::Entity(_) => owner_execution.replay().await?,
@@ -1898,8 +1887,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
             match &pending_event.event {
                 QueuedCardEvent::Revoke(_) => {
+                    let entity_parent_start_index = pending_event.entity_parent_start_index;
                     let card_ids = pending_events
                         .into_iter()
+                        .filter(|pending_event| {
+                            pending_event.entity_parent_start_index == entity_parent_start_index
+                        })
                         .filter_map(|pending_event| match pending_event.event {
                             QueuedCardEvent::Revoke(event) => Some(event.card_id),
                             QueuedCardEvent::Install(_)
@@ -1907,7 +1900,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             | QueuedCardEvent::TransferReceived(_) => None,
                         })
                         .collect::<Vec<_>>();
-                    self.apply_card_revoked_cascade(&card_ids, true).await?;
+                    self.apply_card_revoked_cascade(entity_parent_start_index, &card_ids, true)
+                        .await?;
                 }
                 QueuedCardEvent::Install(event) => {
                     let Some(card) = event.card.clone() else {
@@ -1916,7 +1910,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         ));
                     };
                     let _ = self
-                        .apply_card_install(Some(pending_event.oplog_index), card)
+                        .apply_card_install(
+                            pending_event.entity_parent_start_index,
+                            Some(pending_event.oplog_index),
+                            card,
+                        )
                         .await?;
                 }
                 QueuedCardEvent::TransferReceived(event) => {
@@ -1927,6 +1925,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     };
                     let _ = self
                         .apply_received_card_transfer(
+                            pending_event.entity_parent_start_index,
                             pending_event.oplog_index,
                             event.transfer_id,
                             event.source_card_id,
@@ -1949,8 +1948,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let expired_root_ids =
             expired_wallet_card_ids_at(&self.state.invocation_scope_root_cards, Utc::now());
         if !expired_root_ids.is_empty() {
-            self.apply_card_revoked_cascade(&expired_root_ids, true)
-                .await?;
+            self.apply_card_revoked_cascade(
+                self.entity_parent_start_index(),
+                &expired_root_ids,
+                true,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1964,7 +1967,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .get_attached_last_known_status()
             .await;
         let status_idx = status.oplog_idx;
-        let status_pending = status.pending_card_events;
+        let status_pending = status.pending_card_events.clone();
 
         let oplog = self.public_state.worker().oplog();
         let current_idx = oplog.current_oplog_index().await;
@@ -2048,6 +2051,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) async fn apply_card_install(
         &mut self,
+        entity_parent_start_index: Option<OplogIndex>,
         queued_event_index: Option<OplogIndex>,
         card: StoredCard,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
@@ -2057,6 +2061,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.public_state
                     .worker()
                     .add_and_commit_oplog(OplogEntry::card_install_failed(
+                        entity_parent_start_index,
                         queued_event_index,
                         card_id,
                         reason,
@@ -2068,6 +2073,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::card_installed(
+                    entity_parent_start_index,
                     queued_event_index,
                     card,
                     Some(self.state.wallet_generation),
@@ -2079,6 +2085,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn apply_received_card_transfer(
         &mut self,
+        entity_parent_start_index: Option<OplogIndex>,
         queued_event_index: OplogIndex,
         transfer_id: uuid::Uuid,
         source_card_id: Option<CardId>,
@@ -2089,6 +2096,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::card_install_failed(
+                    entity_parent_start_index,
                     queued_event_index,
                     card_id,
                     reason,
@@ -2100,6 +2108,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .add_and_commit_oplog(OplogEntry::card_transferred(
+                entity_parent_start_index,
                 transfer_id,
                 source_card_id,
                 card_id,
@@ -2136,6 +2145,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::card_revoked(
+                    self.entity_parent_start_index(),
                     queued_event_index,
                     card_id,
                     Some(self.state.wallet_generation),
@@ -2148,6 +2158,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) async fn apply_card_revoked_cascade(
         &mut self,
+        entity_parent_start_index: Option<OplogIndex>,
         card_ids: &[CardId],
         commit_immediately: bool,
     ) -> Result<(), WorkerExecutorError> {
@@ -2179,6 +2190,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let entry = OplogEntry::CardRevokedCascade {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
             local_wallet_generation: Some(self.state.wallet_generation),
@@ -2220,7 +2232,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         for (card_id, wallet_generation) in expired_card_generations {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::card_expired(card_id, Some(wallet_generation)))
+                .add_and_commit_oplog(OplogEntry::card_expired(
+                    self.entity_parent_start_index(),
+                    card_id,
+                    Some(wallet_generation),
+                ))
                 .await;
         }
         Ok(())
@@ -2438,7 +2454,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
-        if self.runtime == OwnerRuntime::Agent && self.state.is_live() && !reconciling {
+        if self.runtime == OwnerRuntime::Agent
+            && self.state.is_live()
+            && !self.state.snapshotting_mode
+            && !reconciling
+        {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
@@ -2899,7 +2919,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                             self.public_state
                                 .worker()
-                                .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                                .add_and_commit_oplog(OplogEntry::jump(
+                                    self.entity_parent_start_index(),
+                                    deleted_region,
+                                ))
                                 .await;
 
                             // TODO: this recomputation should not be necessary.
@@ -3299,7 +3322,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                     self.public_state
                         .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                        .add_and_commit_oplog(OplogEntry::jump(
+                            self.entity_parent_start_index(),
+                            deleted_region,
+                        ))
                         .await;
 
                     // TODO: this recomputation should not be necessary.
@@ -3778,24 +3804,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => (payload, mime_type),
             _ => {
                 let error = format!(
-                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry"
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
-                }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after invalid snapshot entry: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
+                );
+                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
             }
         };
 
@@ -3809,27 +3826,37 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             Ok(data) => data,
             Err(err) => {
-                let error = format!(
-                    "Failed to download snapshot payload: {err}; falling back to full replay"
+                let error =
+                    format!("Failed to download snapshot payload at {snapshot_index}: {err}");
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
                 );
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if snapshot_source == Some(SnapshotSource::Automatic) {
-                    return SnapshotRecoveryResult::Failed;
+                    store
+                        .as_context()
+                        .data()
+                        .get_public_state()
+                        .worker()
+                        .unavailable_periodic_snapshot_through
+                        .fetch_max(snapshot_index.into(), Ordering::AcqRel);
+                    return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
-                if let Err(err) = store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .restart_replay_without_snapshot()
-                    .await
-                {
-                    warn!("Failed to restart replay state after snapshot download failure: {err}");
-                    return SnapshotRecoveryResult::Failed;
-                }
-                return SnapshotRecoveryResult::NotAttempted;
+                return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
             }
         };
+
+        if let Err(error) = load_load_snapshot_guest(&mut store.as_context_mut(), instance) {
+            Self::emit_snapshot_recovery_event(
+                store,
+                snapshot_index,
+                false,
+                Some(error.to_string()),
+            );
+            return SnapshotRecoveryResult::Failed(error);
+        }
 
         let component_metadata = store
             .as_context()
@@ -3860,9 +3887,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Err(err) => {
                 let error =
                     format!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
-                warn!("{error}");
-                Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-                return SnapshotRecoveryResult::Failed;
+                Self::emit_snapshot_recovery_event(
+                    store,
+                    snapshot_index,
+                    false,
+                    Some(error.clone()),
+                );
+                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
             }
         };
 
@@ -3876,9 +3907,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
         {
             let error = format!("Snapshot recovery failed to install invocation context: {err}");
-            warn!("{error}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            return SnapshotRecoveryResult::Failed;
+            return SnapshotRecoveryResult::Unavailable(err);
         }
 
         store
@@ -3911,10 +3941,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .remove_span(&span_id);
         }
 
+        let snapshot_divergence = load_result
+            .as_ref()
+            .is_ok_and(InvokeResult::is_snapshot_replay_divergence);
         let failed = match load_result {
-            Err(error) => Some(format!(
-                "Snapshot recovery failed to load snapshot: {error}"
-            )),
+            Err(error) => return SnapshotRecoveryResult::Unavailable(error),
+            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                return SnapshotRecoveryResult::Retry(
+                    Self::fixed_decision_for_trap_type(&TrapType::Interrupt(interrupt_kind))
+                        .expect("interrupts have a fixed retry decision"),
+                );
+            }
+            Ok(InvokeResult::Failed { error, .. }) if !snapshot_divergence => {
+                return SnapshotRecoveryResult::Unavailable(
+                    WorkerExecutorError::InvocationFailed {
+                        error,
+                        stderr: String::new(),
+                    },
+                );
+            }
             Ok(InvokeResult::Failed { error, .. }) => {
                 let stderr = store
                     .as_context()
@@ -3938,9 +3983,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         if let Some(error) = failed {
-            warn!("{error}; re-creating instance for full replay");
-            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            SnapshotRecoveryResult::Failed
+            warn!(%error, %snapshot_index, "Snapshot recovery failed");
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error.clone()));
+            SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(format!(
+                "Snapshot recovery at {snapshot_index} failed: {error}"
+            )))
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
@@ -3956,12 +4003,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Abandons an automatic snapshot whose replayed tail diverged from the recorded oplog: the
-    /// worker is recreated with automatic snapshot recovery disabled so it replays the full oplog.
+    /// Recreates the instance from the authoritative baseline, excluding this periodic snapshot.
     fn abandon_diverged_automatic_snapshot(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-        full_function_name: &str,
-        error: &AgentError,
+        error: &impl std::fmt::Display,
     ) -> RetryDecision {
         let snapshot_index = store
             .as_context()
@@ -3971,18 +4016,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .last_snapshot_index
             .expect("an automatic snapshot tail is only replayed after loading a snapshot");
         let error = format!(
-            "Replaying {full_function_name} after loading the snapshot diverged from the recorded oplog: {}; falling back to full replay",
-            error.message()
+            "Snapshot recovery at {snapshot_index} diverged from the recorded oplog: {error}; retrying from the authoritative baseline"
         );
-        warn!("{error}");
-        Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+        warn!(%error, "Abandoning periodic snapshot");
+        if store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .replaying_automatic_snapshot_tail
+        {
+            Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
+        }
         store
             .as_context()
             .data()
             .get_public_state()
             .worker()
-            .snapshot_recovery_disabled
-            .store(true, Ordering::Release);
+            .rejected_periodic_snapshot_through
+            .fetch_max(snapshot_index.into(), Ordering::AcqRel);
         RetryDecision::Immediate
     }
 
@@ -4014,29 +4066,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 enum SnapshotRecoveryResult {
     Success,
     NotAttempted,
-    Failed,
+    Failed(WorkerExecutorError),
+    Unavailable(WorkerExecutorError),
+    Retry(RetryDecision),
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn restart_replay_without_snapshot(&mut self) -> Result<(), WorkerExecutorError> {
-        self.state.replay_state.drop_override_and_restart().await?;
-
-        self.state.agent_wallet_cards = match self.state.agent_id.as_ref() {
-            Some(agent_id) => {
-                let card = agent_initial_card_from_component_metadata(
-                    self.component_metadata(),
-                    agent_id,
-                )?;
-                BTreeMap::from([(card.card_id(), card)])
-            }
-            None => BTreeMap::new(),
-        };
-        self.state.wallet_generation = 0;
-        self.rederive_agent_effective_surface_from_wallet();
-
-        Ok(())
-    }
-
     /// Activity tracker for Golem-spawned store background tasks; see
     /// [`tail_work::TailWorkTracker`].
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
@@ -4872,6 +4907,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
             .await;
 
+        let entity_parent_start_index = self.entity_parent_start_index();
         let permission_denial_persisted = if let (
             Some(idempotency_key),
             TrapType::Error {
@@ -4893,6 +4929,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         let inside_atomic_region = *atomic_region_had_side_effects;
                         move |_| {
                             OplogEntry::error(
+                                entity_parent_start_index,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 inside_atomic_region,
@@ -4930,6 +4967,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 atomic_region_had_side_effects,
                 ..
             } => Some(OplogEntry::error(
+                entity_parent_start_index,
                 error.clone(),
                 *retry_from,
                 *atomic_region_had_side_effects,
@@ -5187,7 +5225,11 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let id = self.state.add(resource, name.clone()).await;
         let resource_id = AgentResourceId(id);
         if self.state.is_live() {
-            let entry = OplogEntry::create_resource(resource_id, name.clone());
+            let entry = OplogEntry::create_resource(
+                self.entity_parent_start_index(),
+                resource_id,
+                name.clone(),
+            );
             self.public_state.worker().add_to_oplog(entry).await;
         }
         id
@@ -5198,7 +5240,11 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         if let Some((resource_type_id, _)) = &result {
             let id = AgentResourceId(resource_id);
             if self.state.is_live() {
-                let entry = OplogEntry::drop_resource(id, resource_type_id.clone());
+                let entry = OplogEntry::drop_resource(
+                    self.entity_parent_start_index(),
+                    id,
+                    resource_type_id.clone(),
+                );
                 self.public_state.worker().add_to_oplog(entry).await;
             }
         }
@@ -5482,6 +5528,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        let result = async {
         let mut number_of_replayed_functions = 0;
 
         if refresh_replay_target {
@@ -5758,6 +5805,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }
                             _ => {
                                 let details = format!("{invoke_result:?}");
+                                let snapshot_divergence = match &invoke_result {
+                                    Ok(result) => result.is_snapshot_replay_divergence(),
+                                    Err(WorkerExecutorError::UnexpectedOplogEntry { .. }) => true,
+                                    Err(_) => false,
+                                };
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
                                     Err(error) => {
@@ -5777,14 +5829,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     // restored from the snapshot differs from the original one. The
                                     // recorded oplog is authoritative, so instead of committing the
                                     // failure the snapshot is abandoned and the worker replays from
-                                    // the beginning, which reproduces the recorded outcome.
+                                    // its authoritative baseline.
                                     Some(TrapType::Error { error, .. })
-                                        if store
-                                            .as_context()
-                                            .data()
-                                            .durable_ctx()
-                                            .state
-                                            .replaying_automatic_snapshot_tail
+                                        if snapshot_divergence
+                                            && store
+                                                .as_context()
+                                                .data()
+                                                .durable_ctx()
+                                                .state
+                                                .replaying_automatic_snapshot_tail
                                             && !store
                                                 .as_context()
                                                 .data()
@@ -5793,9 +5846,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     {
                                         Some(Self::abandon_diverged_automatic_snapshot(
                                             store,
-                                            &full_function_name,
-                                            &error,
+                                            &error.message(),
                                         ))
+                                    }
+                                    Some(trap_type)
+                                        if store.as_context().data().durable_ctx().state.replaying_automatic_snapshot_tail
+                                            && !store.as_context().data().durable_ctx().is_live() =>
+                                    {
+                                        // Speculative reconstruction failures must not append an
+                                        // authoritative invocation Error for already recorded work.
+                                        match trap_type {
+                                            TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
+                                                error,
+                                                stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
+                                            }),
+                                            TrapType::Interrupt(kind) => Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind)),
+                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during snapshot replay")),
+                                        }
                                     }
                                     Some(trap_type) => {
                                         let decision = store
@@ -5879,6 +5946,22 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         }
 
         resume_result
+        }.await;
+        // Result validation can consume the final recorded entry before detecting a mismatch.
+        // Its typed replay error, rather than the resulting live cursor, identifies divergence.
+        if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result
+            && store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .state
+                .replaying_automatic_snapshot_tail
+        {
+            return Ok(Some(Self::abandon_diverged_automatic_snapshot(
+                store, error,
+            )));
+        }
+        result
     }
 
     async fn prepare_instance(
@@ -5947,13 +6030,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             target_revision, ..
                         } => {
                             let replay_result = async {
-                                if let SnapshotRecoveryResult::Failed =
-                                    Self::try_load_snapshot(store, instance).await
-                                {
-                                    return Err(WorkerExecutorError::failed_to_resume_worker(
-                                        agent_id.clone(),
-                                        WorkerExecutorError::runtime("loading snapshot failed"),
-                                    ));
+                                match Self::try_load_snapshot(store, instance).await {
+                                    SnapshotRecoveryResult::Failed(error)
+                                    | SnapshotRecoveryResult::Unavailable(error) => {
+                                        return Err(error);
+                                    }
+                                    SnapshotRecoveryResult::Retry(decision) => {
+                                        return Ok(Some(decision));
+                                    }
+                                    SnapshotRecoveryResult::Success
+                                    | SnapshotRecoveryResult::NotAttempted => {}
                                 };
                                 // automatic update will be succeeded as part of the replay.
                                 let result = Self::resume_replay(store, instance, false).await?;
@@ -6013,21 +6099,47 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         record_resume_worker(start.elapsed());
                         result
                     }
-                    SnapshotRecoveryResult::Failed => {
-                        store
+                    SnapshotRecoveryResult::Failed(error) => {
+                        if store
                             .as_context()
                             .data()
-                            .get_public_state()
-                            .worker()
-                            .snapshot_recovery_disabled
-                            .store(true, Ordering::Release);
-                        Ok(Some(RetryDecision::Immediate))
+                            .durable_ctx()
+                            .state
+                            .last_snapshot_source
+                            == Some(SnapshotSource::Automatic)
+                        {
+                            Ok(Some(Self::abandon_diverged_automatic_snapshot(
+                                store, &error,
+                            )))
+                        } else {
+                            Err(error)
+                        }
                     }
+                    SnapshotRecoveryResult::Unavailable(error) => Err(error),
+                    SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
         };
         match prepare_result {
             Ok(None) => {
+                let worker = store.as_context().data().get_public_state().worker();
+                let rejected = worker
+                    .rejected_periodic_snapshot_through
+                    .load(Ordering::Acquire);
+                if rejected != 0 {
+                    let metadata = worker.get_initial_worker_metadata();
+                    worker
+                        .worker_service()
+                        .reject_periodic_snapshots_through(
+                            &metadata.owned_agent_id(),
+                            metadata.fingerprint,
+                            OplogIndex::from_u64(rejected),
+                        )
+                        .await?;
+                }
+                worker
+                    .unavailable_periodic_snapshot_through
+                    .store(0, Ordering::Release);
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }
@@ -6045,41 +6157,35 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-        let workers = this.worker_service().get_running_workers_in_shards().await;
+        let workers = this
+            .worker_service()
+            .get_running_workers_in_shards()
+            .await?;
 
         debug!(workers = ?workers, "Recovering running workers");
 
+        // Only a worker that is genuinely gone may be skipped; every other failure fails the
+        // assignment. See `recovered_status` for the distinction and for what failing buys.
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
             let agent_mode = worker.initial_worker_metadata.agent_mode;
-            // A running worker should always have a recoverable oplog (a `Create` entry), so a
-            // `None` here is an unexpected invariant violation (e.g. a corrupt/partially-deleted
-            // oplog). Isolate the failure to this one agent instead of aborting recovery of every
-            // other worker on this executor (which propagating would do — and would also fail
-            // executor startup or the shard-assignment RPC, since one poison worker could
-            // permanently block this executor from serving its shards).
-            let latest_worker_status = calculate_last_known_status_with_checkpoint(
-                this,
+            let Some(latest_worker_status) = recovered_status(
                 &owned_agent_id,
-                agent_mode,
-                worker.last_known_status,
-            )
-            .await;
-            let latest_worker_status = match latest_worker_status {
-                Ok(Some(status)) => status,
-                Ok(None) => {
-                    error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
-                    continue;
-                }
-                Err(error) => {
-                    error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status during shard-assignment recovery; skipping agent");
-                    continue;
-                }
+                calculate_last_known_status_with_checkpoint(
+                    this,
+                    &owned_agent_id,
+                    agent_mode,
+                    worker.last_known_status,
+                )
+                .await,
+            )?
+            else {
+                continue;
             };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            if should_restart_after_shard_assignment_change(&latest_worker_status)
-                && let Err(err) = Worker::get_or_create_running(
+            if should_restart_after_shard_assignment_change(&latest_worker_status) {
+                Worker::get_or_create_running(
                     this,
                     &owned_agent_id,
                     None,
@@ -6090,14 +6196,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     Principal::anonymous(),
                 )
                 .await
-            {
-                // Same isolation rationale: don't let one worker that fails to restart abort
-                // recovery of the rest. It will be retried on demand on its next invocation.
-                error!(
-                    agent_id = %owned_agent_id,
-                    error = %err,
-                    "Failed to restart worker during shard-assignment recovery; skipping agent"
-                );
+                .map_err(|error| {
+                    anyhow!(
+                        "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                    )
+                })?;
             }
         }
 
@@ -6469,6 +6572,45 @@ fn replace_wallet_cards(
     }
     *generation = next_generation;
     Ok(true)
+}
+
+/// What shard-assignment recovery does with one worker's computed status: `Ok(Some)` to restart
+/// it, `Ok(None)` to skip it, `Err` to fail the whole assignment.
+///
+/// The same distinction `enum_workers_at_key` draws for the scan itself:
+///
+/// - `Ok(None)` from the status computation means the oplog is gone - a delete that raced the
+///   index read. There is nothing to resume, so that one agent is skipped.
+/// - `Err` is not evidence the worker is gone. Logging it and moving on would acknowledge the
+///   assignment with the worker still stopped, and nothing would try again until an external
+///   invocation happened to arrive: a running agent stranded silently for as long as this
+///   executor owns the shard. Failing the assignment hands the retry to the caller instead. The
+///   shard manager retries a failed `assign_shards`, and at startup the process exits and the
+///   restart policy retries. Recovery is idempotent - a worker restarted on an earlier attempt is
+///   simply found running on the next - so re-running the whole scan is safe. The restart that
+///   follows a computed status is treated the same way by the caller.
+///
+/// Every storage read on this path has already had the key-value retry budget, which is sized to
+/// outlast an AWS failover, so what arrives here as `Err` is what outlived that budget. A worker
+/// that can never be restarted therefore keeps this executor from serving its shards, loudly,
+/// rather than being dropped from recovery quietly. That is the intended trade: the loud failure
+/// is visible and gets acted on, the quiet one is not. It is also the shape the oplog layers
+/// already have - a bounded storage retry, then a fatal failure - at a lower cost, since a failed
+/// assignment is one RPC rather than a process exit.
+fn recovered_status(
+    owned_agent_id: &OwnedAgentId,
+    computed: Result<Option<AgentStatusRecord>, String>,
+) -> Result<Option<AgentStatusRecord>, anyhow::Error> {
+    match computed {
+        Ok(Some(status)) => Ok(Some(status)),
+        Ok(None) => {
+            error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
+            Ok(None)
+        }
+        Err(error) => Err(anyhow!(
+            "failed to calculate the status of {owned_agent_id} during shard-assignment recovery, so it cannot be resumed: {error}"
+        )),
+    }
 }
 
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
@@ -8101,6 +8243,7 @@ mod tests {
         let pending_transfer = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(1),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::transfer_started(Uuid::new_v4(), transfer_card, target_holder),
         };
         assert!(next_drainable_card_events(vec![pending_transfer.clone()]).is_empty());
@@ -8110,6 +8253,7 @@ mod tests {
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(2),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(revoked_card_id),
             },
         ];
@@ -8130,6 +8274,7 @@ mod tests {
         let receipt = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(1),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::transfer_received(Uuid::new_v4(), source_card_id, card.clone()),
         };
 
@@ -8155,21 +8300,25 @@ mod tests {
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(1),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(first),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(2),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(second),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(3),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::install(install),
             },
             PendingCardEventRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::from_u64(4),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::revoke(after_install),
             },
         ];
@@ -8199,8 +8348,8 @@ mod tests {
             assert_eq!(count, 2);
 
             let entries = BTreeMap::from([
-                (start, OplogEntry::no_op()),
-                (current_idx, OplogEntry::no_op()),
+                (start, OplogEntry::no_op(None)),
+                (current_idx, OplogEntry::no_op(None)),
             ]);
             scanned_entries += entries.len();
             scan.fold_through(current_idx, &entries);
@@ -8222,7 +8371,7 @@ mod tests {
             queued_idx,
             &BTreeMap::from([(
                 queued_idx,
-                OplogEntry::card_event_queued(QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
             )]),
         );
 
@@ -8233,7 +8382,7 @@ mod tests {
             terminal_idx,
             &BTreeMap::from([(
                 terminal_idx,
-                OplogEntry::card_revoked(queued_idx, card_id, None),
+                OplogEntry::card_revoked(None, queued_idx, card_id, None),
             )]),
         );
 
@@ -8248,11 +8397,13 @@ mod tests {
         let cached_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(9),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(cached_card_id),
         };
         let status_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(10),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(status_card_id),
         };
         let mut scan =
@@ -8282,11 +8433,13 @@ mod tests {
         let cached_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(20),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(CardId::new()),
         };
         let status_pending = PendingCardEventRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(5),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::revoke(CardId::new()),
         };
         let mut scan = CardEventBoundaryScan::new(OplogIndex::from_u64(20), vec![cached_pending]);
@@ -8348,6 +8501,58 @@ mod tests {
         };
 
         assert!(!should_restart_after_shard_assignment_change(&status));
+    }
+
+    fn recovered_agent() -> OwnedAgentId {
+        OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "recovered".to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn shard_assignment_recovery_restarts_a_worker_whose_status_was_computed() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Running,
+            ..AgentStatusRecord::default()
+        };
+
+        let recovered = recovered_status(&recovered_agent(), Ok(Some(status))).unwrap();
+
+        assert_eq!(
+            recovered.map(|status| status.status),
+            Some(AgentStatus::Running)
+        );
+    }
+
+    /// No oplog means the index entry outlived the worker: nothing to resume, so it is skipped.
+    #[test]
+    fn shard_assignment_recovery_skips_a_worker_whose_oplog_is_gone() {
+        assert!(matches!(
+            recovered_status(&recovered_agent(), Ok(None)),
+            Ok(None)
+        ));
+    }
+
+    /// A status that could not be *computed* is not a worker that is gone. Skipping it would
+    /// acknowledge the assignment with the worker stopped and nothing recording that it should
+    /// run; failing the assignment is what gets it retried.
+    #[test]
+    fn shard_assignment_recovery_fails_on_a_status_it_cannot_compute() {
+        let error = recovered_status(
+            &recovered_agent(),
+            Err("failed to load durable stream session payload: redis failover".to_string()),
+        )
+        .expect_err("an uncomputable status was skipped rather than failing the assignment");
+
+        assert!(
+            error.to_string().contains("cannot be resumed")
+                && error.to_string().contains("redis failover"),
+            "{error}"
+        );
     }
 
     fn open_region(regions: &mut Vec<ActiveAtomicRegion>, begin: u64) -> OplogIndex {
@@ -9911,7 +10116,7 @@ impl WakeupScheduler {
                 &self.owned_agent_id.agent_id,
                 self.oplog.current_oplog_index().await,
             )
-            .await;
+            .await?;
 
         let schedule_id = self
             .scheduler_service
