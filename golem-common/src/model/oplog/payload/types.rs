@@ -2188,17 +2188,27 @@ pub enum SerializableHostFailureKind {
     Debug,
     Clone,
     PartialEq,
-    Eq,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
 pub enum SerializableRpcError {
-    ProtocolError { details: String },
-    Denied { details: String },
-    NotFound { details: String },
-    RemoteInternalError { details: String },
+    ProtocolError {
+        details: String,
+    },
+    Denied {
+        details: String,
+    },
+    NotFound {
+        details: String,
+    },
+    RemoteInternalError {
+        details: String,
+    },
+    RemoteAgentError {
+        error: Box<crate::model::agent::AgentError>,
+    },
 }
 
 #[derive(
@@ -2336,7 +2346,6 @@ pub struct SerializableToolOperationTerminal {
 #[desert(evolution())]
 pub struct SerializableToolInvocationResult {
     pub result: Option<TypedSchemaValue>,
-    pub stdout: Option<Vec<u8>>,
 }
 
 #[derive(

@@ -211,6 +211,7 @@ async fn invoke_streaming_caller(
             .unwrap_or_default(),
         retries: 0,
         timeouts: 0,
+        failures: vec![],
     }
 }
 

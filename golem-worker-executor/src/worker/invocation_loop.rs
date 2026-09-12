@@ -652,7 +652,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_non_detached_last_known_status()
                                             .await
-                                            .current_idempotency_key;
+                                            .current_idempotency_key
+                                            .clone();
                                         match kind {
                                             InterruptKind::Suspend(_) => {
                                                 self.parent.add_and_commit_oplog(OplogEntry::suspend()).await;
@@ -3681,6 +3682,7 @@ mod tests {
     fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
         let result = Ok(InvokeResult::Failed {
             consumed_fuel: 0,
+            timed_out: false,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
             in_atomic_region: false,

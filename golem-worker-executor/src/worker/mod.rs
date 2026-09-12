@@ -249,6 +249,15 @@ struct StartupComponentChargeRequirement {
     reserved_linear_memory_bytes: u64,
 }
 
+/// How often a caller parked in [`Worker::wait_for_invocation_result`] re-checks
+/// that this executor still owns the agent it is waiting for.
+///
+/// Reached only when the wait is otherwise idle. A tick that finds the agent
+/// still owned costs one set lookup for the ownership check, then re-enters the
+/// loop and re-runs `lookup_invocation_result`, which loads the published status
+/// record. Cheap, but not free, so this is not a millisecond knob.
+pub const INVOCATION_OWNERSHIP_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
 /// `create_instance` can still load it. Only a definitely-absent target
@@ -481,7 +490,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     snapshot_policy: SnapshotPolicy,
 
     last_resume_request: Mutex<Timestamp>,
-    pub(crate) snapshot_recovery_disabled: AtomicBool,
+    pub(crate) rejected_periodic_snapshot_through: AtomicU64,
+    pub(crate) unavailable_periodic_snapshot_through: AtomicU64,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_limit_interrupt_queued: AtomicBool,
@@ -893,34 +903,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_latest_metadata<T: HasAll<Ctx>>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Option<AgentMetadata> {
+    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-            Some(worker.get_latest_worker_metadata().await)
+            Ok(Some(worker.get_latest_worker_metadata().await))
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = deps.worker_service().get(owned_agent_id).await
+        }) = deps.worker_service().get(owned_agent_id).await?
         {
             // update with latest data from oplog
             let agent_mode = initial_worker_metadata.agent_mode;
-            let last_known_status = calculate_last_known_status_with_checkpoint(
+            // `Ok(None)` means the oplog is gone - a delete raced this read - and the agent is
+            // reported as absent. A status that cannot be *recomputed* is a different thing and
+            // is propagated: every caller treats absence as "not here", and reporting a storage
+            // outage that way turns it into a not-found, or into validation against the deployed
+            // component revision for an agent that is pinned to an older one.
+            let Some(last_known_status) = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
                 agent_mode,
                 last_known_status,
             )
             .await
-            .map_err(|error| {
-                tracing::error!(agent_id = %owned_agent_id, %error, "Failed to calculate worker status");
-                error
-            })
-            .ok()??;
+            .map_err(WorkerExecutorError::runtime)?
+            else {
+                return Ok(None);
+            };
 
             initial_worker_metadata.last_known_status = last_known_status;
 
-            Some(initial_worker_metadata)
+            Ok(Some(initial_worker_metadata))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -1105,7 +1119,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_flusher,
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
-            snapshot_recovery_disabled: AtomicBool::new(false),
+            rejected_periodic_snapshot_through: AtomicU64::new(0),
+            unavailable_periodic_snapshot_through: AtomicU64::new(0),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_limit_interrupt_queued: AtomicBool::new(false),
@@ -1373,6 +1388,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Unloaded { .. } => {
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
+                if start_attempt.is_none() {
+                    this.unavailable_periodic_snapshot_through
+                        .store(0, Ordering::Release);
+                }
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
                     Err(error) => {
@@ -1767,14 +1786,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn get_last_known_status(&self) -> AgentStatusRecord {
-        self.last_known_status.load_full().as_ref().clone()
+    /// Returns the published status as an `Arc` rather than a copy: the record is large and its
+    /// `invocation_results` grows with the invocations the agent has served, and every caller
+    /// here only reads a field or two out of it.
+    pub async fn get_last_known_status(&self) -> Arc<AgentStatusRecord> {
+        self.last_known_status.load_full()
     }
 
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
     // This just has an additional assert built in for when decisions need to be sure that they are fully up to date on the oplog.
     // _NEVER_ call this from outside the invocation loop, as that is the only place that can reason about whether the status is detached or not.
-    pub async fn get_non_detached_last_known_status(&self) -> AgentStatusRecord {
+    pub async fn get_non_detached_last_known_status(&self) -> Arc<AgentStatusRecord> {
         // Runs on the worker-state actor's status queue so the detached flag and the published
         // status are observed consistently with any in-flight commit/reattach transaction.
         self.state_actor.non_detached_status().await
@@ -1783,8 +1805,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Returns the authoritative status, reattaching it to the oplog first when necessary.
     /// Unlike [`Self::get_non_detached_last_known_status`], this is safe for independent store
     /// tasks that can overlap an invocation-loop jump or replay completion.
-    pub async fn get_attached_last_known_status(&self) -> AgentStatusRecord {
-        self.state_actor.attached_status().await.as_ref().clone()
+    pub async fn get_attached_last_known_status(&self) -> Arc<AgentStatusRecord> {
+        self.state_actor.attached_status().await
     }
 
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
@@ -2591,7 +2613,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     // should only be called from invocation loop
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         let keys_to_fail =
             invocation_keys_to_fail(&status, Some(key), !trap_type.is_invocation_rejection());
         let stderr = self.worker_event_service.get_last_invocation_errors();
@@ -3517,8 +3539,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_last_known_status()
             .await
             .pending_card_events
-            .into_iter()
-            .filter_map(|pending_event| match pending_event.event {
+            .iter()
+            .filter_map(|pending_event| match &pending_event.event {
                 QueuedCardEvent::Revoke(event) => Some(event.card_id),
                 QueuedCardEvent::Install(_)
                 | QueuedCardEvent::TransferStarted(_)
@@ -3691,6 +3713,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let foreign_mappings = request.foreign_mappings.clone();
+        for mapping in &foreign_mappings {
+            if producer.owns_handle_identity(&mapping.handle) {
+                producer
+                    .validate_handle(&mapping.handle)
+                    .await
+                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            }
+        }
 
         let prepared = if let Some(prepared) = existing_prepared {
             let mut requested_attempt = request.attempt.clone();
@@ -3840,7 +3870,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let already_attached = attached.is_some();
 
         let streams = DurableSessionStreams::new(
-            producer,
+            producer.clone(),
             self.oplog.clone(),
             session_key,
             prepared.stream_mappings.iter().map(|mapping| {
@@ -3861,10 +3891,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             request.input_element_types,
         );
         for mapping in &foreign_mappings {
-            if streams
-                .has_journaled_consumer_terminal(mapping)
-                .await
-                .map_err(WorkerExecutorError::runtime)?
+            if producer.owns_handle_identity(&mapping.handle)
+                || streams
+                    .has_journaled_consumer_terminal(mapping)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?
             {
                 continue;
             }
@@ -3886,16 +3917,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .add_pair(
                     pending,
                     Box::new(move |pending_invocation_oplog_index| {
-                        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
-                            StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
-                                format_version: 1,
-                                session_key: attached_attempt.session_key,
-                                attachment_id: attached_attempt.attachment_id,
-                                attempt_id: attached_attempt.attempt_id,
-                                epoch: 1,
-                                pending_invocation_oplog_index,
-                            }),
-                        )))
+                        OplogEntry::stream_session(
+                            None,
+                            OplogPayload::Inline(Box::new(StreamSessionRecordV1::Attached(
+                                StreamSessionAttachedRecordV1 {
+                                    format_version: 1,
+                                    session_key: attached_attempt.session_key,
+                                    attachment_id: attached_attempt.attachment_id,
+                                    attempt_id: attached_attempt.attempt_id,
+                                    epoch: 1,
+                                    pending_invocation_oplog_index,
+                                },
+                            ))),
+                        )
                     }),
                 )
                 .await;
@@ -3905,10 +3939,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .map_err(WorkerExecutorError::runtime)?;
         }
         for mapping in &foreign_mappings {
-            if streams
-                .has_journaled_consumer_terminal(mapping)
-                .await
-                .map_err(WorkerExecutorError::runtime)?
+            if producer.owns_handle_identity(&mapping.handle)
+                || streams
+                    .has_journaled_consumer_terminal(mapping)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?
             {
                 continue;
             }
@@ -4444,7 +4479,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         if requires_attachment {
-            streams = streams.require_attachment_before_production();
+            streams = streams.require_root_attachment_before_production();
         }
         streams
             .materialize_result(value, graph, root, component_revision)
@@ -5117,9 +5152,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queued_event_indices = Vec::with_capacity(card_ids.len());
         for card_id in card_ids {
             queued_event_indices.push(
-                self.add_to_oplog(OplogEntry::card_event_queued(QueuedCardEvent::revoke(
-                    card_id,
-                )))
+                self.add_to_oplog(OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::revoke(card_id),
+                ))
                 .await,
             );
         }
@@ -5179,11 +5215,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
         self.state_actor
             .append_and_commit_attached(
-                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
-                    transfer_id,
-                    source_card_id,
-                    card,
-                )),
+                OplogEntry::card_event_queued(
+                    None,
+                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card),
+                ),
                 self.clone(),
                 instance_guard,
                 boundary_guard,
@@ -5423,24 +5458,85 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         key: &IdempotencyKey,
         mut subscription: EventsSubscription,
     ) -> Result<LookupResult, RecvError> {
+        // A deadline, so how often the check runs is a property of the check
+        // rather than of how often this loop happens to restart. Both `continue`
+        // paths below re-enter it, and a sleep started fresh each time would
+        // measure the interval from the last restart instead of running every
+        // interval. A receiver that keeps falling
+        // `invocation_result_broadcast_capacity` events behind restarts this
+        // loop every 100ms, and with a fresh sleep each time the check would
+        // never run at all.
+        let mut next_ownership_check =
+            tokio::time::Instant::now() + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
                 LookupResult::New | LookupResult::Pending => {
-                    let wait_result = subscription
-                        .wait_for(|event| match event {
-                            Event::InvocationCompleted {
-                                agent_id,
-                                idempotency_key,
-                                result,
-                            } if *agent_id == self.owned_agent_id.agent_id
-                                && idempotency_key == key =>
+                    let waiting = subscription.wait_for(|event| match event {
+                        Event::InvocationCompleted {
+                            agent_id,
+                            idempotency_key,
+                            result,
+                        } if *agent_id == self.owned_agent_id.agent_id
+                            && idempotency_key == key =>
+                        {
+                            Some(LookupResult::Complete(result.clone()))
+                        }
+                        _ => None,
+                    });
+
+                    // The deadline is polled first, and `biased` makes that an
+                    // order rather than a coin toss. A receiver that has fallen
+                    // behind the bus is ready at once, with `Lagged`, and a
+                    // select that polled it first would take that arm every
+                    // time and never look at the timer. Under sustained lag
+                    // that starves the ownership check for as long as the lag
+                    // lasts, and a caller whose agent has moved is back to
+                    // waiting out its own timeout. Polling the deadline first
+                    // costs nothing while it is in the future, and when it is
+                    // due, a result that arrived in the same instant is not
+                    // lost: the check either re-enters the loop, whose lookup
+                    // finds it, or reads it before rerouting.
+                    let wait_result = tokio::select! {
+                        biased;
+                        () = tokio::time::sleep_until(next_ownership_check) => {
+                            next_ownership_check = tokio::time::Instant::now()
+                                + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+
+                            // An agent whose shard has moved is resumed by whoever owns
+                            // it now, and its `InvocationCompleted` is published on that
+                            // executor's bus. Nothing will ever arrive on ours, and the
+                            // only other way out of this loop is the result turning up in
+                            // this `Worker`'s own memory, which it never will either. So
+                            // hand the caller the error that makes worker-service
+                            // invalidate its routing table and retry against the new
+                            // owner, rather than leave it to find out by timing out.
+                            //
+                            // Only `InvalidShardId` ends the wait. An executor whose
+                            // shard assignment is not set yet fails this check too, with
+                            // an `Unknown` from `sharding_not_ready_error`, and that one
+                            // has to fall through and keep waiting: an assignment is on
+                            // its way, and the agent may well still be ours.
+                            if let Err(error @ WorkerExecutorError::InvalidShardId { .. }) =
+                                self.shard_service().check_worker(&self.owned_agent_id.agent_id)
                             {
-                                Some(LookupResult::Complete(result.clone()))
+                                // The invocation can have finished while we were deciding
+                                // that. `store_invocation_success` fills `invocation_results`
+                                // before it publishes, so the result is already readable
+                                // here, and a real result always beats a reroute.
+                                match self.lookup_invocation_result(key).await {
+                                    LookupResult::New | LookupResult::Pending => {
+                                        debug!("Agent is no longer owned by this executor, ending the wait for its invocation result");
+                                        break Ok(LookupResult::Complete(Err(error)));
+                                    }
+                                    settled => break Ok(settled),
+                                }
                             }
-                            _ => None,
-                        })
-                        .await;
+                            continue;
+                        }
+                        result = waiting => result,
+                    };
                     match wait_result {
                         Ok(result) => break Ok(result),
                         Err(RecvError::Lagged(_)) => {
@@ -5456,7 +5552,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        let status = self.last_known_status.load_full().as_ref().clone();
+        // Kept as an `Arc` rather than cloned out of. The record owns
+        // `invocation_results`, which gains an entry per invocation, so deep-copying it to read
+        // one key made each lookup cost more than the last. `load_full` already gives a
+        // consistent snapshot with the lifetime this needs.
+        let status = self.last_known_status.load_full();
         let cached = self
             .hydrated_invocation_results
             .read()
@@ -5950,7 +6050,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
 
         let mut invocation_results = self.hydrated_invocation_results.write().await;
@@ -6085,7 +6185,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 None
             } else {
                 // Note: this also checks the oplog for the existence of the create entry.
-                this.worker_service().get(owned_agent_id).await
+                this.worker_service().get(owned_agent_id).await?
             };
 
         match existing_worker_metadata {
@@ -6347,7 +6447,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_status_value = initial_status.load_full().as_ref().clone();
                 this.worker_service()
                     .update_cached_status(owned_agent_id, None, initial_status_value.clone())
-                    .await;
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
@@ -6423,7 +6524,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         self.status_checkpointer
             .maybe_checkpoint(&status, reason)
             .await;
@@ -6446,7 +6547,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
-        let status = self.last_known_status.load_full().as_ref().clone();
+        let status = self.last_known_status.load_full();
         if let Some(marker) = min_exposed_marker
             && status.oplog_idx > marker
         {
@@ -7115,6 +7216,19 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
+        if let Some(rejected) = parent
+            .worker_service()
+            .get_rejected_periodic_snapshot_through(
+                &parent.owned_agent_id,
+                parent.initial_worker_metadata.fingerprint,
+            )
+            .await?
+        {
+            parent
+                .rejected_periodic_snapshot_through
+                .fetch_max(rejected.into(), Ordering::AcqRel);
+        }
+
         let automatic_snapshot = worker_metadata
             .last_known_status
             .last_automatic_snapshot_index
@@ -7126,9 +7240,17 @@ impl RunningWorker {
             .filter(|(_, snapshot_revision)| {
                 *snapshot_revision == worker_metadata.last_known_status.component_revision
             })
-            .filter(|_| {
+            .filter(|(index, _)| {
                 pending_update.is_none()
-                    && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
+                    && u64::from(*index)
+                        > parent
+                            .rejected_periodic_snapshot_through
+                            .load(Ordering::Acquire)
+                            .max(
+                                parent
+                                    .unavailable_periodic_snapshot_through
+                                    .load(Ordering::Acquire),
+                            )
             });
 
         let component_version_for_replay = automatic_snapshot.map_or_else(
@@ -7175,8 +7297,8 @@ impl RunningWorker {
             .last_manual_update_snapshot_index;
         let mut last_snapshot_source = last_snapshot_index.map(|_| SnapshotSource::ManualUpdate);
 
-        // Automatic snapshots are only considered until the first failure and while they match
-        // the active component revision. Pending updates temporarily ignore them so compatibility
+        // Only snapshots newer than the rejection watermark and matching the active revision
+        // are eligible. Pending updates temporarily ignore them so compatibility
         // is established by replaying from the authoritative manual-update baseline.
         if let Some((snapshot_idx, _)) = automatic_snapshot {
             let snapshot_skip =
@@ -7333,7 +7455,7 @@ impl RunningWorker {
                 );
             }
         };
-        let context = match Ctx::create(
+        let mut context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
             parent.parsed_agent_id.clone(),
@@ -7413,6 +7535,12 @@ impl RunningWorker {
                 );
             }
         };
+        if last_snapshot_index.is_some() {
+            // Core initializers run before load-snapshot, but their recorded host calls are
+            // already inside the skipped snapshot history. Recreate that runtime state with
+            // the same durability suppression as snapshot loading, without consuming the tail.
+            context.begin_call_snapshotting_function();
+        }
         let mut hosted = match instance_host.instantiate(context, &component).await {
             Ok(hosted) => hosted,
             Err(error) => {
@@ -7428,6 +7556,9 @@ impl RunningWorker {
             );
         }
         let (instance, mut store) = hosted.into_parts();
+        if last_snapshot_index.is_some() {
+            store.data_mut().end_call_snapshotting_function();
+        }
         if let Some((active_agent, generation)) = entity_generation {
             let interrupt_state = parent.interrupt_signal.lock().await;
             if !interrupt_state.has_interrupt() {

@@ -16,11 +16,10 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceDeployEnvironmentError,
     RegistryServiceGetToolReleaseError, RegistryServiceRollbackEnvironmentError,
 };
+use golem_client::model::AgentSecretCreation;
 use golem_client::model::DeploymentCreation;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent_secret::{
-    AgentSecretCreation, AgentSecretPath, CanonicalAgentSecretPath,
-};
+use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::component::{
     AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName, ComponentUpdate,
     ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate, ToolProvisionConfigCreation,
@@ -54,7 +53,7 @@ use golem_common::schema::tool::{
     CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
 };
 use golem_common::schema::validation::is_equivalent_cross_graph;
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -207,6 +206,10 @@ fn deployment_creation(
         tool_compatibility_mode: Default::default(),
         replace_incompatible_agent_secrets: false,
     }
+}
+
+fn external(value: SchemaValue) -> ExternalSchemaValue {
+    ExternalSchemaValue::try_from(value).unwrap()
 }
 
 fn assert_secret_type_is_string(secret_type: &SchemaGraph) {
@@ -858,8 +861,11 @@ async fn deploy_creates_missing_secret_from_default(
     assert_eq!(secret.path.0, secret_path);
     assert_secret_type_is_string(&secret.secret_type);
     assert_eq!(
-        secret.secret_value,
-        Some(SchemaValue::String("foo".to_string()))
+        secret
+            .secret_value
+            .as_ref()
+            .map(ExternalSchemaValue::as_inner),
+        Some(&SchemaValue::String("foo".to_string()))
     );
 
     Ok(())
@@ -882,7 +888,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
             &AgentSecretCreation {
                 path: AgentSecretPath(secret_path.clone()),
                 secret_type: SchemaGraph::anonymous(SchemaType::string()),
-                secret_value: Some(SchemaValue::String("bar".to_string())),
+                secret_value: Some(external(SchemaValue::String("bar".to_string()))),
             },
         )
         .await?;
@@ -932,8 +938,11 @@ async fn deploy_ignores_default_if_secret_already_exists(
 
     // Existing value must be preserved
     assert_eq!(
-        secret.secret_value,
-        Some(SchemaValue::String("bar".to_string()))
+        secret
+            .secret_value
+            .as_ref()
+            .map(ExternalSchemaValue::as_inner),
+        Some(&SchemaValue::String("bar".to_string()))
     );
 
     Ok(())
@@ -1005,8 +1014,11 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
     assert_secret_type_is_string(&secret.secret_type);
 
     assert_eq!(
-        secret.secret_value,
-        Some(SchemaValue::String("foo".to_string()))
+        secret
+            .secret_value
+            .as_ref()
+            .map(ExternalSchemaValue::as_inner),
+        Some(&SchemaValue::String("foo".to_string()))
     );
 
     Ok(())
@@ -1029,7 +1041,7 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
             &AgentSecretCreation {
                 path: AgentSecretPath(secret_path.clone()),
                 secret_type: SchemaGraph::anonymous(SchemaType::bool()),
-                secret_value: Some(SchemaValue::Bool(false)),
+                secret_value: Some(external(SchemaValue::Bool(false))),
             },
         )
         .await?;

@@ -314,6 +314,7 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
                 store.data().current_atomic_region_had_side_effects();
             Ok(InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: true,
                 error: OplogAgentError::InternalError(format!(
                     "invocation exceeded the configured maximum invocation duration of {:?}",
                     deadline
@@ -730,6 +731,7 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
             })?;
     Ok(InvokeResult::Failed {
         consumed_fuel,
+        timed_out: false,
         error: OplogAgentError::InternalError(agent_error.to_string()),
         retry_from: OplogIndex::INITIAL,
         in_atomic_region: false,
@@ -849,8 +851,8 @@ pub(crate) struct AgentExportFuncs {
 /// `DurableWorkerCtx`; subsequent calls return the cached handle, skipping the
 /// name-based lookup and typed signature checks.
 macro_rules! cached_guest_loader {
-    ($fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
-        fn $fn_name<Ctx: WorkerCtx>(
+    ($vis:vis $fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
+        $vis fn $fn_name<Ctx: WorkerCtx>(
             store: &mut StoreContextMut<'_, Ctx>,
             instance: &wasmtime::component::Instance,
         ) -> Result<$exports::Guest, WorkerExecutorError> {
@@ -897,7 +899,7 @@ cached_guest_loader!(
     "failed to load save-snapshot export"
 );
 cached_guest_loader!(
-    load_load_snapshot_guest,
+    pub(crate) load_load_snapshot_guest,
     load_snapshot_exports,
     load_snapshot,
     "load-snapshot export not available",
@@ -941,6 +943,9 @@ pub enum InvokeResult {
     Failed {
         consumed_fuel: u64,
         error: OplogAgentError,
+        /// Deadline failures share the public internal-error representation but are not evidence
+        /// that a restored snapshot disagrees with recorded execution.
+        timed_out: bool,
         retry_from: OplogIndex,
         /// Whether the trapping call was inside an atomic region (membership). Round-tripped via
         /// `as_trap_type` into `TrapType::Error` so the post-trap recovery decision uses the call's
@@ -983,6 +988,7 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             } => Self::Failed {
                 consumed_fuel,
+                timed_out: false,
                 error,
                 retry_from,
                 in_atomic_region,
@@ -1020,6 +1026,7 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             } => InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: false,
                 error,
                 retry_from,
                 in_atomic_region,
@@ -1027,6 +1034,21 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             },
         }
+    }
+
+    pub(crate) fn is_snapshot_replay_divergence(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                timed_out: false,
+                error: OplogAgentError::DeterministicTrap(_)
+                    | OplogAgentError::PermanentError(_)
+                    | OplogAgentError::InternalError(_)
+                    | OplogAgentError::ReadOnlyViolation(_)
+                    | OplogAgentError::StackOverflow,
+                ..
+            }
+        )
     }
 
     pub fn consumed_fuel(&self) -> u64 {
@@ -1073,9 +1095,10 @@ pub struct LoweredInvocation {
     /// (e.g., the agent method name "do-something")
     pub display_name: String,
     /// `Some(method_name)` when the invocation targets an `AgentMethod` whose
-    /// `read_only` metadata is set. The worker-executor uses this to enable the
-    /// read-only invocation strictness mode for the duration of the call, trapping
-    /// outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
+    /// `read_only` metadata is set, or `Some("load-snapshot")` for the specially
+    /// restricted snapshot-loading lifecycle call. The worker-executor uses this
+    /// to enable read-only invocation strictness for the duration of the call,
+    /// trapping outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
     pub read_only_method: Option<String>,
     /// The typed export call to perform.
     call: LoweredCall,
@@ -1319,7 +1342,7 @@ pub fn lower_invocation(
         }),
         AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
             display_name: "load-snapshot".to_string(),
-            read_only_method: None,
+            read_only_method: Some("load-snapshot".to_string()),
             call: LoweredCall::LoadSnapshot {
                 snapshot: snapshot.into(),
             },
@@ -1476,6 +1499,7 @@ mod tests {
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::{AgentTypeName, Principal};
     use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::RawSnapshotData;
     use golem_common::schema::TypedSchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
@@ -1484,6 +1508,71 @@ mod tests {
     use golem_common::schema::schema_type::SchemaType;
     use std::collections::BTreeMap;
     use test_r::test;
+
+    #[test]
+    fn snapshot_divergence_excludes_deadlines_and_infrastructure_failures() {
+        for (error, timed_out, expected) in [
+            (
+                OplogAgentError::InternalError("boundary mismatch".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::InternalError("deadline".into()),
+                true,
+                false,
+            ),
+            (
+                OplogAgentError::DeterministicTrap("unreachable".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::ReadOnlyViolation(
+                    golem_common::model::oplog::ReadOnlyViolationError {
+                        method: "load-snapshot".into(),
+                        host_function: "keyvalue.set".into(),
+                    },
+                ),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::TransientError("storage unavailable".into()),
+                false,
+                false,
+            ),
+            (
+                OplogAgentError::Unknown("unclassified host failure".into()),
+                false,
+                false,
+            ),
+            (OplogAgentError::OutOfMemory, false, false),
+            (OplogAgentError::ExceededMemoryLimit, false, false),
+        ] {
+            let result = InvokeResult::Failed {
+                consumed_fuel: 0,
+                error,
+                timed_out,
+                retry_from: OplogIndex::INITIAL,
+                in_atomic_region: false,
+                atomic_region_had_side_effects: false,
+                semantic_trap_retry_override: None,
+            };
+            assert_eq!(
+                result.is_snapshot_replay_divergence(),
+                expected,
+                "{result:?}"
+            );
+        }
+        assert!(
+            !InvokeResult::Interrupted {
+                consumed_fuel: 0,
+                interrupt_kind: InterruptKind::Restart,
+            }
+            .is_snapshot_replay_divergence()
+        );
+    }
 
     #[test]
     fn invocation_poll_reuses_production_thread_stack() {
@@ -1636,6 +1725,40 @@ mod tests {
         let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
             .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
+        assert!(lowered.read_only_method.is_none());
+    }
+
+    #[test]
+    fn load_snapshot_uses_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::LoadSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-load".to_string()),
+                snapshot: RawSnapshotData {
+                    data: vec![1, 2, 3],
+                    mime_type: "application/octet-stream".to_string(),
+                },
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot load should lower");
+
+        assert_eq!(lowered.display_name, "load-snapshot");
+        assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
+    }
+
+    #[test]
+    fn save_snapshot_does_not_use_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::SaveSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-save".to_string()),
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot save should lower");
+
+        assert_eq!(lowered.display_name, "save-snapshot");
         assert!(lowered.read_only_method.is_none());
     }
 

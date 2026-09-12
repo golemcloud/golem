@@ -29,7 +29,7 @@ use crate::bridge_gen::typescript::ts_writer::{
 };
 use crate::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, projected_input_schema_graph,
-    projected_schema_graph,
+    projected_schema_graph, validate_host_managed_agent_bridge_policy,
 };
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
@@ -193,6 +193,7 @@ impl TypeScriptBridgeGenerator {
         mode: TypeScriptBridgeMode,
         mut reserved: Vec<String>,
     ) -> anyhow::Result<Self> {
+        validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type
             .source_language
             .eq_ignore_ascii_case("typescript")
@@ -978,6 +979,41 @@ impl TypeScriptBridgeGenerator {
         } else {
             result.clone()
         };
+        if method.uses_streams(&self.agent_type.schema) {
+            let invoke = if ephemeral {
+                "invokeAndAwaitWithMetadata"
+            } else {
+                "invokeAndAwait"
+            };
+            let decode_result = if ephemeral {
+                "base.ownSchemaValueStreams(__result.value); return { metadata: __result.metadata, value: __decode(__result.value) };"
+            } else {
+                "base.ownSchemaValueStreams(__result); return __decode(__result);"
+            };
+            writer.write_doc(&format!(
+                "{}\n\nNative streams move into this awaited call and cannot be reused. Returned streams are lazy; unread forwarding preserves the endpoint. Use abortable(signal, ...) for cancellation. Trigger and schedule are unavailable for stream methods.",
+                method.description
+            ));
+            writer.write_line(formatdoc! {"
+                readonly {member_name}: {{
+                  (...args: [{args}]): Promise<{await_result}>;
+                  abortable(signal: AbortSignal, ...args: [{args}]): Promise<{await_result}>;
+                }} = (() => {{
+                  const __encode = {encode};
+                  const __decode = {decode};
+                  const __await = async (signal: AbortSignal | undefined, ...__args: [{args}]): Promise<{await_result}> => {{
+                    base.throwIfAborted(signal);
+                    const __result = await base.withNativeStreamScope(() => __encode(__args),
+                      __value => this.resolved.{invoke}({method_name}, __value, signal));
+                    return base.withNativeStreamScope(() => {{ {decode_result} }});
+                  }};
+                  return Object.assign((...__args: [{args}]) => __await(undefined, ...__args), {{
+                    abortable: (signal: AbortSignal, ...__args: [{args}]) => __await(signal, ...__args),
+                  }});
+                }})();
+            "});
+            return Ok(());
+        }
         let trigger_result = if ephemeral {
             "base.RemoteInvocationResult['metadata']"
         } else {
@@ -2431,7 +2467,9 @@ impl TypeScriptBridgeGenerator {
             writer.write_line(format!("{if_or_else} (item.{case_index} === {idx}) {{"));
             writer.indent();
             let decoded = self.decode_schema_value(&format!("item.{payload}"), schema)?;
-            writer.write_line(format!("return {{ type: '{name}', value: {decoded} }};"));
+            writer.write_line(format!(
+                "return {{ type: '{name}' as const, value: {decoded} }};"
+            ));
             writer.unindent();
             writer.write_line("}");
         }
@@ -2619,7 +2657,7 @@ impl TypeScriptBridgeGenerator {
     ) -> anyhow::Result<()> {
         writer.indent();
         writer.write_line(if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
-            "{ tag: 'record', fields: ["
+            "base.withCapabilityAdoptionTransaction((): base.SchemaValue => ({ tag: 'record', fields: ["
         } else {
             "{ kind: 'record', value: { fields: ["
         });
@@ -2637,7 +2675,7 @@ impl TypeScriptBridgeGenerator {
         }
         writer.unindent();
         writer.write_line(if self.mode == TypeScriptBridgeMode::GuestWasmRpc {
-            "] };"
+            "] }));"
         } else {
             "] } };"
         });
@@ -2861,20 +2899,34 @@ impl TypeScriptBridgeGenerator {
                 format!("((n: any) => base.datetimeToISOString(n.value))({value})")
             }
             SchemaType::Duration { .. } => format!("((n: any) => n.nanoseconds)({value})"),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => format!(
+                "base.agentStreamFromHandle<{}>(({} as Extract<base.SchemaValue, {{ tag: 'stream' }}>).handle, {})",
+                self.type_reference(inner)?,
+                value,
+                self.guest_stream_item_codec(inner)?
+            ),
+            SchemaType::Secret { .. } => {
+                format!("base.secretHandleFromSchemaValue({value})")
+            }
+            SchemaType::QuotaToken { .. } => {
+                format!("base.quotaTokenFromSchemaValue({value})")
+            }
+            SchemaType::PermissionCard { .. } => {
+                format!("base.permissionCardHandleFromSchemaValue({value})")
+            }
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest decode; value expr = {value}"
             ),
             SchemaType::Text { .. } | SchemaType::Binary { .. } => anyhow::bail!(
                 "Bare text/binary rich scalars have no TypeScript bridge surface; type = {typ:?}"
             ),
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
-            | SchemaType::QuotaToken { .. }
-            | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => anyhow::bail!(
-                "SchemaType variant has no TypeScript bridge decoding yet; type = {typ:?}"
-            ),
+            SchemaType::Quantity { .. } | SchemaType::Future { .. } | SchemaType::Stream { .. } => {
+                anyhow::bail!(
+                    "SchemaType variant has no TypeScript bridge decoding yet; type = {typ:?}"
+                )
+            }
         };
         Ok(rendered)
     }
@@ -3269,22 +3321,45 @@ impl TypeScriptBridgeGenerator {
                 format!("{{ tag: 'datetime', value: base.datetimeFromISOString({value}) }}")
             }
             SchemaType::Duration { .. } => format!("{{ tag: 'duration', nanoseconds: {value} }}"),
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => format!(
+                "{{ tag: 'stream', handle: base.agentStreamToHandle({value}, {}) }}",
+                self.guest_stream_item_codec(inner)?
+            ),
+            SchemaType::Secret { .. } => {
+                format!("base.secretHandleToSchemaValue({value})")
+            }
+            SchemaType::QuotaToken { .. } => {
+                format!("base.quotaTokenToSchemaValue({value})")
+            }
+            SchemaType::PermissionCard { .. } => {
+                format!("base.permissionCardHandleToSchemaValue({value})")
+            }
             SchemaType::Ref { .. } => anyhow::bail!(
                 "Unresolved SchemaType::Ref reached guest encode; value expr = {value}"
             ),
             SchemaType::Text { .. } | SchemaType::Binary { .. } => anyhow::bail!(
                 "Bare text/binary rich scalars have no TypeScript bridge surface; type = {typ:?}"
             ),
-            SchemaType::Quantity { .. }
-            | SchemaType::Secret { .. }
-            | SchemaType::QuotaToken { .. }
-            | SchemaType::PermissionCard { .. }
-            | SchemaType::Future { .. }
-            | SchemaType::Stream { .. } => anyhow::bail!(
-                "SchemaType variant has no TypeScript bridge encoding yet; type = {typ:?}"
-            ),
+            SchemaType::Quantity { .. } | SchemaType::Future { .. } | SchemaType::Stream { .. } => {
+                anyhow::bail!(
+                    "SchemaType variant has no TypeScript bridge encoding yet; type = {typ:?}"
+                )
+            }
         };
         Ok(rendered)
+    }
+
+    fn guest_stream_item_codec(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        let graph = projected_schema_graph(self.type_naming.graph(), typ);
+        let graph = self.schema_graphs.borrow_mut().intern(graph);
+        Ok(format!(
+            "({{ get graph() {{ return {graph}; }}, toValue: (item: any): base.SchemaValue => base.withCapabilityAdoptionTransaction((): base.SchemaValue => ({})), fromValue: (item: base.SchemaValue): {} => ({}) }} satisfies base.SchemaCodec)",
+            self.encode_schema_value("item", typ)?,
+            self.type_reference(typ)?,
+            self.decode_schema_value("item", typ)?
+        ))
     }
 
     /// Inline schema-native encode for a single [`SchemaType`], without the
@@ -4076,6 +4151,21 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Url { .. } => Ok("string".to_string()),
                     SchemaType::Datetime { .. } => Ok("string".to_string()),
                     SchemaType::Duration { .. } => Ok("bigint".to_string()),
+                    SchemaType::Secret { .. }
+                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
+                    {
+                        Ok("base.SecretHandle".to_string())
+                    }
+                    SchemaType::QuotaToken { .. }
+                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
+                    {
+                        Ok("base.QuotaToken".to_string())
+                    }
+                    SchemaType::PermissionCard { .. }
+                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
+                    {
+                        Ok("base.PermissionCardHandle".to_string())
+                    }
                     SchemaType::Stream {
                         inner: Some(inner), ..
                     } => Ok(format!("base.AgentStream<{}>", self.type_reference(inner)?)),
@@ -4231,6 +4321,17 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Url { .. } => Ok("string".to_string()),
             SchemaType::Datetime { .. } => Ok("string".to_string()),
             SchemaType::Duration { .. } => Ok("bigint".to_string()),
+            SchemaType::Secret { .. } if self.mode == TypeScriptBridgeMode::GuestWasmRpc => {
+                Ok("base.SecretHandle".to_string())
+            }
+            SchemaType::QuotaToken { .. } if self.mode == TypeScriptBridgeMode::GuestWasmRpc => {
+                Ok("base.QuotaToken".to_string())
+            }
+            SchemaType::PermissionCard { .. }
+                if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
+            {
+                Ok("base.PermissionCardHandle".to_string())
+            }
             SchemaType::Stream {
                 inner: Some(inner), ..
             } => Ok(format!("base.AgentStream<{}>", self.type_reference(inner)?)),

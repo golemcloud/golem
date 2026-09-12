@@ -14,12 +14,55 @@ impl UpdateTest for UpdateTestImpl {
         Self {}
     }
 
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
         Err("Invalid snapshot - simulating failure".to_string())
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
         Ok(Vec::new())
+    }
+}
+
+#[agent_definition(snapshotting = "enabled")]
+pub trait SnapshotUpdateTest {
+    fn new() -> Self;
+    fn loaded_snapshot_revision(&self) -> u32;
+    fn replay_revision(&self) -> u32;
+    fn revision_two_only(&self) -> u32;
+}
+
+struct SnapshotUpdateTestImpl;
+
+#[agent_implementation]
+impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn loaded_snapshot_revision(&self) -> u32 {
+        0
+    }
+
+    fn replay_revision(&self) -> u32 {
+        4
+    }
+
+    fn revision_two_only(&self) -> u32 {
+        4
+    }
+
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Err("Invalid snapshot - simulating failure".to_string())
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(vec![4])
     }
 }
 
@@ -45,7 +88,10 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
         Ok(Vec::new())
     }
 
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        Ok(())
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Ok(Self)
     }
 }

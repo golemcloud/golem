@@ -768,6 +768,61 @@ fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
     assert!(build_sbt.contains("ScalaJSPlugin"));
 }
 
+#[test]
+fn guest_recursive_stream_matrix_compiles() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let mut schema = crate::bridge_gen::fixtures::guest_streaming_agent_type("scala");
+        schema.mode = mode;
+        let pkg = GeneratedPackage::new_with_mode(schema, ScalaBridgeMode::GuestWasmRpc);
+        let dir = pkg.package_dir();
+        let source = std::fs::read_to_string(dir.join(
+            "src/main/scala/golem/bridge/client/guest_streaming_agent/GuestStreamingAgentClient.scala",
+        )).unwrap();
+        assert!(source.contains("_root_.golem.schema.AgentStream["));
+        assert!(
+            source.contains("_root_.golem.schema.AgentStream[_root_.golem.schema.AgentStream[")
+        );
+        assert!(source.contains("AgentStream.intoSchema["));
+        assert!(source.contains("AgentStream.fromSchema["));
+        assert!(source.contains("new _root_.golem.schema.IntoSchema["));
+        assert!(source.contains("new _root_.golem.schema.FromSchema["));
+        assert!(source.contains("SchemaRpcCodec.decodeResultAsync"));
+        assert!(!source.contains("StreamSession"));
+        assert!(!source.contains("golem.bridge.runtime"));
+        // Only the stream-free status method retains fire-and-forget forms.
+        assert_eq!(source.matches("def trigger(").count(), 1);
+        assert_eq!(source.matches("def scheduleAt(").count(), 1);
+        assert_eq!(source.matches("def scheduleCancelableAt(").count(), 1);
+        assert_eq!(source.matches("def cancelable(").count(), 8);
+        compile_guest_if_enabled(dir.as_path());
+    }
+}
+
+#[test]
+fn guest_untyped_stream_is_rejected() {
+    let schema = agent(
+        "UntypedStream",
+        "scala",
+        vec![],
+        vec![method(
+            "invalid",
+            vec![field("input", SchemaType::stream(None))],
+            None,
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let result = ScalaBridgeGenerator::new_with_mode(
+        schema,
+        Utf8Path::from_path(dir.path()).unwrap(),
+        true,
+        ScalaBridgeMode::GuestWasmRpc,
+    )
+    .and_then(|mut generator| generator.generate());
+    assert!(format!("{:#}", result.unwrap_err()).contains("require an element schema"));
+}
+
 /// Guest agent bridges expose the Scala SDK RPC surface: constructors resolve
 /// remote agents through `RemoteAgentClient`, methods invoke Wasm RPC via
 /// `asyncInvokeAndAwait`, and the generated Scala.js build is ready for a real
@@ -898,6 +953,65 @@ fn guest_durable_phantom_constructors_use_replay_safe_identity() {
     );
     assert!(client_source.contains("_root_.scala.Some(phantom)"));
     assert!(!client_source.contains("_root_.golem.Uuid.random()"));
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_generation_compiles_nested_named_and_multimodal_host_managed_capabilities() {
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+    ]);
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "CapabilityAgent",
+            "scala",
+            vec![],
+            vec![
+                method(
+                    "transfer",
+                    vec![field("envelope", ref_to("capability-envelope"))],
+                    Some(ref_to("capability-envelope")),
+                ),
+                method(
+                    "transferMultimodal",
+                    vec![field("capabilities", capability_modalities.clone())],
+                    Some(capability_modalities),
+                ),
+            ],
+            vec![def("capability-envelope", envelope)],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/capability_agent/CapabilityAgentClient.scala"),
+    )
+    .unwrap();
+
+    assert!(source.contains("_root_.golem.schema.GuestSecretHandle"));
+    assert!(source.contains("_root_.golem.host.QuotaApi.QuotaToken"));
+    assert!(source.contains("_root_.golem.schema.GuestPermissionCardHandle"));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.SecretValue("));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.QuotaTokenHandle("));
+    assert!(source.contains("_root_.golem.schema.SchemaValue.PermissionCardHandle("));
+    assert!(source.contains("final case class CapabilityEnvelope("));
+    assert!(source.contains("sealed trait Multimodal0"));
 
     compile_guest_if_enabled(dir.as_path());
 }

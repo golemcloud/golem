@@ -1210,7 +1210,7 @@ fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
         .iter()
         .map(|entry| {
             let key = entry.path.join(".");
-            let value = golem_common::schema::render::to_json_value(
+            let value = golem_schema::schema::render::to_json_value(
                 entry.value.graph(),
                 entry.value.root_type(),
                 entry.value.value(),

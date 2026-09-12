@@ -192,6 +192,199 @@ fn moon_check_wasm(path: &std::path::Path) {
     );
 }
 
+#[test]
+fn guest_streams_compile_and_run_occurrence_codecs() {
+    let mut fixture = crate::bridge_gen::fixtures::guest_streaming_agent_type("moonbit");
+    fixture.schema.defs.push(def(
+        "FailureItem",
+        SchemaType::record(vec![
+            named_field("first", SchemaType::stream(Some(SchemaType::s32()))),
+            named_field("narrow", SchemaType::s8()),
+            named_field(
+                "last",
+                SchemaType::list(SchemaType::stream(Some(SchemaType::s32()))),
+            ),
+        ]),
+    ));
+    fixture.methods.push(method(
+        "failure",
+        vec![field(
+            "items",
+            SchemaType::stream(Some(ref_to("FailureItem"))),
+        )],
+        None,
+    ));
+    let guest = generate_without_check(fixture, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    for name in [
+        "consume",
+        "produce",
+        "exchange",
+        "forward",
+        "nested",
+        "recursive",
+        "shapes",
+    ] {
+        assert!(!source.contains(&format!("::trigger_{name}(")));
+        assert!(!source.contains(&format!("::schedule_{name}(")));
+        assert!(!source.contains(&format!("::schedule_cancelable_{name}(")));
+    }
+    assert!(source.contains("::trigger_status("));
+    assert!(source.contains("@agents.encode_invocation_input_async"));
+    assert!(source.contains("@schema.AgentStream[@schema.AgentStream[StreamItem]]"));
+    assert!(!source.contains("StreamEncodeContext"));
+    assert!(!source.contains("register_input_stream"));
+    moon_check_wasm(guest.path());
+    let manifest = guest.path().join("client/moon.pkg");
+    let mut imports = std::fs::read_to_string(&manifest).unwrap();
+    imports.push_str(
+        "\nimport {\n  \"golemcloud/golem_sdk/async-core\" @async_core,\n} for \"wbtest\"\n",
+    );
+    std::fs::write(manifest, imports).unwrap();
+    std::fs::write(guest.path().join("client/streams_wbtest.mbt"), r#"
+///|
+fn run_stream_test(body : async () -> Unit) -> Unit raise {
+  let mut callback = @async_core.with_waitableset(async fn() {
+    body()
+    @async_core.task_returned()
+  })
+  let mut steps = 0
+  while callback != 0 {
+    steps += 1
+    assert_true(steps < 1000)
+    assert_eq(callback & 0xf, 1)
+    callback = @async_core.cb(0, 0, 0)
+  }
+}
+
+///|
+test "erased schemas keep their occurrence codecs" {
+  assert_true(stream_encode_shapes_input_0(12) is @model.S8(12))
+  assert_true(stream_encode_shapes_input_1(12) is @model.S32(12))
+  assert_true(stream_encode_shapes_input_2(["a"]) is @model.List(_))
+  assert_true(stream_encode_shapes_input_3(["a", "b"]) is @model.FixedList(_))
+  assert_true(stream_encode_shapes_input_5("a") is @model.Tuple([@model.String("a")]))
+  try stream_encode_shapes_input_0(128) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected narrow integer failure") }
+  try stream_encode_shapes_input_3(["a"]) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected fixed-list failure") }
+  run_stream_test(async fn() {
+    let narrow = produce_shapes_input_0_stream(async fn(writer) {
+      assert_true(writer.write_one(12) is @schema.Accepted)
+    })
+    assert_eq(narrow.read(), Some(12))
+    assert_true(narrow.read() is None)
+    let single = produce_shapes_input_5_stream(async fn(writer) {
+      assert_true(writer.write_one("tuple") is @schema.Accepted)
+    })
+    assert_eq(single.read(), Some("tuple"))
+    assert_true(single.read() is None)
+  })
+}
+
+///|
+test "native custom streams are lazy recursive and directly forwardable" {
+  let calls = Ref(0)
+  let released = Ref(0)
+  let stream = produce_produce_output_stream(async fn(writer) {
+    calls.val += 1
+    assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
+  }, on_unstarted_drop=() => { released.val += 1 })
+  let bundle : StreamBundle = { optional: Some(stream), siblings: [], named: {}, outcome: Err("empty") }
+  let forwarded = decode_StreamBundle(encode_StreamBundle(bundle))
+  assert_eq(calls.val, 0)
+  release_StreamBundle(forwarded)
+  assert_eq(released.val, 1)
+  run_stream_test(async fn() {
+    let inner = produce_nested_input_0_0_stream(async fn(writer) {
+      assert_true(writer.write_one({ label: "root", children: [{ label: "child", children: [] }] }) is @schema.Accepted)
+    })
+    let inner = stream_decode_nested_input_0(stream_encode_nested_input_0(inner))
+    let item = inner.read().unwrap()
+    assert_eq(item.label, "root")
+    assert_eq(item.children[0].label, "child")
+    assert_true(inner.read() is None)
+  })
+}
+
+///|
+test "generated batch release traverses failing siblings and unconverted items" {
+  let drops = Ref(0)
+  fn endpoint() -> @schema.AgentStream[Int] {
+    @schema.AgentStream::produce(async fn(_) { fail("must not pull") },
+      on_unstarted_drop=() => { drops.val += 1 })
+  }
+  run_stream_test(async fn() {
+    let (writer, stream) = new_failure_input_0_stream()
+    let items : Array[FailureItem] = [
+      { first: endpoint(), narrow: 1, last: [endpoint()] },
+      { first: endpoint(), narrow: 128, last: [endpoint(), endpoint()] },
+      { first: endpoint(), narrow: 2, last: [endpoint()] },
+    ]
+    try writer.write_all(items) catch {
+      CodecError(message) => assert_eq(message, "s8 value out of range")
+      error => fail(repr(error))
+    } noraise { _ => fail("expected encoding failure") }
+    assert_eq(drops.val, 7)
+    writer.close()
+    stream.drop()
+  })
+  let value : @model.SchemaValue = @model.Record([endpoint().to_schema_value(), @model.String("bad"), @model.List([endpoint().to_schema_value()])])
+  try decode_FailureItem(value) catch {
+    CodecError(_) => ()
+    error => fail(repr(error))
+  } noraise { _ => fail("expected decoding failure") }
+  assert_eq(drops.val, 9)
+}
+"#).unwrap();
+    let output = std::process::Command::new(
+        workspace_root()
+            .unwrap()
+            .join("sdks/moonbit/golem_sdk/scripts/run-sdk-tests.sh"),
+    )
+    .arg("client")
+    .current_dir(guest.path())
+    .output()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "generated runtime tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_streams_reject_missing_item_schema() {
+    let fixture = agent(
+        "Untyped",
+        "moonbit",
+        vec![],
+        vec![method("read", vec![], Some(SchemaType::stream(None)))],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let mut generator = MoonBitBridgeGenerator::new_with_mode(
+        fixture,
+        Utf8Path::from_path(dir.path()).unwrap(),
+        true,
+        MoonBitBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    assert!(
+        generator
+            .generate()
+            .unwrap_err()
+            .to_string()
+            .contains("require an element schema")
+    );
+}
+
 fn tool_doc(summary: &str) -> Doc {
     Doc {
         summary: summary.to_string(),
@@ -694,6 +887,76 @@ fn guest_mode_emits_standalone_schema_value_codecs_and_moon_checks() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn guest_mode_moon_checks_host_managed_capability_methods() {
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        ("secret", SchemaType::secret(Default::default())),
+        ("quota", SchemaType::quota_token(Default::default())),
+        (
+            "permission",
+            SchemaType::permission_card(Default::default()),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("capability-envelope"))],
+                Some(ref_to("capability-envelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("capability-envelope", envelope)],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+    let package = std::fs::read_to_string(guest.path().join("client/moon.pkg")).unwrap();
+
+    assert!(source.contains("@model.GuestSecretHandle"));
+    assert!(source.contains("@quota.QuotaToken"));
+    assert!(source.contains("@model.GuestPermissionCardHandle"));
+    assert!(source.contains("@schema.to_value_as"));
+    assert!(source.contains("@schema.from_value_as"));
+    assert!(package.contains("\"golemcloud/golem_sdk/quota\""));
+    assert!(package.contains("\"golemcloud/golem_sdk/schema\""));
+    moon_check_wasm(guest.path());
+
+    let without_quota = generate_without_check(
+        agent(
+            "SecretAgent",
+            "moonbit",
+            vec![],
+            vec![method(
+                "transfer",
+                vec![field("secret", SchemaType::secret(Default::default()))],
+                Some(SchemaType::secret(Default::default())),
+            )],
+            vec![],
+            AgentMode::Durable,
+        ),
+        MoonBitBridgeMode::GuestWasmRpc,
+    );
+    let package = std::fs::read_to_string(without_quota.path().join("client/moon.pkg")).unwrap();
+    assert!(!package.contains("golemcloud/golem_sdk/quota"));
 }
 
 #[test]

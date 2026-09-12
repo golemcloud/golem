@@ -81,7 +81,7 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardId, Timestamp,
+    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor, ShardId, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -180,6 +180,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &shard_assignment.shard_ids,
         );
 
+        // Deliberately fatal to startup, unlike the same failure on a running executor.
+        //
+        // This reads the running-worker recovery index, so a failure here means the executor does
+        // not know which workers it is meant to resume. It refuses to start rather than serve with
+        // an unknown recovery set, and the restart policy retries it - which costs nothing, because
+        // an executor that has not started yet is holding no agents.
+        //
+        // That is the whole reason the same storage failure is *not* fatal once agents are running:
+        // there, aborting would force every one of them to replay from oplog or snapshot, which is
+        // far more expensive than stalling through a failover that resolves in tens of seconds.
         Ctx::on_shard_assignment_changed(&worker_executor)
             .await
             .map_err(wasmtime::Error::from_anyhow)?;
@@ -187,21 +197,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(worker_executor)
     }
 
+    /// Takes the agent's latest status record rather than its whole metadata, so the invoke path
+    /// can hand over the status the resident agent already publishes instead of materialising an
+    /// [`AgentMetadata`] around a copy of it.
     async fn ensure_not_failed(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        metadata: &AgentMetadata,
+        status: &AgentStatusRecord,
     ) -> Result<(), WorkerExecutorError> {
-        match &metadata.last_known_status.status {
+        match &status.status {
             AgentStatus::Failed => {
-                let error_and_retry_count = Ctx::get_last_error_and_retry_count(
-                    self,
-                    owned_agent_id,
-                    agent_mode,
-                    &metadata.last_known_status,
-                )
-                .await;
+                let error_and_retry_count =
+                    Ctx::get_last_error_and_retry_count(self, owned_agent_id, agent_mode, status)
+                        .await;
                 if let Some(last_error) = error_and_retry_count {
                     Err(WorkerExecutorError::PreviousInvocationFailed {
                         error: last_error.error,
@@ -299,7 +308,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             // Compare the existing entry's plain (schema-guided) JSON (the same
             // form the request DTO carries) against the requested value.
-            let existing_json = golem_common::schema::render::to_json_value(
+            let existing_json = golem_schema::schema::render::to_json_value(
                 existing_entry.value.graph(),
                 existing_entry.value.root_type(),
                 existing_entry.value.value(),
@@ -355,7 +364,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ));
                 }
             } else {
-                let existing_worker = self.worker_service().get(&owned_agent_id).await;
+                let existing_worker = self.worker_service().get(&owned_agent_id).await?;
                 if let Some(existing) = existing_worker
                     && !Self::is_same_worker_creation_request(
                         &existing.initial_worker_metadata,
@@ -528,7 +537,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
         Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
@@ -599,7 +608,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
         Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         let worker = Worker::get_or_create_suspended(
             self,
@@ -749,7 +758,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .into();
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -903,7 +912,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
         if is_ephemeral
             && Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-                .await
+                .await?
                 .is_none()
         {
             return Ok(None);
@@ -943,16 +952,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
         self.ensure_worker_belongs_to_this_executor(&agent_id)?;
 
-        let metadata = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+        // This runs on every invocation. For a resident agent, read the status the worker already
+        // publishes; only an agent that is not resident has its record materialised (from the
+        // cache and the oplog), which is the same cold path as before.
+        let failure_check = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
+        } else if let Some(worker) = self.active_agents().try_get(&owned_agent_id).await {
+            Some((worker.agent_mode(), worker.get_last_known_status().await))
         } else {
-            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+                .await?
+                .map(|metadata| (metadata.agent_mode, Arc::new(metadata.last_known_status)))
         };
 
-        if let Some(metadata) = &metadata
-            && metadata.agent_mode != AgentMode::Ephemeral
+        if let Some((agent_mode, status)) = &failure_check
+            && *agent_mode != AgentMode::Ephemeral
         {
-            self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
+            self.ensure_not_failed(&owned_agent_id, *agent_mode, status)
                 .await?;
         }
 
@@ -1050,7 +1066,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -1202,13 +1218,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let principal = extract_principal(&request.principal);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
-            .await?;
+        self.ensure_not_failed(
+            &owned_agent_id,
+            metadata.agent_mode,
+            &metadata.last_known_status,
+        )
+        .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
@@ -1254,7 +1274,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = self
             .worker_service()
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
@@ -1358,7 +1378,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = self
             .worker_service()
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
@@ -1435,14 +1455,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         entries: chunk
                             .entries
                             .into_iter()
-                            .map(|(idx, entry)| {
-                                entry.try_into().map(|entry: golem::worker::OplogEntry| {
-                                    golem::worker::OplogEntryWithIndex {
-                                        oplog_index: idx.into(),
-                                        entry: Some(entry),
-                                    }
-                                })
-                            })
+                            .map(|entry| entry.try_into())
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(WorkerExecutorError::unknown)?,
                         next,
@@ -1775,7 +1788,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         if Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .is_none()
         {
             let component = self

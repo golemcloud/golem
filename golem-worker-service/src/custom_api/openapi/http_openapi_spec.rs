@@ -13,7 +13,7 @@
 //! Emits the OpenAPI 3.1 document for a deployed HTTP API as a
 //! [`serde_json::Value`].
 //!
-//! All `SchemaType` rendering goes through [`render_schema`] (the Wave-1
+//! All request `SchemaType` rendering goes through [`render_input_schema`] (the Wave-1
 //! renderer); named types lowered from the routes are emitted once into
 //! `components/schemas`. The legacy compiled-route schema types are touched
 //! only by the boundary adapter [`build_document_schema`].
@@ -23,7 +23,7 @@ use super::response_schema::{
 };
 use super::route_schema::{RequestBodyModel, RouteSchema, build_document_schema};
 use super::schema_mapping::{
-    arbitrary_binary_schema, render_schema, string_enum_schema, string_schema,
+    arbitrary_binary_schema, render_input_schema, string_enum_schema, string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use golem_common::model::domain_registration::Domain;
@@ -140,7 +140,7 @@ fn add_route_parameters(
         RichRouteBehaviour::CallAgent(_) => {
             if let Some(call_agent) = &route_schema.call_agent {
                 for param in &call_agent.path_params {
-                    let mut schema = render_schema(graph, &param.schema, components)?;
+                    let mut schema = render_input_schema(graph, &param.schema, components)?;
                     if param.is_catchall {
                         set_schema_description(
                             &mut schema,
@@ -150,11 +150,11 @@ fn add_route_parameters(
                     parameters.push(path_parameter(&param.name, schema));
                 }
                 for param in &call_agent.query_params {
-                    let schema = render_schema(graph, &param.schema, components)?;
+                    let schema = render_input_schema(graph, &param.schema, components)?;
                     parameters.push(query_parameter(&param.name, param.required, schema));
                 }
                 for param in &call_agent.header_params {
-                    let schema = render_schema(graph, &param.schema, components)?;
+                    let schema = render_input_schema(graph, &param.schema, components)?;
                     parameters.push(header_parameter(&param.name, param.required, schema));
                 }
             }
@@ -187,7 +187,7 @@ fn build_request_body(
     Ok(match body {
         RequestBodyModel::Unused => None,
         RequestBodyModel::Json(ty) => {
-            let schema = render_schema(graph, ty, components)?;
+            let schema = render_input_schema(graph, ty, components)?;
             Some(request_body_value(
                 "JSON body",
                 vec![("application/json".to_string(), schema)],

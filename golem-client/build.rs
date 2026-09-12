@@ -126,15 +126,23 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // agent secret
             (
                 "AgentSecretDto",
-                "golem_common::model::agent_secret::AgentSecretDto",
+                "golem_common::model::external_agent_secret::AgentSecretDto",
             ),
             (
                 "AgentSecretCreation",
-                "golem_common::model::agent_secret::AgentSecretCreation",
+                "golem_common::model::external_agent_secret::AgentSecretCreation",
             ),
             (
                 "AgentSecretUpdate",
-                "golem_common::model::agent_secret::AgentSecretUpdate",
+                "golem_common::model::external_agent_secret::AgentSecretUpdate",
+            ),
+            (
+                "ExternalSchemaValue",
+                "golem_common::schema::ExternalSchemaValue",
+            ),
+            (
+                "ExternalTypedSchemaValue",
+                "golem_common::schema::ExternalTypedSchemaValue",
             ),
             // retry policy
             (
