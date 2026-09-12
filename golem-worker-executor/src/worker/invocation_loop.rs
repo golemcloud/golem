@@ -25,7 +25,7 @@ use crate::services::resource_usage_metering::{ResourceUsageMeteringWindow, clos
 use crate::services::{HasActiveAgents, HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
-    lower_invocation,
+    invoke_result_from_trap, lower_invocation,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -71,8 +71,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, error, span, warn};
 use uuid::Uuid;
-use wasmtime::Store;
 use wasmtime::component::Instance;
+use wasmtime::{AsContextMut, Store};
 
 /// Span for one bounded phase of a worker's lifecycle.
 ///
@@ -514,6 +514,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
 
+            if cleanup_ephemeral_worker {
+                self.parent.fence_oplog_forwarding();
+            }
             let retry_was_live = {
                 let store = agent.runtime.store.lock().await;
                 store.data().durable_ctx().begin_stream_runtime_teardown();
@@ -594,7 +597,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     )
                     .await;
                     if cleanup_ephemeral_worker {
-                        self.parent.remove_from_active_agents().await;
                         self.archive_ephemeral_oplog();
                     }
                     break;
@@ -874,9 +876,71 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     fn archive_ephemeral_oplog(&self) {
-        let oplog = self.parent.oplog.clone();
-        tokio::spawn(async move {
-            let _ = EphemeralOplog::try_archive_background(&oplog).await;
+        let worker = self.parent.clone();
+        let shutdown_worker = worker.clone();
+        let invocation_loops = worker.active_agents().invocation_loops();
+        invocation_loops.spawn(async move {
+            let archival = worker.durable_stream_producer.wait_for_responses_and_fence().await;
+            let forwarding = worker.fence_oplog_forwarding();
+            let mut cleanup = worker.owner_cleanup.lock().await;
+            if *cleanup != super::OwnerCleanupState::PreRemoval
+                || !worker.is_current_cached_owner().await
+            {
+                if let Some(archival) = archival {
+                    archival.send_replace(Some(Err(
+                        crate::durable_host::durable_stream::DurableStreamProducerError::RecoveryRequired,
+                    )));
+                }
+                return;
+            }
+            let result: Result<(), WorkerExecutorError> = async {
+                let retirement = worker.retire_durable_stream_producer();
+                worker
+                    .stop_internal(
+                        false,
+                        None,
+                        UnloadRequest::ordinary(UnloadReason::Idle),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: None,
+                        },
+                        PendingLiveInvocationDisposition::Fail,
+                    )
+                    .await;
+                if let super::WorkerInstance::CleanupFailed(error) = &*worker.instance.lock().await
+                {
+                    return Err(error.clone());
+                }
+                worker.durable_stream_attachment_reconciler.stop().await;
+                retirement.await?;
+                worker.state_actor.drain_lifecycle().await?;
+                if let Some(forwarding) = &forwarding {
+                    forwarding.drain_forwarding().await;
+                }
+                worker.durable_stream_commit()(None).await;
+                worker.status_flusher.begin_delete().await;
+                worker.status_checkpointer.begin_delete().await;
+                while EphemeralOplog::try_archive_blocking(&worker.oplog).await == Some(true) {}
+                if let Some(forwarding) = &forwarding {
+                    forwarding.forget_retired_wrapper();
+                }
+                worker.remove_from_active_agents().await;
+                *cleanup = super::OwnerCleanupState::Retired;
+                Ok(())
+            }
+            .await;
+            if let Some(archival) = archival {
+                archival.send_replace(Some(result.clone().map_err(|error| {
+                    crate::durable_host::durable_stream::DurableStreamProducerError::Oplog(error.to_string())
+                })));
+            }
+            if let Err(error) = result {
+                tracing::error!(agent_id = %worker.agent_id(), error = %error, "Failed to retire ephemeral worker before archival");
+            }
+        }, move || {
+            let retirement = shutdown_worker.durable_stream_producer.shutdown();
+            Box::pin(async move {
+                retirement.await.expect("Failed to drain ephemeral streams during executor shutdown");
+            })
         });
     }
 
@@ -2167,11 +2231,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                     .await;
                             }
                             Err(error) => {
+                                let result = invoke_result_from_trap(
+                                    &mut self.store.as_context_mut(),
+                                    consumed_fuel,
+                                    error,
+                                )
+                                .await;
                                 return self
                                     .agent_invocation_failed(
                                         &display_name,
                                         &invocation_idempotency_key,
-                                        Err(WorkerExecutorError::runtime(error.to_string())),
+                                        Ok(result),
                                     )
                                     .await;
                             }

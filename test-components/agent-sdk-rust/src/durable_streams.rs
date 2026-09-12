@@ -1,0 +1,315 @@
+use golem_rust::agentic::{AgentStream, spawn_local};
+use golem_rust::schema::{FromSchema, IntoSchema};
+use golem_rust::{agent_definition, agent_implementation, endpoint};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static INPUT_ITEMS: AtomicU64 = AtomicU64::new(0);
+static INPUT_EOF: AtomicU64 = AtomicU64::new(0);
+static INPUT_ERRORS: AtomicU64 = AtomicU64::new(0);
+// Native transport acceptance can precede durable publication, including a final dropped item.
+static OUTPUT_WRITES: AtomicU64 = AtomicU64::new(0);
+static OUTPUT_ERRORS: AtomicU64 = AtomicU64::new(0);
+static CONTINUATIONS: AtomicU64 = AtomicU64::new(0);
+static MARKERS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(IntoSchema, FromSchema)]
+pub struct EchoOutput {
+    pub output: AgentStream<String>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+pub struct FramedRecord {
+    pub name: String,
+    pub number: u32,
+}
+
+#[agent_definition(mount = "/durable-stream-agents/{id}")]
+pub trait DurableStreamAgent {
+    fn new(id: String) -> Self;
+
+    #[endpoint(put = "/json/{count}?delay_ms={delay_ms}")]
+    fn json(&self, count: u32, delay_ms: u64) -> AgentStream<String>;
+
+    #[endpoint(put = "/bytes/{count}?delay_ms={delay_ms}")]
+    fn bytes(&self, count: u32, delay_ms: u64) -> AgentStream<u8>;
+
+    #[endpoint(put = "/delayed-output/{handle_delay_ms}?delay_ms={delay_ms}")]
+    async fn delayed_output(&self, handle_delay_ms: u64, delay_ms: u64) -> AgentStream<String>;
+
+    #[endpoint(put = "/echo")]
+    fn echo(&self, input: AgentStream<String>) -> EchoOutput;
+
+    #[endpoint(put = "/sink")]
+    async fn sink(&self, input: AgentStream<String>) -> String;
+
+    #[endpoint(put = "/echo-bytes")]
+    fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
+
+    #[endpoint(put = "/echo-records")]
+    fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord>;
+
+    #[endpoint(put = "/prefixed")]
+    fn prefixed(&self, input: AgentStream<String>, prefix: String) -> AgentStream<String>;
+
+    #[endpoint(put = "/cancellation-output/{count}?delay_ms={delay_ms}")]
+    fn cancellation_output(&self, count: u32, delay_ms: u64) -> AgentStream<String>;
+
+    #[endpoint(put = "/observations")]
+    fn observations(&self) -> Vec<u64>;
+
+    #[endpoint(put = "/mark/{value}")]
+    fn mark(&self, value: u64) -> u64;
+
+    #[endpoint(put = "/component-id")]
+    fn component_id(&self) -> String;
+
+    #[endpoint(put = "/shadow/{output}")]
+    fn shadow(&self, output: String) -> EchoOutput;
+
+    #[endpoint(put = "/bound/{path}?count={count}", headers("x-label" = "label"))]
+    fn bound(
+        &self,
+        message: String,
+        count: u32,
+        label: String,
+        path: String,
+    ) -> AgentStream<String>;
+
+    #[endpoint(put = "/isolated-a/{count}")]
+    fn isolated_a(&self, count: u32) -> AgentStream<String>;
+
+    #[endpoint(put = "/isolated-b/{count}")]
+    fn isolated_b(&self, count: u32) -> AgentStream<String>;
+}
+
+struct DurableStreamAgentImpl;
+
+#[agent_implementation]
+impl DurableStreamAgent for DurableStreamAgentImpl {
+    fn new(_id: String) -> Self {
+        Self
+    }
+
+    fn json(&self, count: u32, delay_ms: u64) -> AgentStream<String> {
+        stream_with_delay((0..count).map(|i| format!("message-{i:04}")), delay_ms)
+    }
+
+    fn bytes(&self, count: u32, delay_ms: u64) -> AgentStream<u8> {
+        stream_with_delay((0..count).map(|i| (i % 251) as u8), delay_ms)
+    }
+
+    async fn delayed_output(&self, handle_delay_ms: u64, delay_ms: u64) -> AgentStream<String> {
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+            handle_delay_ms.saturating_mul(1_000_000),
+        )
+        .await;
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            // Keep the producer active while testing the reader's wait deadline.
+            let mut remaining = delay_ms;
+            while remaining > 0 {
+                let step = remaining.min(100);
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(step * 1_000_000).await;
+                remaining -= step;
+            }
+            let _ = writer.write_one("delayed-value".to_string()).await;
+        });
+        stream
+    }
+
+    fn echo(&self, mut input: AgentStream<String>) -> EchoOutput {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            loop {
+                match input.next().await {
+                    Ok(Some(value)) => {
+                        INPUT_ITEMS.fetch_add(1, Ordering::Relaxed);
+                        if writer.write_one(value).await.is_err() {
+                            OUTPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                            break;
+                        }
+                        OUTPUT_WRITES.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(None) => {
+                        INPUT_EOF.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
+                    Err(_) => {
+                        INPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
+                }
+            }
+            CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
+        });
+        EchoOutput { output }
+    }
+
+    async fn sink(&self, mut input: AgentStream<String>) -> String {
+        let mut values = Vec::new();
+        while let Some(value) = input.next().await.expect("sink input failed") {
+            values.push(value);
+        }
+        values.join("|")
+    }
+
+    fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8> {
+        copy_stream(input, |value| value)
+    }
+
+    fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord> {
+        copy_stream(input, |value| value)
+    }
+
+    fn prefixed(&self, input: AgentStream<String>, prefix: String) -> AgentStream<String> {
+        copy_stream(input, move |value| format!("{prefix}{value}"))
+    }
+
+    fn cancellation_output(&self, count: u32, delay_ms: u64) -> AgentStream<String> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            for value in 0..count {
+                if value != 0 {
+                    golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                        delay_ms.saturating_mul(1_000_000),
+                    )
+                    .await;
+                }
+                if writer.write_one(format!("cancel-{value}")).await.is_err() {
+                    OUTPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    break;
+                }
+                OUTPUT_WRITES.fetch_add(1, Ordering::Relaxed);
+            }
+            CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
+        });
+        output
+    }
+
+    fn observations(&self) -> Vec<u64> {
+        vec![
+            INPUT_ITEMS.load(Ordering::Relaxed),
+            INPUT_EOF.load(Ordering::Relaxed),
+            OUTPUT_WRITES.load(Ordering::Relaxed),
+            OUTPUT_ERRORS.load(Ordering::Relaxed),
+            CONTINUATIONS.load(Ordering::Relaxed),
+            MARKERS.load(Ordering::Relaxed),
+            INPUT_ERRORS.load(Ordering::Relaxed),
+        ]
+    }
+
+    fn mark(&self, value: u64) -> u64 {
+        MARKERS.fetch_add(value, Ordering::Relaxed) + value
+    }
+
+    fn component_id(&self) -> String {
+        std::env::var("GOLEM_COMPONENT_ID").unwrap()
+    }
+
+    fn shadow(&self, output: String) -> EchoOutput {
+        EchoOutput {
+            output: stream_with_delay([output], 0),
+        }
+    }
+
+    fn bound(
+        &self,
+        message: String,
+        count: u32,
+        label: String,
+        path: String,
+    ) -> AgentStream<String> {
+        stream_with_delay(
+            (0..count).map(|i| format!("{path}|{label}|{i}|{message}")),
+            0,
+        )
+    }
+
+    fn isolated_a(&self, count: u32) -> AgentStream<String> {
+        stream_with_delay((0..count).map(|i| format!("a-{i}")), 0)
+    }
+
+    fn isolated_b(&self, count: u32) -> AgentStream<String> {
+        stream_with_delay((0..count).map(|i| format!("b-{i}")), 0)
+    }
+}
+
+fn stream_with_delay<T: IntoSchema + FromSchema + 'static>(
+    values: impl IntoIterator<Item = T>,
+    delay_ms: u64,
+) -> AgentStream<T> {
+    let values = values.into_iter().collect::<Vec<_>>();
+    let (mut writer, stream) = AgentStream::new();
+    spawn_local(async move {
+        for value in values {
+            if delay_ms != 0 {
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                    delay_ms.saturating_mul(1_000_000),
+                )
+                .await;
+            }
+            if writer.write_one(value).await.is_err() {
+                break;
+            }
+        }
+    });
+    stream
+}
+
+fn copy_stream<T, U>(mut input: AgentStream<T>, map: impl Fn(T) -> U + 'static) -> AgentStream<U>
+where
+    T: IntoSchema + FromSchema + 'static,
+    U: IntoSchema + FromSchema + 'static,
+{
+    let (mut writer, output) = AgentStream::new();
+    spawn_local(async move {
+        while let Ok(Some(value)) = input.next().await {
+            if writer.write_one(map(value)).await.is_err() {
+                break;
+            }
+        }
+    });
+    output
+}
+
+#[agent_definition(ephemeral, mount = "/ephemeral-stream-agents")]
+pub trait EphemeralStreamAgent {
+    fn new() -> Self;
+
+    #[endpoint(put = "/identity/{label}")]
+    fn identity(&self, label: String) -> AgentStream<String>;
+}
+
+struct EphemeralStreamAgentImpl;
+
+#[agent_implementation]
+impl EphemeralStreamAgent for EphemeralStreamAgentImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn identity(&self, label: String) -> AgentStream<String> {
+        stream_with_delay([label, golem_rust::agentic::get_agent_id().agent_id], 0)
+    }
+}
+
+#[agent_definition(mount = "/phantom-stream-agents", phantom_agent = true)]
+pub trait PhantomStreamAgent {
+    fn new() -> Self;
+
+    #[endpoint(put = "/identity/{label}")]
+    fn identity(&self, label: String) -> AgentStream<String>;
+}
+
+struct PhantomStreamAgentImpl;
+
+#[agent_implementation]
+impl PhantomStreamAgent for PhantomStreamAgentImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn identity(&self, label: String) -> AgentStream<String> {
+        stream_with_delay([label, golem_rust::agentic::get_agent_id().agent_id], 0)
+    }
+}

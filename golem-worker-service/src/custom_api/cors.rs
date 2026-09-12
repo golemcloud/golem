@@ -96,6 +96,14 @@ pub async fn apply_cors_outgoing_middleware(
 ) -> Result<(), RequestHandlerError> {
     debug!("Begin executing SetCorsResponseHeadersMiddleware");
 
+    if matches!(&resolved_route.route.behavior, super::RichRouteBehaviour::CallAgent(behaviour)
+        if behaviour.route_mode == golem_service_base::custom_api::AgentRouteMode::DurableStreams)
+    {
+        result.headers.insert(
+            http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            "Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, ETag, Location, Retry-After".into(),
+        );
+    }
     let cors = &resolved_route.route.cors;
 
     if cors.allowed_patterns.is_empty() {

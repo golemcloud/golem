@@ -49,7 +49,10 @@
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
 //! lock-free.
 
-use super::status::{calculate_last_known_status_with_checkpoint, update_status_with_new_entries};
+use super::status::{
+    calculate_last_known_status_with_checkpoint, try_fold_status_from,
+    update_status_with_new_entries,
+};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
     PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric,
@@ -66,7 +69,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
@@ -148,6 +151,9 @@ enum StatusJob {
 /// fire-and-forget. Ordered oplog entries await a reply but never take the worker's `instance`
 /// lock, so it remains safe for store-polled callers.
 enum LifecycleJob<Ctx: WorkerCtx> {
+    Drain {
+        done: oneshot::Sender<()>,
+    },
     /// Wakes the invocation loop after a commit changed the published status.
     NotifyStatusChanged,
     /// Records a `GrowMemory` oplog hint after a guest growth has committed.
@@ -324,8 +330,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let notification_queued_task = notification_queued.clone();
         let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
         let lifecycle_task = tokio::spawn(async move {
+            let mut drains = Vec::new();
             while let Some(job) = lifecycle_rx.recv().await {
                 match job {
+                    LifecycleJob::Drain { done } => {
+                        drains.push(done);
+                    }
                     LifecycleJob::NotifyStatusChanged => {
                         let instance_guard = instance.lock().await;
                         notification_queued_task.store(false, Ordering::Release);
@@ -356,6 +366,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 )
                                 .await;
                         }
+                    }
+                }
+                // Earlier growth jobs can enqueue another pass behind a drain request.
+                if lifecycle_rx.is_empty() {
+                    for done in drains.drain(..) {
+                        let _ = done.send(());
                     }
                 }
             }
@@ -484,6 +500,18 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
     }
 
+    /// Joins queued lifecycle work and its requeued descendants after execution has stopped.
+    /// Must not be awaited while holding the worker instance lock or from a lifecycle job.
+    pub async fn drain_lifecycle(&self) -> Result<(), WorkerExecutorError> {
+        let (done, result) = oneshot::channel();
+        self.lifecycle_jobs
+            .send(LifecycleJob::Drain { done })
+            .map_err(|_| WorkerExecutorError::runtime("Worker lifecycle actor stopped"))?;
+        result
+            .await
+            .map_err(|_| WorkerExecutorError::runtime("Worker lifecycle drain stopped"))
+    }
+
     /// Asks the lifecycle task to record a committed guest `memory.grow` of `delta` bytes. Fire
     /// and forget: called from the `memory.grow` resource limiter, which runs on a store-keeping
     /// fiber and must not await anything.
@@ -585,25 +613,53 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         commit_level: CommitLevel,
         committed: Option<oneshot::Sender<()>>,
     ) -> bool {
-        let new_entries = self.oplog.commit(commit_level).await;
+        // Sample before committing: a later sample could include new, uncommitted appends.
+        let appended_through = self.oplog.current_oplog_index().await;
+        let mut new_entries = self.oplog.commit(commit_level).await;
         if let Some(committed) = committed {
             let _ = committed.send(());
         }
 
-        let authority_change_count = new_entries
+        let mut authority_change_count = new_entries
             .values()
             .filter(|entry| is_authority_state_entry(entry))
             .count() as u64;
 
         let changed = if !self.detached.load(Ordering::Acquire) {
             let old_status = self.last_known_status.load_full();
-
-            let updated_status = update_status_with_new_entries(
-                self.agent_mode,
-                old_status.as_ref().clone(),
-                new_entries,
-                &self.deps.config().retry,
-            );
+            // A catch-up can already have folded a plugin's buffered direct-commit receipts.
+            new_entries.retain(|index, _| *index > old_status.oplog_idx);
+            let flushes_buffer =
+                self.agent_mode != AgentMode::Ephemeral || commit_level != CommitLevel::DurableOnly;
+            let contiguous = match (new_entries.first_key_value(), new_entries.last_key_value()) {
+                (Some((first, _)), Some((last, _))) => {
+                    *first == old_status.oplog_idx.next()
+                        && last.as_u64() - first.as_u64() + 1 == new_entries.len() as u64
+                        && (!flushes_buffer || *last >= appended_through)
+                }
+                _ => !flushes_buffer || appended_through <= old_status.oplog_idx,
+            };
+            let updated_status = if contiguous {
+                update_status_with_new_entries(
+                    self.agent_mode,
+                    old_status.as_ref().clone(),
+                    new_entries,
+                    &self.deps.config().retry,
+                )
+            } else {
+                // Threshold flushes and replica waits can commit entries outside this actor.
+                // Read committed storage in bounded chunks, including payload hydration, rather
+                // than retaining every automatically flushed entry in memory until this commit.
+                // The gap may contain authority changes absent from the commit receipt.
+                authority_change_count = authority_change_count.max(1);
+                try_fold_status_from(
+                    &self.deps,
+                    &self.owned_agent_id,
+                    self.agent_mode,
+                    old_status.as_ref().clone(),
+                )
+                .await
+            };
 
             match updated_status {
                 // The comparison stays. Skipping the fold when the commit produced no entries

@@ -159,6 +159,9 @@ fn record_key(record: &StreamSessionRecordV1) -> Option<&StreamSessionKeyV1> {
         StreamSessionRecordV1::Detached(v) => Some(&v.session_key),
         StreamSessionRecordV1::InvocationResult(v) => Some(&v.session_key),
         StreamSessionRecordV1::Finished(v) => Some(&v.session_key),
+        StreamSessionRecordV1::ConsumerCancelApplied(v) => Some(&v.intent.session_key),
+        StreamSessionRecordV1::Tombstoned(v) => Some(&v.session_key),
+        StreamSessionRecordV1::CancelRequested(v) => Some(&v.session_key),
         _ => None,
     }
 }

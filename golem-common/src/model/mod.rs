@@ -1027,6 +1027,8 @@ pub struct AgentStatusRecord {
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub has_durable_stream_history: bool,
+    pub pending_durable_stream_cancellations:
+        HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecordV1>,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
@@ -1078,6 +1080,7 @@ impl Default for AgentStatusRecord {
             received_card_transfers: ReceivedCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             has_durable_stream_history: false,
+            pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
             cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
@@ -1192,6 +1195,8 @@ pub struct DurableStreamSessionStatus {
     pub attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub attachment_attached: Option<bool>,
     pub lifecycle_error: Option<String>,
+    pub tombstoned_slots: HashSet<String>,
+    pub cancellation_requested: bool,
 }
 
 impl DurableStreamSessionStatus {
@@ -1260,6 +1265,9 @@ impl DurableStreamSessionStatus {
             StreamSessionRecordV1::Detached(v) => Some(&v.session_key),
             StreamSessionRecordV1::InvocationResult(v) => Some(&v.session_key),
             StreamSessionRecordV1::Finished(v) => Some(&v.session_key),
+            StreamSessionRecordV1::Tombstoned(v) => Some(&v.session_key),
+            StreamSessionRecordV1::CancelRequested(v) => Some(&v.session_key),
+            StreamSessionRecordV1::ConsumerCancelApplied(v) => Some(&v.intent.session_key),
             _ => None,
         };
         let Some(record_key) = record_key else { return };
@@ -1348,6 +1356,10 @@ impl DurableStreamSessionStatus {
             StreamSessionRecordV1::Finished(_) => {
                 self.finished.get_or_insert(oplog_idx);
             }
+            StreamSessionRecordV1::Tombstoned(v) => {
+                self.tombstoned_slots.insert(v.slot.clone());
+            }
+            StreamSessionRecordV1::CancelRequested(_) => self.cancellation_requested = true,
             _ => {}
         };
     }
@@ -1438,6 +1450,11 @@ impl DurableStreamSessionIndex {
             StreamSessionRecordV1::Detached(v) => &v.session_key.idempotency_key,
             StreamSessionRecordV1::InvocationResult(v) => &v.session_key.idempotency_key,
             StreamSessionRecordV1::Finished(v) => &v.session_key.idempotency_key,
+            StreamSessionRecordV1::Tombstoned(v) => &v.session_key.idempotency_key,
+            StreamSessionRecordV1::CancelRequested(v) => &v.session_key.idempotency_key,
+            StreamSessionRecordV1::ConsumerCancelApplied(v) => {
+                &v.intent.session_key.idempotency_key
+            }
             _ => return,
         };
         let mut status = match self.get(key) {

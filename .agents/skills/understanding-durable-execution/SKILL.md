@@ -93,6 +93,17 @@ says how strict that commit is: `Always` waits for durable storage; `DurableOnly
 for durable agents (`PrimaryOplog::commit` flushes everything; `EphemeralOplog` honours the
 level). Guarantees such as "accepted only after commit" refer to the commit, not the append.
 
+`worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
+commit and ignores receipt entries already folded into the published status. Primary/ephemeral
+threshold flushes and replica waits can commit outside the status actor, so even an empty receipt
+may hide a committed suffix. Unless the remaining receipt is exactly the contiguous suffix after
+the last published index, the status actor catches up with `status::try_fold_status_from`: committed
+storage is read in bounded chunks, external `StreamSession` payloads are hydrated, and the result
+is published once. This avoids retaining an unbounded auto-flushed tail and adds neither oplog
+entries nor a protocol change. Gap recovery conservatively invalidates authority snapshots after
+the fold. Ephemeral `DurableOnly` intentionally remains non-flushing and keeps its no-I/O fast
+path. This is status reconstruction, not replay tolerance.
+
 ## Component map
 
 | Area | Files | Responsibility |
@@ -136,6 +147,28 @@ reconstruction path. Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) neve
 worker that is executing or holds non-durable in-memory work. Ephemeral agents are fail-stop:
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
+
+Explicit interruption retires the cached owner and fences its replacement startup. If the worker
+has already unloaded (for example during OOM backoff), the retiring owner must commit an unclaimed
+terminal interrupt and notify invocation waiters before removal; no Store remains to do it. A
+terminal interrupt already claimed by the invocation loop is not recorded again, and a completed
+or failed invocation is not overwritten. Test:
+`tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart`.
+
+`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
+turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
+remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
+restart does not fail the invocation waiter or append `Interrupted`.
+
+Environment and application deletion invalidate component metadata, environment state and agent
+type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
+of admitting requests against a retiring cached owner.
+
+Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
+The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
+If normal archival already fenced the owner, lookup joins archival through cache removal, then
+resolves an observation-only owner from storage. Archive failure or cancellation rejects the lookup;
+it never grants access to the old poisoned producer or restarts the ephemeral invocation.
 
 ## Oplog model
 

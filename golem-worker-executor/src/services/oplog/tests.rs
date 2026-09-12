@@ -872,6 +872,12 @@ pub(crate) struct ReadCountingBlobStorage {
     reads: AtomicUsize,
     puts: AtomicUsize,
     fail_put: Option<usize>,
+    pause_put: std::sync::Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
     pause_read: std::sync::Mutex<
         Option<(
             tokio::sync::oneshot::Sender<()>,
@@ -887,6 +893,7 @@ impl ReadCountingBlobStorage {
             reads: AtomicUsize::new(0),
             puts: AtomicUsize::new(0),
             fail_put: None,
+            pause_put: std::sync::Mutex::new(None),
             pause_read: std::sync::Mutex::new(None),
         }
     }
@@ -897,8 +904,21 @@ impl ReadCountingBlobStorage {
             reads: AtomicUsize::new(0),
             puts: AtomicUsize::new(0),
             fail_put: Some(fail_put),
+            pause_put: std::sync::Mutex::new(None),
             pause_read: std::sync::Mutex::new(None),
         }
+    }
+
+    fn pause_next_put(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *self.pause_put.lock().unwrap() = Some((started_tx, release_rx));
+        (started_rx, release_tx)
     }
 
     pub(crate) fn pause_next_read(
@@ -981,6 +1001,11 @@ impl BlobStorage for ReadCountingBlobStorage {
         data: &[u8],
     ) -> Result<(), anyhow::Error> {
         let put = self.puts.fetch_add(1, Ordering::Relaxed) + 1;
+        let pause = self.pause_put.lock().unwrap().take();
+        if let Some((started, release)) = pause {
+            let _ = started.send(());
+            let _ = release.await;
+        }
         if self.fail_put == Some(put) {
             return Err(anyhow::anyhow!("injected blob write failure {put}"));
         }
@@ -1259,6 +1284,29 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
     assert_eq!(entries.get(&OplogIndex::INITIAL), Some(&create_entry));
     assert_eq!(calls.read.load(Ordering::Relaxed), 1);
 
+    for _ in 0..2 {
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                EphemeralOplog::try_archive_blocking(&oplog)
+            )
+            .await
+            .expect("blocking archival hung after the last movable layer was empty"),
+            Some(false)
+        );
+    }
+    assert_eq!(
+        service
+            .read_exact(
+                &owned_agent_id,
+                AgentMode::Ephemeral,
+                OplogIndex::INITIAL,
+                1
+            )
+            .await
+            .get(&OplogIndex::INITIAL),
+        Some(&create_entry)
+    );
     drop(oplog);
 }
 
@@ -2019,13 +2067,13 @@ async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
 }
 
 #[test]
-async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracing) {
+async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
         DurableStreamHandleV1, StreamCancelReasonV1, StreamCancelRecordV1, StreamCancelRoleV1,
         StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamItemsPayloadV1,
         StreamItemsRecordV1, StreamOffsetV1, StreamRegisteredRecordV1,
-        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSourceKindV1,
-        StreamTerminalAuthorV1,
+        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSessionFinishedRecordV1,
+        StreamSessionRecordV1, StreamSourceKindV1, StreamTerminalAuthorV1,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -2067,89 +2115,108 @@ async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracin
         idempotency_key: IdempotencyKey::new("stream-invocation".to_string()),
     };
     let added = oplog
-        .add_durable_stream_batch(Box::new(move |registration_index| {
+        .add_durable_stream_batch_iter(Box::new(move |registration_index| {
             let item_index = registration_index.next();
             let end_index = item_index.next();
             let cancel_index = end_index.next();
-            vec![
-                DurableStreamOplogRecord::Registered(
-                    None,
-                    StreamRegisteredRecordV1 {
-                        format_version: 1,
-                        coordinate: StreamRegistrationCoordinateV1::Root {
-                            invocation_id: invocation_id.clone(),
-                            root_kind: StreamRootKindV1::MethodResult,
-                            recursive_value_path: Vec::new(),
+            Box::new(
+                vec![
+                    DurableStreamOplogRecord::Registered(
+                        None,
+                        StreamRegisteredRecordV1 {
+                            format_version: 1,
+                            coordinate: StreamRegistrationCoordinateV1::Root {
+                                invocation_id: invocation_id.clone(),
+                                root_kind: StreamRootKindV1::MethodResult,
+                                recursive_value_path: Vec::new(),
+                            },
+                            registration_oplog_index: registration_index,
+                            handle: DurableStreamHandleV1 {
+                                format_version: 1,
+                                stream_id,
+                                producer_environment_id: environment_id,
+                                producer: agent_id,
+                                expected_producer_fingerprint: producer_fingerprint,
+                                source_invocation: invocation_id.clone(),
+                                component_revision: ComponentRevision::INITIAL,
+                                element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                            },
+                            source_kind: StreamSourceKindV1::InvocationOutput,
+                            session_mapping: None,
                         },
-                        registration_oplog_index: registration_index,
-                        handle: DurableStreamHandleV1 {
+                    ),
+                    DurableStreamOplogRecord::Items(
+                        None,
+                        StreamItemsRecordV1 {
                             format_version: 1,
                             stream_id,
-                            producer_environment_id: environment_id,
-                            producer: agent_id,
-                            expected_producer_fingerprint: producer_fingerprint,
-                            source_invocation: invocation_id,
-                            component_revision: ComponentRevision::INITIAL,
-                            element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                            producer_fingerprint,
+                            first_sequence: 0,
+                            nested_stream_ids: Vec::new(),
+                            newly_registered_stream_ids: Vec::new(),
+                            payload: StreamItemsPayloadV1::Values(vec![vec![42; 1024]]),
+                            offsets: vec![StreamOffsetV1::new(item_index, 0)],
                         },
-                        source_kind: StreamSourceKindV1::InvocationOutput,
-                        session_mapping: None,
-                    },
-                ),
-                DurableStreamOplogRecord::Items(
-                    None,
-                    StreamItemsRecordV1 {
-                        format_version: 1,
-                        stream_id,
-                        producer_fingerprint,
-                        first_sequence: 0,
-                        nested_stream_ids: Vec::new(),
-                        newly_registered_stream_ids: Vec::new(),
-                        payload: StreamItemsPayloadV1::Values(vec![vec![42; 1024]]),
-                        offsets: vec![StreamOffsetV1::new(item_index, 0)],
-                    },
-                ),
-                DurableStreamOplogRecord::End(
-                    None,
-                    StreamEndRecordV1 {
-                        format_version: 1,
-                        stream_id,
-                        producer_fingerprint,
-                        sequence: 1,
-                        offset: StreamOffsetV1::new(end_index, 0),
-                        authored_by: StreamTerminalAuthorV1::Guest,
-                        result: StreamEndResultV1::Ok,
-                    },
-                ),
-                DurableStreamOplogRecord::Cancel(
-                    None,
-                    StreamCancelRecordV1 {
-                        format_version: 1,
-                        stream_id,
-                        producer_fingerprint,
-                        sequence: 1,
-                        offset: StreamOffsetV1::new(cancel_index, 0),
-                        authored_by: StreamTerminalAuthorV1::Protocol,
-                        role: StreamCancelRoleV1::OutputConsumer,
-                        reason: StreamCancelReasonV1::Protocol,
-                        details: Some("test cancellation".to_string()),
-                    },
-                ),
-            ]
+                    ),
+                    DurableStreamOplogRecord::End(
+                        None,
+                        StreamEndRecordV1 {
+                            format_version: 1,
+                            stream_id,
+                            producer_fingerprint,
+                            sequence: 1,
+                            offset: StreamOffsetV1::new(end_index, 0),
+                            authored_by: StreamTerminalAuthorV1::Guest,
+                            result: StreamEndResultV1::Ok,
+                        },
+                    ),
+                    DurableStreamOplogRecord::Cancel(
+                        None,
+                        StreamCancelRecordV1 {
+                            format_version: 1,
+                            stream_id,
+                            producer_fingerprint,
+                            sequence: 1,
+                            offset: StreamOffsetV1::new(cancel_index, 0),
+                            authored_by: StreamTerminalAuthorV1::Protocol,
+                            role: StreamCancelRoleV1::OutputConsumer,
+                            reason: StreamCancelReasonV1::Protocol,
+                            details: Some("test cancellation".to_string()),
+                        },
+                    ),
+                    DurableStreamOplogRecord::Session(
+                        None,
+                        Box::new(StreamSessionRecordV1::Finished(
+                            StreamSessionFinishedRecordV1 {
+                                format_version: 1,
+                                session_key: invocation_id,
+                                result: Err(vec![57; 1024]),
+                            },
+                        )),
+                    ),
+                ]
+                .into_iter(),
+            )
         }))
         .await
         .unwrap();
     oplog.commit(CommitLevel::Always).await;
 
-    assert_eq!(added.len(), 4);
+    assert_eq!(added.len(), 5);
     for (_, entry) in added {
         match entry {
             OplogEntry::StreamRegistered { record, .. } => {
-                assert!(matches!(&record, OplogPayload::External { .. }));
+                assert!(matches!(
+                    &record,
+                    OplogPayload::External { cached: None, .. }
+                ));
                 oplog.download_payload(record).await.unwrap();
             }
             OplogEntry::StreamItems { record, .. } => {
-                assert!(matches!(&record, OplogPayload::External { .. }));
+                assert!(matches!(
+                    &record,
+                    OplogPayload::External { cached: None, .. }
+                ));
                 let record = oplog.download_payload(record).await.unwrap();
                 assert_eq!(
                     record.payload,
@@ -2157,16 +2224,395 @@ async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracin
                 );
             }
             OplogEntry::StreamEnd { record, .. } => {
-                assert!(matches!(&record, OplogPayload::External { .. }));
+                assert!(matches!(
+                    &record,
+                    OplogPayload::External { cached: None, .. }
+                ));
                 oplog.download_payload(record).await.unwrap();
             }
             OplogEntry::StreamCancel { record, .. } => {
-                assert!(matches!(&record, OplogPayload::External { .. }));
+                assert!(matches!(
+                    &record,
+                    OplogPayload::External { cached: None, .. }
+                ));
                 oplog.download_payload(record).await.unwrap();
+            }
+            OplogEntry::StreamSession { record, .. } => {
+                assert!(matches!(
+                    &record,
+                    OplogPayload::External {
+                        cached: Some(_),
+                        ..
+                    }
+                ));
+                let StreamSessionRecordV1::Finished(record) =
+                    oplog.download_payload(record).await.unwrap()
+                else {
+                    panic!("expected finished session");
+                };
+                assert_eq!(record.result, Err(vec![57; 1024]));
             }
             _ => panic!("durable stream batch appended a non-stream entry"),
         }
     }
+}
+
+#[test]
+async fn lazy_durable_stream_batch_upload_failure_appends_no_references(_tracing: &Tracing) {
+    use golem_common::base_model::durable_stream::{
+        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamOffsetV1, StreamTerminalAuthorV1,
+    };
+
+    let blob_storage = Arc::new(ReadCountingBlobStorage::failing_on_put(2));
+    let oplog_service = PrimaryOplogService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        blob_storage,
+        100,
+        0,
+        usize::MAX,
+        RetryConfig::no_retries(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "failed-lazy-stream-batch".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let generated = Arc::new(AtomicUsize::new(0));
+    let produced = generated.clone();
+    let error = oplog
+        .add_durable_stream_batch_iter(Box::new(move |index| {
+            Box::new((0..3).map(move |position| {
+                produced.fetch_add(1, Ordering::SeqCst);
+                DurableStreamOplogRecord::End(
+                    None,
+                    StreamEndRecordV1 {
+                        format_version: 1,
+                        stream_id: StreamId(Uuid::new_v4()),
+                        producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
+                        sequence: 0,
+                        offset: StreamOffsetV1::new(
+                            OplogIndex::from_u64(index.as_u64() + position),
+                            0,
+                        ),
+                        authored_by: StreamTerminalAuthorV1::Guest,
+                        result: StreamEndResultV1::Ok,
+                    },
+                )
+            }))
+        }))
+        .await
+        .unwrap_err();
+    assert!(error.contains("injected blob write failure 2"), "{error}");
+    assert_eq!(generated.load(Ordering::SeqCst), 2);
+    assert_eq!(oplog.current_oplog_index().await, OplogIndex::NONE);
+    assert!(oplog.commit(CommitLevel::Always).await.is_empty());
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn ephemeral_lazy_durable_stream_batch_externalizes_terminals_atomically(_tracing: &Tracing) {
+    use golem_common::base_model::durable_stream::{
+        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamOffsetV1,
+        StreamSessionFinishedRecordV1, StreamSessionRecordV1, StreamTerminalAuthorV1,
+    };
+    use golem_common::model::component::ComponentRevision;
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage,
+            100,
+            0,
+            usize::MAX,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary, nev![archive], 100, 0);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "ephemeral-lazy-stream-batch".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let mut metadata = make_agent_metadata(agent_id.clone(), account_id, environment_id);
+    metadata.agent_mode = AgentMode::Ephemeral;
+    let oplog = service
+        .create(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogEntry::create(
+                agent_id.clone(),
+                AgentMode::Ephemeral,
+                ComponentRevision::INITIAL,
+                Vec::new(),
+                environment_id,
+                account_id,
+                None,
+                100,
+                100,
+                HashSet::new(),
+                Vec::new(),
+                None,
+                Uuid::new_v4(),
+            )
+            .rounded(),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+    let stream_id = StreamId(Uuid::new_v4());
+    let session_key = StreamInvocationIdV1 {
+        callee_environment_id: environment_id,
+        callee: agent_id,
+        callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
+        idempotency_key: IdempotencyKey::new("ephemeral-terminal-session".to_string()),
+    };
+
+    let added = oplog
+        .add_durable_stream_batch_iter(Box::new(move |first_index| {
+            Box::new(
+                vec![
+                    DurableStreamOplogRecord::End(
+                        None,
+                        StreamEndRecordV1 {
+                            format_version: 1,
+                            stream_id,
+                            producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
+                            sequence: 0,
+                            offset: StreamOffsetV1::new(first_index, 0),
+                            authored_by: StreamTerminalAuthorV1::Guest,
+                            result: StreamEndResultV1::Ok,
+                        },
+                    ),
+                    DurableStreamOplogRecord::Session(
+                        None,
+                        Box::new(StreamSessionRecordV1::Finished(
+                            StreamSessionFinishedRecordV1 {
+                                format_version: 1,
+                                session_key,
+                                result: Err(vec![91; 1024]),
+                            },
+                        )),
+                    ),
+                ]
+                .into_iter(),
+            )
+        }))
+        .await
+        .unwrap();
+
+    assert_eq!(added.len(), 2);
+    assert_eq!(added[1].0, added[0].0.next());
+    assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
+    let persisted = service
+        .read_exact(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            OplogIndex::INITIAL,
+            3,
+        )
+        .await;
+    assert_eq!(persisted.len(), 3);
+    assert!(matches!(
+        persisted[&OplogIndex::INITIAL],
+        OplogEntry::Create { .. }
+    ));
+    assert!(matches!(
+        persisted[&added[0].0],
+        OplogEntry::StreamEnd { .. }
+    ));
+    let OplogEntry::StreamSession { record, .. } = &persisted[&added[1].0] else {
+        panic!("persisted terminal batch must end with a session record");
+    };
+    let StreamSessionRecordV1::Finished(finished) =
+        oplog.download_payload(record.clone()).await.unwrap()
+    else {
+        panic!("persisted terminal batch must end with Finished");
+    };
+    assert_eq!(finished.result, Err(vec![91; 1024]));
+    assert!(matches!(
+        &added[0].1,
+        OplogEntry::StreamEnd {
+            record: OplogPayload::External { cached: None, .. },
+            ..
+        }
+    ));
+    let session_payload = match &added[1].1 {
+        OplogEntry::StreamSession {
+            record:
+                payload @ OplogPayload::External {
+                    cached: Some(_), ..
+                },
+            ..
+        } => payload.clone(),
+        other => panic!("expected cached external Finished session, got {other:?}"),
+    };
+    let StreamSessionRecordV1::Finished(finished) =
+        oplog.download_payload(session_payload).await.unwrap()
+    else {
+        panic!("expected finished session");
+    };
+    assert_eq!(finished.result, Err(vec![91; 1024]));
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn blocked_lazy_durable_stream_batch_prepares_before_atomic_commit_and_append(
+    _tracing: &Tracing,
+) {
+    use golem_common::base_model::durable_stream::{
+        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamOffsetV1,
+        StreamSessionFinishedRecordV1, StreamSessionRecordV1, StreamTerminalAuthorV1,
+    };
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::new());
+    let (put_started, release_put) = blob_storage.pause_next_put();
+    let service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage,
+            blob_storage,
+            0,
+            0,
+            usize::MAX,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "blocked-lazy-stream-batch".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let generated = Arc::new(AtomicUsize::new(0));
+    let produced = generated.clone();
+    let session_key = StreamInvocationIdV1 {
+        callee_environment_id: environment_id,
+        callee: owned_agent_id.agent_id.clone(),
+        callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
+        idempotency_key: IdempotencyKey::new("blocked-terminal-session".to_string()),
+    };
+    let batch_oplog = oplog.clone();
+    let batch = tokio::spawn(async move {
+        batch_oplog
+            .add_durable_stream_batch_iter(Box::new(move |first_index| {
+                let finished_produced = produced.clone();
+                let terminals = (0..2).map(move |position| {
+                    produced.fetch_add(1, Ordering::SeqCst);
+                    DurableStreamOplogRecord::End(
+                        None,
+                        StreamEndRecordV1 {
+                            format_version: 1,
+                            stream_id: StreamId(Uuid::new_v4()),
+                            producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
+                            sequence: position,
+                            offset: StreamOffsetV1::new(
+                                OplogIndex::from_u64(first_index.as_u64() + position),
+                                0,
+                            ),
+                            authored_by: StreamTerminalAuthorV1::Guest,
+                            result: StreamEndResultV1::Ok,
+                        },
+                    )
+                });
+                Box::new(terminals.chain(std::iter::once_with(move || {
+                    finished_produced.fetch_add(1, Ordering::SeqCst);
+                    DurableStreamOplogRecord::Session(
+                        None,
+                        Box::new(StreamSessionRecordV1::Finished(
+                            StreamSessionFinishedRecordV1 {
+                                format_version: 1,
+                                session_key,
+                                result: Err(vec![73; 1024]),
+                            },
+                        )),
+                    )
+                })))
+            }))
+            .await
+    });
+    put_started.await.unwrap();
+
+    assert_eq!(generated.load(Ordering::SeqCst), 1);
+    assert!(
+        service
+            .read_source(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 3)
+            .await
+            .is_empty(),
+        "the blocked first upload must not expose a partial reference"
+    );
+    let competing_commit = oplog.commit(CommitLevel::Always);
+    tokio::pin!(competing_commit);
+    assert!(futures::poll!(&mut competing_commit).is_pending());
+    let competing_append = oplog.add(OplogEntry::suspend().rounded());
+    tokio::pin!(competing_append);
+    assert!(futures::poll!(&mut competing_append).is_pending());
+
+    release_put.send(()).unwrap();
+    let added = batch.await.unwrap().unwrap();
+    competing_commit.await;
+    let competing_index = competing_append.await;
+
+    assert_eq!(generated.load(Ordering::SeqCst), 3);
+    assert_eq!(added.len(), 3);
+    assert_eq!(added[0].0, OplogIndex::INITIAL);
+    assert_eq!(added[1].0, added[0].0.next());
+    assert_eq!(added[2].0, added[1].0.next());
+    assert_eq!(competing_index, added[2].0.next());
+    assert!(matches!(
+        &added[2].1,
+        OplogEntry::StreamSession {
+            record: OplogPayload::External {
+                cached: Some(_),
+                ..
+            },
+            ..
+        }
+    ));
+    let committed = service
+        .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 4)
+        .await;
+    assert_eq!(committed.len(), 4);
+    assert!(matches!(
+        committed[&competing_index],
+        OplogEntry::Suspend { .. }
+    ));
 }
 
 #[test]
@@ -4414,7 +4860,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
         1,
         RetryConfig::default(),
     ));
-    let service = MultiLayerOplogService::new(primary, nev![archive], 100, 1);
+    let service = MultiLayerOplogService::new(primary.clone(), nev![archive], 100, 1);
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -4432,6 +4878,7 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
             default_execution_status(AgentMode::Durable),
         )
         .await;
+    oplog.add_and_commit(OplogEntry::no_op(None)).await;
     let current = oplog.current_oplog_index().await;
 
     service.delete(&owned_agent_id, AgentMode::Durable).await;
@@ -4448,8 +4895,66 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
         .or_else(|| panic.downcast_ref::<&str>().copied());
     assert_eq!(
         message,
-        Some("Oplog read failed: missing oplog entries in range [1..=1]")
+        Some("Oplog read failed: missing oplog entries in range [1..=2]")
     );
+
+    // Deletion must admit a fresh oplog generation, and dropping the
+    // old generation afterwards must not evict either replacement cache entry.
+    let metadata = make_agent_metadata(owned_agent_id.agent_id(), account_id, environment_id);
+    let initial_entry = OplogEntry::NoOp {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+    };
+    let replacement = service
+        .create(
+            &owned_agent_id,
+            AgentMode::Durable,
+            initial_entry.clone(),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert!(!Arc::ptr_eq(&oplog, &replacement));
+    assert_eq!(replacement.current_oplog_index().await, OplogIndex::INITIAL);
+    assert_eq!(
+        replacement.read_exact(OplogIndex::INITIAL, 1).await,
+        BTreeMap::from([(OplogIndex::INITIAL, initial_entry.rounded())])
+    );
+
+    let replacement_primary = primary
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(OplogIndex::INITIAL),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    drop(oplog);
+    let reopened = service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(OplogIndex::INITIAL),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert!(Arc::ptr_eq(&replacement, &reopened));
+    let reopened_primary = primary
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(OplogIndex::INITIAL),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert!(Arc::ptr_eq(&replacement_primary, &reopened_primary));
 }
 
 async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: AgentMode) {

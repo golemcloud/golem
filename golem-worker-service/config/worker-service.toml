@@ -22,6 +22,16 @@ environment_auth_details_cache_ttl = "10m"
 [component_service]
 component_cache_max_capacity = 1024
 
+[durable_streams]
+long_poll_timeout = "30s"
+max_append_body_bytes = 1048576
+
+[durable_streams.load]
+max_append_requests_per_second_per_stream = 100
+max_catch_up_requests_per_second_per_stream = 100
+max_concurrent_readers_per_node = 4096
+max_concurrent_readers_per_stream = 16
+
 [gateway_session_storage]
 type = "Redis"
 

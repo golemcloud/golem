@@ -16,21 +16,23 @@ pub(crate) mod metadata;
 
 use crate::durable_host::stream_bus::{
     DurableLiveStreamBus, DurableLiveStreamBusError, DurableLiveStreamEvent,
-    DurableLiveStreamSubscription,
+    DurableLiveStreamSubscription, PublicationReceipt, QueuedDurableEvent,
 };
+use crate::services::activity::{ActivityGate, spawn_with_activity};
 #[cfg(test)]
 use crate::services::oplog::CommitLevel;
 use crate::services::oplog::{
     DurableStreamOplogRecord, Oplog, OplogOps, OplogService, OplogServiceOps,
 };
-use crate::services::rpc::Rpc;
+use crate::services::rpc::{DurableStreamReadError, Rpc};
 use crate::services::worker::WorkerService;
 use async_trait::async_trait;
+use futures::FutureExt;
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::durable_stream::{
     AttachedStreamSegmentRequestV1, AttachmentId, DEFAULT_LIVE_JOIN_BUFFER_SIZE,
-    DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1, InputStreamHighWaterV1,
-    MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
+    DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1, ExternalProducerIdV1,
+    InputStreamHighWaterV1, MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
     MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
     MAX_STREAM_VALUE_TRAVERSAL_DEPTH, STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRoleV1,
     StreamAttachmentActivatedRecordV1, StreamAttachmentControlOperationV1,
@@ -38,9 +40,10 @@ use golem_common::base_model::durable_stream::{
     StreamAttachmentFinalizedRecordV1, StreamAttachmentKeyV1, StreamAttachmentPreparedRecordV1,
     StreamAttachmentRenewedRecordV1, StreamCancelReasonV1, StreamCancelRecordV1,
     StreamCancelRoleV1, StreamCascadeDependentResultV1, StreamCascadeOutboxRecordV1,
-    StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamItemsPayloadV1,
-    StreamItemsRecordV1, StreamOffsetV1, StreamProducerDeletingRecordV1, StreamRegisteredRecordV1,
-    StreamRegistrationCoordinateV1, StreamSessionAttachedRecordV1, StreamSessionFinishedRecordV1,
+    StreamEndRecordV1, StreamEndResultV1, StreamExternalProducerStateRecordV1, StreamId,
+    StreamInvocationIdV1, StreamItemsPayloadV1, StreamItemsRecordV1, StreamOffsetV1,
+    StreamProducerDeletingRecordV1, StreamRegisteredRecordV1, StreamRegistrationCoordinateV1,
+    StreamSessionAttachedRecordV1, StreamSessionFinishedRecordV1,
     StreamSessionInputHighWaterRecordV1, StreamSessionKeyV1, StreamSessionMappingRecordV1,
     StreamSessionMappingV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
     StreamSourceKindV1, StreamSourceUnavailableRecordV1, StreamTerminalAuthorV1,
@@ -59,10 +62,40 @@ use metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use tokio::sync::{Mutex, MutexGuard, Notify, oneshot};
+use tokio::sync::{Mutex, MutexGuard, Notify, OwnedSemaphorePermit, Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
+
+tokio::task_local! {
+    static MUTATION_SCOPE: Arc<ProducerMutationScope>;
+    static MUTATION_EFFECTS: ProducerMutationEffects;
+}
+
+struct ProducerMutationScope {
+    producer: Arc<DurableStreamProducer>,
+    commit_tails: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    session_records_changed: AtomicBool,
+    publications: std::sync::Mutex<Vec<PublicationReceipt>>,
+    remote_cancellations: std::sync::Mutex<
+        Vec<futures::future::BoxFuture<'static, Result<(), DurableStreamProducerError>>>,
+    >,
+    _operation: OwnedSemaphorePermit,
+    _memory: OwnedSemaphorePermit,
+}
+
+struct ProducerMutationEffects {
+    producer: Arc<DurableStreamProducer>,
+    pending: AtomicBool,
+}
+
+impl Drop for ProducerMutationEffects {
+    fn drop(&mut self) {
+        if self.pending.load(Ordering::Acquire) {
+            self.producer.poison();
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ProducerRegistrationRequestV1 {
@@ -89,6 +122,7 @@ pub(crate) enum ProducerOutputSourceV1 {
 pub(crate) struct ProducerOutputRegistrationV1 {
     pub(crate) transport_stream_id: u64,
     pub(crate) source: ProducerOutputSourceV1,
+    pub(crate) cancellation_epoch: Option<u64>,
 }
 
 pub(crate) struct PendingCommittedCancellation {
@@ -96,10 +130,9 @@ pub(crate) struct PendingCommittedCancellation {
     sequence: u64,
     role: StreamCancelRoleV1,
     reason: StreamCancelReasonV1,
-    bus: Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>,
+    publication: PublicationReceipt,
     event: CommittedProducerStreamEventV1,
     outcome: Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError>,
-    newly_committed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
@@ -141,6 +174,38 @@ pub(crate) struct ProducerWriteOutcomeV1<T> {
     pub(crate) replayed: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+pub(crate) struct StreamHandleReadResultV1 {
+    pub(crate) events: Vec<CommittedProducerStreamEventV1>,
+    pub(crate) next_offset: Option<StreamOffsetV1>,
+    pub(crate) head_offset: Option<StreamOffsetV1>,
+    pub(crate) closed: bool,
+    pub(crate) cancelled: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ExternalProducerV1 {
+    pub(crate) id: ExternalProducerIdV1,
+    pub(crate) epoch: u64,
+    pub(crate) sequence: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ExternalAppendOutcomeV1 {
+    Accepted(StreamOffsetV1),
+    Duplicate {
+        offset: StreamOffsetV1,
+        highest_sequence: Option<u64>,
+    },
+    EpochFenced(u64),
+    SeqGap {
+        expected: u64,
+        received: u64,
+    },
+    Closed,
+    NotFound,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DurableStreamProducerError {
     UnsupportedVersion(u8),
@@ -149,6 +214,7 @@ pub(crate) enum DurableStreamProducerError {
     UnknownStream(StreamId),
     AlreadyTerminal(StreamId),
     FencedByTerminal(CommittedProducerStreamEventPayloadV1),
+    ClosedByOtherProducer,
     EventConflict,
     SequenceGap { expected: u64, actual: u64 },
     CounterOverflow,
@@ -172,6 +238,7 @@ pub(crate) enum DurableStreamProducerError {
     DeletionBlocked(Vec<StreamAttachmentKeyV1>),
     CorruptHistory(String),
     Oplog(String),
+    RecoveryRequired,
     LiveBus(DurableLiveStreamBusError),
 }
 
@@ -182,6 +249,12 @@ impl std::fmt::Display for DurableStreamProducerError {
 }
 
 impl std::error::Error for DurableStreamProducerError {}
+
+impl From<DurableStreamProducerError> for String {
+    fn from(error: DurableStreamProducerError) -> Self {
+        error.to_string()
+    }
+}
 
 impl DurableStreamProducerError {
     pub(crate) fn deletion_blocked_evidence(&self) -> Option<String> {
@@ -210,7 +283,10 @@ impl DurableStreamProducerError {
 
 impl From<DurableLiveStreamBusError> for DurableStreamProducerError {
     fn from(value: DurableLiveStreamBusError) -> Self {
-        Self::LiveBus(value)
+        match value {
+            DurableLiveStreamBusError::Retired => Self::RecoveryRequired,
+            value => Self::LiveBus(value),
+        }
     }
 }
 
@@ -240,6 +316,10 @@ struct ProducerStreamIndex {
     complete_for_deletion: bool,
     cascade_outbox: HashMap<StreamAttachmentKeyV1, StreamCascadeDependentResultV1>,
     consumer_journals: HashMap<(StreamSessionKeyV1, StreamId), IndexedConsumerJournal>,
+    external_producer_heads:
+        HashMap<(StreamSessionKeyV1, StreamId, ExternalProducerIdV1), IndexedExternalProducer>,
+    external_producer_offsets:
+        HashMap<(StreamSessionKeyV1, StreamId, ExternalProducerIdV1, u64, u64), StreamOffsetV1>,
     open_streams: usize,
     deleting: bool,
     consumer_deleting: bool,
@@ -327,6 +407,14 @@ struct IndexedProducerStream {
     terminal: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+pub struct IndexedExternalProducer {
+    epoch: u64,
+    last_sequence: u64,
+    next_sequence: u64,
+    last_offset: StreamOffsetV1,
+}
+
 impl IndexedProducerStream {
     fn offsets(&self) -> Vec<StreamOffsetV1> {
         let mut offsets = Vec::new();
@@ -348,6 +436,27 @@ impl IndexedProducerStream {
 }
 
 impl ProducerStreamIndex {
+    fn apply_external_producer_state(&mut self, record: &StreamExternalProducerStateRecordV1) {
+        let base = (
+            record.session_key.clone(),
+            record.stream_id,
+            record.producer_id.clone(),
+        );
+        self.external_producer_heads.insert(
+            base.clone(),
+            IndexedExternalProducer {
+                epoch: record.epoch,
+                last_sequence: record.sequence,
+                next_sequence: record.next_sequence,
+                last_offset: record.resulting_offset,
+            },
+        );
+        self.external_producer_offsets.insert(
+            (base.0, base.1, base.2, record.epoch, record.sequence),
+            record.resulting_offset,
+        );
+    }
+
     fn entity_parent_start_index(
         &self,
         stream_id: StreamId,
@@ -1098,7 +1207,6 @@ impl ProducerStreamIndex {
             payload: CommittedProducerStreamEventPayloadV1::End(record.result),
         };
         stream.first_sequence.get_or_insert(record.sequence);
-        stream.terminal_event = Some(event.clone());
         stream.last_offset = Some(record.offset);
         stream.terminal = true;
         self.open_streams -= 1;
@@ -1168,7 +1276,6 @@ impl ProducerStreamIndex {
             },
         };
         stream.first_sequence.get_or_insert(record.sequence);
-        stream.terminal_event = Some(event.clone());
         stream.last_offset = Some(record.offset);
         stream.terminal = true;
         self.open_streams -= 1;
@@ -1647,7 +1754,16 @@ pub(crate) struct DurableStreamProducer {
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,
     index: Mutex<ProducerStreamIndex>,
-    buses: RwLock<HashMap<StreamId, Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>>>,
+    poisoned: AtomicBool,
+    retirement: CancellationToken,
+    durable_activity: Arc<ActivityGate>,
+    owned_operations: Arc<Semaphore>,
+    owned_operation_bytes: Arc<Semaphore>,
+    lifecycle_operations: Arc<Semaphore>,
+    lifecycle_operation_bytes: Arc<Semaphore>,
+    buses: RwLock<BTreeMap<StreamId, Arc<DurableLiveStreamBus<CommittedProducerStreamEventV1>>>>,
+    terminal_dispatcher_started: AtomicBool,
+    terminal_progress: Arc<Notify>,
     committed_retention: std::sync::Mutex<CommittedEventRetention>,
     source_cancellations: RwLock<HashMap<StreamId, (u64, CancellationToken)>>,
     next_source_cancellation_id: AtomicU64,
@@ -1763,6 +1879,318 @@ fn encoded_event_bytes(event: &CommittedProducerStreamEventV1) -> usize {
 }
 
 impl DurableStreamProducer {
+    pub(crate) fn ensure_healthy(&self) -> Result<(), DurableStreamProducerError> {
+        if self.poisoned.load(Ordering::Acquire) {
+            Err(DurableStreamProducerError::RecoveryRequired)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn wait_durable_drained(&self) {
+        self.durable_activity.wait_drained().await;
+    }
+
+    pub(crate) async fn with_metadata_activity<T>(
+        &self,
+        lookup: impl Future<Output = T>,
+    ) -> Result<T, DurableStreamProducerError> {
+        self.ensure_healthy()?;
+        let activity = self
+            .durable_activity
+            .inherit_or_enter()
+            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+        let result = activity.scope(lookup).await;
+        self.ensure_healthy()?;
+        Ok(result)
+    }
+
+    /// Cancels only a remote waiter; local durable mutations must finish independently.
+    pub(crate) async fn remote_until_retired<T>(
+        &self,
+        remote: impl Future<Output = Result<T, DurableStreamProducerError>>,
+    ) -> Result<T, DurableStreamProducerError> {
+        tokio::select! {
+            biased;
+            _ = self.retirement.cancelled() => Err(DurableStreamProducerError::RecoveryRequired),
+            result = remote => result,
+        }
+    }
+
+    pub(crate) fn try_retire_quiescent(&self) -> bool {
+        if self.ensure_healthy().is_err() || !self.durable_activity.try_close_if_idle() {
+            return false;
+        }
+        self.poison();
+        true
+    }
+
+    pub(crate) fn poison(&self) {
+        self.poisoned.store(true, Ordering::Release);
+        self.retirement.cancel();
+        self.durable_activity.close();
+        self.owned_operations.close();
+        self.owned_operation_bytes.close();
+        self.lifecycle_operations.close();
+        self.lifecycle_operation_bytes.close();
+        for bus in self
+            .buses
+            .read()
+            .expect("durable stream bus map lock poisoned")
+            .values()
+        {
+            bus.retire();
+        }
+        self.terminal_progress.notify_one();
+        self.session_records_changed.notify_waiters();
+    }
+
+    fn begin_durable_effect(&self) {
+        let _ = MUTATION_EFFECTS.try_with(|scope| {
+            if std::ptr::eq(scope.producer.as_ref(), self) {
+                scope.pending.store(true, Ordering::Release);
+            }
+        });
+    }
+
+    fn finish_durable_effect(&self) {
+        let _ = MUTATION_EFFECTS.try_with(|scope| {
+            if std::ptr::eq(scope.producer.as_ref(), self) {
+                scope.pending.store(false, Ordering::Release);
+            }
+        });
+    }
+
+    fn track_durable_effects<T, E>(
+        self: &Arc<Self>,
+        operation: impl Future<Output = Result<T, E>>,
+    ) -> impl Future<Output = Result<T, E>> {
+        let operation = Box::pin(operation);
+        MUTATION_EFFECTS.scope(
+            ProducerMutationEffects {
+                producer: self.clone(),
+                pending: AtomicBool::new(false),
+            },
+            async move {
+                let outcome = operation.await;
+                if outcome.is_ok() {
+                    self.finish_durable_effect();
+                }
+                outcome
+            },
+        )
+    }
+
+    pub(crate) async fn run_owned<T, E, F, Fut>(
+        &self,
+        retained_bytes: usize,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<DurableStreamProducerError> + Send + 'static,
+        F: FnOnce(Arc<Self>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.run_owned_mutation(retained_bytes, false, operation)
+            .await
+    }
+
+    pub(crate) async fn run_lifecycle<T, E, F, Fut>(
+        &self,
+        retained_bytes: usize,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<DurableStreamProducerError> + Send + 'static,
+        F: FnOnce(Arc<Self>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.run_owned_mutation(retained_bytes, true, operation)
+            .await
+    }
+
+    pub(crate) fn defer_remote_cancellation(
+        &self,
+        cancellation: impl Future<Output = Result<(), DurableStreamProducerError>> + Send + 'static,
+    ) {
+        MUTATION_SCOPE.with(|scope| {
+            assert!(std::ptr::eq(scope.producer.as_ref(), self));
+            scope
+                .remote_cancellations
+                .lock()
+                .expect("remote cancellation list lock poisoned")
+                .push(Box::pin(cancellation));
+        });
+    }
+
+    async fn run_owned_mutation<T, E, F, Fut>(
+        &self,
+        retained_bytes: usize,
+        lifecycle: bool,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<DurableStreamProducerError> + Send + 'static,
+        F: FnOnce(Arc<Self>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        self.ensure_healthy()?;
+        let producer = self
+            .self_weak
+            .upgrade()
+            .expect("live producer has an owning Arc");
+        if MUTATION_SCOPE
+            .try_with(|scope| Arc::ptr_eq(&scope.producer, &producer))
+            .unwrap_or(false)
+        {
+            return producer
+                .track_durable_effects(operation(producer.clone()))
+                .await;
+        }
+        if !lifecycle && retained_bytes > 256 * 1024 * 1024 {
+            return Err(DurableStreamProducerError::ItemTooLarge.into());
+        }
+        let (operations, bytes) = if lifecycle {
+            (&self.lifecycle_operations, &self.lifecycle_operation_bytes)
+        } else {
+            (&self.owned_operations, &self.owned_operation_bytes)
+        };
+        let permit = operations
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| DurableStreamProducerError::RecoveryRequired)?;
+        let memory = bytes
+            .clone()
+            .acquire_many_owned(
+                // A single large lifecycle error must still be finalized. Reserving the
+                // entire lane excludes other byte-retaining lifecycle operations.
+                retained_bytes.min(256 * 1024 * 1024) as u32,
+            )
+            .await
+            .map_err(|_| DurableStreamProducerError::RecoveryRequired)?;
+        self.ensure_healthy()?;
+        let activity = self
+            .durable_activity
+            .try_enter()
+            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+        let (reply, result) = oneshot::channel();
+        let scope = Arc::new(ProducerMutationScope {
+            producer: producer.clone(),
+            commit_tails: std::sync::Mutex::new(Vec::new()),
+            session_records_changed: AtomicBool::new(false),
+            publications: std::sync::Mutex::new(Vec::new()),
+            remote_cancellations: std::sync::Mutex::new(Vec::new()),
+            _operation: permit,
+            _memory: memory,
+        });
+        tokio::spawn(async move {
+            MUTATION_SCOPE
+                .scope(scope.clone(), async move {
+                    let mut outcome = match std::panic::AssertUnwindSafe(async {
+                        activity
+                            .clone()
+                            .scope(producer.track_durable_effects(operation(producer.clone())))
+                            .await
+                    })
+                    .catch_unwind()
+                    .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(_) => {
+                            producer.poison();
+                            Err(DurableStreamProducerError::Oplog(
+                                "durable stream mutation panicked".into(),
+                            )
+                            .into())
+                        }
+                    };
+                    let mut publications = std::mem::take(
+                        &mut *scope
+                            .publications
+                            .lock()
+                            .expect("publication receipt list lock poisoned"),
+                    );
+                    let tails = std::mem::take(
+                        &mut *scope
+                            .commit_tails
+                            .lock()
+                            .expect("commit tail list lock poisoned"),
+                    );
+                    for tail in tails {
+                        if let Err(error) = tail.await {
+                            producer.poison();
+                            outcome = Err(DurableStreamProducerError::Oplog(format!(
+                                "durable stream commit callback failed: {error}"
+                            ))
+                            .into());
+                        }
+                    }
+                    // Slot readers use published worker status, which is folded after the
+                    // durability receipt but before the commit callback completes.
+                    if scope.session_records_changed.load(Ordering::Acquire) {
+                        producer.session_records_changed.notify_waiters();
+                    }
+                    // Storage quiescence excludes live fanout. The separate count/byte
+                    // reservations still bound normal publications until delivery completes.
+                    drop(activity);
+                    let cancellations = std::mem::take(
+                        &mut *scope
+                            .remote_cancellations
+                            .lock()
+                            .expect("remote cancellation list lock poisoned"),
+                    );
+                    if outcome.is_ok() {
+                        for cancellation in cancellations {
+                            // A routed call must not inherit local mutation admission or
+                            // durable activity, even when it routes back to this executor.
+                            match tokio::spawn(cancellation).await {
+                                Ok(Ok(())) => {}
+                                Ok(Err(error)) => outcome = Err(error.into()),
+                                Err(error) => {
+                                    outcome = Err(DurableStreamProducerError::Oplog(format!(
+                                        "remote stream cancellation failed: {error}"
+                                    ))
+                                    .into());
+                                }
+                            }
+                        }
+                    }
+                    if !lifecycle {
+                        for publication in publications.drain(..) {
+                            if let Err(error) = publication
+                                .await
+                                .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
+                            {
+                                producer.poison();
+                                outcome = Err(DurableStreamProducerError::from(error).into());
+                            }
+                        }
+                    }
+                    let _ = reply.send((outcome, publications));
+                })
+                .await;
+        });
+        let (mut outcome, publications) = result
+            .await
+            .expect("durable stream producer-owned operation terminated");
+        // Terminal delivery is owned by the shared dispatcher. The request still observes
+        // backpressure, but neither a stalled nor an abandoned request holds lifecycle admission.
+        for publication in publications {
+            if let Err(error) = publication
+                .await
+                .unwrap_or(Err(DurableLiveStreamBusError::PublicationAborted))
+            {
+                self.poison();
+                outcome = Err(DurableStreamProducerError::from(error).into());
+            }
+        }
+        outcome
+    }
+
     pub(crate) fn set_control_metadata_provider(
         &self,
         service: Arc<dyn WorkerService>,
@@ -1775,15 +2203,17 @@ impl DurableStreamProducer {
         &self,
         key: &StreamSessionKeyV1,
     ) -> Result<Option<super::durable_session::SessionControlMetadata>, String> {
+        self.ensure_healthy()?;
         let Some((service, mode)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
-        service
-            .lookup_durable_stream_control_metadata(
-                &OwnedAgentId::new(self.environment_id, &self.producer),
-                *mode,
-                key,
-            )
+        let activity = self
+            .durable_activity
+            .inherit_or_enter()
+            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+        let owner = OwnedAgentId::new(self.environment_id, &self.producer);
+        activity
+            .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, key))
             .await
             .map(Some)
     }
@@ -1793,31 +2223,43 @@ impl DurableStreamProducer {
         key: &StreamSessionKeyV1,
         stream: StreamId,
     ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, String> {
+        self.ensure_healthy()?;
         let Some((service, mode)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
-        let owner = OwnedAgentId::new(self.environment_id, &self.producer);
-        let metadata = service
-            .lookup_durable_stream_control_metadata(&owner, *mode, key)
-            .await?;
-        let count = metadata
-            .consumer_record_counts
-            .get(&stream)
-            .copied()
-            .unwrap_or_default();
-        let page_size = crate::services::stream_session_index::CONSUMER_JOURNAL_INDEX_PAGE_SIZE;
-        let mut positions = Vec::new();
-        for page in 0..count.div_ceil(page_size) {
-            let records = service
-                .read_durable_stream_consumer_page(&owner, key, stream, page)
-                .await?;
-            let needed = (count - page * page_size).min(page_size) as usize;
-            if records.len() < needed {
-                return Err("consumer journal index page is shorter than its coverage".into());
-            }
-            positions.extend_from_slice(&records[..needed]);
-        }
-        Ok(Some((metadata.covered_through, positions)))
+        let activity = self
+            .durable_activity
+            .inherit_or_enter()
+            .ok_or(DurableStreamProducerError::RecoveryRequired)?;
+        activity
+            .scope(async {
+                let owner = OwnedAgentId::new(self.environment_id, &self.producer);
+                let metadata = service
+                    .lookup_durable_stream_control_metadata(&owner, *mode, key)
+                    .await?;
+                let count = metadata
+                    .consumer_record_counts
+                    .get(&stream)
+                    .copied()
+                    .unwrap_or_default();
+                let page_size =
+                    crate::services::stream_session_index::CONSUMER_JOURNAL_INDEX_PAGE_SIZE;
+                let mut positions = Vec::new();
+                for page in 0..count.div_ceil(page_size) {
+                    let records = service
+                        .read_durable_stream_consumer_page(&owner, key, stream, page)
+                        .await?;
+                    let needed = (count - page * page_size).min(page_size) as usize;
+                    if records.len() < needed {
+                        return Err(
+                            "consumer journal index page is shorter than its coverage".into()
+                        );
+                    }
+                    positions.extend_from_slice(&records[..needed]);
+                }
+                Ok(Some((metadata.covered_through, positions)))
+            })
+            .await
     }
 
     #[cfg(test)]
@@ -2009,6 +2451,9 @@ impl DurableStreamProducer {
                             .map_err(DurableStreamProducerError::Oplog)?;
                         index.apply_session_references(entity_parent_start_index, &record)?;
                         index.apply_result_offset(oplog_index, &record);
+                        if let StreamSessionRecordV1::ExternalProducerState(value) = &record {
+                            index.apply_external_producer_state(value);
+                        }
                         index.apply_deletion_record(
                             &record,
                             environment_id,
@@ -2054,7 +2499,7 @@ impl DurableStreamProducer {
         commit: DurableStreamCommit,
         index: ProducerStreamIndex,
     ) -> Result<Arc<Self>, DurableStreamProducerError> {
-        let mut buses = HashMap::with_capacity(index.streams.len());
+        let mut buses = BTreeMap::new();
         for (stream_id, stream) in &index.streams {
             let bus = Arc::new(DurableLiveStreamBus::from_committed_high_water(
                 live_join_capacity,
@@ -2081,7 +2526,16 @@ impl DurableStreamProducer {
             producer,
             producer_fingerprint,
             index: Mutex::new(index),
+            poisoned: AtomicBool::new(false),
+            retirement: CancellationToken::new(),
+            durable_activity: ActivityGate::new(),
+            owned_operations: Arc::new(Semaphore::new(16)),
+            owned_operation_bytes: Arc::new(Semaphore::new(256 * 1024 * 1024)),
+            lifecycle_operations: Arc::new(Semaphore::new(16)),
+            lifecycle_operation_bytes: Arc::new(Semaphore::new(256 * 1024 * 1024)),
             buses: RwLock::new(buses),
+            terminal_dispatcher_started: AtomicBool::new(false),
+            terminal_progress: Arc::new(Notify::new()),
             committed_retention: std::sync::Mutex::new(CommittedEventRetention::default()),
             source_cancellations: RwLock::new(HashMap::new()),
             next_source_cancellation_id: AtomicU64::new(1),
@@ -2094,11 +2548,49 @@ impl DurableStreamProducer {
     }
 
     async fn commit(&self) {
-        (self.commit)(None).await;
+        self.begin_durable_effect();
+        let scope = MUTATION_SCOPE
+            .try_with(Arc::clone)
+            .ok()
+            .filter(|scope| std::ptr::eq(scope.producer.as_ref(), self));
+        let Some(scope) = scope else {
+            (self.commit)(None).await;
+            return;
+        };
+        let (committed, receipt) = oneshot::channel();
+        let callback = (self.commit)(Some(committed));
+        let producer = scope.producer.clone();
+        let task = spawn_with_activity(async move {
+            if let Err(panic) = std::panic::AssertUnwindSafe(callback).catch_unwind().await {
+                producer.poison();
+                std::panic::resume_unwind(panic);
+            }
+        });
+        scope
+            .commit_tails
+            .lock()
+            .expect("commit tail list lock poisoned")
+            .push(task);
+        receipt
+            .await
+            .expect("durable stream commit failed before durability receipt");
     }
 
     async fn commit_notifying(&self, committed: oneshot::Sender<()>) {
-        (self.commit)(Some(committed)).await;
+        self.commit().await;
+        let _ = committed.send(());
+    }
+
+    pub(crate) fn retained_payload_bytes(
+        payload: &StreamItemsPayloadV1,
+    ) -> Result<usize, DurableStreamProducerError> {
+        validate_items_payload(payload)?;
+        Ok(match payload {
+            StreamItemsPayloadV1::Values(values) => values.iter().map(Vec::len).sum::<usize>() * 2,
+            StreamItemsPayloadV1::PackedU8(bytes) => {
+                bytes.len() * (std::mem::size_of::<CommittedProducerStreamEventV1>() + 2)
+            }
+        })
     }
 
     fn retain_committed_events(&self, events: &[CommittedProducerStreamEventV1]) {
@@ -2165,15 +2657,19 @@ impl DurableStreamProducer {
             // Ordinary values and terminals retain their payload behind a shared allocation.
             events
                 .iter()
-                .map(|event| {
+                .filter_map(|event| {
                     let encoded_event_bytes = encoded_event_bytes(event);
-                    RetainedCommittedBatch {
-                        encoded_event_bytes: Some(encoded_event_bytes),
-                        retained_bytes: encoded_event_bytes
-                            .saturating_add(std::mem::size_of::<RetainedCommittedBatch>())
-                            .saturating_add(std::mem::size_of::<CommittedProducerStreamEventV1>()),
-                        events: RetainedCommittedEvents::Shared(Arc::new(event.clone())),
+                    let retained_bytes = encoded_event_bytes
+                        .saturating_add(std::mem::size_of::<RetainedCommittedBatch>())
+                        .saturating_add(std::mem::size_of::<CommittedProducerStreamEventV1>());
+                    if retained_bytes > COMMITTED_RETENTION_MAX_BYTES {
+                        return None;
                     }
+                    Some(RetainedCommittedBatch {
+                        encoded_event_bytes: Some(encoded_event_bytes),
+                        retained_bytes,
+                        events: RetainedCommittedEvents::Shared(Arc::new(event.clone())),
+                    })
                 })
                 .collect()
         };
@@ -2357,62 +2853,123 @@ impl DurableStreamProducer {
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamSessionRecordV1,
     ) -> Result<(), DurableStreamProducerError> {
-        if !record.has_supported_format() {
+        let memory = golem_common::serialization::serialize(&record)
+            .map_err(DurableStreamProducerError::Oplog)?
+            .len();
+        self.run_owned(memory, move |owner| async move {
+            owner
+                .append_session_record_owned(entity_parent_start_index, record)
+                .await
+        })
+        .await
+    }
+
+    pub(crate) async fn append_session_record_owned(
+        &self,
+        entity_parent_start_index: Option<OplogIndex>,
+        record: StreamSessionRecordV1,
+    ) -> Result<(), DurableStreamProducerError> {
+        self.append_session_records_owned(entity_parent_start_index, vec![record])
+            .await
+    }
+
+    pub(crate) async fn append_session_records_owned(
+        &self,
+        entity_parent_start_index: Option<OplogIndex>,
+        records: Vec<StreamSessionRecordV1>,
+    ) -> Result<(), DurableStreamProducerError> {
+        if records.iter().any(|record| !record.has_supported_format()) {
             return Err(DurableStreamProducerError::CorruptHistory(
                 "unsupported or malformed durable Stream Session record".to_string(),
             ));
         }
         let mut index = self
-            .index_for(ProducerMetadataKey::session_record(&record))
+            .index_for(records.iter().flat_map(ProducerMetadataKey::session_record))
             .await?;
-        if index.deleting
-            && !matches!(
-                &record,
-                StreamSessionRecordV1::AttachmentFinalized(_)
-                    | StreamSessionRecordV1::CascadeOutbox(_)
-                    | StreamSessionRecordV1::ConsumerDeleting(_)
-                    | StreamSessionRecordV1::SourceUnavailable(_)
-            )
-        {
-            return Err(DurableStreamProducerError::ProducerDeleting);
+        let mut staged = index.clone();
+        for record in &records {
+            if staged.deleting
+                && !matches!(
+                    record,
+                    StreamSessionRecordV1::AttachmentFinalized(_)
+                        | StreamSessionRecordV1::CascadeOutbox(_)
+                        | StreamSessionRecordV1::ConsumerDeleting(_)
+                        | StreamSessionRecordV1::SourceUnavailable(_)
+                )
+            {
+                return Err(DurableStreamProducerError::ProducerDeleting);
+            }
+            if staged.consumer_deleting
+                && matches!(
+                    record,
+                    StreamSessionRecordV1::TopologyPrepared(_)
+                        | StreamSessionRecordV1::TopologyActivated(_)
+                )
+            {
+                return Err(DurableStreamProducerError::ConsumerDeleting);
+            }
+            staged.apply_session_references(entity_parent_start_index, record)?;
+            staged.apply_deletion_record(
+                record,
+                self.environment_id,
+                &self.producer,
+                self.producer_fingerprint,
+            )?;
         }
-        if index.consumer_deleting
-            && matches!(
-                &record,
-                StreamSessionRecordV1::TopologyPrepared(_)
-                    | StreamSessionRecordV1::TopologyActivated(_)
-            )
-        {
-            return Err(DurableStreamProducerError::ConsumerDeleting);
-        }
-        index.apply_session_references(entity_parent_start_index, &record)?;
-        index.apply_deletion_record(
-            &record,
-            self.environment_id,
-            &self.producer,
-            self.producer_fingerprint,
-        )?;
-        let result_key = match &record {
-            StreamSessionRecordV1::InvocationResult(record) => Some(record.session_key.clone()),
-            _ => None,
-        };
-        let oplog_index = self
+        let result_keys = records
+            .iter()
+            .enumerate()
+            .filter_map(|(position, record)| match record {
+                StreamSessionRecordV1::InvocationResult(record) => {
+                    Some((position, record.session_key.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.begin_durable_effect();
+        let entries = self
             .oplog
-            .add(OplogEntry::stream_session(
-                entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
-            ))
-            .await;
-        if let Some(key) = result_key {
-            index.invocation_results.entry(key).or_insert(oplog_index);
+            .add_durable_stream_batch(Box::new(move |_| {
+                records
+                    .into_iter()
+                    .map(|record| {
+                        DurableStreamOplogRecord::Session(
+                            entity_parent_start_index,
+                            Box::new(record),
+                        )
+                    })
+                    .collect()
+            }))
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        for (position, key) in result_keys {
+            staged
+                .invocation_results
+                .entry(key)
+                .or_insert(entries[position].0);
         }
         self.commit().await;
+        *index = staged;
         drop(index);
         self.notify_session_records_changed();
         Ok(())
     }
 
     pub(crate) async fn commit_source_unavailable_overlay(
+        &self,
+        key: StreamAttachmentKeyV1,
+        source_offset: StreamOffsetV1,
+        consumer_read_ordinal: u64,
+    ) -> Result<bool, DurableStreamProducerError> {
+        self.run_lifecycle(0, move |owner| async move {
+            owner
+                .commit_source_unavailable_overlay_owned(key, source_offset, consumer_read_ordinal)
+                .await
+        })
+        .await
+    }
+
+    async fn commit_source_unavailable_overlay_owned(
         &self,
         key: StreamAttachmentKeyV1,
         source_offset: StreamOffsetV1,
@@ -2527,6 +3084,8 @@ impl DurableStreamProducer {
                 .expect("source-unavailable record always identifies a session"),
         );
         index.apply_session_references(entity_parent_start_index, &record)?;
+        index.apply_consumer_journal_record(&record)?;
+        self.begin_durable_effect();
         self.oplog
             .add(OplogEntry::stream_session(
                 entity_parent_start_index,
@@ -2568,6 +3127,16 @@ impl DurableStreamProducer {
         &self,
         record: StreamSessionRecordV1,
     ) -> Result<AttachmentApplyOutcome, DurableStreamProducerError> {
+        self.run_lifecycle(0, move |owner| async move {
+            owner.persist_attachment_record_owned(record).await
+        })
+        .await
+    }
+
+    async fn persist_attachment_record_owned(
+        &self,
+        record: StreamSessionRecordV1,
+    ) -> Result<AttachmentApplyOutcome, DurableStreamProducerError> {
         if !record.has_supported_format() {
             return Err(DurableStreamProducerError::CorruptHistory(
                 "unsupported or malformed durable attachment record".to_string(),
@@ -2593,6 +3162,7 @@ impl DurableStreamProducer {
             self.producer_fingerprint,
         )?;
         if outcome == AttachmentApplyOutcome::Changed {
+            self.begin_durable_effect();
             self.oplog
                 .add(OplogEntry::stream_session(
                     entity_parent_start_index,
@@ -2663,11 +3233,33 @@ impl DurableStreamProducer {
     }
 
     pub(crate) fn notify_session_records_changed(&self) {
-        self.session_records_changed.notify_waiters();
+        let deferred = MUTATION_SCOPE
+            .try_with(|scope| {
+                if std::ptr::eq(scope.producer.as_ref(), self) {
+                    scope.session_records_changed.store(true, Ordering::Release);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        if !deferred {
+            self.session_records_changed.notify_waiters();
+        }
     }
 
     #[tracing::instrument(name = "durable_stream.register", skip_all)]
     pub(crate) async fn register(
+        &self,
+        request: ProducerRegistrationRequestV1,
+    ) -> Result<ProducerWriteOutcomeV1<DurableStreamHandleV1>, DurableStreamProducerError> {
+        self.run_owned(0, move |owner| async move {
+            owner.register_owned(request).await
+        })
+        .await
+    }
+
+    async fn register_owned(
         &self,
         request: ProducerRegistrationRequestV1,
     ) -> Result<ProducerWriteOutcomeV1<DurableStreamHandleV1>, DurableStreamProducerError> {
@@ -2743,6 +3335,7 @@ impl DurableStreamProducer {
         let producer_fingerprint = self.producer_fingerprint;
         let entity_parent_start_index = request.entity_parent_start_index;
         let request_for_entry = request.clone();
+        self.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -2810,6 +3403,26 @@ impl DurableStreamProducer {
         + Send
         + 'static,
     ) -> Result<StreamSessionPreparedRecordV1, DurableStreamProducerError> {
+        let memory = golem_common::serialization::serialize(&pending_invocation)
+            .map_err(DurableStreamProducerError::Oplog)?
+            .len();
+        self.run_owned(memory, move |owner| async move {
+            owner
+                .prepare_session_owned(requests, pending_invocation, committed, make_prepared)
+                .await
+        })
+        .await
+    }
+
+    async fn prepare_session_owned(
+        &self,
+        requests: Vec<(u64, ProducerRegistrationRequestV1)>,
+        pending_invocation: OplogEntry,
+        committed: oneshot::Sender<()>,
+        make_prepared: impl FnOnce(Vec<(u64, DurableStreamHandleV1)>) -> StreamSessionPreparedRecordV1
+        + Send
+        + 'static,
+    ) -> Result<StreamSessionPreparedRecordV1, DurableStreamProducerError> {
         let mut index = self
             .index_for(
                 requests
@@ -2854,6 +3467,7 @@ impl DurableStreamProducer {
         let producer = self.producer.clone();
         let producer_fingerprint = self.producer_fingerprint;
         let records = requests.clone();
+        self.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -3006,6 +3620,27 @@ impl DurableStreamProducer {
         entity_parent_start_index: Option<OplogIndex>,
     ) -> Result<(Vec<DurableStreamHandleV1>, StreamSessionRecordV1), DurableStreamProducerError>
     {
+        self.run_owned(result.len() * 2, move |owner| async move {
+            owner
+                .register_result_streams_owned(
+                    session_key,
+                    result,
+                    outputs,
+                    entity_parent_start_index,
+                )
+                .await
+        })
+        .await
+    }
+
+    async fn register_result_streams_owned(
+        &self,
+        session_key: StreamSessionKeyV1,
+        result: Vec<u8>,
+        outputs: Vec<ProducerOutputRegistrationV1>,
+        entity_parent_start_index: Option<OplogIndex>,
+    ) -> Result<(Vec<DurableStreamHandleV1>, StreamSessionRecordV1), DurableStreamProducerError>
+    {
         let mut keys = vec![ProducerMetadataKey::Session(session_key.clone())];
         for output in &outputs {
             match &output.source {
@@ -3022,6 +3657,38 @@ impl DurableStreamProducer {
         }
         let mut index = self.index_for(keys).await?;
         let result_offset = index.invocation_results.get(&session_key).copied();
+        let result_session_key = session_key.clone();
+        let mut cancellations = Vec::new();
+        for (position, output) in outputs.iter().enumerate() {
+            if let Some(epoch) = output.cancellation_epoch {
+                if epoch == 0 {
+                    return Err(DurableStreamProducerError::InvalidAttachmentState);
+                }
+                let terminal = match &output.source {
+                    ProducerOutputSourceV1::New(_) => Some((0, entity_parent_start_index)),
+                    ProducerOutputSourceV1::Existing(handle)
+                        if self.owns_handle_identity(handle) =>
+                    {
+                        let stream = index
+                            .streams
+                            .get(&handle.stream_id)
+                            .ok_or(DurableStreamProducerError::UnknownStream(handle.stream_id))?;
+                        if stream.terminal {
+                            None
+                        } else {
+                            Some((
+                                stream.next_sequence,
+                                index.entity_parent_start_index(handle.stream_id)?,
+                            ))
+                        }
+                    }
+                    ProducerOutputSourceV1::Existing(_) => None,
+                };
+                let applied_locally = matches!(&output.source, ProducerOutputSourceV1::New(_))
+                    || matches!(&output.source, ProducerOutputSourceV1::Existing(handle) if self.owns_handle_identity(handle));
+                cancellations.push((position, epoch, terminal, applied_locally));
+            }
+        }
         let requests = outputs
             .iter()
             .filter_map(|output| match &output.source {
@@ -3072,9 +3739,11 @@ impl DurableStreamProducer {
         }) {
             return Err(DurableStreamProducerError::RegistrationDivergence);
         }
-        if requests.is_empty() {
+        if requests.is_empty()
+            && let Some(result_offset) = result_offset
+        {
             let expected = make_result(Vec::new());
-            let StreamSessionRecordV1::InvocationResult(expected_result) = &expected else {
+            let StreamSessionRecordV1::InvocationResult(_) = &expected else {
                 return Err(DurableStreamProducerError::CorruptHistory(
                     "empty result registration did not build an invocation-result record"
                         .to_string(),
@@ -3085,55 +3754,13 @@ impl DurableStreamProducer {
                     "result registration built a malformed invocation-result record".to_string(),
                 ));
             }
-            let session_finished = index
-                .finished_sessions
-                .contains(&expected_result.session_key);
-            let session_key = expected_result.session_key.clone();
             drop(index);
-            if let Some(offset) = result_offset {
-                let record = self.read_result_record(offset).await?;
-                return if record == expected {
-                    Ok((Vec::new(), record))
-                } else {
-                    Err(DurableStreamProducerError::RegistrationDivergence)
-                };
-            }
-            if session_finished {
-                return Err(DurableStreamProducerError::SessionFinished(session_key));
-            }
-            let expected_for_entry = expected.clone();
-            let mut entries = self
-                .oplog
-                .add_durable_stream_batch(Box::new(move |_| {
-                    vec![DurableStreamOplogRecord::Session(
-                        entity_parent_start_index,
-                        Box::new(expected_for_entry),
-                    )]
-                }))
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            self.commit().await;
-            let (oplog_index, entry) = entries.pop().ok_or_else(|| {
-                DurableStreamProducerError::CorruptHistory(
-                    "empty result registration batch returned no session record".to_string(),
-                )
-            })?;
-            let OplogEntry::StreamSession { record, .. } = entry else {
-                return Err(DurableStreamProducerError::CorruptHistory(
-                    "empty result registration batch returned an unexpected entry".to_string(),
-                ));
+            let record = self.read_result_record(result_offset).await?;
+            return if record == expected {
+                Ok((Vec::new(), record))
+            } else {
+                Err(DurableStreamProducerError::RegistrationDivergence)
             };
-            let record = self
-                .oplog
-                .download_payload(record)
-                .await
-                .map_err(DurableStreamProducerError::Oplog)?;
-            let mut index = self
-                .index_for(ProducerMetadataKey::session_record(&record))
-                .await?;
-            index.apply_session_references(entity_parent_start_index, &record)?;
-            index.apply_result_offset(oplog_index, &record);
-            return Ok((Vec::new(), record));
         }
         let existing_handles = requests
             .iter()
@@ -3167,6 +3794,11 @@ impl DurableStreamProducer {
                 }
             }
             return Err(DurableStreamProducerError::RegistrationDivergence);
+        }
+        if index.finished_sessions.contains(&result_session_key) {
+            return Err(DurableStreamProducerError::SessionFinished(
+                result_session_key,
+            ));
         }
         let session_key = requests.first().and_then(|request| {
             index.registration_session_key(&request.coordinate, &request.session_mapping)
@@ -3206,6 +3838,7 @@ impl DurableStreamProducer {
         let environment_id = self.environment_id;
         let producer = self.producer.clone();
         let producer_fingerprint = self.producer_fingerprint;
+        self.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -3234,6 +3867,61 @@ impl DurableStreamProducer {
                 if !session_record.has_supported_format() {
                     return Vec::new();
                 }
+                let StreamSessionRecordV1::InvocationResult(invocation_result) = &session_record else {
+                    unreachable!("result builder returns an invocation result");
+                };
+                let mut cancelled = HashSet::new();
+                for (position, epoch, terminal, applied_locally) in cancellations {
+                    let handle = &invocation_result.stream_mappings[position].handle;
+                    if !cancelled.insert(handle.stream_id) { continue; }
+                    result.push(DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecordV1::ConsumerCancelIntent(
+                            golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: invocation_result.session_key.clone(),
+                                stream_id: handle.stream_id,
+                                epoch,
+                                role: StreamCancelRoleV1::OutputConsumer,
+                                reason: StreamCancelReasonV1::Cancelled,
+                                details: None,
+                            }
+                        )),
+                    ));
+                    if let Some((sequence, attribution)) = terminal {
+                        let offset = StreamOffsetV1::new(OplogIndex::from_u64(first_index.as_u64() + result.len() as u64), 0);
+                        result.push(DurableStreamOplogRecord::Cancel(attribution, StreamCancelRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            stream_id: handle.stream_id,
+                            producer_fingerprint,
+                            sequence,
+                            offset,
+                            authored_by: StreamTerminalAuthorV1::Protocol,
+                            role: StreamCancelRoleV1::OutputConsumer,
+                            reason: StreamCancelReasonV1::Cancelled,
+                            details: None,
+                        }));
+                    }
+                    if applied_locally {
+                        result.push(DurableStreamOplogRecord::Session(
+                            entity_parent_start_index,
+                            Box::new(StreamSessionRecordV1::ConsumerCancelApplied(
+                                golem_common::base_model::durable_stream::StreamConsumerCancelAppliedRecordV1 {
+                                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                    intent: golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecordV1 {
+                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                        session_key: invocation_result.session_key.clone(),
+                                        stream_id: handle.stream_id,
+                                        epoch,
+                                        role: StreamCancelRoleV1::OutputConsumer,
+                                        reason: StreamCancelReasonV1::Cancelled,
+                                        details: None,
+                                    },
+                                },
+                            )),
+                        ));
+                    }
+                }
                 result.push(DurableStreamOplogRecord::Session(
                     entity_parent_start_index,
                     Box::new(session_record),
@@ -3246,6 +3934,7 @@ impl DurableStreamProducer {
 
         let mut handles = Vec::new();
         let mut session_record = None;
+        let mut cancelled_count = 0;
         for (oplog_index, entry) in entries {
             match entry {
                 OplogEntry::StreamRegistered {
@@ -3287,7 +3976,30 @@ impl DurableStreamProducer {
                         .map_err(DurableStreamProducerError::Oplog)?;
                     index.apply_session_references(entity_parent_start_index, &record)?;
                     index.apply_result_offset(oplog_index, &record);
-                    session_record = Some(record);
+                    if matches!(record, StreamSessionRecordV1::InvocationResult(_)) {
+                        session_record = Some(record);
+                    }
+                }
+                OplogEntry::StreamCancel {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                } => {
+                    let record = self
+                        .oplog
+                        .download_payload(record)
+                        .await
+                        .map_err(DurableStreamProducerError::Oplog)?;
+                    let event = index.apply_cancel(
+                        oplog_index,
+                        entity_parent_start_index,
+                        record,
+                        self.producer_fingerprint,
+                    )?;
+                    self.cancel_source(event.stream_id);
+                    // The terminal dispatcher publishes without delaying result registration on a reader.
+                    drop(self.enqueue_events(event.stream_id, vec![event], false)?);
+                    cancelled_count += 1;
                 }
                 _ => {
                     return Err(DurableStreamProducerError::CorruptHistory(
@@ -3297,6 +4009,7 @@ impl DurableStreamProducer {
             }
         }
         self.record_registered_streams(handles.len());
+        self.record_terminal_streams(cancelled_count);
         crate::metrics::durable_stream::record_producer_operation("register_result", false);
         Ok((
             handles,
@@ -3331,6 +4044,108 @@ impl DurableStreamProducer {
             .get(coordinate)
             .and_then(|stream_id| index.registrations.get(stream_id))
             .map(|registration| registration.handle.clone()))
+    }
+
+    pub(crate) async fn stream_head(
+        &self,
+        handle: &DurableStreamHandleV1,
+    ) -> Result<(Option<StreamOffsetV1>, bool, bool), DurableStreamProducerError> {
+        let index = self.index_for_terminal([], handle.stream_id).await?;
+        if index
+            .registrations
+            .get(&handle.stream_id)
+            .is_none_or(|registration| &registration.handle != handle)
+        {
+            return Err(DurableStreamProducerError::InvalidHandle);
+        }
+        let stream = &index.streams[&handle.stream_id];
+        let cancelled = stream.terminal_event.as_ref().is_some_and(|event| {
+            matches!(
+                event.payload,
+                CommittedProducerStreamEventPayloadV1::Cancel { .. }
+            )
+        });
+        Ok((stream.last_offset, stream.terminal, cancelled))
+    }
+
+    pub(crate) async fn read_by_handle(
+        self: &Arc<Self>,
+        request: golem_common::model::durable_stream::StreamHandleReadRequestV1,
+    ) -> Result<StreamHandleReadResultV1, DurableStreamProducerError> {
+        if let Some(offset) = request.after {
+            StreamOffsetV1::from_bytes(offset.0)
+                .map_err(|error| DurableStreamProducerError::InvalidOffset(error.to_string()))?;
+        }
+        let (mut head, mut closed, mut cancelled) = self.stream_head(&request.handle).await?;
+        if request.max_items == 0 {
+            return Ok(StreamHandleReadResultV1 {
+                events: Vec::new(),
+                next_offset: request.after,
+                head_offset: head,
+                closed,
+                cancelled,
+            });
+        }
+        if request.max_bytes == 0 {
+            return Err(DurableStreamProducerError::InvalidValueBatch);
+        }
+        let mut events = if head.is_some() && request.after <= head {
+            self.read_segment(&request.handle, request.after, head)
+                .await?
+        } else {
+            Vec::new()
+        };
+        if events.is_empty() && !closed && request.wait_millis > 0 {
+            let bus = self.stream_bus(request.handle.stream_id).await?;
+            let deadline = tokio::time::Instant::now()
+                + std::time::Duration::from_millis(request.wait_millis.min(30_000));
+            loop {
+                let changed = bus.high_water_changed();
+                bus.ensure_available()?;
+                (head, closed, cancelled) = self.stream_head(&request.handle).await?;
+                events = if head.is_some() && request.after <= head {
+                    self.read_segment(&request.handle, request.after, head)
+                        .await?
+                } else {
+                    Vec::new()
+                };
+                bus.ensure_available()?;
+                if !events.is_empty() || closed || tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                if let Ok(result) = tokio::time::timeout_at(deadline, changed).await {
+                    result?;
+                }
+            }
+        }
+        let max_items = (request.max_items as usize).min(STREAM_SEGMENT_MAX_EVENTS);
+        let max_bytes = request.max_bytes.min(STREAM_SEGMENT_TARGET_BYTES as u64);
+        let mut bytes = 0u64;
+        let mut count = 0usize;
+        for event in &events {
+            let size = match &event.payload {
+                CommittedProducerStreamEventPayloadV1::Value(value) => value.len() as u64,
+                CommittedProducerStreamEventPayloadV1::PackedU8(_) => 1,
+                _ => 0,
+            };
+            if count == max_items || bytes + size > max_bytes {
+                if count == 0 {
+                    return Err(DurableStreamProducerError::InvalidValueBatch);
+                }
+                break;
+            }
+            bytes += size;
+            count += 1;
+        }
+        events.truncate(count);
+        let next_offset = events.last().map(|event| event.offset).or(request.after);
+        Ok(StreamHandleReadResultV1 {
+            events,
+            next_offset,
+            head_offset: head,
+            closed,
+            cancelled,
+        })
     }
 
     pub(crate) async fn validate_registration(
@@ -3546,6 +4361,56 @@ impl DurableStreamProducer {
         }))
     }
 
+    pub(crate) async fn attached_input_high_water(
+        &self,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+    ) -> Result<Option<InputStreamHighWaterV1>, DurableStreamProducerError> {
+        let index = self
+            .index_for_terminal(
+                [
+                    ProducerMetadataKey::Stream(stream_id),
+                    ProducerMetadataKey::ExternalProducerHead(
+                        session_key.clone(),
+                        stream_id,
+                        ExternalProducerIdV1::Attached,
+                    ),
+                ],
+                stream_id,
+            )
+            .await?;
+        let stream = index
+            .streams
+            .get(&stream_id)
+            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+        let head = index.external_producer_heads.get(&(
+            session_key.clone(),
+            stream_id,
+            ExternalProducerIdV1::Attached,
+        ));
+        let next_sequence = head.map_or(0, |head| head.next_sequence);
+        if next_sequence == 0 && !stream.terminal {
+            return Ok(None);
+        }
+        let resulting_offset = stream.last_offset.ok_or_else(|| {
+            DurableStreamProducerError::CorruptHistory(
+                "terminal attached input has no resulting offset".into(),
+            )
+        })?;
+        Ok(Some(InputStreamHighWaterV1 {
+            highest_contiguous_sequence: if stream.terminal
+                && head.is_none_or(|head| head.last_offset != resulting_offset)
+            {
+                next_sequence
+            } else {
+                next_sequence.saturating_sub(1)
+            },
+            resulting_offset,
+            terminal: stream.terminal,
+        }))
+    }
+
+    #[cfg(test)]
     pub(crate) async fn write_items_with_nested(
         &self,
         stream_id: StreamId,
@@ -3612,6 +4477,217 @@ impl DurableStreamProducer {
         nested_sources: Vec<NestedStreamWriteV1>,
         traversal_depth: usize,
     ) -> Result<ProducerWriteOutcomeV1<Vec<StreamOffsetV1>>, DurableStreamProducerError> {
+        let memory = Self::retained_payload_bytes(&payload)?;
+        self.run_owned(memory, move |owner| async move {
+            owner
+                .write_items_owned(
+                    stream_id,
+                    first_sequence,
+                    payload,
+                    nested_sources,
+                    traversal_depth,
+                    None,
+                    None,
+                )
+                .await
+        })
+        .await
+    }
+
+    pub(crate) async fn write_attached_items_with_nested(
+        self: &Arc<Self>,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+        transport_first_sequence: u64,
+        payload: StreamItemsPayloadV1,
+        nested: Vec<ProducerRegistrationRequestV1>,
+    ) -> Result<ProducerWriteOutcomeV1<Vec<StreamOffsetV1>>, DurableStreamProducerError> {
+        let memory = Self::retained_payload_bytes(&payload)?;
+        let _transport_next_sequence = transport_first_sequence
+            .checked_add(payload.logical_item_count() as u64)
+            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+        let session_key = session_key.clone();
+        self.run_owned(memory, move |owner| async move {
+            let id = ExternalProducerIdV1::Attached;
+            let index = owner
+                .index_for_terminal(
+                    [
+                        ProducerMetadataKey::Stream(stream_id),
+                        ProducerMetadataKey::ExternalProducerHead(
+                            session_key.clone(),
+                            stream_id,
+                            id.clone(),
+                        ),
+                        ProducerMetadataKey::ExternalProducerSequence(
+                            session_key.clone(),
+                            stream_id,
+                            id.clone(),
+                            0,
+                            transport_first_sequence,
+                        ),
+                    ],
+                    stream_id,
+                )
+                .await?;
+            let identity = (session_key.clone(), stream_id, id.clone());
+            let stream = index
+                .streams
+                .get(&stream_id)
+                .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            let (global_first_sequence, index) =
+                if let Some(head) = index.external_producer_heads.get(&identity) {
+                    if transport_first_sequence < head.next_sequence {
+                        let offset = index
+                            .external_producer_offsets
+                            .get(&(
+                                identity.0,
+                                identity.1,
+                                identity.2,
+                                0,
+                                transport_first_sequence,
+                            ))
+                            .copied()
+                            .ok_or_else(|| {
+                                DurableStreamProducerError::CorruptHistory(
+                                    "attached producer sequence has no original offset".into(),
+                                )
+                            })?;
+                        if stream.terminal && stream.last_offset == Some(offset) {
+                            return Err(DurableStreamProducerError::EventConflict);
+                        }
+                        drop(index);
+                        let sequence = owner
+                            .read_item_batch(offset.producer_oplog_index())
+                            .await?
+                            .first_sequence;
+                        (sequence, None)
+                    } else {
+                        if stream.terminal {
+                            return Err(if Some(head.last_offset) == stream.last_offset {
+                                fenced_by_terminal(stream)
+                            } else {
+                                DurableStreamProducerError::ClosedByOtherProducer
+                            });
+                        }
+                        if transport_first_sequence != head.next_sequence {
+                            return Err(DurableStreamProducerError::SequenceGap {
+                                expected: head.next_sequence,
+                                actual: transport_first_sequence,
+                            });
+                        }
+                        (stream.next_sequence, Some(index))
+                    }
+                } else {
+                    if stream.terminal {
+                        return Err(DurableStreamProducerError::ClosedByOtherProducer);
+                    }
+                    if transport_first_sequence != 0 {
+                        return Err(DurableStreamProducerError::SequenceGap {
+                            expected: 0,
+                            actual: transport_first_sequence,
+                        });
+                    }
+                    (stream.next_sequence, Some(index))
+                };
+            let delta = global_first_sequence
+                .checked_sub(transport_first_sequence)
+                .ok_or_else(|| {
+                    DurableStreamProducerError::CorruptHistory(
+                        "attached transport sequence exceeds global stream sequence".into(),
+                    )
+                })?;
+            let nested = nested
+                .into_iter()
+                .map(|mut request| {
+                    if let StreamRegistrationCoordinateV1::Nested {
+                        parent_producer_sequence,
+                        ..
+                    } = &mut request.coordinate
+                    {
+                        *parent_producer_sequence = parent_producer_sequence
+                            .checked_add(delta)
+                            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                    }
+                    Ok(request)
+                })
+                .collect::<Result<Vec<_>, DurableStreamProducerError>>()?;
+            owner
+                .write_items_owned(
+                    stream_id,
+                    global_first_sequence,
+                    payload,
+                    nested
+                        .into_iter()
+                        .map(NestedStreamWriteV1::Register)
+                        .collect(),
+                    0,
+                    Some(ExternalProducerV1 {
+                        id,
+                        epoch: 0,
+                        sequence: transport_first_sequence,
+                    }),
+                    index,
+                )
+                .await
+        })
+        .await
+    }
+
+    pub(crate) async fn attached_global_sequence(
+        &self,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+        transport_sequence: u64,
+    ) -> Result<u64, DurableStreamProducerError> {
+        let index = self
+            .index_for_terminal(
+                [
+                    ProducerMetadataKey::Stream(stream_id),
+                    ProducerMetadataKey::ExternalProducerSequence(
+                        session_key.clone(),
+                        stream_id,
+                        ExternalProducerIdV1::Attached,
+                        0,
+                        transport_sequence,
+                    ),
+                ],
+                stream_id,
+            )
+            .await?;
+        if let Some(offset) = index
+            .external_producer_offsets
+            .get(&(
+                session_key.clone(),
+                stream_id,
+                ExternalProducerIdV1::Attached,
+                0,
+                transport_sequence,
+            ))
+            .copied()
+        {
+            drop(index);
+            return Ok(self
+                .read_item_batch(offset.producer_oplog_index())
+                .await?
+                .first_sequence);
+        }
+        index
+            .streams
+            .get(&stream_id)
+            .map(|stream| stream.next_sequence)
+            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))
+    }
+
+    async fn write_items_owned(
+        &self,
+        stream_id: StreamId,
+        first_sequence: u64,
+        payload: StreamItemsPayloadV1,
+        nested_sources: Vec<NestedStreamWriteV1>,
+        traversal_depth: usize,
+        external_producer: Option<ExternalProducerV1>,
+        index: Option<MutexGuard<'_, ProducerStreamIndex>>,
+    ) -> Result<ProducerWriteOutcomeV1<Vec<StreamOffsetV1>>, DurableStreamProducerError> {
         validate_items_payload(&payload)?;
         let item_count = payload.logical_item_count() as u64;
         let nested = nested_sources
@@ -3635,7 +4711,14 @@ impl DurableStreamProducer {
             }
         }
         keys.push(ProducerMetadataKey::Batch(stream_id, first_sequence));
-        let mut index = self.index_for_terminal(keys, stream_id).await?;
+        let mut index = if let Some(mut index) = index {
+            // Attached writers retain the guard from global sequence assignment
+            // through commit, so HTTP writers cannot take that sequence meanwhile.
+            self.load_index_keys(&mut index, keys).await?;
+            index
+        } else {
+            self.index_for_terminal(keys, stream_id).await?
+        };
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         if nested
             .iter()
@@ -3849,6 +4932,8 @@ impl DurableStreamProducer {
         let payload_for_entry = payload.clone();
         let registrations_for_entry = new_nested;
         let nested_for_entry = nested_sources;
+        let external_session_key = session_key.clone();
+        self.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -3895,6 +4980,7 @@ impl DurableStreamProducer {
                 let offsets = (0..payload_for_entry.logical_item_count())
                     .map(|sub_index| StreamOffsetV1::new(item_index, sub_index as u32))
                     .collect::<Vec<_>>();
+                let resulting_offset = *offsets.last().expect("validated input contains an item");
                 let payload_for_high_water = payload_for_entry.clone();
                 records.push(DurableStreamOplogRecord::Items(
                     entity_parent_start_index,
@@ -3937,81 +5023,40 @@ impl DurableStreamProducer {
                         )),
                     ));
                 }
+                if let Some(producer) = external_producer {
+                    records.push(DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecordV1::ExternalProducerState(
+                            StreamExternalProducerStateRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: external_session_key,
+                                stream_id,
+                                producer_id: producer.id,
+                                epoch: producer.epoch,
+                                sequence: producer.sequence,
+                                next_sequence: producer
+                                    .sequence
+                                    .checked_add(item_count)
+                                    .expect("validated attached sequence does not overflow"),
+                                resulting_offset,
+                            },
+                        )),
+                    ));
+                }
                 records
             }))
             .await
             .map_err(DurableStreamProducerError::Oplog)?;
         self.commit().await;
 
-        let mut pending_registrations = Vec::new();
-        let mut committed_item = None;
-        for (oplog_index, entry) in entries {
-            match entry {
-                OplogEntry::StreamRegistered {
-                    entity_parent_start_index,
-                    record,
-                    ..
-                } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
-                    pending_registrations.push((oplog_index, entity_parent_start_index, record));
-                }
-                OplogEntry::StreamItems {
-                    entity_parent_start_index,
-                    record,
-                    ..
-                } => {
-                    let record = self
-                        .oplog
-                        .download_payload(record)
-                        .await
-                        .map_err(DurableStreamProducerError::Oplog)?;
-                    committed_item = Some((oplog_index, entity_parent_start_index, record));
-                }
-                OplogEntry::StreamSession { .. } => {}
-                _ => unreachable!("stream item batch builder returned a different entry"),
-            }
-        }
-        let (item_index, entity_parent_start_index, item_record) =
-            committed_item.expect("stream item batch returned no item entry");
-        let item_offsets = item_record.offsets.clone();
-        let newly_registered_stream_ids = item_record.newly_registered_stream_ids.clone();
-        let newly_registered_stream_count = newly_registered_stream_ids.len();
-        let item_events = index.apply_item_batch(
-            item_index,
-            entity_parent_start_index,
-            pending_registrations,
-            item_record,
-            self.environment_id,
-            &self.producer,
-            self.producer_fingerprint,
-        )?;
-        {
-            let mut buses = self
-                .buses
-                .write()
-                .expect("durable stream bus map lock poisoned");
-            for nested_stream_id in newly_registered_stream_ids {
-                buses.insert(
-                    nested_stream_id,
-                    Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
-                );
-            }
-        }
-        let bus = self.bus(stream_id)?;
-        drop(index);
-        self.retain_committed_events(&item_events);
-        for event in item_events {
-            bus.publish_committed(DurableLiveStreamEvent {
-                offset: event.offset,
-                payload: event,
-            })
+        let (item_events, newly_registered_stream_count) = self
+            .apply_committed_write_batch(&mut index, entries)
             .await?;
-        }
+        let item_offsets = item_events.iter().map(|event| event.offset).collect();
+        let publication = self.enqueue_events(stream_id, item_events, false)?;
         self.record_registered_streams(newly_registered_stream_count);
+        drop(index);
+        self.wait_for_publication(publication).await?;
         crate::metrics::durable_stream::record_producer_operation("write", false);
         tracing::debug!(
             stream_id = %stream_id,
@@ -4027,6 +5072,433 @@ impl DurableStreamProducer {
         })
     }
 
+    async fn apply_committed_write_batch(
+        &self,
+        index: &mut ProducerStreamIndex,
+        entries: Vec<(OplogIndex, OplogEntry)>,
+    ) -> Result<(Vec<CommittedProducerStreamEventV1>, usize), DurableStreamProducerError> {
+        let mut registrations = Vec::new();
+        let mut registered_ids = Vec::new();
+        let mut events = Vec::new();
+        for (oplog_index, entry) in entries {
+            match entry {
+                OplogEntry::StreamRegistered {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                } => {
+                    let record = self
+                        .oplog
+                        .download_payload(record)
+                        .await
+                        .map_err(DurableStreamProducerError::Oplog)?;
+                    registrations.push((oplog_index, entity_parent_start_index, record));
+                }
+                OplogEntry::StreamItems {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                } => {
+                    let record = self
+                        .oplog
+                        .download_payload(record)
+                        .await
+                        .map_err(DurableStreamProducerError::Oplog)?;
+                    registered_ids.extend_from_slice(&record.newly_registered_stream_ids);
+                    events.extend(index.apply_item_batch(
+                        oplog_index,
+                        entity_parent_start_index,
+                        std::mem::take(&mut registrations),
+                        record,
+                        self.environment_id,
+                        &self.producer,
+                        self.producer_fingerprint,
+                    )?);
+                }
+                OplogEntry::StreamEnd {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                } => {
+                    let record = self
+                        .oplog
+                        .download_payload(record)
+                        .await
+                        .map_err(DurableStreamProducerError::Oplog)?;
+                    events.push(index.apply_end(
+                        oplog_index,
+                        entity_parent_start_index,
+                        record,
+                        self.producer_fingerprint,
+                    )?);
+                }
+                OplogEntry::StreamSession {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                } => {
+                    let record = self
+                        .oplog
+                        .download_payload(record)
+                        .await
+                        .map_err(DurableStreamProducerError::Oplog)?;
+                    index.apply_session_references(entity_parent_start_index, &record)?;
+                    match record {
+                        StreamSessionRecordV1::ExternalProducerState(record) => {
+                            index.apply_external_producer_state(&record);
+                        }
+                        StreamSessionRecordV1::InputHighWater(_) => {}
+                        _ => unreachable!("write batch contains an unrelated session record"),
+                    }
+                }
+                _ => unreachable!("write batch contains an unrelated oplog entry"),
+            }
+        }
+        assert!(
+            registrations.is_empty(),
+            "write batch omitted enclosing item"
+        );
+        let count = registered_ids.len();
+        let mut buses = self
+            .buses
+            .write()
+            .expect("durable stream bus map lock poisoned");
+        for stream_id in registered_ids {
+            buses.insert(
+                stream_id,
+                Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
+            );
+        }
+        Ok((events, count))
+    }
+
+    pub(crate) async fn append_external_input(
+        self: &Arc<Self>,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+        payload: Option<StreamItemsPayloadV1>,
+        close: bool,
+        producer: Option<ExternalProducerV1>,
+    ) -> Result<ExternalAppendOutcomeV1, DurableStreamProducerError> {
+        if let Some(payload) = &payload {
+            match payload {
+                StreamItemsPayloadV1::Values(values) => {
+                    if values.is_empty() {
+                        return Err(DurableStreamProducerError::InvalidValueBatch);
+                    }
+                    if values
+                        .iter()
+                        .any(|value| value.len() > MAX_DURABLE_STREAM_ITEM_SIZE)
+                    {
+                        return Err(DurableStreamProducerError::ItemTooLarge);
+                    }
+                }
+                StreamItemsPayloadV1::PackedU8(_) => validate_items_payload(payload)?,
+            }
+        }
+        let retained_bytes = match &payload {
+            Some(StreamItemsPayloadV1::Values(values)) => {
+                values.iter().map(Vec::len).sum::<usize>() * 2
+            }
+            Some(StreamItemsPayloadV1::PackedU8(bytes)) => {
+                bytes.len() * (std::mem::size_of::<CommittedProducerStreamEventV1>() + 2)
+            }
+            None => 0,
+        } + producer.as_ref().map_or(0, |producer| match &producer.id {
+            ExternalProducerIdV1::Client(id) => id.len(),
+            ExternalProducerIdV1::Attached => 0,
+        });
+        let session_key = session_key.clone();
+        self.run_owned(retained_bytes, move |owner| async move {
+            owner
+                .append_external_input_owned(&session_key, stream_id, payload, close, producer)
+                .await
+        })
+        .await
+    }
+
+    async fn append_external_input_owned(
+        &self,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+        payload: Option<StreamItemsPayloadV1>,
+        close: bool,
+        producer: Option<ExternalProducerV1>,
+    ) -> Result<ExternalAppendOutcomeV1, DurableStreamProducerError> {
+        let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
+        if let Some(producer) = &producer {
+            if matches!(&producer.id, ExternalProducerIdV1::Client(id) if id.is_empty()) {
+                return Err(DurableStreamProducerError::InvalidValueBatch);
+            }
+            keys.push(ProducerMetadataKey::ExternalProducerHead(
+                session_key.clone(),
+                stream_id,
+                producer.id.clone(),
+            ));
+            keys.push(ProducerMetadataKey::ExternalProducerSequence(
+                session_key.clone(),
+                stream_id,
+                producer.id.clone(),
+                producer.epoch,
+                producer.sequence,
+            ));
+        }
+        let mut index = self.index_for_terminal(keys, stream_id).await?;
+        let Some(registration) = index.registrations.get(&stream_id) else {
+            return Ok(ExternalAppendOutcomeV1::NotFound);
+        };
+        if index.stream_sessions.get(&stream_id) != Some(session_key) {
+            return Ok(ExternalAppendOutcomeV1::NotFound);
+        }
+        if registration.source_kind != StreamSourceKindV1::ExternalInlineInput
+            && !(registration.source_kind == StreamSourceKindV1::Nested
+                && producer
+                    .as_ref()
+                    .is_some_and(|producer| producer.id == ExternalProducerIdV1::Attached))
+        {
+            return Err(DurableStreamProducerError::InvalidHandle);
+        }
+        let stream = &index.streams[&stream_id];
+        index.ensure_producer_write_allowed()?;
+        if payload.is_none() && !close {
+            return Err(DurableStreamProducerError::InvalidValueBatch);
+        }
+        if stream.terminal {
+            if close
+                && let Some(event) = &stream.terminal_event
+                && matches!(
+                    event.payload,
+                    CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+                )
+            {
+                if payload.is_none() && producer.is_none() {
+                    return Ok(ExternalAppendOutcomeV1::Duplicate {
+                        offset: event.offset,
+                        highest_sequence: None,
+                    });
+                }
+                if let Some(request) = &producer {
+                    let identity = (session_key.clone(), stream_id, request.id.clone());
+                    if let Some(head) = index.external_producer_heads.get(&identity)
+                        && head.epoch == request.epoch
+                        && head.last_sequence == request.sequence
+                        && head.last_offset == event.offset
+                    {
+                        return Ok(ExternalAppendOutcomeV1::Duplicate {
+                            offset: event.offset,
+                            highest_sequence: Some(head.last_sequence),
+                        });
+                    }
+                }
+            }
+            return Ok(ExternalAppendOutcomeV1::Closed);
+        }
+        if index.finished_sessions.contains(session_key) {
+            return Ok(ExternalAppendOutcomeV1::Closed);
+        }
+        if let Some(request) = &producer {
+            let identity = (session_key.clone(), stream_id, request.id.clone());
+            if let Some(head) = index.external_producer_heads.get(&identity) {
+                if request.epoch < head.epoch {
+                    return Ok(ExternalAppendOutcomeV1::EpochFenced(head.epoch));
+                }
+                if request.epoch == head.epoch && request.sequence <= head.last_sequence {
+                    if request.id == ExternalProducerIdV1::Attached {
+                        // Attached item retries validate their original payload through
+                        // write_items_owned; an end frame cannot stand in for an item.
+                        return Err(DurableStreamProducerError::EventConflict);
+                    }
+                    let offset = index
+                        .external_producer_offsets
+                        .get(&(
+                            identity.0,
+                            identity.1,
+                            identity.2,
+                            request.epoch,
+                            request.sequence,
+                        ))
+                        .copied()
+                        .ok_or_else(|| {
+                            DurableStreamProducerError::CorruptHistory(
+                                "external producer sequence has no original offset".into(),
+                            )
+                        })?;
+                    return Ok(ExternalAppendOutcomeV1::Duplicate {
+                        offset,
+                        highest_sequence: Some(head.last_sequence),
+                    });
+                }
+                let expected = if request.epoch == head.epoch {
+                    head.next_sequence
+                } else {
+                    0
+                };
+                if request.sequence != expected {
+                    return Ok(ExternalAppendOutcomeV1::SeqGap {
+                        expected,
+                        received: request.sequence,
+                    });
+                }
+            } else if request.sequence != 0 {
+                return Ok(ExternalAppendOutcomeV1::SeqGap {
+                    expected: 0,
+                    received: request.sequence,
+                });
+            }
+        }
+
+        let first_sequence = stream.next_sequence;
+        let item_count = payload
+            .as_ref()
+            .map_or(0, |value| value.logical_item_count()) as u64;
+        let terminal_sequence = first_sequence
+            .checked_add(item_count)
+            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+        let producer_fingerprint = self.producer_fingerprint;
+        let session = session_key.clone();
+        if let Some(producer) = &producer {
+            producer
+                .sequence
+                .checked_add(1)
+                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+        }
+        let producer_record = producer.clone();
+        let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
+        self.begin_durable_effect();
+        let entries = self
+            .oplog
+            .add_durable_stream_batch(Box::new(move |first_index| {
+                let mut records = Vec::new();
+                let mut resulting_offset = None;
+                if let Some(payload) = &payload {
+                    match payload {
+                        StreamItemsPayloadV1::Values(values) => {
+                            for (position, value) in values.iter().enumerate() {
+                                let item_index =
+                                    OplogIndex::from_u64(first_index.as_u64() + position as u64);
+                                let offset = StreamOffsetV1::new(item_index, 0);
+                                resulting_offset = Some(offset);
+                                records.push(DurableStreamOplogRecord::Items(
+                                    entity_parent_start_index,
+                                    StreamItemsRecordV1 {
+                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                        stream_id,
+                                        producer_fingerprint,
+                                        first_sequence: first_sequence + position as u64,
+                                        nested_stream_ids: Vec::new(),
+                                        newly_registered_stream_ids: Vec::new(),
+                                        payload: StreamItemsPayloadV1::Values(vec![value.clone()]),
+                                        offsets: vec![offset],
+                                    },
+                                ));
+                            }
+                        }
+                        StreamItemsPayloadV1::PackedU8(_) => {
+                            let offsets = (0..payload.logical_item_count())
+                                .map(|sub| StreamOffsetV1::new(first_index, sub as u32))
+                                .collect::<Vec<_>>();
+                            resulting_offset = offsets.last().copied();
+                            records.push(DurableStreamOplogRecord::Items(
+                                entity_parent_start_index,
+                                StreamItemsRecordV1 {
+                                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                    stream_id,
+                                    producer_fingerprint,
+                                    first_sequence,
+                                    nested_stream_ids: Vec::new(),
+                                    newly_registered_stream_ids: Vec::new(),
+                                    payload: payload.clone(),
+                                    offsets,
+                                },
+                            ));
+                        }
+                    }
+                }
+                let end_index =
+                    OplogIndex::from_u64(first_index.as_u64() + records.len() as u64 + 1);
+                if close {
+                    resulting_offset = Some(StreamOffsetV1::new(end_index, 0));
+                }
+                let resulting_offset =
+                    resulting_offset.expect("external append has payload or terminal");
+                records.push(DurableStreamOplogRecord::Session(
+                    entity_parent_start_index,
+                    Box::new(StreamSessionRecordV1::InputHighWater(
+                        StreamSessionInputHighWaterRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: session.clone(),
+                            stream_id,
+                            epoch: 1,
+                            first_sequence,
+                            payload: payload
+                                .unwrap_or_else(|| StreamItemsPayloadV1::Values(Vec::new())),
+                            high_water: InputStreamHighWaterV1 {
+                                highest_contiguous_sequence: if close {
+                                    terminal_sequence
+                                } else {
+                                    terminal_sequence - 1
+                                },
+                                resulting_offset,
+                                terminal: close,
+                            },
+                        },
+                    )),
+                ));
+                if close {
+                    records.push(DurableStreamOplogRecord::End(
+                        entity_parent_start_index,
+                        StreamEndRecordV1 {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            stream_id,
+                            producer_fingerprint,
+                            sequence: terminal_sequence,
+                            offset: resulting_offset,
+                            authored_by: StreamTerminalAuthorV1::Protocol,
+                            result: StreamEndResultV1::Ok,
+                        },
+                    ));
+                }
+                if let Some(producer) = producer_record {
+                    records.push(DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecordV1::ExternalProducerState(
+                            StreamExternalProducerStateRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: session,
+                                stream_id,
+                                producer_id: producer.id,
+                                epoch: producer.epoch,
+                                sequence: producer.sequence,
+                                next_sequence: producer.sequence.checked_add(1).expect(
+                                    "validated external producer sequence does not overflow",
+                                ),
+                                resulting_offset,
+                            },
+                        )),
+                    ));
+                }
+                records
+            }))
+            .await
+            .map_err(DurableStreamProducerError::Oplog)?;
+        self.commit().await;
+
+        let (events, _) = self
+            .apply_committed_write_batch(&mut index, entries)
+            .await?;
+        let offset = events
+            .last()
+            .expect("external append committed no result offset")
+            .offset;
+        let publication = self.enqueue_events(stream_id, events, false)?;
+        if close {
+            self.record_terminal_streams(1);
+        }
+        drop(index);
+        self.wait_for_publication(publication).await?;
+        Ok(ExternalAppendOutcomeV1::Accepted(offset))
+    }
+
     async fn commit_resource_exhausted_terminal(
         &self,
         mut index: MutexGuard<'_, ProducerStreamIndex>,
@@ -4036,6 +5508,7 @@ impl DurableStreamProducer {
         let result = StreamEndResultV1::ErrorContext(resource_exhausted_error_context()?);
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let producer_fingerprint = self.producer_fingerprint;
+        self.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -4077,15 +5550,11 @@ impl DurableStreamProducer {
             record,
             self.producer_fingerprint,
         )?;
-        let bus = self.bus(stream_id)?;
-        drop(index);
-        self.retain_committed_events(std::slice::from_ref(&event));
-        bus.publish_committed(DurableLiveStreamEvent {
-            offset: event.offset,
-            payload: event,
-        })
-        .await?;
+        let publication = self.enqueue_events(stream_id, vec![event], false)?;
         self.record_terminal_streams(1);
+        drop(index);
+        self.wait_for_publication(publication).await?;
+        self.finish_durable_effect();
         Ok(())
     }
 
@@ -4095,8 +5564,16 @@ impl DurableStreamProducer {
         sequence: u64,
         result: StreamEndResultV1,
     ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
-        self.end_authored(stream_id, sequence, result, StreamTerminalAuthorV1::Guest)
-            .await
+        let memory = match &result {
+            StreamEndResultV1::ErrorContext(bytes) => bytes.len(),
+            _ => 0,
+        };
+        self.run_owned(memory, move |owner| async move {
+            owner
+                .end_authored(stream_id, sequence, result, StreamTerminalAuthorV1::Guest)
+                .await
+        })
+        .await
     }
 
     async fn end_authored(
@@ -4175,6 +5652,7 @@ impl DurableStreamProducer {
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let producer_fingerprint = self.producer_fingerprint;
+        self.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -4217,15 +5695,10 @@ impl DurableStreamProducer {
             self.producer_fingerprint,
         )?;
         let offset = event.offset;
-        let bus = self.bus(stream_id)?;
-        drop(index);
-        self.retain_committed_events(std::slice::from_ref(&event));
-        bus.publish_committed(DurableLiveStreamEvent {
-            offset,
-            payload: event,
-        })
-        .await?;
+        let publication = self.enqueue_events(stream_id, vec![event], false)?;
         self.record_terminal_streams(1);
+        drop(index);
+        self.wait_for_publication(publication).await?;
         crate::metrics::durable_stream::record_producer_operation("end", false);
         tracing::debug!(
             stream_id = %stream_id,
@@ -4269,7 +5742,7 @@ impl DurableStreamProducer {
             TerminalReplayDecision::Append => {}
             TerminalReplayDecision::Replayed(event) => {
                 let offset = event.offset;
-                let bus = self.bus(stream_id)?;
+                let publication = self.enqueue_events(stream_id, vec![event.clone()], true)?;
                 drop(index);
                 self.cancel_source(stream_id);
                 return Ok(PendingCommittedCancellation {
@@ -4277,18 +5750,17 @@ impl DurableStreamProducer {
                     sequence,
                     role,
                     reason,
-                    bus,
+                    publication,
                     event,
                     outcome: Ok(ProducerWriteOutcomeV1 {
                         value: offset,
                         replayed: true,
                     }),
-                    newly_committed: false,
                 });
             }
             TerminalReplayDecision::Fenced(event) => {
                 let error = DurableStreamProducerError::FencedByTerminal(event.payload.clone());
-                let bus = self.bus(stream_id)?;
+                let publication = self.enqueue_events(stream_id, vec![event.clone()], true)?;
                 drop(index);
                 self.cancel_source(stream_id);
                 return Ok(PendingCommittedCancellation {
@@ -4296,10 +5768,9 @@ impl DurableStreamProducer {
                     sequence,
                     role,
                     reason,
-                    bus,
+                    publication,
                     event,
                     outcome: Err(error),
-                    newly_committed: false,
                 });
             }
         }
@@ -4307,6 +5778,7 @@ impl DurableStreamProducer {
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let producer_fingerprint = self.producer_fingerprint;
+        self.begin_durable_effect();
         let mut entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |oplog_index| {
@@ -4351,7 +5823,8 @@ impl DurableStreamProducer {
             self.producer_fingerprint,
         )?;
         let offset = event.offset;
-        let bus = self.bus(stream_id)?;
+        let publication = self.enqueue_events(stream_id, vec![event.clone()], false)?;
+        self.record_terminal_streams(1);
         drop(index);
         self.cancel_source(stream_id);
         Ok(PendingCommittedCancellation {
@@ -4359,13 +5832,12 @@ impl DurableStreamProducer {
             sequence,
             role,
             reason,
-            bus,
+            publication,
             event,
             outcome: Ok(ProducerWriteOutcomeV1 {
                 value: offset,
                 replayed: false,
             }),
-            newly_committed: true,
         })
     }
 
@@ -4374,21 +5846,7 @@ impl DurableStreamProducer {
         pending: PendingCommittedCancellation,
     ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
         let offset = pending.event.offset;
-        if pending.newly_committed {
-            self.retain_committed_events(std::slice::from_ref(&pending.event));
-        }
-        let live_event = DurableLiveStreamEvent {
-            offset,
-            payload: pending.event,
-        };
-        if pending.newly_committed {
-            pending.bus.publish_committed(live_event).await?;
-        } else {
-            pending.bus.republish_committed(live_event).await;
-        }
-        if pending.newly_committed {
-            self.record_terminal_streams(1);
-        }
+        self.wait_for_publication(pending.publication).await?;
         if let Ok(outcome) = &pending.outcome {
             crate::metrics::durable_stream::record_producer_operation("cancel", outcome.replayed);
             tracing::debug!(
@@ -4405,6 +5863,24 @@ impl DurableStreamProducer {
     }
 
     pub(crate) async fn commit_cancel_open(
+        &self,
+        stream_id: StreamId,
+        role: StreamCancelRoleV1,
+        reason: StreamCancelReasonV1,
+        details: Option<String>,
+    ) -> Result<Option<PendingCommittedCancellation>, DurableStreamProducerError> {
+        self.run_lifecycle(
+            details.as_ref().map_or(0, String::len),
+            move |owner| async move {
+                owner
+                    .commit_cancel_open_owned(stream_id, role, reason, details)
+                    .await
+            },
+        )
+        .await
+    }
+
+    async fn commit_cancel_open_owned(
         &self,
         stream_id: StreamId,
         role: StreamCancelRoleV1,
@@ -4430,6 +5906,24 @@ impl DurableStreamProducer {
     }
 
     pub(crate) async fn cancel_open(
+        self: &Arc<Self>,
+        stream_id: StreamId,
+        role: StreamCancelRoleV1,
+        reason: StreamCancelReasonV1,
+        details: Option<String>,
+    ) -> Result<(), DurableStreamProducerError> {
+        self.run_lifecycle(
+            details.as_ref().map_or(0, String::len),
+            move |owner| async move {
+                owner
+                    .cancel_open_owned(stream_id, role, reason, details)
+                    .await
+            },
+        )
+        .await
+    }
+
+    async fn cancel_open_owned(
         &self,
         stream_id: StreamId,
         role: StreamCancelRoleV1,
@@ -4496,6 +5990,21 @@ impl DurableStreamProducer {
         stream_id: StreamId,
         result: StreamEndResultV1,
     ) -> Result<(), DurableStreamProducerError> {
+        let memory = match &result {
+            StreamEndResultV1::ErrorContext(bytes) => bytes.len(),
+            _ => 0,
+        };
+        self.run_lifecycle(memory, move |owner| async move {
+            owner.end_open_owned(stream_id, result).await
+        })
+        .await
+    }
+
+    async fn end_open_owned(
+        &self,
+        stream_id: StreamId,
+        result: StreamEndResultV1,
+    ) -> Result<(), DurableStreamProducerError> {
         let index = self
             .index_for([ProducerMetadataKey::Stream(stream_id)])
             .await?;
@@ -4554,6 +6063,42 @@ impl DurableStreamProducer {
         result: Result<(), Vec<u8>>,
         input_cancel_reason: StreamCancelReasonV1,
     ) -> Result<(), DurableStreamProducerError> {
+        if self
+            .index_for([ProducerMetadataKey::Session(session_key.clone())])
+            .await?
+            .finished_sessions
+            .contains(&session_key)
+        {
+            return Ok(());
+        }
+        // The lazy batch retains one error, one record, and its encoding at a time,
+        // independently of the number of output streams.
+        let terminal_bytes = result
+            .as_ref()
+            .err()
+            .map_or(0, |bytes| bytes.len())
+            .max(b"output stream ended without a terminal".len());
+        let memory = terminal_bytes.saturating_mul(4);
+        self.run_lifecycle(memory, move |owner| async move {
+            owner
+                .finish_session_owned(
+                    session_key,
+                    entity_parent_start_index,
+                    result,
+                    input_cancel_reason,
+                )
+                .await
+        })
+        .await
+    }
+
+    async fn finish_session_owned(
+        &self,
+        session_key: StreamSessionKeyV1,
+        entity_parent_start_index: Option<OplogIndex>,
+        result: Result<(), Vec<u8>>,
+        input_cancel_reason: StreamCancelReasonV1,
+    ) -> Result<(), DurableStreamProducerError> {
         let mut index = self.index_for_session_streams(&session_key).await?;
         if index.finished_sessions.contains(&session_key) {
             return Ok(());
@@ -4597,19 +6142,19 @@ impl DurableStreamProducer {
         }
 
         let producer_fingerprint = self.producer_fingerprint;
-        let result_for_batch = result.clone();
+        let result_for_batch = Arc::new(result);
         let session_key_for_batch = session_key.clone();
+        self.begin_durable_effect();
         let entries = self
             .oplog
-            .add_durable_stream_batch(Box::new(move |first_index| {
-                let mut records = Vec::with_capacity(open_streams.len() + 1);
-                for (position, (stream_id, role, sequence, stream_attribution)) in
-                    open_streams.into_iter().enumerate()
-                {
-                    let oplog_index = OplogIndex::from_u64(first_index.as_u64() + position as u64);
-                    match role {
-                        SessionStreamRoleV1::Input => {
-                            records.push(DurableStreamOplogRecord::Cancel(
+            .add_durable_stream_batch_iter(Box::new(move |first_index| {
+                let finished_result = result_for_batch.clone();
+                let terminals = open_streams.into_iter().enumerate().map(
+                    move |(position, (stream_id, role, sequence, stream_attribution))| {
+                        let oplog_index =
+                            OplogIndex::from_u64(first_index.as_u64() + position as u64);
+                        match role {
+                            SessionStreamRoleV1::Input => DurableStreamOplogRecord::Cancel(
                                 stream_attribution,
                                 StreamCancelRecordV1 {
                                     format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -4625,39 +6170,41 @@ impl DurableStreamProducer {
                                             .to_string(),
                                     ),
                                 },
-                            ));
+                            ),
+                            SessionStreamRoleV1::Output => {
+                                let details = match result_for_batch.as_ref() {
+                                    Ok(()) => b"output stream ended without a terminal".to_vec(),
+                                    Err(details) => details.clone(),
+                                };
+                                DurableStreamOplogRecord::End(
+                                    stream_attribution,
+                                    StreamEndRecordV1 {
+                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                        stream_id,
+                                        producer_fingerprint,
+                                        sequence,
+                                        offset: StreamOffsetV1::new(oplog_index, 0),
+                                        authored_by: StreamTerminalAuthorV1::Protocol,
+                                        result: StreamEndResultV1::ErrorContext(details),
+                                    },
+                                )
+                            }
                         }
-                        SessionStreamRoleV1::Output => {
-                            let details = match &result_for_batch {
-                                Ok(()) => b"output stream ended without a terminal".to_vec(),
-                                Err(details) => details.clone(),
-                            };
-                            records.push(DurableStreamOplogRecord::End(
-                                stream_attribution,
-                                StreamEndRecordV1 {
-                                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                    stream_id,
-                                    producer_fingerprint,
-                                    sequence,
-                                    offset: StreamOffsetV1::new(oplog_index, 0),
-                                    authored_by: StreamTerminalAuthorV1::Protocol,
-                                    result: StreamEndResultV1::ErrorContext(details),
-                                },
-                            ));
-                        }
-                    }
-                }
-                records.push(DurableStreamOplogRecord::Session(
-                    entity_parent_start_index,
-                    Box::new(StreamSessionRecordV1::Finished(
-                        StreamSessionFinishedRecordV1 {
-                            format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            session_key: session_key_for_batch,
-                            result: result_for_batch,
-                        },
-                    )),
-                ));
-                records
+                    },
+                );
+                let finished = std::iter::once_with(move || {
+                    DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecordV1::Finished(
+                            StreamSessionFinishedRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: session_key_for_batch,
+                                result: Arc::unwrap_or_clone(finished_result),
+                            },
+                        )),
+                    )
+                });
+                Box::new(terminals.chain(finished))
             }))
             .await
             .map_err(DurableStreamProducerError::Oplog)?;
@@ -4676,11 +6223,16 @@ impl DurableStreamProducer {
                         .download_payload(record)
                         .await
                         .map_err(DurableStreamProducerError::Oplog)?;
-                    terminal_events.push(index.apply_end(
+                    let event = index.apply_end(
                         oplog_index,
                         entity_parent_start_index,
                         record,
                         self.producer_fingerprint,
+                    )?;
+                    terminal_events.push(self.enqueue_events(
+                        event.stream_id,
+                        vec![event],
+                        false,
                     )?);
                 }
                 OplogEntry::StreamCancel {
@@ -4693,19 +6245,29 @@ impl DurableStreamProducer {
                         .download_payload(record)
                         .await
                         .map_err(DurableStreamProducerError::Oplog)?;
-                    terminal_events.push(index.apply_cancel(
+                    let event = index.apply_cancel(
                         oplog_index,
                         entity_parent_start_index,
                         record,
                         self.producer_fingerprint,
+                    )?;
+                    terminal_events.push(self.enqueue_events(
+                        event.stream_id,
+                        vec![event],
+                        false,
                     )?);
                 }
-                OplogEntry::StreamSession { record, .. } => {
+                OplogEntry::StreamSession {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                } => {
                     let record = self
                         .oplog
                         .download_payload(record)
                         .await
                         .map_err(DurableStreamProducerError::Oplog)?;
+                    index.apply_session_references(entity_parent_start_index, &record)?;
                     let StreamSessionRecordV1::Finished(record) = record else {
                         return Err(DurableStreamProducerError::CorruptHistory(
                             "session finish batch contains an unexpected session record"
@@ -4722,20 +6284,11 @@ impl DurableStreamProducer {
             }
         }
         let terminal_count = terminal_events.len();
-        let terminal_events = terminal_events
-            .into_iter()
-            .map(|event| Ok((self.bus(event.stream_id)?, event)))
-            .collect::<Result<Vec<_>, DurableStreamProducerError>>()?;
-        drop(index);
-        for (bus, event) in terminal_events {
-            self.retain_committed_events(std::slice::from_ref(&event));
-            bus.publish_committed(DurableLiveStreamEvent {
-                offset: event.offset,
-                payload: event,
-            })
-            .await?;
-        }
         self.record_terminal_streams(terminal_count);
+        drop(index);
+        for publication in terminal_events {
+            self.wait_for_publication(publication).await?;
+        }
         crate::metrics::durable_stream::record_producer_operation("finish_session", false);
         tracing::debug!(
             terminal_streams = terminal_count,
@@ -4852,6 +6405,155 @@ impl DurableStreamProducer {
         }
     }
 
+    fn enqueue_events(
+        &self,
+        stream_id: StreamId,
+        events: Vec<CommittedProducerStreamEventV1>,
+        replayed: bool,
+    ) -> Result<PublicationReceipt, DurableStreamProducerError> {
+        let bus = self.bus(stream_id)?;
+        if !replayed {
+            self.retain_committed_events(&events);
+            bus.notify_committed();
+        }
+        if events.len() == 1 && events[0].is_terminal() {
+            let event = events.into_iter().next().unwrap();
+            let receipt =
+                bus.defer_terminal(event.offset, replayed, self.terminal_progress.clone())?;
+            bus.try_publish_deferred_terminal(self.queued_terminal(stream_id, event.offset))?;
+            self.start_terminal_dispatcher();
+            return Ok(receipt);
+        }
+        Ok(bus.enqueue_batch(
+            events
+                .into_iter()
+                .map(|event| DurableLiveStreamEvent {
+                    offset: event.offset,
+                    payload: event,
+                })
+                .collect(),
+            replayed,
+            MUTATION_SCOPE
+                .try_with(Arc::clone)
+                .ok()
+                .filter(|scope| std::ptr::eq(scope.producer.as_ref(), self)),
+        ))
+    }
+
+    fn queued_terminal(
+        &self,
+        stream_id: StreamId,
+        offset: StreamOffsetV1,
+    ) -> QueuedDurableEvent<CommittedProducerStreamEventV1> {
+        let oplog = self.oplog.clone();
+        QueuedDurableEvent::Terminal {
+            offset,
+            load: Arc::new(move |offset| {
+                let oplog = oplog.clone();
+                Box::pin(async move {
+                    metadata::read_terminal_event(oplog.as_ref(), stream_id, offset)
+                        .await
+                        .map_err(|_| DurableLiveStreamBusError::PublicationAborted)
+                })
+            }),
+        }
+    }
+
+    fn start_terminal_dispatcher(&self) {
+        if self
+            .terminal_dispatcher_started
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let producer = self.self_weak.clone();
+        let progress = self.terminal_progress.clone();
+        tokio::spawn(async move {
+            loop {
+                let changed = progress.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                let mut cursor = None;
+                let mut pending = false;
+                loop {
+                    let Some(producer) = producer.upgrade() else {
+                        return;
+                    };
+                    let page: Vec<_> = producer
+                        .buses
+                        .read()
+                        .expect("durable stream bus map lock poisoned")
+                        .range((
+                            cursor.map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded),
+                            std::ops::Bound::Unbounded,
+                        ))
+                        .take(32)
+                        .map(|(id, bus)| (*id, bus.clone()))
+                        .collect();
+                    let last_page = page.len() < 32;
+                    for (stream_id, bus) in page {
+                        cursor = Some(stream_id);
+                        if !bus.has_pending_deferred_terminal() {
+                            continue;
+                        }
+                        let result = async {
+                            producer.ensure_healthy()?;
+                            if let Some(offset) = bus.ready_deferred_terminal()? {
+                                bus.try_publish_deferred_terminal(
+                                    producer.queued_terminal(stream_id, offset),
+                                )?;
+                            }
+                            Ok::<(), DurableStreamProducerError>(())
+                        }
+                        .await;
+                        if result.is_err() {
+                            producer.poison();
+                            bus.fail_deferred_terminal(
+                                DurableLiveStreamBusError::PublicationAborted,
+                            );
+                        }
+                        pending |= bus.has_pending_deferred_terminal();
+                    }
+                    if last_page {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                if pending {
+                    // A transient bus-state lock need not generate a reader notification.
+                    tokio::select! {
+                        _ = &mut changed => {},
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {},
+                    }
+                } else {
+                    changed.await;
+                }
+            }
+        });
+    }
+
+    async fn wait_for_publication(
+        &self,
+        publication: PublicationReceipt,
+    ) -> Result<(), DurableStreamProducerError> {
+        let scope = MUTATION_SCOPE
+            .try_with(Arc::clone)
+            .ok()
+            .filter(|scope| std::ptr::eq(scope.producer.as_ref(), self));
+        if let Some(scope) = scope {
+            scope
+                .publications
+                .lock()
+                .expect("publication receipt list lock poisoned")
+                .push(publication);
+        } else {
+            publication
+                .await
+                .map_err(|_| DurableLiveStreamBusError::PublicationAborted)??;
+        }
+        Ok(())
+    }
+
     fn bus(
         &self,
         stream_id: StreamId,
@@ -4881,20 +6583,19 @@ impl DurableStreamProducer {
         stream_id: StreamId,
         events: Vec<CommittedProducerStreamEventV1>,
     ) -> Result<(), DurableStreamProducerError> {
-        let bus = self.stream_bus(stream_id).await?;
-        for event in events {
-            bus.republish_committed(DurableLiveStreamEvent {
-                offset: event.offset,
-                payload: event,
-            })
-            .await;
-        }
+        let index = self
+            .index_for([ProducerMetadataKey::Stream(stream_id)])
+            .await?;
+        let publication = self.enqueue_events(stream_id, events, true)?;
+        drop(index);
+        self.wait_for_publication(publication).await?;
         Ok(())
     }
 }
 
 impl Drop for DurableStreamProducer {
     fn drop(&mut self) {
+        self.terminal_progress.notify_one();
         crate::metrics::durable_stream::remove_open_streams(
             self.open_stream_count.load(Ordering::Relaxed),
         );
@@ -5103,6 +6804,26 @@ impl RoutedAttachedStreamSegmentSource {
             metadata,
         }
     }
+
+    async fn read_routed(
+        &self,
+        request: AttachedStreamSegmentRequestV1,
+    ) -> Result<Vec<u8>, DurableStreamProducerError> {
+        let mut delay = std::time::Duration::from_millis(100);
+        loop {
+            match self.rpc.read_durable_stream_segment(
+                golem_common::model::durable_stream::DurableStreamReadRequestV1::AttachedConsumer(Box::new(request.clone())),
+                &self.auth_ctx,
+            ).await {
+                Ok(payload) => return Ok(payload),
+                Err(DurableStreamReadError::Other(error)) => return Err(DurableStreamProducerError::Oplog(error.to_string())),
+                Err(DurableStreamReadError::Unavailable) => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -5130,20 +6851,15 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
             return Err(DurableStreamProducerError::InvalidHandle);
         }
         let payload = self
-            .rpc
-            .read_durable_stream_segment(
-                AttachedStreamSegmentRequestV1 {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    attachment: attachment.clone(),
-                    mapping: self.mapping.clone(),
-                    after,
-                    through,
-                    wait_for_events: false,
-                },
-                &self.auth_ctx,
-            )
-            .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
+            .read_routed(AttachedStreamSegmentRequestV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                attachment: attachment.clone(),
+                mapping: self.mapping.clone(),
+                after,
+                through,
+                wait_for_events: false,
+            })
+            .await?;
         golem_common::serialization::deserialize(&payload)
             .map_err(DurableStreamProducerError::CorruptHistory)
     }
@@ -5159,20 +6875,15 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
             return Err(DurableStreamProducerError::InvalidHandle);
         }
         let payload = self
-            .rpc
-            .read_durable_stream_segment(
-                AttachedStreamSegmentRequestV1 {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    attachment: attachment.clone(),
-                    mapping: self.mapping.clone(),
-                    after,
-                    through: None,
-                    wait_for_events: true,
-                },
-                &self.auth_ctx,
-            )
-            .await
-            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
+            .read_routed(AttachedStreamSegmentRequestV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                attachment: attachment.clone(),
+                mapping: self.mapping.clone(),
+                after,
+                through: None,
+                wait_for_events: true,
+            })
+            .await?;
         golem_common::serialization::deserialize(&payload)
             .map_err(DurableStreamProducerError::CorruptHistory)
     }
@@ -5418,22 +7129,24 @@ impl DbDirectStreamAttachmentConsumerProbe {
             rpc: Some(rpc),
         }
     }
-}
 
-#[async_trait]
-impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
-    async fn status(
+    pub(crate) async fn committed_cancellation_status(
         &self,
         key: &StreamAttachmentKeyV1,
+        mapping: &StreamSessionMappingRecordV1,
+        intent: &golem_common::model::durable_stream::StreamConsumerCancelIntentRecordV1,
     ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
-        self.status_exact(key, None).await
+        self.inspect_status(key, Some(mapping), Some(intent)).await
     }
 
     #[tracing::instrument(name = "durable_stream.consumer.status", level = "debug", skip_all)]
-    async fn status_exact(
+    async fn inspect_status(
         &self,
         key: &StreamAttachmentKeyV1,
         expected_mapping: Option<&StreamSessionMappingRecordV1>,
+        expected_cancel: Option<
+            &golem_common::model::durable_stream::StreamConsumerCancelIntentRecordV1,
+        >,
     ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
         let session_owner = OwnedAgentId::new(
             key.session_key.callee_environment_id,
@@ -5518,7 +7231,9 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             .zip(status.attachment_attempt_id)
             .zip(status.attachment_attached)
             .map(|((epoch, attempt_id), attached)| (epoch, attempt_id, attached));
-        if attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch) {
+        if expected_cancel.is_none()
+            && attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch)
+        {
             return Ok(ConsumerAttachmentStatus::EpochMismatch);
         }
 
@@ -5555,6 +7270,19 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         if !metadata.covered_through.is_defined() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
+        if let Some(intent) = expected_cancel {
+            let mapping = expected_mapping.expect("cancellation inspection requires a mapping");
+            return metadata
+                .has_committed_cancellation(key, mapping, intent)
+                .map(|matches| {
+                    if matches {
+                        ConsumerAttachmentStatus::Active
+                    } else {
+                        ConsumerAttachmentStatus::Missing
+                    }
+                })
+                .map_err(DurableStreamProducerError::CorruptHistory);
+        }
         let topology = metadata
             .topology_status(key, expected_mapping)
             .map_err(DurableStreamProducerError::CorruptHistory)?;
@@ -5581,6 +7309,24 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             }
             (None, topology) => Ok(topology),
         }
+    }
+}
+
+#[async_trait]
+impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
+    async fn status(
+        &self,
+        key: &StreamAttachmentKeyV1,
+    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+        self.status_exact(key, None).await
+    }
+
+    async fn status_exact(
+        &self,
+        key: &StreamAttachmentKeyV1,
+        expected_mapping: Option<&StreamSessionMappingRecordV1>,
+    ) -> Result<ConsumerAttachmentStatus, DurableStreamProducerError> {
+        self.inspect_status(key, expected_mapping, None).await
     }
 
     #[tracing::instrument(
@@ -6053,6 +7799,19 @@ impl DurableStreamProducer {
         now_millis: u64,
         require_no_dependents: bool,
     ) -> Result<(), DurableStreamProducerError> {
+        self.run_lifecycle(0, move |owner| async move {
+            owner
+                .commit_deletion_barrier_owned(now_millis, require_no_dependents)
+                .await
+        })
+        .await
+    }
+
+    async fn commit_deletion_barrier_owned(
+        &self,
+        now_millis: u64,
+        require_no_dependents: bool,
+    ) -> Result<(), DurableStreamProducerError> {
         let mut index = self.index_for_cleanup().await?;
         if index.deleting {
             crate::metrics::durable_stream::record_producer_operation("deletion_barrier", true);
@@ -6082,6 +7841,7 @@ impl DurableStreamProducer {
         let environment_id = self.environment_id;
         let producer = self.producer.clone();
         let producer_fingerprint = self.producer_fingerprint;
+        self.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
@@ -6164,21 +7924,14 @@ impl DurableStreamProducer {
         }
         index.complete_for_deletion = true;
         let terminal_count = terminal_events.len();
-        let terminal_events = terminal_events
-            .into_iter()
-            .map(|event| Ok((self.bus(event.stream_id)?, event)))
-            .collect::<Result<Vec<_>, DurableStreamProducerError>>()?;
-        drop(index);
-        for (bus, event) in terminal_events {
+        for event in terminal_events {
             self.cancel_source(event.stream_id);
-            self.retain_committed_events(std::slice::from_ref(&event));
-            bus.publish_committed(DurableLiveStreamEvent {
-                offset: event.offset,
-                payload: event,
-            })
-            .await?;
+            // The terminal dispatcher owns delivery. Deletion waits for the committed
+            // barrier and cascade records, never for a live reader to make progress.
+            drop(self.enqueue_events(event.stream_id, vec![event], false)?);
         }
         self.record_terminal_streams(terminal_count);
+        drop(index);
         crate::metrics::durable_stream::record_producer_operation("deletion_barrier", false);
         tracing::debug!(
             terminal_streams = terminal_count,
@@ -6194,7 +7947,22 @@ impl DurableStreamProducer {
         now_millis: u64,
         result: StreamCascadeDependentResultV1,
     ) -> Result<(), DurableStreamProducerError> {
+        self.run_lifecycle(0, move |owner| async move {
+            owner
+                .commit_cascade_outbox_owned(key, now_millis, result)
+                .await
+        })
+        .await
+    }
+
+    async fn commit_cascade_outbox_owned(
+        &self,
+        key: StreamAttachmentKeyV1,
+        now_millis: u64,
+        result: StreamCascadeDependentResultV1,
+    ) -> Result<(), DurableStreamProducerError> {
         let mut index = self.index.lock().await;
+        self.ensure_healthy()?;
         if let Some(existing) = index.cascade_outbox.get(&key) {
             return if existing == &result {
                 crate::metrics::durable_stream::record_cascade("replayed");
@@ -6223,6 +7991,7 @@ impl DurableStreamProducer {
             completed_at_millis: now_millis,
             result,
         });
+        self.begin_durable_effect();
         self.oplog
             .add(OplogEntry::stream_session(
                 entity_parent_start_index,
@@ -6272,6 +8041,7 @@ impl DurableStreamProducer {
         batch_size: usize,
         probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
     ) -> Result<usize, DurableStreamProducerError> {
+        self.ensure_healthy()?;
         let (deleting, candidates) =
             if let Some(candidates) = self.indexed_attachment_candidates(batch_size).await? {
                 candidates
@@ -6819,6 +8589,7 @@ impl DurableCatchUpReader {
         if self.terminal_delivered {
             return Ok(None);
         }
+        self.bus.ensure_available()?;
         if self.history.is_empty() {
             if self.last_delivered >= self.join_high_water {
                 self.history_source = None;
@@ -6835,6 +8606,7 @@ impl DurableCatchUpReader {
                 }
             }
         }
+        self.bus.ensure_available()?;
         if let Some(event) = self.history.pop_front() {
             let event = self.deliver(event)?;
             self.release_subscription_if_complete();
@@ -6842,12 +8614,9 @@ impl DurableCatchUpReader {
         }
         loop {
             let Some(subscription) = self.subscription.as_mut() else {
-                return Ok(None);
+                return Err(DurableLiveStreamBusError::PublicationAborted.into());
             };
-            let Some(event) = subscription.recv().await else {
-                self.release_subscription().await;
-                return Ok(None);
-            };
+            let event = subscription.recv().await?;
             if self
                 .join_high_water
                 .is_some_and(|high_water| event.offset <= high_water)
@@ -6884,12 +8653,6 @@ impl DurableCatchUpReader {
         }
     }
 
-    async fn release_subscription(&mut self) {
-        if let Some(subscription) = self.subscription.take() {
-            self.bus.unsubscribe(subscription.reader_id()).await;
-        }
-    }
-
     fn deliver(
         &mut self,
         event: CommittedProducerStreamEventV1,
@@ -6921,10 +8684,10 @@ pub(crate) mod tests {
         CommittedProducerStreamEventV1, ConsumerAttachmentStatus, ConsumerJournalInspection,
         ConsumerJournalSummary, DurableCatchUpReader, DurableLiveStreamBus,
         DurableLiveStreamBusError, DurableStreamCommit, DurableStreamProducer,
-        DurableStreamProducerError, IndexedConsumerJournal, ProducerOutputRegistrationV1,
-        ProducerOutputSourceV1, ProducerRegistrationRequestV1, ProducerStreamIndex,
-        StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentStateV1,
-        StreamSegmentSource, registration_record,
+        DurableStreamProducerError, ExternalAppendOutcomeV1, ExternalProducerV1,
+        IndexedConsumerJournal, ProducerOutputRegistrationV1, ProducerOutputSourceV1,
+        ProducerRegistrationRequestV1, ProducerStreamIndex, StreamAttachmentConsumerProbe,
+        StreamAttachmentControl, StreamAttachmentStateV1, StreamSegmentSource, registration_record,
     };
     use crate::services::oplog::{
         CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
@@ -6935,14 +8698,14 @@ pub(crate) mod tests {
     use futures::FutureExt;
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
     use golem_common::base_model::durable_stream::{
-        AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, InputStreamHighWaterV1,
-        MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION, MAX_LIVE_JOIN_BUFFER_SIZE,
-        MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
-        MAX_STREAM_VALUE_TRAVERSAL_DEPTH, PersistedStreamInvocationDescriptorV1,
-        STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS, STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-        SessionStreamRoleV1, StartAttemptDescriptorV1, StreamAttachmentFinalizationReasonV1,
-        StreamAttachmentKeyV1, StreamCancelReasonV1, StreamCancelRoleV1,
-        StreamCascadeDependentResultV1, StreamConsumerDeletingRecordV1,
+        AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, ExternalProducerIdV1,
+        InputStreamHighWaterV1, MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
+        MAX_LIVE_JOIN_BUFFER_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE,
+        MAX_PACKED_U8_STREAM_ITEM_SIZE, MAX_STREAM_VALUE_TRAVERSAL_DEPTH,
+        PersistedStreamInvocationDescriptorV1, STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
+        STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRoleV1, StartAttemptDescriptorV1,
+        StreamAttachmentFinalizationReasonV1, StreamAttachmentKeyV1, StreamCancelReasonV1,
+        StreamCancelRoleV1, StreamCascadeDependentResultV1, StreamConsumerDeletingRecordV1,
         StreamConsumerItemValueRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1,
         StreamItemsPayloadV1, StreamItemsRecordV1, StreamOffsetV1, StreamRegistrationCoordinateV1,
         StreamRootKindV1, StreamSessionKeyV1, StreamSessionMappingRecordV1,
@@ -6959,11 +8722,11 @@ pub(crate) mod tests {
     use golem_schema::schema::SchemaFingerprintV1;
     use std::collections::{BTreeMap, VecDeque};
     use std::fmt::Debug;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use test_r::{test, timeout};
-    use tokio::sync::{Barrier, oneshot};
+    use tokio::sync::{Barrier, Notify, oneshot};
     use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
@@ -7256,6 +9019,180 @@ pub(crate) mod tests {
         let entries = oplog.read_exact(index, 1).await;
 
         assert_eq!(entries.get(&index), Some(&entry));
+    }
+
+    #[test]
+    async fn nested_mutation_preserves_unfinished_parent_effects() {
+        for parent_pending in [false, true] {
+            for child_succeeds in [false, true] {
+                for child_finishes in [false, true] {
+                    let identity = identity();
+                    let producer = DurableStreamProducer::load(
+                        Arc::new(TestOplog::default()),
+                        identity.environment_id,
+                        identity.agent_id,
+                        identity.fingerprint,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                    let outcome: Result<(), DurableStreamProducerError> = producer
+                        .run_owned(0, move |parent| async move {
+                            if parent_pending {
+                                parent.begin_durable_effect();
+                            }
+                            let child_result: Result<(), DurableStreamProducerError> = parent
+                                .run_lifecycle(0, move |child| async move {
+                                    child.begin_durable_effect();
+                                    if child_finishes {
+                                        child.finish_durable_effect();
+                                    }
+                                    if child_succeeds {
+                                        Ok(())
+                                    } else {
+                                        Err(DurableStreamProducerError::ItemTooLarge)
+                                    }
+                                })
+                                .await;
+                            assert_eq!(child_result.is_ok(), child_succeeds);
+                            Err(DurableStreamProducerError::ItemTooLarge)
+                        })
+                        .await;
+                    assert!(outcome.is_err());
+                    let requires_recovery = parent_pending || (!child_succeeds && !child_finishes);
+                    assert_eq!(
+                        producer.ensure_healthy().is_err(),
+                        requires_recovery,
+                        "parent_pending={parent_pending}, child_succeeds={child_succeeds}, child_finishes={child_finishes}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn nested_sibling_success_cannot_hide_failed_or_cancelled_effects() {
+        for cancel_child in [false, true] {
+            let identity = identity();
+            let producer = DurableStreamProducer::load(
+                Arc::new(TestOplog::default()),
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            producer
+                .run_owned(0, move |parent| async move {
+                    let (release, released) = oneshot::channel();
+                    let mut child = Box::pin(parent.run_owned(0, move |child| async move {
+                        child.begin_durable_effect();
+                        released.await.unwrap();
+                        Err::<(), _>(DurableStreamProducerError::ItemTooLarge)
+                    }));
+                    assert!(futures::poll!(child.as_mut()).is_pending());
+                    parent
+                        .run_owned(0, |sibling| async move {
+                            sibling.begin_durable_effect();
+                            sibling.finish_durable_effect();
+                            Ok::<(), DurableStreamProducerError>(())
+                        })
+                        .await?;
+                    assert_eq!(parent.ensure_healthy(), Ok(()));
+                    if cancel_child {
+                        drop(child);
+                    } else {
+                        release.send(()).unwrap();
+                        assert!(child.await.is_err());
+                    }
+                    Ok::<(), DurableStreamProducerError>(())
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                producer.ensure_healthy(),
+                Err(DurableStreamProducerError::RecoveryRequired)
+            );
+        }
+    }
+
+    #[test]
+    async fn quiescent_retirement_rejects_storage_activity_without_poisoning_the_producer() {
+        let identity = identity();
+        let producer = DurableStreamProducer::load(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let activity = producer.durable_activity.try_enter().unwrap();
+        assert!(!producer.try_retire_quiescent());
+        assert_eq!(producer.ensure_healthy(), Ok(()));
+        assert!(producer.durable_activity.try_enter().is_some());
+        drop(activity);
+        assert!(producer.try_retire_quiescent());
+        assert_eq!(
+            producer.ensure_healthy(),
+            Err(DurableStreamProducerError::RecoveryRequired)
+        );
+        assert!(producer.durable_activity.try_enter().is_none());
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn metadata_lookup_tracks_detached_storage_after_caller_cancellation() {
+        for cancel_caller in [false, true] {
+            let identity = identity();
+            let producer = DurableStreamProducer::load(
+                Arc::new(TestOplog::default()),
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let (release, released) = oneshot::channel();
+            let (started, ready) = oneshot::channel();
+            let mut lookup = Box::pin(producer.with_metadata_activity(async {
+                crate::services::activity::spawn_with_activity(async move {
+                    started.send(()).unwrap();
+                    released.await.unwrap();
+                })
+                .await
+                .unwrap();
+                37
+            }));
+            assert!(futures::poll!(lookup.as_mut()).is_pending());
+            ready.await.unwrap();
+            assert!(!producer.try_retire_quiescent());
+            producer.poison();
+            let mut drain = Box::pin(producer.wait_durable_drained());
+            if cancel_caller {
+                drop(lookup);
+                assert!(futures::poll!(drain.as_mut()).is_pending());
+                release.send(()).unwrap();
+            } else {
+                assert!(futures::poll!(drain.as_mut()).is_pending());
+                release.send(()).unwrap();
+                assert_eq!(
+                    lookup.await,
+                    Err(DurableStreamProducerError::RecoveryRequired)
+                );
+            }
+            drain.await;
+            assert_eq!(
+                producer
+                    .with_metadata_activity(async { panic!("retired lookup ran") })
+                    .await,
+                Err::<(), _>(DurableStreamProducerError::RecoveryRequired)
+            );
+        }
     }
 
     pub(crate) struct TestIdentity {
@@ -8589,6 +10526,69 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[timeout("30s")]
+    async fn deletion_cascade_does_not_wait_for_a_stalled_live_reader() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, Some(1)).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let mut reader = live
+            .bus(handle.stream_id)
+            .unwrap()
+            .subscribe()
+            .await
+            .unwrap();
+        let first_offset = live
+            .write_items(handle.stream_id, 0, StreamItemsPayloadV1::PackedU8(vec![7]))
+            .await
+            .unwrap()
+            .value[0];
+        let key = attachment_key(&identity, handle.stream_id);
+        live.prepare_attachment(key.clone(), 100).await.unwrap();
+        live.activate_attachment(key.clone(), 110).await.unwrap();
+        let probe = CascadeConsumerProbe {
+            status: ConsumerAttachmentStatus::Active,
+            inspection: std::sync::Mutex::new(ConsumerJournalInspection {
+                source_offsets: Vec::new(),
+                source_unavailable: None,
+            }),
+            overlay_commits: AtomicU64::new(0),
+        };
+
+        tokio::time::timeout(Duration::from_secs(5), live.cascade_deletion(200, &probe))
+            .await
+            .expect("deletion waited for live delivery instead of durability")
+            .unwrap();
+        assert_eq!(probe.overlay_commits.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            probe.inspection.lock().unwrap().source_unavailable,
+            Some(first_offset)
+        );
+        let restarted = producer(oplog, &identity, None).await;
+        assert_eq!(
+            restarted
+                .deletion_diagnostics()
+                .await
+                .unwrap()
+                .cascade_completed,
+            vec![(
+                key,
+                StreamCascadeDependentResultV1::SourceUnavailable {
+                    first_unjournaled_offset: first_offset,
+                }
+            )]
+        );
+        assert_eq!(reader.recv().await.unwrap().offset, first_offset);
+        let terminal = reader.recv().await.unwrap();
+        assert!(terminal.offset > first_offset);
+        assert!(terminal.payload.is_terminal());
+    }
+
+    #[test]
     async fn cascade_is_durable_idempotent_and_overlays_the_first_unjournaled_position() {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
@@ -9337,6 +11337,1413 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[test_r::timeout("30s")]
+    async fn closed_export_reports_terminal_state_before_final_page() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+        let identity = identity();
+        let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let offsets = live
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![3, 9, 17, 41]),
+            )
+            .await
+            .unwrap()
+            .value;
+        live.end(handle.stream_id, 4, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        let read = live
+            .read_by_handle(StreamHandleReadRequestV1 {
+                handle,
+                after: None,
+                max_items: 2,
+                max_bytes: 10,
+                wait_millis: 0,
+            })
+            .await
+            .unwrap();
+        assert!(read.closed);
+        assert!(!read.cancelled);
+        assert_eq!(read.events.len(), 2);
+        assert_eq!(read.next_offset, Some(offsets[1]));
+        assert!(read.next_offset < read.head_offset);
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn blocked_terminal_publication_wakes_export_reader_after_durable_commit() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+        let identity = identity();
+        let live = producer(Arc::new(TestOplog::default()), &identity, Some(1)).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let bus = live.stream_bus(handle.stream_id).await.unwrap();
+        let mut reader = bus.subscribe().await.unwrap();
+        let offset = live
+            .write_items(handle.stream_id, 0, StreamItemsPayloadV1::PackedU8(vec![3]))
+            .await
+            .unwrap()
+            .value[0];
+
+        let export = live.read_by_handle(StreamHandleReadRequestV1 {
+            handle: handle.clone(),
+            after: Some(offset),
+            max_items: 2,
+            max_bytes: 10,
+            wait_millis: 5_000,
+        });
+        tokio::pin!(export);
+        assert!(futures::poll!(&mut export).is_pending());
+
+        let terminal = tokio::spawn({
+            let live = live.clone();
+            async move { live.end(handle.stream_id, 1, StreamEndResultV1::Ok).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let (_, closed, _) = live.stream_head(&handle).await.unwrap();
+                if closed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("terminal commit did not finish");
+        assert!(
+            !terminal.is_finished(),
+            "publication must remain backpressured"
+        );
+
+        let read = tokio::time::timeout(std::time::Duration::from_millis(100), export)
+            .await
+            .expect("durably committed terminal must wake the export reader")
+            .unwrap();
+        assert!(read.closed);
+        assert_eq!(read.events.len(), 1);
+        reader.recv().await.unwrap();
+        terminal.await.unwrap().unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn unattached_slot_reads_paginate_and_wake_both_readers() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let key = attachment_key(&identity, handle.stream_id);
+        live.prepare_attachment(key.clone(), 100).await.unwrap();
+        live.activate_attachment(key.clone(), 101).await.unwrap();
+        let offsets = live
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![3, 9, 17]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let request = StreamHandleReadRequestV1 {
+            handle: handle.clone(),
+            after: None,
+            max_items: 2,
+            max_bytes: 10,
+            wait_millis: 0,
+        };
+        let first = live.read_by_handle(request.clone()).await.unwrap();
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|event| event.payload.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                CommittedProducerStreamEventPayloadV1::PackedU8(3),
+                CommittedProducerStreamEventPayloadV1::PackedU8(9)
+            ]
+        );
+        assert_eq!(first.next_offset, Some(offsets[1]));
+        assert_eq!(first.head_offset, Some(offsets[2]));
+        let byte_limited = live
+            .read_by_handle(StreamHandleReadRequestV1 {
+                max_items: 20,
+                max_bytes: 1,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(byte_limited.events.len(), 1);
+        assert_eq!(byte_limited.next_offset, Some(offsets[0]));
+        let head = live
+            .read_by_handle(StreamHandleReadRequestV1 {
+                max_items: 0,
+                max_bytes: 0,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert!(head.events.is_empty());
+        assert_eq!(head.next_offset, None);
+        assert_eq!(head.head_offset, Some(offsets[2]));
+        for after in [
+            offsets[0],
+            offsets[2],
+            StreamOffsetV1::new(OplogIndex::from_u64(999), 0),
+        ] {
+            let head = live
+                .read_by_handle(StreamHandleReadRequestV1 {
+                    after: Some(after),
+                    max_items: 0,
+                    max_bytes: 0,
+                    ..request.clone()
+                })
+                .await
+                .unwrap();
+            assert_eq!(head.next_offset, Some(after));
+            assert_eq!(head.head_offset, Some(offsets[2]));
+            assert!(head.events.is_empty());
+        }
+        let wait = StreamHandleReadRequestV1 {
+            after: Some(offsets[2]),
+            wait_millis: 5_000,
+            ..request.clone()
+        };
+        let bus = live.stream_bus(handle.stream_id).await.unwrap();
+        let mut attached_readers = Vec::new();
+        for _ in 0..golem_common::base_model::durable_stream::MAX_LIVE_READERS_PER_STREAM {
+            attached_readers.push(bus.subscribe().await.unwrap());
+        }
+        let left = live.read_by_handle(wait.clone());
+        let right = live.read_by_handle(wait);
+        tokio::pin!(left, right);
+        assert!(futures::poll!(&mut left).is_pending());
+        assert!(futures::poll!(&mut right).is_pending());
+        assert!(matches!(
+            bus.subscribe().await,
+            Err(super::DurableLiveStreamBusError::ReaderLimit)
+        ));
+        let next = live
+            .write_items(
+                handle.stream_id,
+                3,
+                StreamItemsPayloadV1::PackedU8(vec![41]),
+            )
+            .await
+            .unwrap()
+            .value[0];
+        let (left, right) = tokio::join!(left, right);
+        let left = left.unwrap();
+        assert_eq!(left, right.unwrap());
+        assert_eq!(left.events.len(), 1);
+        assert_eq!(
+            left.events[0].payload,
+            CommittedProducerStreamEventPayloadV1::PackedU8(41)
+        );
+        assert_eq!(left.next_offset, Some(next));
+        assert_eq!(live.index.lock().await.attachments.len(), 1);
+        let attached = live
+            .read_attached_segment(&key, &handle, 102, None, None)
+            .await
+            .unwrap();
+        assert_eq!(attached.len(), 4);
+        let beyond = StreamOffsetV1::new(
+            OplogIndex::from_u64(next.producer_oplog_index().as_u64() + 100),
+            0,
+        );
+        let result = live
+            .read_by_handle(StreamHandleReadRequestV1 {
+                after: Some(beyond),
+                ..request
+            })
+            .await
+            .unwrap();
+        assert!(result.events.is_empty());
+        assert_eq!(result.next_offset, Some(beyond));
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn future_cursor_live_reads_wait_for_deadline_or_closure() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+        let identity = identity();
+        let live = producer(Arc::new(TestOplog::default()), &identity, None).await;
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let request = StreamHandleReadRequestV1 {
+            handle: handle.clone(),
+            after: Some(StreamOffsetV1::new(OplogIndex::from_u64(999), 0)),
+            max_items: 10,
+            max_bytes: 100,
+            wait_millis: 100,
+        };
+        let started = tokio::time::Instant::now();
+        let timed_out = live.read_by_handle(request.clone()).await.unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(timed_out.events.is_empty());
+        assert_eq!(timed_out.next_offset, request.after);
+        assert!(!timed_out.closed);
+
+        let mut waiting = Box::pin(live.read_by_handle(StreamHandleReadRequestV1 {
+            wait_millis: 5_000,
+            ..request.clone()
+        }));
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        live.write_items(handle.stream_id, 0, StreamItemsPayloadV1::PackedU8(vec![7]))
+            .await
+            .unwrap();
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        live.end(handle.stream_id, 1, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        let closed = waiting.await.unwrap();
+        assert!(closed.closed);
+        assert!(closed.events.is_empty());
+        assert_eq!(closed.next_offset, request.after);
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn normal_and_external_batches_publish_in_commit_order_after_caller_abort() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog, &identity, Some(1)).await;
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(0)],
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let bus = live.bus(handle.stream_id).unwrap();
+        let mut reader = bus.subscribe().await.unwrap();
+        let first = tokio::spawn({
+            let live = live.clone();
+            let id = handle.stream_id;
+            async move {
+                live.write_items(id, 0, StreamItemsPayloadV1::PackedU8(vec![3, 7, 19]))
+                    .await
+            }
+        });
+        while live.stream_head(&handle).await.unwrap().0.is_none() {
+            tokio::task::yield_now().await;
+        }
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let second = live.append_external_input(
+            &identity.invocation,
+            handle.stream_id,
+            Some(StreamItemsPayloadV1::PackedU8(vec![31, 44])),
+            true,
+            None,
+        );
+        let read = async {
+            let mut events = Vec::new();
+            for _ in 0..6 {
+                events.push(reader.recv().await.unwrap());
+            }
+            events
+        };
+        let (accepted, events) = tokio::join!(second, read);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.payload.payload.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                CommittedProducerStreamEventPayloadV1::PackedU8(3),
+                CommittedProducerStreamEventPayloadV1::PackedU8(7),
+                CommittedProducerStreamEventPayloadV1::PackedU8(19),
+                CommittedProducerStreamEventPayloadV1::PackedU8(31),
+                CommittedProducerStreamEventPayloadV1::PackedU8(44),
+                CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok),
+            ]
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].offset < pair[1].offset)
+        );
+        assert_eq!(
+            accepted.unwrap(),
+            ExternalAppendOutcomeV1::Accepted(events[5].offset)
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+
+        for fail_after_receipt in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let fail = Arc::new(AtomicBool::new(false));
+            let commit: DurableStreamCommit = Arc::new({
+                let oplog = oplog.clone();
+                let fail = fail.clone();
+                move |receipt| {
+                    let oplog = oplog.clone();
+                    let fail = fail.clone();
+                    Box::pin(async move {
+                        oplog.commit(CommitLevel::Always).await;
+                        assert!(
+                            fail_after_receipt || !fail.load(Ordering::Acquire),
+                            "injected failure before durability receipt"
+                        );
+                        if let Some(receipt) = receipt {
+                            let _ = receipt.send(());
+                        }
+                        assert!(
+                            !fail.load(Ordering::Acquire),
+                            "injected failure after durability receipt"
+                        );
+                    })
+                }
+            });
+            let live = DurableStreamProducer::load_with_commit(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+                commit,
+            )
+            .await
+            .unwrap();
+            let handle = live
+                .register(root_registration(&identity))
+                .await
+                .unwrap()
+                .value;
+            let payload = StreamItemsPayloadV1::PackedU8(vec![13, 79]);
+            fail.store(true, Ordering::Release);
+            assert!(
+                live.write_items(handle.stream_id, 0, payload.clone())
+                    .await
+                    .is_err()
+            );
+            let request = StreamHandleReadRequestV1 {
+                handle: handle.clone(),
+                after: None,
+                max_items: 16,
+                max_bytes: 4096,
+                wait_millis: 0,
+            };
+            assert!(
+                live.read_by_handle(request.clone()).await.is_err(),
+                "cached reads must not conceal an uncertain commit outcome"
+            );
+            assert!(
+                live.write_items(handle.stream_id, 0, payload.clone())
+                    .await
+                    .is_err()
+            );
+
+            let recovered = DurableStreamProducer::load(
+                oplog,
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let read = recovered.read_by_handle(request).await.unwrap();
+            assert_eq!(
+                read.events
+                    .iter()
+                    .map(|event| event.payload.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    CommittedProducerStreamEventPayloadV1::PackedU8(13),
+                    CommittedProducerStreamEventPayloadV1::PackedU8(79)
+                ]
+            );
+            let retry = recovered
+                .write_items(handle.stream_id, 0, payload)
+                .await
+                .unwrap();
+            assert!(retry.replayed);
+            assert_eq!(
+                retry.value,
+                read.events
+                    .iter()
+                    .map(|event| event.offset)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
+        use golem_common::model::durable_stream::StreamHandleReadRequestV1;
+
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let block_commit = Arc::new(AtomicBool::new(false));
+        let committed = Arc::new(Notify::new());
+        let commit: DurableStreamCommit = Arc::new({
+            let oplog = oplog.clone();
+            let block_commit = block_commit.clone();
+            let committed = committed.clone();
+            move |published| {
+                let oplog = oplog.clone();
+                let block_commit = block_commit.clone();
+                let committed = committed.clone();
+                Box::pin(async move {
+                    oplog.commit(CommitLevel::Always).await;
+                    if let Some(published) = published {
+                        let _ = published.send(());
+                    }
+                    if block_commit.load(Ordering::SeqCst) {
+                        committed.notify_waiters();
+                        futures::future::pending().await
+                    }
+                })
+            }
+        });
+        let live = DurableStreamProducer::load_with_commit(
+            oplog,
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let handle = live
+            .register(root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+
+        block_commit.store(true, Ordering::SeqCst);
+        let notification = committed.notified();
+        let cancellation = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.cancel_open(
+                    handle.stream_id,
+                    StreamCancelRoleV1::OutputConsumer,
+                    StreamCancelReasonV1::Cancelled,
+                    None,
+                )
+                .await
+            }
+        });
+        notification.await;
+        cancellation.abort();
+        assert!(cancellation.await.unwrap_err().is_cancelled());
+
+        let read = live
+            .read_by_handle(StreamHandleReadRequestV1 {
+                handle,
+                after: None,
+                max_items: 0,
+                max_bytes: 0,
+                wait_millis: 0,
+            })
+            .await
+            .unwrap();
+        assert!(
+            read.closed,
+            "durably committed cancellation was not hydrated"
+        );
+        assert!(
+            read.cancelled,
+            "durably committed cancellation was not hydrated"
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn external_append_retry_after_commit_cancellation_is_duplicate() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let block_commit = Arc::new(AtomicBool::new(false));
+        let committed = Arc::new(Notify::new());
+        let commit: DurableStreamCommit = Arc::new({
+            let oplog = oplog.clone();
+            let block_commit = block_commit.clone();
+            let committed = committed.clone();
+            move |published| {
+                let oplog = oplog.clone();
+                let block_commit = block_commit.clone();
+                let committed = committed.clone();
+                Box::pin(async move {
+                    oplog.commit(CommitLevel::Always).await;
+                    if let Some(published) = published {
+                        let _ = published.send(());
+                    }
+                    if block_commit.load(Ordering::SeqCst) {
+                        committed.notify_waiters();
+                        futures::future::pending().await
+                    }
+                })
+            }
+        });
+        let live = DurableStreamProducer::load_with_commit(
+            oplog,
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(0)],
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let external = ExternalProducerV1 {
+            id: ExternalProducerIdV1::Client("retrying-producer".into()),
+            epoch: 1,
+            sequence: 0,
+        };
+
+        block_commit.store(true, Ordering::SeqCst);
+        let notification = committed.notified();
+        let append = tokio::spawn({
+            let live = live.clone();
+            let session = identity.invocation.clone();
+            let external = external.clone();
+            async move {
+                live.append_external_input(
+                    &session,
+                    handle.stream_id,
+                    Some(StreamItemsPayloadV1::PackedU8(vec![7])),
+                    false,
+                    Some(external),
+                )
+                .await
+            }
+        });
+        notification.await;
+        append.abort();
+        assert!(append.await.unwrap_err().is_cancelled());
+        block_commit.store(false, Ordering::SeqCst);
+
+        let retry = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![7])),
+                false,
+                Some(external),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(retry, ExternalAppendOutcomeV1::Duplicate { .. }),
+            "durably committed producer sequence was appended again: {retry:?}"
+        );
+    }
+
+    // Provisional bug-finder test: external input records must retain their stream owner.
+    #[test]
+    async fn provisional_external_append_retains_entity_attribution() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let attribution = Some(OplogIndex::from_u64(71));
+        let mut request = registration(
+            &identity,
+            StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodInput,
+                recursive_value_path: vec![StreamValuePathStepV1::TupleElement(0)],
+            },
+            StreamSourceKindV1::ExternalInlineInput,
+        );
+        request.entity_parent_start_index = attribution;
+        let handle = live.register(request).await.unwrap().value;
+        let before = oplog.current_oplog_index().await;
+
+        live.append_external_input(
+            &identity.invocation,
+            handle.stream_id,
+            Some(StreamItemsPayloadV1::PackedU8(vec![7])),
+            true,
+            Some(ExternalProducerV1 {
+                id: ExternalProducerIdV1::Client("attributed-producer".into()),
+                epoch: 1,
+                sequence: 0,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let after = oplog.current_oplog_index().await;
+        for position in before.next().as_u64()..=after.as_u64() {
+            assert_eq!(
+                oplog
+                    .read(OplogIndex::from_u64(position))
+                    .await
+                    .entity_parent_start_index(),
+                attribution
+            );
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reload() {
+        for sent_item in [false, true] {
+            for own_end in [false, true] {
+                let identity = identity();
+                let oplog = Arc::new(TestOplog::default());
+                let live = producer(oplog.clone(), &identity, None).await;
+                let handle = live
+                    .register(registration(
+                        &identity,
+                        StreamRegistrationCoordinateV1::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKindV1::MethodInput,
+                            recursive_value_path: vec![StreamValuePathStepV1::TupleElement(0)],
+                        },
+                        StreamSourceKindV1::ExternalInlineInput,
+                    ))
+                    .await
+                    .unwrap()
+                    .value;
+                if sent_item {
+                    live.write_attached_items_with_nested(
+                        &identity.invocation,
+                        handle.stream_id,
+                        0,
+                        StreamItemsPayloadV1::PackedU8(vec![13]),
+                        Vec::new(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let end_sequence = u64::from(sent_item);
+                live.append_external_input(
+                    &identity.invocation,
+                    handle.stream_id,
+                    None,
+                    true,
+                    own_end.then_some(ExternalProducerV1 {
+                        id: ExternalProducerIdV1::Attached,
+                        epoch: 0,
+                        sequence: end_sequence,
+                    }),
+                )
+                .await
+                .unwrap();
+                drop(live);
+
+                let recovered = producer(oplog.clone(), &identity, None).await;
+                let tip = oplog.current_oplog_index().await;
+                let error = recovered
+                    .write_attached_items_with_nested(
+                        &identity.invocation,
+                        handle.stream_id,
+                        end_sequence + u64::from(own_end),
+                        StreamItemsPayloadV1::PackedU8(vec![17]),
+                        Vec::new(),
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error,
+                    if own_end {
+                        DurableStreamProducerError::FencedByTerminal(
+                            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok),
+                        )
+                    } else {
+                        DurableStreamProducerError::ClosedByOtherProducer
+                    }
+                );
+                if !own_end {
+                    assert_eq!(
+                        recovered
+                            .write_attached_items_with_nested(
+                                &identity.invocation,
+                                handle.stream_id,
+                                end_sequence + 2,
+                                StreamItemsPayloadV1::PackedU8(vec![23]),
+                                Vec::new(),
+                            )
+                            .await
+                            .unwrap_err(),
+                        DurableStreamProducerError::ClosedByOtherProducer,
+                        "all frames already in flight must be discarded after a foreign close",
+                    );
+                }
+                if own_end {
+                    assert_eq!(
+                        recovered
+                            .write_attached_items_with_nested(
+                                &identity.invocation,
+                                handle.stream_id,
+                                end_sequence,
+                                StreamItemsPayloadV1::PackedU8(vec![19]),
+                                Vec::new(),
+                            )
+                            .await
+                            .unwrap_err(),
+                        DurableStreamProducerError::EventConflict,
+                    );
+                }
+                assert_eq!(oplog.current_oplog_index().await, tip);
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retry() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(98)],
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+
+        live.write_attached_items_with_nested(
+            &identity.invocation,
+            handle.stream_id,
+            0,
+            StreamItemsPayloadV1::PackedU8(vec![10]),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        let client = ExternalProducerV1 {
+            id: ExternalProducerIdV1::Client("multi".into()),
+            epoch: 0,
+            sequence: 0,
+        };
+        let accepted = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::Values(vec![vec![20], vec![30]])),
+                false,
+                Some(client.clone()),
+            )
+            .await
+            .unwrap();
+        live.write_attached_items_with_nested(
+            &identity.invocation,
+            handle.stream_id,
+            1,
+            StreamItemsPayloadV1::PackedU8(vec![40]),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        drop(live);
+
+        let recovered = producer(oplog.clone(), &identity, None).await;
+        let ExternalAppendOutcomeV1::Accepted(original_offset) = accepted else {
+            panic!("client append was not accepted")
+        };
+        assert_eq!(
+            recovered
+                .append_external_input(
+                    &identity.invocation,
+                    handle.stream_id,
+                    Some(StreamItemsPayloadV1::Values(vec![vec![20], vec![30]])),
+                    false,
+                    Some(client),
+                )
+                .await
+                .unwrap(),
+            ExternalAppendOutcomeV1::Duplicate {
+                offset: original_offset,
+                highest_sequence: Some(0),
+            }
+        );
+        assert_eq!(
+            recovered
+                .attached_input_high_water(&identity.invocation, handle.stream_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .highest_contiguous_sequence,
+            1
+        );
+        let retry = recovered
+            .write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                1,
+                StreamItemsPayloadV1::PackedU8(vec![40]),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        assert!(retry.replayed);
+        assert!(matches!(
+            recovered
+                .write_attached_items_with_nested(
+                    &identity.invocation,
+                    handle.stream_id,
+                    1,
+                    StreamItemsPayloadV1::PackedU8(vec![41]),
+                    Vec::new(),
+                )
+                .await,
+            Err(DurableStreamProducerError::EventConflict)
+        ));
+        recovered
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                None,
+                true,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Attached,
+                    epoch: 0,
+                    sequence: 2,
+                }),
+            )
+            .await
+            .unwrap();
+        let events = recovered.read_segment(&handle, None, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.producer_sequence)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4]
+        );
+        assert!(matches!(
+            events[0].payload,
+            CommittedProducerStreamEventPayloadV1::PackedU8(10)
+        ));
+        assert_eq!(
+            events[1].payload,
+            CommittedProducerStreamEventPayloadV1::Value(vec![20])
+        );
+        assert_eq!(
+            events[2].payload,
+            CommittedProducerStreamEventPayloadV1::Value(vec![30])
+        );
+        assert!(matches!(
+            events[3].payload,
+            CommittedProducerStreamEventPayloadV1::PackedU8(40)
+        ));
+        assert!(events[4].is_terminal());
+
+        let item_records = oplog
+            .read_exact(
+                OplogIndex::INITIAL,
+                oplog.current_oplog_index().await.as_u64(),
+            )
+            .await
+            .into_iter()
+            .filter(|(_, entry)| matches!(entry, OplogEntry::StreamItems { .. }))
+            .count();
+        assert_eq!(
+            item_records, 4,
+            "each value append must have its own Items record"
+        );
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_writes() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(97)],
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let (attached, http) = tokio::join!(
+            live.write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![10, 11]),
+                Vec::new(),
+            ),
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::Values(vec![
+                    vec![20],
+                    vec![30],
+                    vec![31]
+                ])),
+                false,
+                None,
+            ),
+        );
+        assert_eq!(attached.unwrap().value.len(), 2);
+        assert!(matches!(
+            http.unwrap(),
+            ExternalAppendOutcomeV1::Accepted(_)
+        ));
+        let nested = registration(
+            &identity,
+            StreamRegistrationCoordinateV1::Nested {
+                parent_stream_id: handle.stream_id,
+                parent_producer_sequence: 2,
+                recursive_value_path: vec![StreamValuePathStepV1::TupleElement(0)],
+            },
+            StreamSourceKindV1::Nested,
+        );
+        let payload = StreamItemsPayloadV1::Values(vec![vec![40]]);
+        let fresh = live
+            .write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                2,
+                payload.clone(),
+                vec![nested.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(!fresh.replayed);
+        assert_eq!(
+            live.attached_global_sequence(&identity.invocation, handle.stream_id, 2)
+                .await
+                .unwrap(),
+            5
+        );
+        let child = live
+            .nested_handles(handle.stream_id, 5)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        live.append_external_input(
+            &identity.invocation,
+            child.stream_id,
+            None,
+            true,
+            Some(ExternalProducerV1 {
+                id: ExternalProducerIdV1::Attached,
+                epoch: 0,
+                sequence: 0,
+            }),
+        )
+        .await
+        .unwrap();
+        drop(live);
+        let recovered = producer(oplog, &identity, None).await;
+        let retry = recovered
+            .write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                2,
+                payload,
+                vec![nested],
+            )
+            .await
+            .unwrap();
+        assert!(retry.replayed);
+        assert_eq!(retry.value, fresh.value);
+        assert_eq!(
+            recovered.nested_handles(handle.stream_id, 5).await.unwrap(),
+            vec![child]
+        );
+        let high_water = recovered
+            .attached_input_high_water(&identity.invocation, handle.stream_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(high_water.highest_contiguous_sequence, 2);
+        assert!(!high_water.terminal);
+        assert!(matches!(
+            recovered
+                .append_external_input(
+                    &identity.invocation,
+                    handle.stream_id,
+                    None,
+                    true,
+                    Some(ExternalProducerV1 {
+                        id: ExternalProducerIdV1::Attached,
+                        epoch: 0,
+                        sequence: 2
+                    }),
+                )
+                .await,
+            Err(DurableStreamProducerError::EventConflict)
+        ));
+        recovered
+            .append_external_input(&identity.invocation, handle.stream_id, None, true, None)
+            .await
+            .unwrap();
+        let high_water = recovered
+            .attached_input_high_water(&identity.invocation, handle.stream_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(high_water.highest_contiguous_sequence, 3);
+        assert!(high_water.terminal);
+        let events = recovered.read_segment(&handle, None, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.producer_sequence)
+                .collect::<Vec<_>>(),
+            (0..7).collect::<Vec<_>>()
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].offset < pair[1].offset)
+        );
+    }
+
+    #[test]
+    async fn external_append_producer_retries_epochs_close_and_recovery() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(99)],
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let p0 = ExternalProducerV1 {
+            id: ExternalProducerIdV1::Client("p1".into()),
+            epoch: 1,
+            sequence: 0,
+        };
+        let accepted = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![1, 2])),
+                false,
+                Some(p0.clone()),
+            )
+            .await
+            .unwrap();
+        let ExternalAppendOutcomeV1::Accepted(original) = accepted else {
+            panic!()
+        };
+        let (a, b) = tokio::join!(
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![1, 2])),
+                false,
+                Some(p0.clone())
+            ),
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![1, 2])),
+                false,
+                Some(p0)
+            ),
+        );
+        let duplicate = ExternalAppendOutcomeV1::Duplicate {
+            offset: original,
+            highest_sequence: Some(0),
+        };
+        assert_eq!(a.unwrap(), duplicate);
+        assert_eq!(b.unwrap(), duplicate);
+        let newer = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![3])),
+                false,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p1".into()),
+                    epoch: 1,
+                    sequence: 1,
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(newer, ExternalAppendOutcomeV1::Accepted(_)));
+        assert_eq!(
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![1, 2])),
+                false,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p1".into()),
+                    epoch: 1,
+                    sequence: 0,
+                }),
+            )
+            .await
+            .unwrap(),
+            ExternalAppendOutcomeV1::Duplicate {
+                offset: original,
+                highest_sequence: Some(1),
+            }
+        );
+        assert_eq!(
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![3])),
+                false,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p1".into()),
+                    epoch: 1,
+                    sequence: 3
+                })
+            )
+            .await
+            .unwrap(),
+            ExternalAppendOutcomeV1::SeqGap {
+                expected: 2,
+                received: 3
+            }
+        );
+        assert!(matches!(
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![3])),
+                false,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p1".into()),
+                    epoch: 2,
+                    sequence: 0
+                })
+            )
+            .await
+            .unwrap(),
+            ExternalAppendOutcomeV1::Accepted(_)
+        ));
+        assert_eq!(
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![4])),
+                false,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p1".into()),
+                    epoch: 1,
+                    sequence: 1
+                })
+            )
+            .await
+            .unwrap(),
+            ExternalAppendOutcomeV1::EpochFenced(2)
+        );
+        let normal = live
+            .write_items(handle.stream_id, 4, StreamItemsPayloadV1::PackedU8(vec![8]))
+            .await
+            .unwrap()
+            .value[0];
+        let closed = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![4])),
+                true,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p2".into()),
+                    epoch: 0,
+                    sequence: 0,
+                }),
+            )
+            .await
+            .unwrap();
+        let ExternalAppendOutcomeV1::Accepted(closed) = closed else {
+            panic!()
+        };
+        assert!(original < normal && normal < closed);
+        assert_eq!(
+            live.append_external_input(&identity.invocation, handle.stream_id, None, true, None)
+                .await
+                .unwrap(),
+            ExternalAppendOutcomeV1::Duplicate {
+                offset: closed,
+                highest_sequence: None,
+            }
+        );
+        drop(live);
+        let recovered = producer(oplog, &identity, None).await;
+        assert_eq!(
+            recovered
+                .append_external_input(
+                    &identity.invocation,
+                    handle.stream_id,
+                    Some(StreamItemsPayloadV1::PackedU8(vec![9])),
+                    false,
+                    None
+                )
+                .await
+                .unwrap(),
+            ExternalAppendOutcomeV1::Closed
+        );
+    }
+
+    #[test]
+    async fn close_from_a_different_producer_is_not_reported_as_duplicate() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let producer_tuple = |id: &str, sequence| ExternalProducerV1 {
+            id: ExternalProducerIdV1::Client(id.into()),
+            epoch: 0,
+            sequence,
+        };
+        live.append_external_input(
+            &identity.invocation,
+            handle.stream_id,
+            Some(StreamItemsPayloadV1::PackedU8(vec![1])),
+            false,
+            Some(producer_tuple("first", 0)),
+        )
+        .await
+        .unwrap();
+        let accepted = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                None,
+                true,
+                Some(producer_tuple("first", 1)),
+            )
+            .await
+            .unwrap();
+        let ExternalAppendOutcomeV1::Accepted(offset) = accepted else {
+            panic!("first producer close must be accepted");
+        };
+        let before = oplog.current_oplog_index().await;
+        let recovered = producer(oplog.clone(), &identity, None).await;
+
+        for current in [&live, &recovered] {
+            assert_eq!(
+                current
+                    .append_external_input(
+                        &identity.invocation,
+                        handle.stream_id,
+                        None,
+                        true,
+                        Some(producer_tuple("first", 1)),
+                    )
+                    .await
+                    .unwrap(),
+                ExternalAppendOutcomeV1::Duplicate {
+                    offset,
+                    highest_sequence: Some(1),
+                }
+            );
+            for request in [
+                producer_tuple("different", 0),
+                producer_tuple("first", 2),
+                ExternalProducerV1 {
+                    epoch: 1,
+                    ..producer_tuple("first", 1)
+                },
+            ] {
+                assert_eq!(
+                    current
+                        .append_external_input(
+                            &identity.invocation,
+                            handle.stream_id,
+                            None,
+                            true,
+                            Some(request),
+                        )
+                        .await
+                        .unwrap(),
+                    ExternalAppendOutcomeV1::Closed
+                );
+            }
+            assert_eq!(
+                current
+                    .append_external_input(
+                        &identity.invocation,
+                        handle.stream_id,
+                        Some(StreamItemsPayloadV1::PackedU8(vec![1])),
+                        false,
+                        Some(producer_tuple("first", 0)),
+                    )
+                    .await
+                    .unwrap(),
+                ExternalAppendOutcomeV1::Closed
+            );
+            assert_eq!(oplog.current_oplog_index().await, before);
+        }
+    }
+
+    #[test]
     async fn producer_frames_after_earlier_input_consumer_cancel_are_fenced() {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
@@ -9661,10 +13068,12 @@ pub(crate) mod tests {
                 ProducerOutputRegistrationV1 {
                     transport_stream_id: 31,
                     source: ProducerOutputSourceV1::New(request.clone()),
+                    cancellation_epoch: None,
                 },
                 ProducerOutputRegistrationV1 {
                     transport_stream_id: 12,
                     source: ProducerOutputSourceV1::Existing(existing.clone()),
+                    cancellation_epoch: None,
                 },
             ]
         };
@@ -9700,6 +13109,96 @@ pub(crate) mod tests {
     }
 
     #[test]
+    async fn result_registration_cancels_outputs_before_publishing_the_result() {
+        for new_output in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let producer = producer(oplog.clone(), &identity, None).await;
+            let mut request = root_registration(&identity);
+            request.coordinate = StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: vec![StreamValuePathStepV1::RecordField(0)],
+            };
+            let existing = producer.register(request.clone()).await.unwrap().value;
+            producer
+                .end(existing.stream_id, 0, StreamEndResultV1::Ok)
+                .await
+                .unwrap();
+            request.coordinate = StreamRegistrationCoordinateV1::Root {
+                invocation_id: identity.invocation.clone(),
+                root_kind: StreamRootKindV1::MethodResult,
+                recursive_value_path: vec![StreamValuePathStepV1::RecordField(1)],
+            };
+            let open = if new_output {
+                None
+            } else {
+                Some(producer.register(request.clone()).await.unwrap().value)
+            };
+            let outputs = || {
+                vec![
+                    ProducerOutputRegistrationV1 {
+                        transport_stream_id: 13,
+                        source: match &open {
+                            Some(handle) => ProducerOutputSourceV1::Existing(handle.clone()),
+                            None => ProducerOutputSourceV1::New(request.clone()),
+                        },
+                        cancellation_epoch: Some(7),
+                    },
+                    ProducerOutputRegistrationV1 {
+                        transport_stream_id: 29,
+                        source: ProducerOutputSourceV1::Existing(existing.clone()),
+                        cancellation_epoch: Some(7),
+                    },
+                ]
+            };
+            let registered = producer
+                .register_result_streams(identity.invocation.clone(), vec![3], outputs(), None)
+                .await
+                .unwrap();
+            let StreamSessionRecordV1::InvocationResult(result) = &registered.1 else {
+                unreachable!()
+            };
+            let result_index = oplog.current_oplog_index().await;
+            let recovered = DurableStreamProducer::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            for (position, handle) in result.output_streams.iter().enumerate() {
+                let mut reader = recovered.catch_up(handle.clone(), None).await.unwrap();
+                let event = reader.next().await.unwrap().unwrap();
+                assert!(event.offset.producer_oplog_index() < result_index);
+                assert_eq!(
+                    event.payload,
+                    if position == 0 {
+                        CommittedProducerStreamEventPayloadV1::Cancel {
+                            role: StreamCancelRoleV1::OutputConsumer,
+                            reason: StreamCancelReasonV1::Cancelled,
+                            details: None,
+                        }
+                    } else {
+                        CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+                    }
+                );
+                assert!(reader.next().await.unwrap().is_none());
+            }
+            assert_eq!(
+                recovered
+                    .register_result_streams(identity.invocation.clone(), vec![3], outputs(), None)
+                    .await
+                    .unwrap(),
+                registered
+            );
+            assert_eq!(oplog.current_oplog_index().await, result_index);
+        }
+    }
+
+    #[test]
     async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
@@ -9709,10 +13208,12 @@ pub(crate) mod tests {
             ProducerOutputRegistrationV1 {
                 transport_stream_id: 1,
                 source: ProducerOutputSourceV1::New(request.clone()),
+                cancellation_epoch: None,
             },
             ProducerOutputRegistrationV1 {
                 transport_stream_id: 2,
                 source: ProducerOutputSourceV1::New(request),
+                cancellation_epoch: None,
             },
         ];
 
@@ -10322,6 +13823,66 @@ pub(crate) mod tests {
     }
 
     #[test]
+    async fn session_control_batch_validates_before_appending_any_record() {
+        use crate::services::oplog::OplogOps;
+        use golem_common::model::durable_stream::{
+            StreamSessionCancelRequestedRecordV1, StreamSlotTombstonedRecordV1,
+        };
+
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog.clone(), &identity, None).await;
+        let cancel = StreamSessionRecordV1::CancelRequested(StreamSessionCancelRequestedRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: identity.invocation.clone(),
+        });
+        let tombstone = StreamSessionRecordV1::Tombstoned(StreamSlotTombstonedRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: identity.invocation,
+            slot: "$result".into(),
+            role: SessionStreamRoleV1::Output,
+        });
+        let mut malformed = tombstone.clone();
+        if let StreamSessionRecordV1::Tombstoned(record) = &mut malformed {
+            record.slot.clear();
+        }
+        let before = oplog.current_oplog_index().await;
+        let invalid_records = vec![cancel.clone(), malformed];
+        assert!(matches!(
+            producer
+                .run_owned(0, move |owner| async move {
+                    owner
+                        .append_session_records_owned(None, invalid_records)
+                        .await
+                })
+                .await,
+            Err(DurableStreamProducerError::CorruptHistory(_))
+        ));
+        assert_eq!(oplog.current_oplog_index().await, before);
+
+        let records = vec![cancel.clone(), tombstone.clone()];
+        producer
+            .run_owned(0, move |owner| async move {
+                owner.append_session_records_owned(None, records).await
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            oplog.current_oplog_index().await.as_u64(),
+            before.as_u64() + 2
+        );
+        for (offset, expected) in [cancel, tombstone].into_iter().enumerate() {
+            let entry = oplog
+                .read(OplogIndex::from_u64(before.as_u64() + 1 + offset as u64))
+                .await;
+            let OplogEntry::StreamSession { record, .. } = entry else {
+                panic!("expected session control record");
+            };
+            assert_eq!(oplog.download_payload(record).await.unwrap(), expected);
+        }
+    }
+
+    #[test]
     async fn malformed_session_record_is_rejected_at_the_write_boundary() {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
@@ -10576,6 +14137,687 @@ pub(crate) mod tests {
         assert_eq!(oplog.committed_length(), 1);
         assert!(restarted.register(request).await.unwrap().replayed);
         assert_eq!(oplog.committed_length(), 1);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn remote_cancellation_releases_durable_activity_but_retains_owned_admission() {
+        for abandon in [false, true] {
+            let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+            let (started, ready) = oneshot::channel();
+            let (release, released) = oneshot::channel();
+            let caller = tokio::spawn({
+                let live = live.clone();
+                async move {
+                    live.run_lifecycle(7, move |owner| async move {
+                        let routed_owner = owner.clone();
+                        owner.defer_remote_cancellation(async move {
+                            assert!(super::MUTATION_SCOPE.try_with(|_| ()).is_err());
+                            started.send(()).unwrap();
+                            released.await.unwrap();
+                            assert_eq!(
+                                routed_owner
+                                    .run_owned(0, |_| async {
+                                        Ok::<(), DurableStreamProducerError>(())
+                                    })
+                                    .await,
+                                Err(DurableStreamProducerError::RecoveryRequired)
+                            );
+                            Err(DurableStreamProducerError::Oplog("remote failure".into()))
+                        });
+                        Ok::<(), DurableStreamProducerError>(())
+                    })
+                    .await
+                }
+            });
+            ready.await.unwrap();
+            assert!(!caller.is_finished());
+            live.durable_activity.close();
+            tokio::time::timeout(Duration::from_secs(5), live.wait_durable_drained())
+                .await
+                .expect("remote RPC retained local durable activity");
+            assert_eq!(live.lifecycle_operations.available_permits(), 15);
+            assert_eq!(
+                live.lifecycle_operation_bytes.available_permits(),
+                256 * 1024 * 1024 - 7
+            );
+            if abandon {
+                caller.abort();
+            }
+            release.send(()).unwrap();
+            if abandon {
+                assert!(caller.await.unwrap_err().is_cancelled());
+            } else {
+                assert_eq!(
+                    caller.await.unwrap(),
+                    Err(DurableStreamProducerError::Oplog("remote failure".into()))
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while live.lifecycle_operations.available_permits() != 16 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                live.lifecycle_operation_bytes.available_permits(),
+                256 * 1024 * 1024
+            );
+            live.ensure_healthy().unwrap();
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn session_notification_waits_for_status_fold_after_caller_cancellation() {
+        let identity = identity();
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(()).unwrap();
+                    release.notified().await;
+                    folded.store(true, Ordering::Release);
+                })
+            }
+        });
+        let live = DurableStreamProducer::load_with_commit(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let mut notification = Box::pin(live.session_records_changed().notified());
+        notification.as_mut().enable();
+        let (requested, ready) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_owned(0, move |owner| async move {
+                    owner.commit().await;
+                    owner.finish_durable_effect();
+                    owner.notify_session_records_changed();
+                    requested.send(()).unwrap();
+                    Ok::<(), DurableStreamProducerError>(())
+                })
+                .await
+            }
+        });
+        ready.await.unwrap();
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+        assert!(!folded.load(Ordering::Acquire));
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        release.notify_one();
+        notification.await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
+        for lifecycle in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let block = Arc::new(AtomicBool::new(false));
+            let committed = Arc::new(Notify::new());
+            let release = Arc::new(Notify::new());
+            let commit: DurableStreamCommit = Arc::new({
+                let oplog = oplog.clone();
+                let block = block.clone();
+                let committed = committed.clone();
+                let release = release.clone();
+                move |receipt| {
+                    let oplog = oplog.clone();
+                    let block = block.clone();
+                    let committed = committed.clone();
+                    let release = release.clone();
+                    Box::pin(async move {
+                        oplog.commit(CommitLevel::Always).await;
+                        if let Some(receipt) = receipt {
+                            let _ = receipt.send(());
+                        }
+                        if block.swap(false, Ordering::AcqRel) {
+                            committed.notify_one();
+                            release.notified().await;
+                        }
+                    })
+                }
+            });
+            let live = DurableStreamProducer::load_with_commit(
+                oplog,
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                Some(1),
+                commit,
+            )
+            .await
+            .unwrap();
+            let handle = live
+                .register(root_registration(&identity))
+                .await
+                .unwrap()
+                .value;
+            let mut reader = live
+                .bus(handle.stream_id)
+                .unwrap()
+                .subscribe()
+                .await
+                .unwrap();
+            live.write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::Values(vec![vec![3]]),
+            )
+            .await
+            .unwrap();
+            block.store(true, Ordering::Release);
+            let caller = tokio::spawn({
+                let live = live.clone();
+                async move {
+                    if lifecycle {
+                        live.end_open(handle.stream_id, StreamEndResultV1::Ok).await
+                    } else {
+                        live.write_items(
+                            handle.stream_id,
+                            1,
+                            StreamItemsPayloadV1::Values(vec![vec![7]]),
+                        )
+                        .await
+                        .map(|_| ())
+                    }
+                }
+            });
+            committed.notified().await;
+            caller.abort();
+            assert!(caller.await.unwrap_err().is_cancelled());
+            live.durable_activity.close();
+            let drained = live.durable_activity.wait_drained();
+            tokio::pin!(drained);
+            assert!(futures::poll!(&mut drained).is_pending());
+            release.notify_one();
+            tokio::time::timeout(Duration::from_secs(5), &mut drained)
+                .await
+                .expect("durable activity retained a blocked publication");
+            assert_eq!(
+                live.run_owned(0, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+                    .await,
+                Err(DurableStreamProducerError::RecoveryRequired)
+            );
+            if !lifecycle {
+                assert_eq!(live.owned_operations.available_permits(), 15);
+            }
+            let first = reader.recv().await.unwrap();
+            let second = reader.recv().await.unwrap();
+            assert_eq!(
+                first.payload.payload,
+                CommittedProducerStreamEventPayloadV1::Value(vec![3])
+            );
+            assert!(first.offset < second.offset);
+            assert_eq!(
+                second.payload.payload,
+                if lifecycle {
+                    CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+                } else {
+                    CommittedProducerStreamEventPayloadV1::Value(vec![7])
+                }
+            );
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn lifecycle_cancellations_outlive_callers_under_saturated_data_admission() {
+        for saturate_bytes in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let live = producer(oplog.clone(), &identity, Some(1)).await;
+            let mut streams = Vec::new();
+            // More blocked terminals than the lifecycle lane can admit at once, and more
+            // buses than one dispatcher page, exercise both admission and scan progress.
+            for i in 0..33 {
+                let handle = live
+                    .register(registration(
+                        &identity,
+                        StreamRegistrationCoordinateV1::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKindV1::MethodResult,
+                            recursive_value_path: vec![StreamValuePathStepV1::TupleElement(i)],
+                        },
+                        StreamSourceKindV1::InvocationOutput,
+                    ))
+                    .await
+                    .unwrap()
+                    .value;
+                let reader = live
+                    .bus(handle.stream_id)
+                    .unwrap()
+                    .subscribe()
+                    .await
+                    .unwrap();
+                live.write_items(
+                    handle.stream_id,
+                    0,
+                    StreamItemsPayloadV1::Values(vec![vec![3]]),
+                )
+                .await
+                .unwrap();
+                streams.push((handle.stream_id, reader));
+            }
+            let blocked_count = if saturate_bytes { 1 } else { 16 };
+            let mut writes = Vec::new();
+            for (stream_id, _) in streams.iter().take(blocked_count) {
+                let stream_id = *stream_id;
+                let live = live.clone();
+                writes.push(tokio::spawn(async move {
+                    // Charge the whole byte lane without allocating a 256 MiB test payload.
+                    // The nested write retains that reservation through blocked delivery.
+                    live.run_owned(
+                        if saturate_bytes { 256 * 1024 * 1024 } else { 1 },
+                        move |owner| async move {
+                            owner
+                                .write_items(
+                                    stream_id,
+                                    1,
+                                    StreamItemsPayloadV1::Values(vec![vec![7]]),
+                                )
+                                .await
+                        },
+                    )
+                    .await
+                }));
+            }
+            while oplog.committed_length() < (66 + blocked_count) as u64 {
+                tokio::task::yield_now().await;
+            }
+            if saturate_bytes {
+                assert_eq!(live.owned_operation_bytes.available_permits(), 0);
+            } else {
+                assert_eq!(live.owned_operations.available_permits(), 0);
+            }
+            let mut cancellations = Vec::new();
+            for (stream_id, _) in &streams {
+                let stream_id = *stream_id;
+                let live = live.clone();
+                cancellations.push(tokio::spawn(async move {
+                    live.cancel_open(
+                        stream_id,
+                        StreamCancelRoleV1::OutputConsumer,
+                        StreamCancelReasonV1::Cancelled,
+                        None,
+                    )
+                    .await
+                }));
+            }
+            loop {
+                let index = live.index.lock().await;
+                let committed = index
+                    .streams
+                    .values()
+                    .filter(|stream| stream.terminal)
+                    .count();
+                drop(index);
+                if committed == 33 && live.lifecycle_operations.available_permits() == 16 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(writes.iter().all(|write| !write.is_finished()));
+            assert!(cancellations.iter().all(|cancel| !cancel.is_finished()));
+            for cancel in cancellations.iter().step_by(2) {
+                cancel.abort();
+            }
+            for (i, (_, mut reader)) in streams.into_iter().enumerate() {
+                let first = reader.recv().await.unwrap();
+                assert_eq!(
+                    first.payload.payload,
+                    CommittedProducerStreamEventPayloadV1::Value(vec![3])
+                );
+                let mut previous = first.offset;
+                if i < blocked_count {
+                    let second = reader.recv().await.unwrap();
+                    assert_eq!(
+                        second.payload.payload,
+                        CommittedProducerStreamEventPayloadV1::Value(vec![7])
+                    );
+                    assert!(previous < second.offset);
+                    previous = second.offset;
+                }
+                let terminal = reader.recv().await.unwrap();
+                assert!(previous < terminal.offset);
+                assert_eq!(
+                    terminal.payload.payload,
+                    CommittedProducerStreamEventPayloadV1::Cancel {
+                        role: StreamCancelRoleV1::OutputConsumer,
+                        reason: StreamCancelReasonV1::Cancelled,
+                        details: None,
+                    }
+                );
+            }
+            for write in writes {
+                write.await.unwrap().unwrap();
+            }
+            for (i, cancel) in cancellations.into_iter().enumerate() {
+                if i % 2 == 0 {
+                    assert!(cancel.await.unwrap_err().is_cancelled());
+                } else {
+                    cancel.await.unwrap().unwrap();
+                }
+            }
+            assert_eq!(live.owned_operations.available_permits(), 16);
+            assert_eq!(
+                live.owned_operation_bytes.available_permits(),
+                256 * 1024 * 1024
+            );
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
+        use crate::services::oplog::OplogOps;
+        use golem_common::base_model::durable_stream::StreamSessionFinishedRecordV1;
+
+        for error_len in [128 * 1024, 2 * 1024 * 1024] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let live = producer(oplog.clone(), &identity, None).await;
+            let mut handles = Vec::new();
+            for i in 0..3 {
+                handles.push(
+                    live.register(registration(
+                        &identity,
+                        StreamRegistrationCoordinateV1::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKindV1::MethodResult,
+                            recursive_value_path: vec![StreamValuePathStepV1::TupleElement(i)],
+                        },
+                        StreamSourceKindV1::InvocationOutput,
+                    ))
+                    .await
+                    .unwrap()
+                    .value,
+                );
+            }
+            let before = oplog.current_oplog_index().await;
+            let occupied = live
+                .lifecycle_operation_bytes
+                .clone()
+                .acquire_many_owned(256 * 1024 * 1024 - 128)
+                .await
+                .unwrap();
+            let error = vec![71; error_len];
+            let mut finishing = Box::pin(live.finish_session(
+                identity.invocation.clone(),
+                None,
+                Err(error.clone()),
+                StreamCancelReasonV1::InvocationFailed,
+            ));
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(50), &mut finishing)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(oplog.current_oplog_index().await, before);
+            drop(occupied);
+            finishing.await.unwrap();
+            let finished_index = oplog.current_oplog_index().await;
+            assert_eq!(finished_index.as_u64(), before.as_u64() + 4);
+            let OplogEntry::StreamSession { record, .. } = oplog.read(finished_index).await else {
+                panic!("terminal batch must end with Finished");
+            };
+            assert_eq!(
+                oplog.download_payload(record).await.unwrap(),
+                StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: identity.invocation.clone(),
+                    result: Err(error.clone()),
+                })
+            );
+            assert!(
+                live.index
+                    .lock()
+                    .await
+                    .streams
+                    .values()
+                    .all(|stream| stream.terminal_event.is_none())
+            );
+            let restarted = producer(oplog.clone(), &identity, None).await;
+            for current in [&live, &restarted] {
+                for handle in &handles {
+                    let mut reader = current.catch_up(handle.clone(), None).await.unwrap();
+                    assert_eq!(
+                        reader.next().await.unwrap().unwrap().payload,
+                        CommittedProducerStreamEventPayloadV1::End(
+                            StreamEndResultV1::ErrorContext(error.clone())
+                        )
+                    );
+                }
+                let occupied = current
+                    .lifecycle_operation_bytes
+                    .clone()
+                    .acquire_many_owned(256 * 1024 * 1024)
+                    .await
+                    .unwrap();
+                tokio::time::timeout(
+                    Duration::from_secs(1),
+                    current.finish_session(
+                        identity.invocation.clone(),
+                        None,
+                        Err(vec![99; error_len]),
+                        StreamCancelReasonV1::InvocationFailed,
+                    ),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(oplog.current_oplog_index().await, finished_index);
+                drop(occupied);
+            }
+            assert_eq!(
+                live.lifecycle_operation_bytes.available_permits(),
+                256 * 1024 * 1024
+            );
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn session_finish_memory_does_not_scale_with_stream_count() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        for i in 0..MAX_DURABLE_STREAMS_PER_SESSION {
+            live.register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(i as u32)],
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap();
+        }
+        let before = oplog.current_oplog_index().await;
+        let occupied = live
+            .lifecycle_operation_bytes
+            .clone()
+            .acquire_many_owned(256 * 1024 * 1024 - 1024)
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            live.finish_session(
+                identity.invocation.clone(),
+                None,
+                Err(vec![83; 128]),
+                StreamCancelReasonV1::InvocationFailed,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            oplog.current_oplog_index().await.as_u64(),
+            before.as_u64() + MAX_DURABLE_STREAMS_PER_SESSION as u64 + 1
+        );
+        assert!(
+            live.index
+                .lock()
+                .await
+                .streams
+                .values()
+                .all(|stream| stream.terminal && stream.terminal_event.is_none())
+        );
+        drop(occupied);
+
+        live.run_lifecycle(256 * 1024 * 1024 + 1, |owner| async move {
+            assert_eq!(owner.lifecycle_operation_bytes.available_permits(), 0);
+            owner
+                .run_lifecycle(1, |_| async { Ok::<(), DurableStreamProducerError>(()) })
+                .await
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            live.lifecycle_operation_bytes.available_permits(),
+            256 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn multistream_lifecycle_batches_release_admission_before_delivery() {
+        for deleting in [false, true] {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let live = producer(oplog.clone(), &identity, Some(1)).await;
+            let mut readers = Vec::new();
+            for i in 0..3 {
+                let handle = live
+                    .register(registration(
+                        &identity,
+                        StreamRegistrationCoordinateV1::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKindV1::MethodResult,
+                            recursive_value_path: vec![StreamValuePathStepV1::TupleElement(i)],
+                        },
+                        StreamSourceKindV1::InvocationOutput,
+                    ))
+                    .await
+                    .unwrap()
+                    .value;
+                let reader = live
+                    .bus(handle.stream_id)
+                    .unwrap()
+                    .subscribe()
+                    .await
+                    .unwrap();
+                live.write_items(
+                    handle.stream_id,
+                    0,
+                    StreamItemsPayloadV1::Values(vec![vec![i as u8 + 3]]),
+                )
+                .await
+                .unwrap();
+                readers.push(reader);
+            }
+            let finishing = tokio::spawn({
+                let live = live.clone();
+                let session = identity.invocation.clone();
+                async move {
+                    if deleting {
+                        live.commit_deletion_barrier(123, true).await
+                    } else {
+                        live.finish_session(
+                            session,
+                            None,
+                            Err(vec![19, 31]),
+                            StreamCancelReasonV1::InvocationFailed,
+                        )
+                        .await
+                    }
+                }
+            });
+            loop {
+                let index = live.index.lock().await;
+                let committed = if deleting {
+                    index.deleting
+                } else {
+                    index.finished_sessions.contains(&identity.invocation)
+                };
+                drop(index);
+                if committed && live.lifecycle_operations.available_permits() == 16 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            if deleting {
+                tokio::time::timeout(Duration::from_secs(5), finishing)
+                    .await
+                    .expect("deletion waited for terminal delivery")
+                    .unwrap()
+                    .unwrap();
+            } else {
+                assert!(!finishing.is_finished());
+                finishing.abort();
+                assert!(finishing.await.unwrap_err().is_cancelled());
+            }
+            for (i, mut reader) in readers.into_iter().enumerate() {
+                let item = reader.recv().await.unwrap();
+                assert_eq!(
+                    item.payload.payload,
+                    CommittedProducerStreamEventPayloadV1::Value(vec![i as u8 + 3])
+                );
+                let terminal = reader.recv().await.unwrap();
+                assert!(item.offset < terminal.offset);
+                if deleting {
+                    assert!(matches!(
+                        terminal.payload.payload,
+                        CommittedProducerStreamEventPayloadV1::Cancel {
+                            reason: StreamCancelReasonV1::ProducerDeleting,
+                            ..
+                        }
+                    ));
+                } else {
+                    assert_eq!(
+                        terminal.payload.payload,
+                        CommittedProducerStreamEventPayloadV1::End(
+                            StreamEndResultV1::ErrorContext(vec![19, 31])
+                        )
+                    );
+                }
+            }
+            let restarted = producer(oplog, &identity, None).await;
+            let index = restarted.index.lock().await;
+            assert_eq!(
+                index
+                    .streams
+                    .values()
+                    .filter(|stream| stream.terminal)
+                    .count(),
+                3
+            );
+            assert_eq!(index.deleting, deleting);
+            assert_eq!(
+                index.finished_sessions.contains(&identity.invocation),
+                !deleting
+            );
+        }
     }
 
     #[test]
@@ -10881,6 +15123,38 @@ pub(crate) mod tests {
         ));
         release_tx.send(()).unwrap();
         lock_task.await.unwrap();
+    }
+
+    #[test]
+    async fn poisoned_producer_rejects_prefetched_history_without_advancing_cursor() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = producer(oplog, &identity, None).await;
+        let registered = producer
+            .register(root_registration(&identity))
+            .await
+            .unwrap();
+        producer
+            .write_items(
+                registered.value.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![3, 7]),
+            )
+            .await
+            .unwrap();
+        let mut reader = producer.catch_up(registered.value, None).await.unwrap();
+        assert!(!reader.history.is_empty());
+        producer.poison();
+        assert_eq!(
+            reader.next().await,
+            Err(DurableStreamProducerError::RecoveryRequired)
+        );
+        assert_eq!(
+            reader.next().await,
+            Err(DurableStreamProducerError::RecoveryRequired)
+        );
+        assert_eq!(reader.last_delivered, None);
+        assert!(!reader.terminal_delivered);
     }
 
     #[test]

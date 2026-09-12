@@ -91,6 +91,57 @@ context, then appends `Finished`; a protocol terminal fences any later guest ter
 failing locally does not fail sibling streams or the invocation
 (`tests/rpc.rs::stream_local_output_failure_does_not_fail_sibling_or_invocation`).
 
+### External HTTP input appends
+
+`AppendToStreamSlot` resolves the route-authorized method and canonical input slot using the
+invocation's pinned schema. HTTP POST validates JSON batches or packed bytes before dispatch;
+it never retries a plain append transparently. `append_external_input_owned` checks the producer
+epoch/sequence and commits `ExternalProducerState`, items and optional terminal in the same oplog
+batch before publishing to the existing live bus. WebSocket input shares that history.
+
+JSON batches emit one `StreamItems` record per value in a single atomic commit. The
+`ExternalProducerIdV1` identity distinguishes HTTP `Client(String)` from `Attached`, so a client
+cannot claim the WebSocket's producer identity. Attached sequences count only WebSocket items
+(including packed bytes), continuously across attachment epochs. The producer assigns global
+sequences under its index guard and commits the transport-sequence-to-offset mapping alongside
+the items. Nested coordinates use global sequences; retries resolve the original batch and retain
+payload/topology validation. Resume reports the attached counter, not the global stream count.
+After another producer closes the input, fresh attached frames already in flight are discarded
+without failing the invocation. Items after the attached producer's own End remain protocol errors;
+terminal authorship is reconstructed from the producer head and stream terminal offsets.
+
+An open-stream duplicate returns its original offset and the producer's highest accepted sequence,
+not the current stream tail. After closure, only the original closing tuple is a producer duplicate:
+the persisted producer head must match the terminal offset. Other tuples return Closed; an ordinary
+producer-less empty close remains idempotent. No resident dedupe state or new replay path is used.
+
+### External cancellation and deleted URLs
+
+HTTP export controls reuse `ControlDurableStreamAttachment`, with a system-only export request
+carrying the route-authorized method and optional canonical slot. They do not use worker
+interruption or the pending-invocation cancellation API.
+
+Session DELETE commits `CancelRequested` and cancellation intents for open stream mappings.
+It retains readable history and leaves existing terminal outcomes unchanged. Pending output
+streams immediately read as cancelled; later result materialization commits their cancellation
+in the same batch as registration and the result, without starting new drains. Replay still
+reconstructs historical drains and journaled observations. Cancellation is cooperative: code
+independent of the streams can continue changing state, doing I/O, and returning a result.
+
+Slot DELETE resolves the canonical schema slot under the session lock shared with result
+materialization, then atomically commits its cancellation intent and `Tombstoned` record. The
+tombstone records input/output role so a same-named input does not cancel a later output. The
+URL subsequently returns 410 for GET/HEAD/POST/DELETE and 409 for PUT. Oplog history is retained;
+recreating a stream requires a new session. Session inspection still lists deleted slots.
+
+`ConsumerCancelApplied` acknowledges the exact persisted intent after local producer commit or
+an acknowledged remote cancellation. It is not a guest `ConsumerTerminal`. A crash between
+producer commit and this receipt retries cancellation idempotently. Pending intents are folded
+into `AgentStatusRecord` and keep even idle workers in assignment recovery, including caller-side
+sessions without local `Prepared`. Applied intents no longer keep the recovery catalogue alive;
+the original intent remains available for authorization and replay. Remote retry and receipt
+writing acquire lifecycle admission separately, never while holding the session lock across RPC.
+
 ### Tests
 
 `tests/rpc.rs::{durable_streaming_output_recovers_after_executor_restart,

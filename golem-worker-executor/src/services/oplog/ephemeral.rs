@@ -21,8 +21,9 @@ use crate::services::oplog::reader::{
     OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
 };
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart, PendingUpload, ReservedRawStartBuilder, downcast_oplog,
+    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
+    IndexedReservedStartBuilder, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
+    PendingUpload, ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
@@ -72,6 +73,10 @@ enum EphemeralJob {
     AddDurableStreamBatch {
         make_batch: DurableStreamBatchBuilder,
         done: tokio::sync::oneshot::Sender<Vec<(OplogIndex, OplogEntry)>>,
+    },
+    AddDurableStreamBatchIter {
+        make_batch: DurableStreamBatchIterBuilder,
+        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
     },
     AddPair {
         start: OplogEntry,
@@ -225,6 +230,53 @@ impl EphemeralOplog {
                             })
                             .collect();
                         state.maybe_commit().await;
+                        let _ = done.send(result);
+                    }
+                    EphemeralJob::AddDurableStreamBatchIter { make_batch, done } => {
+                        let first_index = state.last_oplog_idx.next();
+                        let mut prepared = Vec::new();
+                        let mut error = None;
+                        for record in make_batch(first_index) {
+                            let bytes = match record.serialize() {
+                                Ok(bytes) => bytes,
+                                Err(err) => {
+                                    error = Some(err);
+                                    break;
+                                }
+                            };
+                            let raw = match actor_primary_service
+                                .upload_raw_payload_external(
+                                    &actor_owned_agent_id,
+                                    agent_mode,
+                                    bytes,
+                                )
+                                .await
+                            {
+                                Ok(raw) => raw,
+                                Err(err) => {
+                                    error = Some(err);
+                                    break;
+                                }
+                            };
+                            match record.into_external_entry(raw) {
+                                Ok(entry) => prepared.push(entry),
+                                Err(err) => {
+                                    error = Some(err);
+                                    break;
+                                }
+                            }
+                        }
+                        let result = if let Some(error) = error {
+                            Err(error)
+                        } else {
+                            let mut result = Vec::with_capacity(prepared.len());
+                            for entry in prepared {
+                                let index = state.push(entry.clone());
+                                result.push((index, entry));
+                            }
+                            state.maybe_commit().await;
+                            Ok(result)
+                        };
                         let _ = done.send(result);
                     }
                     EphemeralJob::AddPair {
@@ -423,7 +475,7 @@ impl EphemeralOplog {
             source + 1 < last_movable
         } else {
             // Fully archived
-            false
+            return false;
         };
 
         if let Some(done_rx) = done_rx {
@@ -644,6 +696,15 @@ impl Oplog for EphemeralOplog {
         Ok(self
             .run_job(|done| EphemeralJob::AddDurableStreamBatch { make_batch, done })
             .await)
+    }
+
+    async fn add_durable_stream_batch_iter(
+        &self,
+        make_batch: DurableStreamBatchIterBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        record_oplog_call("add_durable_stream_batch_iter");
+        self.run_job(|done| EphemeralJob::AddDurableStreamBatchIter { make_batch, done })
+            .await
     }
 
     async fn add_pair(

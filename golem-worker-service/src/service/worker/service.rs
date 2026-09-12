@@ -32,6 +32,10 @@ use golem_api_grpc::proto::golem::worker::invocation_request;
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControlResult,
+    ReadStreamSlotRequest, ReadStreamSlotSuccess,
+};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
@@ -1534,23 +1538,39 @@ impl WorkerService {
         &self,
         producer_agent_id: &AgentId,
         producer_environment_id: EnvironmentId,
-        consumer_agent_id: &AgentId,
-        consumer_environment_id: EnvironmentId,
-        expected_consumer_fingerprint: AgentFingerprint,
+        consumer_agent_id: Option<&AgentId>,
+        consumer_environment_id: Option<EnvironmentId>,
+        expected_consumer_fingerprint: Option<AgentFingerprint>,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
-        let component = self
-            .component_service
-            .get_current_by_id_uncached(producer_agent_id.component_id)
-            .await?;
-        authorize_agent_permission(
-            &auth_ctx,
-            &component,
-            producer_agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
-        )?;
+        let read: golem_common::model::durable_stream::DurableStreamReadRequestV1 =
+            golem_common::serialization::deserialize(&payload)
+                .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
+        match read {
+            golem_common::model::durable_stream::DurableStreamReadRequestV1::AttachedConsumer(
+                _,
+            ) => {
+                let component = self
+                    .component_service
+                    .get_current_by_id_uncached(producer_agent_id.component_id)
+                    .await?;
+                authorize_agent_permission(
+                    &auth_ctx,
+                    &component,
+                    producer_agent_id,
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )?;
+            }
+            golem_common::model::durable_stream::DurableStreamReadRequestV1::AuthorizedExport(
+                _,
+            ) => {
+                auth_ctx
+                    .authorize_system_only("read authorized durable stream export")
+                    .map_err(AuthServiceError::Unauthorized)?;
+            }
+        }
         self.worker_client
             .read_durable_stream_segment(
                 producer_agent_id,
@@ -1774,6 +1794,84 @@ impl WorkerService {
         .chain(tail);
         self.worker_client
             .invoke_agent_session(&agent_id, Box::pin(request))
+            .await
+    }
+
+    pub async fn create_stream_session(
+        &self,
+        agent_id: &AgentId,
+        request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("create authorized Durable Streams session")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client
+            .create_stream_session(agent_id, request)
+            .await
+    }
+
+    pub async fn control_export_stream(
+        &self,
+        agent_id: &AgentId,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("control authorized Durable Streams export")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .control_export_stream(agent_id, request)
+            .await
+    }
+
+    pub async fn read_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("access authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client.read_stream_slot(agent_id, request).await
+    }
+
+    pub async fn append_to_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<
+        golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result,
+    > {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("append to authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .append_to_stream_slot(agent_id, request)
             .await
     }
 

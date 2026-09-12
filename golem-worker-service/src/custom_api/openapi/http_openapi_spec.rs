@@ -28,15 +28,44 @@ use super::schema_mapping::{
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use golem_common::model::domain_registration::Domain;
 use golem_common::schema::graph::SchemaGraph;
-use golem_service_base::custom_api::PathSegment;
+use golem_service_base::custom_api::{AgentRouteMode, PathSegment};
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 pub struct HttpApiOpenApiSpec(pub Value);
 
 impl HttpApiOpenApiSpec {
     pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
-        let document = build_document_schema(routes).map_err(|e| e.to_string())?;
+        let mut ds_only_paths: HashSet<_> = routes
+            .iter()
+            .filter_map(|route| match &route.behavior {
+                RichRouteBehaviour::CallAgent(inner)
+                    if inner.route_mode == AgentRouteMode::DurableStreams =>
+                {
+                    Some(&route.path)
+                }
+                _ => None,
+            })
+            .collect();
+        for route in routes {
+            match &route.behavior {
+                RichRouteBehaviour::CallAgent(inner)
+                    if inner.route_mode == AgentRouteMode::DurableStreams => {}
+                RichRouteBehaviour::CorsPreflight(_) => {}
+                _ => {
+                    ds_only_paths.remove(&route.path);
+                }
+            }
+        }
+        let routes: Vec<_> = routes
+            .iter()
+            .filter(|route| match &route.behavior {
+                RichRouteBehaviour::CallAgent(inner) => inner.route_mode == AgentRouteMode::Rest,
+                RichRouteBehaviour::CorsPreflight(_) => !ds_only_paths.contains(&route.path),
+                _ => true,
+            })
+            .collect();
+        let document = build_document_schema(&routes).map_err(|e| e.to_string())?;
         let graph = &document.graph;
 
         let mut component_schemas: Map<String, Value> = Map::new();

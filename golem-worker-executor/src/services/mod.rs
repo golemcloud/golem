@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod active_agents;
+pub(crate) mod activity;
 pub mod agent_filesystem;
 pub mod agent_memory_meter;
 pub mod agent_types;

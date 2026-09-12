@@ -98,6 +98,289 @@ fn owned_agent(name: &str, component_id: ComponentId) -> OwnedAgentId {
     )
 }
 
+#[test]
+async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
+    use golem_common::model::durable_stream::*;
+
+    let (service, kv, oplog_service) = service_with_oplog().await;
+    let owner = owned_agent("cancellation-consumer", ComponentId::new());
+    let remote = owned_agent("cancellation-producer", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+    let key = session_key(&remote, &IdempotencyKey::new("cancel-session".into()));
+    let intent = StreamConsumerCancelIntentRecordV1 {
+        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        session_key: key.clone(),
+        stream_id: StreamId(uuid::Uuid::new_v4()),
+        epoch: 3,
+        role: StreamCancelRoleV1::OutputConsumer,
+        reason: StreamCancelReasonV1::Cancelled,
+        details: Some("external cancellation".into()),
+    };
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    assert_eq!(
+        service
+            .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
+            .await
+            .unwrap()
+            .sessions
+            .len(),
+        1,
+        "caller-side cancellation without Prepared must remain discoverable"
+    );
+
+    let mut wrong_intent = intent.clone();
+    wrong_intent.epoch = 4;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            intent: wrong_intent,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    assert_eq!(
+        service
+            .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
+            .await
+            .unwrap()
+            .sessions
+            .len(),
+        1,
+        "a receipt from another epoch must not retire the original obligation"
+    );
+
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            intent: intent.clone(),
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    assert!(
+        service
+            .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+    drop(service);
+    let reopened = DefaultWorkerService::new(
+        kv,
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service,
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    assert!(
+        reopened
+            .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty(),
+        "cold recovery must not resurrect an acknowledged cancellation"
+    );
+    let history = reopened
+        .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &key)
+        .await
+        .unwrap();
+    assert!(!history.has_cancellation_intents());
+    assert!(!history.needs_recovery(&owner, &key));
+}
+
+#[test]
+async fn committed_cancellation_probe_preserves_exact_authority_after_takeover() {
+    use crate::durable_host::durable_stream::{
+        ConsumerAttachmentStatus, DbDirectStreamAttachmentConsumerProbe,
+        StreamAttachmentConsumerProbe,
+    };
+    use golem_common::model::durable_stream::*;
+    use golem_schema::schema::SchemaFingerprintV1;
+
+    let (service, _, oplog_service) = service_with_oplog().await;
+    let owner = owned_agent("cancel-authority", ComponentId::new());
+    let remote = owned_agent("cancel-source", ComponentId::new());
+    let key = session_key(&owner, &IdempotencyKey::new("session".into()));
+    let mut metadata = agent_metadata(&owner);
+    metadata.fingerprint = key.callee_fingerprint;
+    let oplog = oplog_service
+        .create_fresh(
+            &owner,
+            AgentMode::Durable,
+            OplogEntry::create(
+                owner.agent_id.clone(),
+                AgentMode::Durable,
+                ComponentRevision::INITIAL,
+                vec![],
+                owner.environment_id,
+                metadata.created_by,
+                None,
+                100,
+                100,
+                Default::default(),
+                vec![],
+                None,
+                key.callee_fingerprint.0,
+            ),
+            metadata,
+            stale_status(),
+            suspended_status(),
+        )
+        .await;
+    let mapping = StreamSessionMappingRecordV1 {
+        transport_stream_id: 7,
+        role: SessionStreamRoleV1::Output,
+        handle: DurableStreamHandleV1 {
+            format_version: 1,
+            stream_id: StreamId(uuid::Uuid::new_v4()),
+            producer_environment_id: remote.environment_id,
+            producer: remote.agent_id.clone(),
+            expected_producer_fingerprint: AgentFingerprint(remote.agent_id.component_id.0),
+            source_invocation: session_key(&remote, &IdempotencyKey::new("source".into())),
+            component_revision: ComponentRevision::INITIAL,
+            element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
+        },
+    };
+    let StreamSessionRecordV1::Prepared(prepared) = prepared_record(&owner, &key.idempotency_key)
+    else {
+        unreachable!()
+    };
+    let attachment_id = prepared.attempt.attachment_id;
+    let attempt_id = prepared.attempt.attempt_id;
+    append_session(oplog.as_ref(), StreamSessionRecordV1::Prepared(prepared)).await;
+    let pending = append_pending_invocation(oplog.as_ref(), &key.idempotency_key).await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment_id,
+            attempt_id,
+            epoch: 1,
+            pending_invocation_oplog_index: pending,
+        }),
+    )
+    .await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::Mapping(StreamSessionMappingUpdateRecordV1 {
+            format_version: 1,
+            session_key: key.clone(),
+            mapping: mapping.clone(),
+        }),
+    )
+    .await;
+    let attachment = StreamAttachmentKeyV1 {
+        attachment_id,
+        stream_id: mapping.handle.stream_id,
+        epoch: 1,
+        session_key: key.clone(),
+        producer_environment_id: remote.environment_id,
+        producer: remote.agent_id.clone(),
+        expected_producer_fingerprint: mapping.handle.expected_producer_fingerprint,
+        consumer_environment_id: owner.environment_id,
+        consumer: owner.agent_id.clone(),
+        expected_consumer_fingerprint: key.callee_fingerprint,
+        consumer_invocation: key.clone(),
+    };
+    let intent = StreamConsumerCancelIntentRecordV1 {
+        format_version: 1,
+        session_key: key.clone(),
+        stream_id: mapping.handle.stream_id,
+        epoch: 1,
+        role: StreamCancelRoleV1::OutputConsumer,
+        reason: StreamCancelReasonV1::Cancelled,
+        details: Some("committed external cancellation".into()),
+    };
+    oplog.commit(CommitLevel::Always).await;
+    let probe = DbDirectStreamAttachmentConsumerProbe::new(Arc::new(service), oplog_service);
+    assert_eq!(
+        probe
+            .committed_cancellation_status(&attachment, &mapping, &intent)
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::Missing
+    );
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+    )
+    .await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecordV1::ResumeAttempt(StreamSessionResumeAttemptRecordV1 {
+            format_version: 1,
+            attempt: ResumeAttemptDescriptorV1 {
+                format_version: 1,
+                operation: StreamResumeOperationV1::Takeover,
+                session_key: key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: key.callee_fingerprint,
+                attempt_id: AttemptId::fresh(),
+                expected_epoch: 1,
+                effective_identity: vec![],
+                cursors: vec![],
+                live_join_buffer_events: 1,
+            },
+            accepted_epoch: 2,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    assert_eq!(
+        probe
+            .status_exact(&attachment, Some(&mapping))
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::EpochMismatch
+    );
+    assert_eq!(
+        probe
+            .committed_cancellation_status(&attachment, &mapping, &intent)
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::Active
+    );
+    let mut changed = intent.clone();
+    changed.details = Some("unrecorded cancellation".into());
+    assert_eq!(
+        probe
+            .committed_cancellation_status(&attachment, &mapping, &changed)
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::Missing
+    );
+    let mut changed_mapping = mapping.clone();
+    changed_mapping.transport_stream_id = 8;
+    assert_eq!(
+        probe
+            .committed_cancellation_status(&attachment, &changed_mapping, &intent)
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::Missing
+    );
+    let mut changed_consumer = attachment.clone();
+    changed_consumer.expected_consumer_fingerprint = AgentFingerprint::new();
+    changed_consumer.consumer_invocation.callee_fingerprint =
+        changed_consumer.expected_consumer_fingerprint;
+    assert_eq!(
+        probe
+            .committed_cancellation_status(&changed_consumer, &mapping, &intent)
+            .await
+            .unwrap(),
+        ConsumerAttachmentStatus::IncarnationMismatch
+    );
+}
+
 async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
     let kv = Arc::new(InMemoryKeyValueStorage::new());
     let oplog = Arc::new(
