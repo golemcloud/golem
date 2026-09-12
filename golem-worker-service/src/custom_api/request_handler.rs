@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(
             response.headers().get(http::header::ALLOW),
-            Some(&"PUT, HEAD, GET".parse().unwrap())
+            Some(&"PUT, HEAD, GET, DELETE".parse().unwrap())
         );
 
         let response = handler
