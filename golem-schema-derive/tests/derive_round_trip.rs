@@ -13,8 +13,8 @@
 // limitations under the License.
 #![allow(dead_code)]
 
-use golem_common::schema::render::{from_json_value, to_json_value};
 use golem_common::schema::{FromSchema, IntoSchema, try_into_schema_graph};
+use golem_schema::schema::render::{from_json_value, to_json_value};
 use proptest::prelude::*;
 use test_r::test;
 

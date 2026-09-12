@@ -93,7 +93,7 @@ pub(crate) struct DurableSessionStreams {
     rpc: Option<Arc<dyn Rpc>>,
     consumer_journal: Option<Arc<dyn DurableStreamConsumerJournal>>,
     auth_ctx: Option<AuthCtx>,
-    require_attachment_before_production: bool,
+    require_root_attachment_before_production: bool,
     next_transport_stream_id: Arc<AtomicU64>,
     session_lock: Arc<Mutex<()>>,
     attachment_epoch: u64,
@@ -726,7 +726,7 @@ impl DurableSessionStreams {
             rpc: None,
             consumer_journal: None,
             auth_ctx: None,
-            require_attachment_before_production: false,
+            require_root_attachment_before_production: false,
             next_transport_stream_id: Arc::new(AtomicU64::new(next_transport_stream_id)),
             session_lock,
             attachment_epoch: 1,
@@ -787,8 +787,8 @@ impl DurableSessionStreams {
         self
     }
 
-    pub(crate) fn require_attachment_before_production(mut self) -> Self {
-        self.require_attachment_before_production = true;
+    pub(crate) fn require_root_attachment_before_production(mut self) -> Self {
+        self.require_root_attachment_before_production = true;
         self
     }
 
@@ -2296,9 +2296,26 @@ impl DurableSessionStreams {
                     let streams = streams.clone();
                     let graph = graph.clone();
                     let nested_tx = nested_tx.clone();
-                    tasks.spawn(async move { streams.drain_output(drain, graph, nested_tx).await });
+                    tasks.spawn(async move {
+                        if streams.require_root_attachment_before_production {
+                            streams.wait_for_active_attachment(&drain.handle).await?;
+                        }
+                        streams.drain_output(drain, graph, nested_tx).await
+                    });
                 }
-                while !tasks.is_empty() {
+                loop {
+                    // A completed parent may have queued children before its final join.
+                    while let Ok(drain) = nested_rx.try_recv() {
+                        let streams = streams.clone();
+                        let graph = graph.clone();
+                        let nested_tx = nested_tx.clone();
+                        tasks.spawn(
+                            async move { streams.drain_output(drain, graph, nested_tx).await },
+                        );
+                    }
+                    if tasks.is_empty() {
+                        break;
+                    }
                     tokio::select! {
                         Some(drain) = nested_rx.recv() => {
                             let streams = streams.clone();
@@ -2515,7 +2532,12 @@ impl DurableSessionStreams {
                 let streams = self.clone();
                 let graph = graph.clone();
                 let nested_tx = nested_tx.clone();
-                tasks.spawn(async move { streams.drain_output(drain, graph, nested_tx).await });
+                tasks.spawn(async move {
+                    if streams.require_root_attachment_before_production {
+                        streams.wait_for_active_attachment(&drain.handle).await?;
+                    }
+                    streams.drain_output(drain, graph, nested_tx).await
+                });
             }
             loop {
                 while let Ok(drain) = nested_rx.try_recv() {
@@ -2754,9 +2776,8 @@ impl DurableSessionStreams {
             element_type,
             role,
         } = drain;
-        if self.require_attachment_before_production {
-            self.wait_for_active_attachment(&handle).await?;
-        }
+        // Root drains require admission; children are admitted by their committed parent item.
+        // A child returned unread to its producer is consumed locally, without an attachment.
         let lifecycle = endpoint.lifecycle();
         let mut source = endpoint.activate();
         let source_cancelled = tokio_util::sync::CancellationToken::new();
@@ -3064,6 +3085,17 @@ impl DurableSessionStreams {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
+            // A terminal output only reconstructs committed events. Its consumer may
+            // already have detached permanently, so replay cannot require an attachment.
+            if self
+                .producer
+                .input_high_water(handle.stream_id)
+                .await
+                .map_err(|error| error.to_string())?
+                .is_some_and(|high_water| high_water.terminal)
+            {
+                return Ok(());
+            }
             let active = self
                 .producer
                 .has_active_attachment(&self.session_key, handle)
@@ -4024,7 +4056,10 @@ impl DurableSessionStreams {
 }
 
 fn same_attachment_slot(left: &StreamAttachmentKeyV1, right: &StreamAttachmentKeyV1) -> bool {
-    left.attachment_id == right.attachment_id && left.stream_id == right.stream_id
+    left.attachment_id == right.attachment_id
+        && left.stream_id == right.stream_id
+        && left.consumer_environment_id == right.consumer_environment_id
+        && left.consumer == right.consumer
 }
 
 fn attachment_mismatch_status(
@@ -4420,6 +4455,22 @@ fn durable_stream_cancel_error(
 }
 
 impl DurableInputProducer {
+    /// Explicit guest resource drop also cancels endpoints that were never unwrapped.
+    /// A transferred endpoint has already been taken from the affine stream cell.
+    pub(crate) fn drop_unread(
+        stream: SchemaValueStream,
+        drop_event_sink: mpsc::UnboundedSender<DropEvent>,
+        runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) {
+        if stream
+            .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
+            .is_ok()
+            && let Ok(endpoint) = stream.take_host_endpoint::<DurableInputEndpoint>()
+        {
+            drop(Self::new(endpoint).with_drop_cleanup(drop_event_sink, runtime_teardown));
+        }
+    }
+
     pub(crate) fn new(endpoint: DurableInputEndpoint) -> Self {
         Self {
             reader: endpoint.reader,
@@ -5251,6 +5302,197 @@ mod tests {
         ));
     }
 
+    async fn activate_test_root_attachment(
+        producer: &DurableStreamProducer,
+        identity: &TestIdentity,
+        handle: &DurableStreamHandleV1,
+    ) {
+        let mut consumer_invocation = identity.invocation.clone();
+        consumer_invocation.callee.agent_id = "distinct-root-consumer".to_string();
+        let attachment = StreamAttachmentKeyV1 {
+            attachment_id: AttachmentId::primary(
+                identity.environment_id,
+                &identity.agent_id,
+                &identity.invocation.idempotency_key,
+            )
+            .unwrap(),
+            stream_id: handle.stream_id,
+            epoch: 1,
+            session_key: identity.invocation.clone(),
+            producer_environment_id: handle.producer_environment_id,
+            producer: handle.producer.clone(),
+            expected_producer_fingerprint: handle.expected_producer_fingerprint,
+            consumer_environment_id: consumer_invocation.callee_environment_id,
+            consumer: consumer_invocation.callee.clone(),
+            expected_consumer_fingerprint: consumer_invocation.callee_fingerprint,
+            consumer_invocation,
+        };
+        let now = Timestamp::now_utc().to_millis();
+        producer
+            .prepare_attachment(attachment.clone(), now)
+            .await
+            .unwrap();
+        producer.activate_attachment(attachment, now).await.unwrap();
+    }
+
+    async fn assert_local_nested_stream_drains_after_root_admission(root_kind: StreamRootKindV1) {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation.clone(),
+            [],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)))
+        .require_root_attachment_before_production();
+        let child_type = SchemaType::stream(Some(SchemaType::u8()));
+        let root_type = SchemaType::stream(Some(child_type));
+        let graph = SchemaGraph::anonymous(root_type.clone());
+        let (root_publisher, root_endpoint) = test_output_stream_pair(4).unwrap();
+
+        let materialize_result = match root_kind {
+            StreamRootKindV1::MethodInput => {
+                streams
+                    .materialize_agent_input(
+                        &SchemaValue::Stream(SchemaValueStream::from_host_endpoint(root_endpoint)),
+                        &graph,
+                        &root_type,
+                        ComponentRevision::INITIAL,
+                    )
+                    .await
+                    .unwrap();
+                None
+            }
+            StreamRootKindV1::MethodResult => {
+                let streams = streams.clone();
+                let graph = graph.clone();
+                let root_type = root_type.clone();
+                Some(tokio::spawn(async move {
+                    streams
+                        .materialize_result(
+                            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                                root_endpoint,
+                            )),
+                            &graph,
+                            &root_type,
+                            ComponentRevision::INITIAL,
+                        )
+                        .await
+                }))
+            }
+        };
+        let coordinate = StreamRegistrationCoordinateV1::Root {
+            invocation_id: identity.invocation.clone(),
+            root_kind,
+            recursive_value_path: Vec::new(),
+        };
+        let root_handle = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(handle) = producer.handle_for_coordinate(&coordinate).await.unwrap() {
+                    break handle;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("root stream was not registered");
+        assert_eq!(
+            producer
+                .input_high_water(root_handle.stream_id)
+                .await
+                .unwrap(),
+            None
+        );
+
+        activate_test_root_attachment(&producer, &identity, &root_handle).await;
+        let (first_publisher, first_endpoint) = test_output_stream_pair(2).unwrap();
+        let (second_publisher, second_endpoint) = test_output_stream_pair(2).unwrap();
+        root_publisher
+            .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                first_endpoint,
+            )))
+            .await
+            .unwrap();
+        root_publisher
+            .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                second_endpoint,
+            )))
+            .await
+            .unwrap();
+        root_publisher.publish_end().await.unwrap();
+        wait_for_terminal_commit(&producer, root_handle.stream_id).await;
+
+        // Both children are queued before the parent's final join, but remain live afterwards.
+        let first_handle = producer
+            .nested_handles(root_handle.stream_id, 0)
+            .await
+            .unwrap()[0]
+            .clone();
+        let second_handle = producer
+            .nested_handles(root_handle.stream_id, 1)
+            .await
+            .unwrap()[0]
+            .clone();
+        first_publisher
+            .publish_item(SchemaValue::U8(17))
+            .await
+            .unwrap();
+        first_publisher.publish_end().await.unwrap();
+        second_publisher
+            .publish_item(SchemaValue::U8(29))
+            .await
+            .unwrap();
+        second_publisher.publish_end().await.unwrap();
+
+        for (handle, expected) in [(first_handle, 17), (second_handle, 29)] {
+            let mut reader = DurableStreamReader::Owned {
+                reader: Box::new(producer.catch_up(handle.clone(), None).await.unwrap()),
+                source: producer.clone(),
+                handle: Box::new(handle),
+                next_journal_lag_sample: Instant::now(),
+            };
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), reader.next()).await.unwrap().unwrap().unwrap().payload,
+                CommittedProducerStreamEventPayloadV1::PackedU8(value) if value == expected
+            ));
+            assert!(matches!(
+                reader.next().await.unwrap().unwrap().payload,
+                CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+            ));
+        }
+        assert_eq!(
+            StreamAttachmentControl::inspect_attachments(producer.as_ref())
+                .await
+                .len(),
+            1,
+            "local nested streams must not require independent attachments"
+        );
+        if let Some(task) = materialize_result {
+            task.await.unwrap().unwrap();
+        }
+    }
+
+    #[test]
+    async fn caller_input_local_nested_streams_inherit_root_admission() {
+        assert_local_nested_stream_drains_after_root_admission(StreamRootKindV1::MethodInput).await;
+    }
+
+    #[test]
+    async fn result_local_nested_streams_inherit_root_admission() {
+        assert_local_nested_stream_drains_after_root_admission(StreamRootKindV1::MethodResult)
+            .await;
+    }
+
     struct RecordingConsumerJournal {
         oplog: Arc<dyn Oplog>,
         commits: Arc<AtomicU64>,
@@ -5574,6 +5816,68 @@ mod tests {
         })
         .await
         .expect("stream terminal was not committed");
+    }
+
+    #[test]
+    async fn completed_output_reconstruction_does_not_require_an_attachment() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::InvocationOutput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let streams = DurableSessionStreams::new(
+            producer.clone(),
+            oplog.clone(),
+            identity.invocation.clone(),
+            [],
+        );
+        assert!(
+            futures::poll!(std::pin::pin!(streams.wait_for_active_attachment(&handle)))
+                .is_pending(),
+            "an open output still requires an attachment"
+        );
+        producer
+            .end(handle.stream_id, 0, StreamEndResultV1::Ok)
+            .await
+            .unwrap();
+        drop(streams);
+        drop(producer);
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = DurableSessionStreams::new(producer, oplog, identity.invocation, []);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            streams.wait_for_active_attachment(&handle),
+        )
+        .await
+        .expect("a terminal output must reconstruct without a consumer attachment")
+        .unwrap();
     }
 
     #[test]
@@ -6336,6 +6640,15 @@ mod tests {
 
     #[test]
     async fn dropping_unfinished_input_producer_cancels_the_durable_source_after_cleanup_drain() {
+        check_dropped_input_cancellation(false).await;
+    }
+
+    #[test]
+    async fn dropping_unread_input_resource_cancels_the_durable_source_after_cleanup_drain() {
+        check_dropped_input_cancellation(true).await;
+    }
+
+    async fn check_dropped_input_cancellation(unread_resource: bool) {
         let identity = identity();
         let oplog = Arc::new(TestOplog::default());
         let producer = DurableStreamProducer::load(
@@ -6401,15 +6714,23 @@ mod tests {
         let source_cancelled = tokio_util::sync::CancellationToken::new();
         producer.register_source_cancellation(handle.stream_id, source_cancelled.clone());
         let (drop_event_sink, mut drop_events) = mpsc::unbounded_channel();
-        let input = DurableInputProducer::new(
-            streams
-                .endpoint(handle.clone(), 0, SessionStreamRoleV1::Output)
-                .await
-                .unwrap(),
-        )
-        .with_drop_cleanup(drop_event_sink, Arc::new(|| false));
-
-        drop(input);
+        let endpoint = streams
+            .endpoint(handle.clone(), 0, SessionStreamRoleV1::Output)
+            .await
+            .unwrap();
+        if unread_resource {
+            let stream = SchemaValueStream::from_host_endpoint(endpoint);
+            let moved = stream.take_for_transfer().unwrap();
+            DurableInputProducer::drop_unread(stream, drop_event_sink.clone(), Arc::new(|| false));
+            assert!(drop_events.try_recv().is_err());
+            assert!(!source_cancelled.is_cancelled());
+            DurableInputProducer::drop_unread(moved, drop_event_sink, Arc::new(|| false));
+        } else {
+            drop(
+                DurableInputProducer::new(endpoint)
+                    .with_drop_cleanup(drop_event_sink, Arc::new(|| false)),
+            );
+        }
         let cancellation = match drop_events.recv().await.unwrap() {
             DropEvent::CancelDroppedDurableInput { cancellation } => cancellation,
             event => panic!("unexpected drop event: {event:?}"),

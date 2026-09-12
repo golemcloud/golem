@@ -123,7 +123,7 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
     }
 }
 
-async fn resolve_agent_owner<Ctx: WorkerCtx>(
+pub(super) async fn resolve_agent_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     component_id: &ComponentId,
     agent: Option<&str>,
@@ -155,7 +155,7 @@ async fn resolve_agent_owner<Ctx: WorkerCtx>(
     Ok((owner, environment_id))
 }
 
-async fn agent_operation_denied<Ctx: WorkerCtx>(
+pub(super) async fn agent_operation_denied<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     agent_id: &AgentId,
     verb: AgentVerb,

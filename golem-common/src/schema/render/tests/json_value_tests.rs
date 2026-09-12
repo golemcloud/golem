@@ -15,10 +15,6 @@
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::Role;
 use crate::schema::proptest_strategies::schema_values_eq;
-use crate::schema::render::error::RenderError;
-use crate::schema::render::json_value::{
-    from_json_value, from_untrusted_json_value, to_json_value, to_json_value_redacted,
-};
 use crate::schema::render::tests::paired_strategy::paired_strategy;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, PermissionCardSpec, QuotaTokenSpec,
@@ -30,6 +26,10 @@ use crate::schema::schema_value::{
 };
 use crate::schema::validation::validate_graph;
 use chrono::{TimeZone, Utc};
+use golem_schema::schema::render::error::RenderError;
+use golem_schema::schema::render::json_value::{
+    from_json_value, from_untrusted_json_value, to_json_value, to_json_value_redacted,
+};
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -58,7 +58,7 @@ proptest! {
     fn json_value_validates_against_json_schema((ty, value) in paired_strategy()) {
         let graph = SchemaGraph::anonymous(ty.clone());
         let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
-        let schema = crate::schema::render::json_schema::to_json_schema(&graph, &ty);
+        let schema = golem_schema::schema::render::json_schema::to_json_schema(&graph, &ty);
         let compiled = jsonschema::draft202012::new(&schema).expect("compile schema");
         prop_assert!(
             compiled.is_valid(&json),
@@ -788,7 +788,7 @@ fn permission_card_json_round_trip_matches_schema_and_redacts() {
     let decoded = from_json_value(&graph, &ty, &json).expect("decode permission-card");
     assert_eq!(decoded, value);
 
-    let schema = crate::schema::render::json_schema::to_json_schema(&graph, &ty);
+    let schema = golem_schema::schema::render::json_schema::to_json_schema(&graph, &ty);
     let compiled = jsonschema::draft202012::new(&schema).expect("compile permission-card schema");
     assert!(
         compiled.is_valid(&json),

@@ -3746,12 +3746,6 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
     );
 
     let (
-        provider_checkpoint_port,
-        provider_checkpoint_gate_port,
-        provider_checkpoint_server,
-        mut provider_checkpoints,
-    ) = start_crash_checkpoint_server().await;
-    let (
         caller_checkpoint_port,
         caller_checkpoint_gate_port,
         caller_checkpoint_server,
@@ -3767,14 +3761,6 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             agent_id.clone(),
             HashMap::from([
                 (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_checkpoint_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_checkpoint_gate_port.to_string(),
-                ),
-                (
                     "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
                     caller_checkpoint_port.to_string(),
                 ),
@@ -3787,6 +3773,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         )
         .await?;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut original_body = executor.gate_next_live_entity_body_completion(&worker_id, "streaming");
 
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
@@ -3795,29 +3782,16 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         data_value!(),
     );
     let crash_and_validate = async {
-        let original_body =
-            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
-                .await?;
-        let original_before_custom = next_crash_checkpoint(
-            &mut caller_checkpoints,
-            "before-reconstruction-custom-effect",
-        )
-        .await?;
-        wait_for_active_tool_operations(&executor, &owned_agent_id, 1).await?;
-        original_body
-            .release
-            .send(())
-            .map_err(|_| anyhow::anyhow!("original reconstruction body gate was dropped"))?;
-        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
-        original_before_custom
-            .release
-            .send(())
-            .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), original_body.entered())
+            .await
+            .map_err(|_| anyhow::anyhow!("original entity body did not complete"))?;
         let original_custom =
             next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
-        let custom_start = executor
-            .get_oplog(&worker_id, OplogIndex::INITIAL)
-            .await?
+        original_body.release();
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        let entity_start = wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let custom_start = original_oplog
             .iter()
             .find_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(params)
@@ -3828,6 +3802,10 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
                 _ => None,
             })
             .ok_or_else(|| anyhow::anyhow!("recorded custom durability Start was not found"))?;
+        assert!(!original_oplog.iter().any(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == custom_start)
+                || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == custom_start)
+        }));
         let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
         let mut reconstruction_body =
             executor.gate_next_completed_entity_reconstruction(&worker_id);
@@ -3840,6 +3818,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         )
         .await
         .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
+        assert_eq!(reconstruction_start, entity_start);
         executor
             .drain_reconstruction_terminal(&owned_agent_id, reconstruction_start)
             .await?;
@@ -3856,6 +3835,8 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         )
         .await
         .map_err(|_| anyhow::anyhow!("custom durability did not reach replay-to-live"))??;
+        wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
+        assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(250),
@@ -3890,7 +3871,6 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         b"C".as_slice(),
         "the repaired custom effect must commit exactly once after body validation"
     );
-    provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
     Ok(())
 }

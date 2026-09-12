@@ -14,9 +14,9 @@
 
 use crate::mcp::invoke::{schema_binary_value_from_json, schema_text_value_from_json};
 use golem_common::schema::graph::SchemaGraph;
-use golem_common::schema::render::json_value::from_untrusted_json_value;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
+use golem_schema::schema::render::json_value::from_untrusted_json_value;
 
 /// Extract a single multimodal part value, typed by the multimodal variant
 /// case's payload schema (resolved against `graph`).

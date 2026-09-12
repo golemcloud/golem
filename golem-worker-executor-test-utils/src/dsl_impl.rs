@@ -55,10 +55,10 @@ use golem_common::model::worker::{
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::schema::AgentTypeSchema;
-use golem_common::schema::render::from_json_value;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_common::widen_infallible;
+use golem_schema::schema::render::from_json_value;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;

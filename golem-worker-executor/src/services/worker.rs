@@ -318,6 +318,25 @@ pub trait WorkerService: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Result<(), WorkerExecutorError>;
 
+    async fn get_rejected_periodic_snapshot_through(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn reject_periodic_snapshots_through(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _oplog_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        Err(WorkerExecutorError::runtime(
+            "snapshot rejection storage is unavailable",
+        ))
+    }
+
     async fn lookup_durable_stream_session(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -661,6 +680,16 @@ impl DefaultWorkerService {
         KeyValueStorageNamespace::AgentInvocationResultIndex {
             agent_id: agent_id.clone(),
         }
+    }
+
+    fn rejected_periodic_snapshots_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+        KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
+            agent_id: agent_id.clone(),
+        }
+    }
+
+    fn rejected_periodic_snapshots_field(fingerprint: AgentFingerprint) -> String {
+        fingerprint.0.to_string()
     }
 
     /// Key holding only the worker's immutable `AgentMode`, stored separately from the status
@@ -1212,6 +1241,11 @@ impl WorkerService for DefaultWorkerService {
             .clear(owned_agent_id)
             .await
             .map_err(WorkerExecutorError::runtime)?;
+        self.remove_split_status(
+            owned_agent_id,
+            Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
+        )
+        .await?;
 
         let shard_assignment = self
             .shard_service
@@ -1266,6 +1300,67 @@ impl WorkerService for DefaultWorkerService {
                     "failed to remove worker agent mode in the KV storage: {err}"
                 ))
             })
+    }
+
+    async fn get_rejected_periodic_snapshot_through(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        let value: Option<Result<OplogIndex, String>> = self
+            .key_value_storage
+            .with_entity(
+                "worker",
+                "get_rejected_periodic_snapshot_through",
+                "oplog_index",
+            )
+            .get_attempt_deserialize(
+                Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
+                &Self::rejected_periodic_snapshots_field(fingerprint),
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        value.transpose().map_err(WorkerExecutorError::runtime)
+    }
+
+    async fn reject_periodic_snapshots_through(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        oplog_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        let namespace = Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id);
+        let field = Self::rejected_periodic_snapshots_field(fingerprint);
+        loop {
+            let current = self
+                .key_value_storage
+                .with_entity("worker", "read_rejected_periodic_snapshot", "oplog_index")
+                .get_raw(namespace.clone(), &field)
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            if let Some(current) = &current {
+                let current_index: OplogIndex =
+                    deserialize(current).map_err(WorkerExecutorError::runtime)?;
+                if current_index >= oplog_index {
+                    return Ok(());
+                }
+            }
+            let encoded = serialize(&oplog_index).map_err(WorkerExecutorError::runtime)?;
+            let updated = self
+                .key_value_storage
+                .with_entity("worker", "reject_periodic_snapshots_through", "oplog_index")
+                .compare_and_set_many_raw(
+                    namespace.clone(),
+                    &field,
+                    current.as_deref(),
+                    &[(field.as_str(), encoded.as_slice())],
+                )
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            if updated {
+                return Ok(());
+            }
+        }
     }
 
     async fn lookup_durable_stream_session(
@@ -1691,7 +1786,7 @@ mod tests {
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
-    use std::collections::{BTreeMap, VecDeque};
+    use std::collections::{BTreeMap, HashSet, VecDeque};
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use tokio::sync::Notify;
@@ -1973,6 +2068,104 @@ mod tests {
         };
         let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
         (service, oplog, owned_agent_id)
+    }
+
+    #[test]
+    async fn rejected_periodic_snapshot_watermark_is_monotonic_and_incarnation_scoped() {
+        let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
+        let first = AgentFingerprint::new();
+        let second = AgentFingerprint::new();
+
+        service
+            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(12))
+            .await
+            .unwrap();
+        service
+            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(7))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .await
+                .unwrap(),
+            Some(OplogIndex::from_u64(12))
+        );
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, second)
+                .await
+                .unwrap(),
+            None
+        );
+
+        service.remove_cached_status(&owned_agent_id).await.unwrap();
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .await
+                .unwrap(),
+            Some(OplogIndex::from_u64(12))
+        );
+
+        service
+            .remove_split_status(
+                &owned_agent_id,
+                DefaultWorkerService::rejected_periodic_snapshots_namespace(
+                    &owned_agent_id.agent_id,
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    fn assignment_tracking_test_service() -> (
+        DefaultWorkerService,
+        Arc<InMemoryKeyValueStorage>,
+        OwnedAgentId,
+        usize,
+    ) {
+        let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_service = Arc::new(ShardServiceDefault::new());
+        let number_of_shards = 4;
+        shard_service.register(number_of_shards, &HashSet::new());
+        let service = DefaultWorkerService::new(
+            key_value_storage.clone(),
+            shard_service,
+            Arc::new(IndexTestOplogService::new(BTreeMap::new())),
+            Arc::new(IndexTestComponentService),
+            Arc::new(GolemConfig::default()),
+        );
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "assignment-tracking-test".to_string(),
+        };
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+        (service, key_value_storage, owned_agent_id, number_of_shards)
+    }
+
+    async fn assignment_tracking_members(
+        key_value_storage: &InMemoryKeyValueStorage,
+        owned_agent_id: &OwnedAgentId,
+        number_of_shards: usize,
+    ) -> Vec<OwnedAgentId> {
+        let shard_id = ShardId::from_agent_id(&owned_agent_id.agent_id, number_of_shards);
+        key_value_storage
+            .with_entity("test", "get_assignment_tracking", "agent_id")
+            .members_of_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &DefaultWorkerService::running_in_shard_key(&shard_id),
+            )
+            .await
+            .unwrap()
     }
 
     async fn invocation_index_metadata(
@@ -2522,6 +2715,50 @@ mod tests {
                 .unwrap()
                 .contains_key(&owned_agent_id),
             "a cancelled catch-up must not retain one dead lock registration per agent"
+        );
+    }
+
+    #[test]
+    async fn set_assignment_tracking_writes_durable_worker_to_recovery_index() {
+        let (service, key_value_storage, owned_agent_id, number_of_shards) =
+            assignment_tracking_test_service();
+        let status = AgentStatusRecord {
+            status: AgentStatus::Running,
+            agent_mode: AgentMode::Durable,
+            ..AgentStatusRecord::default()
+        };
+
+        service
+            .set_assignment_tracking(&owned_agent_id, &status)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            assignment_tracking_members(&key_value_storage, &owned_agent_id, number_of_shards)
+                .await,
+            vec![owned_agent_id]
+        );
+    }
+
+    #[test]
+    async fn set_assignment_tracking_does_not_write_ephemeral_worker_to_recovery_index() {
+        let (service, key_value_storage, owned_agent_id, number_of_shards) =
+            assignment_tracking_test_service();
+        let status = AgentStatusRecord {
+            status: AgentStatus::Running,
+            agent_mode: AgentMode::Ephemeral,
+            ..AgentStatusRecord::default()
+        };
+
+        service
+            .set_assignment_tracking(&owned_agent_id, &status)
+            .await
+            .unwrap();
+
+        assert!(
+            assignment_tracking_members(&key_value_storage, &owned_agent_id, number_of_shards)
+                .await
+                .is_empty()
         );
     }
 
