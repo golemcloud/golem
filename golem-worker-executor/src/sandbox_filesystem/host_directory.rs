@@ -22,7 +22,7 @@ use std::ffi::OsStr;
 /// What is at the path can be a file, a directory, a symlink, or nothing. It goes away when the
 /// host directory that the path starts at is discarded or dropped.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HostPath(Box<Path>);
+pub(crate) struct HostPath(Arc<Path>);
 
 impl HostPath {
     pub(crate) fn as_path(&self) -> &Path {
@@ -41,9 +41,10 @@ impl HostPath {
                 std::io::Error::from(std::io::ErrorKind::InvalidInput),
             ));
         }
-        Ok(HostPath(
-            tree_copy::child_path(self.as_path(), name).into_boxed_path(),
-        ))
+        Ok(HostPath(Arc::from(tree_copy::child_path(
+            self.as_path(),
+            name,
+        ))))
     }
 }
 
@@ -76,7 +77,7 @@ impl HostDirectory {
                 std::io::Error::from(std::io::ErrorKind::InvalidInput),
             ));
         }
-        let path = HostPath(tree_copy::child_path(root.path, name).into_boxed_path());
+        let path = HostPath(Arc::from(tree_copy::child_path(root.path, name)));
         if !root
             .names
             .lock()
