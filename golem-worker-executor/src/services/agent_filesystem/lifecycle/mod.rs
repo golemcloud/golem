@@ -580,7 +580,7 @@ async fn complete_initial_materialization<Adapter: SandboxFilesystemAdapter>(
             loop {
                 let error = match sandbox
                     .seed_file(
-                        source.path(),
+                        source.path().as_path(),
                         SandboxPath::at_root(target.clone()),
                         sandbox_file_permissions(read_only),
                     )
@@ -938,7 +938,7 @@ async fn apply_initial_file_update(
                     };
                     staged.push(SandboxFileUpdate::new(
                         relative.clone(),
-                        source.path().to_path_buf(),
+                        source.path().as_path().to_path_buf(),
                         sandbox_file_permissions(
                             file.permissions == AgentFilePermissions::ReadOnly,
                         ),

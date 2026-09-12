@@ -1,8 +1,9 @@
 use super::*;
 use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
 use crate::sandbox_filesystem::{
-    FilesystemAllocation, ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning,
-    ScriptedSandboxPath, ScriptedSandboxPathBase, ScriptedSandboxPathCall,
+    FilesystemAllocation, HostDirectory, ScriptedSandboxFilesystemControl,
+    ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath, ScriptedSandboxPathBase,
+    ScriptedSandboxPathCall,
 };
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
@@ -138,6 +139,14 @@ fn sandbox_provisioning(
     )
 }
 
+/// Makes the cache directory of a file loader on unmanaged storage with a temporary root.
+async fn initial_files_directory() -> HostDirectory {
+    let provisioning = sandbox_provisioning(&FilesystemStorageConfig::default()).unwrap();
+    HostDirectory::create_at_root(&provisioning, std::ffi::OsStr::new(".initial-files"))
+        .await
+        .unwrap()
+}
+
 async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
     let id = agent_id();
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
@@ -154,7 +163,7 @@ async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
         &loader,
         id.environment_id,
@@ -752,7 +761,7 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
         &loader,
         id.environment_id,
@@ -782,7 +791,7 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
 #[timeout("5s")]
 async fn external_seed_source_retains_its_cache_lease_through_seeding() {
     let (prepared, loader) = prepared_initial_file().await;
-    let source_path = prepared.files[0].source.path().to_path_buf();
+    let source_path = prepared.files[0].source.path().as_path().to_path_buf();
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     control.push_seed_file(Ok(()));
@@ -4764,7 +4773,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let files = vec![
         InitialAgentFile {
             content_hash: read_only_hash,

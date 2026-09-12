@@ -25,7 +25,6 @@ use std::ffi::OsStr;
 pub(crate) struct HostPath(Box<Path>);
 
 impl HostPath {
-    #[allow(dead_code)]
     pub(crate) fn as_path(&self) -> &Path {
         &self.0
     }
@@ -34,7 +33,6 @@ impl HostPath {
     ///
     /// The name must be one normal component. An empty name, `.`, `..`, or a name with a
     /// separator gives an `InvalidInput` error, so the new path stays under this path.
-    #[allow(dead_code)]
     pub(crate) fn child(&self, name: &OsStr) -> Result<HostPath, FilesystemStorageError> {
         if !is_one_normal_component(name) {
             return Err(FilesystemStorageError::io(
@@ -66,7 +64,6 @@ impl HostDirectory {
     /// Makes an empty directory with this name directly under the volume root. Removes what an
     /// earlier process left under the name first. Fails if this process already made the name, or
     /// if the name is not one normal component that starts with a dot.
-    #[allow(dead_code)]
     pub(crate) async fn create_at_root(
         provisioning: &SandboxFilesystemProvisioning,
         name: &OsStr,
@@ -162,7 +159,6 @@ impl HostDirectory {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn path(&self) -> &HostPath {
         &self.path
     }

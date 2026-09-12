@@ -33,7 +33,6 @@ mod unmanaged;
 
 #[allow(unused_imports)]
 pub(crate) use adapter::*;
-#[allow(unused_imports)]
 pub(crate) use host_directory::{HostDirectory, HostPath};
 use scratch::ScratchSpace;
 pub(crate) use scratch::ScratchTree;
@@ -758,14 +757,6 @@ impl SandboxFilesystemProvisioning {
                     host_directory_names: Arc::default(),
                 })
             }
-        }
-    }
-
-    pub(crate) fn initial_file_cache_root(&self) -> Option<&Path> {
-        match &self.mode {
-            SandboxFilesystemProvisioningMode::Unmanaged(_) => None,
-            #[cfg(target_os = "linux")]
-            SandboxFilesystemProvisioningMode::Managed(managed) => Some(managed.root()),
         }
     }
 
