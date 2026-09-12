@@ -65,6 +65,7 @@ use golem_common::cache::SimpleCache;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
@@ -811,6 +812,7 @@ impl ComponentCommandHandler {
         &self,
         environment: &ResolvedEnvironmentIdentity,
         resolved_tool_grants: &ResolvedToolGrants,
+        ambient_tools: &[golem_common::model::deployment::DeploymentPlanAmbientToolEntry],
     ) -> anyhow::Result<ResolvedManifestComponentsAndTools> {
         let (component_names, declared_agents, has_remote_tools) = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -856,6 +858,7 @@ impl ComponentCommandHandler {
                 &mut components,
                 &unknown_declared_agents,
                 has_remote_tools,
+                ambient_tools,
             )
             .await?;
 
@@ -873,6 +876,7 @@ impl ComponentCommandHandler {
         components: &mut BTreeMap<ComponentName, ComponentDeployProperties>,
         unknown_declared_agents: &BTreeSet<AgentTypeName>,
         has_remote_tools: bool,
+        ambient_tools: &[golem_common::model::deployment::DeploymentPlanAmbientToolEntry],
     ) -> anyhow::Result<(RemoteToolDeploymentPlan, BTreeSet<ToolName>)> {
         let plugin_grants = if has_remote_tools {
             self.ctx
@@ -886,6 +890,10 @@ impl ComponentCommandHandler {
         let app = app_ctx.some_or_err()?.application();
         let mut issues = Vec::new();
         let mut implementations = BTreeMap::<ToolName, Vec<DiscoveredToolImplementation>>::new();
+        let ambient_names = ambient_tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<BTreeSet<_>>();
 
         for agent_name in unknown_declared_agents {
             issues.push(ToolValidationIssue::error(
@@ -1070,6 +1078,7 @@ impl ComponentCommandHandler {
                     Some(agent_name),
                     Some(agent.source()),
                     &implementations,
+                    &ambient_names,
                 );
             }
         }
@@ -1145,6 +1154,71 @@ impl ComponentCommandHandler {
         let mut remote_tool_deployments = BTreeMap::new();
         let mut diffable_remote_tool_deployments = BTreeMap::new();
         let mut pending_remote_initial_files = Vec::new();
+
+        for ambient in ambient_tools {
+            if implementations.contains_key(&ambient.name)
+                || app.tool_declarations().contains_key(&ambient.name)
+            {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::DeclarationDiscoveryIdentity,
+                    ToolValidationCode::DuplicateImplementation,
+                    ToolEntityPath::tool(&ambient.name, "agents.tools"),
+                    None,
+                    "Ambient tool collides with an application tool; ambient tools must not have top-level declarations",
+                ));
+                continue;
+            }
+
+            let mut agent_bindings = BTreeMap::new();
+            for agent_name in agent_components.keys() {
+                let agent = resolved_agents.agent(agent_name);
+                let override_binding = agent
+                    .as_ref()
+                    .and_then(|agent| agent.tool_bindings().get(ambient.name.as_str()).cloned())
+                    .and_then(|state| {
+                        let agent = agent.as_ref().unwrap();
+                        resolve_tool_binding_input(
+                            &mut issues,
+                            &ambient.name,
+                            &ambient.definition,
+                            &ambient.owner_account_email,
+                            &state,
+                            "agents.tools",
+                            Some(agent_name),
+                            Some(agent.source()),
+                        )
+                    });
+                if let Some(binding) = override_binding {
+                    validate_effective_tool_binding(
+                        &mut issues,
+                        &ambient.name,
+                        Some(&ambient.environment_binding),
+                        &binding,
+                        agent_name,
+                        agent.as_ref().unwrap().source(),
+                    );
+                    agent_bindings.insert(agent_name.clone(), binding);
+                }
+            }
+            diffable_remote_tool_deployments.insert(
+                ambient.name.to_string(),
+                ambient
+                    .to_diffable(agent_components.keys().cloned(), &agent_bindings)
+                    .into(),
+            );
+            remote_tool_deployments.insert(
+                ambient.name.clone(),
+                RemoteToolDeployment {
+                    name: ambient.name.clone(),
+                    release: ToolReleaseReference::ById(ToolReleaseById {
+                        release_id: ambient.release_id,
+                    }),
+                    provision: ambient.provision.clone(),
+                    environment_binding: Some(ambient.environment_binding.clone()),
+                    agent_bindings,
+                },
+            );
+        }
 
         for (tool_name, sources) in &implementations {
             let Some(source) = sources.as_slice().first() else {
@@ -2085,6 +2159,7 @@ fn validate_tool_binding_references(
     agent_name: Option<&AgentTypeName>,
     source: Option<&std::path::Path>,
     implementations: &BTreeMap<ToolName, Vec<DiscoveredToolImplementation>>,
+    ambient_names: &BTreeSet<ToolName>,
 ) {
     for raw_name in bindings.keys() {
         let field_path = format!("{field_prefix}.{raw_name}");
@@ -2103,7 +2178,9 @@ fn validate_tool_binding_references(
             continue;
         }
         match ToolName::try_from(raw_name.as_str()) {
-            Ok(tool_name) if implementations.contains_key(&tool_name) => {}
+            Ok(tool_name)
+                if implementations.contains_key(&tool_name)
+                    || ambient_names.contains(&tool_name) => {}
             Ok(_) => issues.push(ToolValidationIssue::error(
                 ToolValidationPhase::BindingReferences,
                 ToolValidationCode::UnknownToolReference,
@@ -2199,6 +2276,12 @@ fn resolve_tool_binding_input(
         entity_path("secretKeysReadable"),
         source,
     );
+    let config_keys_readable = resolve_config_scope(
+        issues,
+        &state.config_keys_readable,
+        entity_path("configKeysReadable"),
+        source,
+    );
     let requested_revealable = resolve_secret_scope(
         issues,
         &state.secret_keys_revealable,
@@ -2220,6 +2303,7 @@ fn resolve_tool_binding_input(
         version: Some(definition.version.clone()),
         parameters: NormalizedJsonValue::new(parameters),
         account: Some(account.unwrap_or_else(|| owner.clone())),
+        config_keys_readable,
         secret_keys_readable: readable,
         secret_keys_revealable: revealable,
     })
@@ -2320,6 +2404,62 @@ fn resolve_secret_scope(
                     }
                 }
                 SecretKeyScope::Keys(canonical_paths)
+            }
+        };
+        resolved.intersection(&next)
+    })
+}
+
+fn resolve_config_scope(
+    issues: &mut Vec<ToolValidationIssue>,
+    layers: &[app_raw::ManifestConfigKeyScope],
+    path: ToolEntityPath,
+    source: Option<&std::path::Path>,
+) -> golem_common::model::tool::ConfigKeyScope {
+    use golem_common::model::tool::ConfigKeyScope;
+    layers.iter().fold(ConfigKeyScope::All, |resolved, layer| {
+        let next = match layer {
+            app_raw::ManifestConfigKeyScope::All(value) if value == "*" => ConfigKeyScope::All,
+            app_raw::ManifestConfigKeyScope::All(value) => {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::BindingSemantics,
+                    ToolValidationCode::InvalidConfigScope,
+                    path.clone(),
+                    source.map(std::path::Path::to_path_buf),
+                    format!("Expected '*' or a list of config paths, found '{value}'"),
+                ));
+                ConfigKeyScope::All
+            }
+            app_raw::ManifestConfigKeyScope::Keys(paths) => {
+                let mut canonical_paths = BTreeSet::new();
+                for raw_path in paths {
+                    if raw_path == "*" {
+                        issues.push(ToolValidationIssue::error(
+                            ToolValidationPhase::BindingSemantics,
+                            ToolValidationCode::InvalidConfigScope,
+                            path.clone(),
+                            source.map(std::path::Path::to_path_buf),
+                            "'*' must be used as the whole config scope, not as a list entry",
+                        ));
+                        continue;
+                    }
+                    match crate::args::parse_agent_config_path(raw_path) {
+                        Ok(segments) => canonical_paths.insert(
+                            CanonicalAgentConfigPath::from_path_in_unknown_casing(&segments),
+                        ),
+                        Err(error) => {
+                            issues.push(ToolValidationIssue::error(
+                                ToolValidationPhase::BindingSemantics,
+                                ToolValidationCode::InvalidConfigScope,
+                                path.clone(),
+                                source.map(std::path::Path::to_path_buf),
+                                format!("Invalid config path '{raw_path}': {error}"),
+                            ));
+                            false
+                        }
+                    };
+                }
+                ConfigKeyScope::Keys(canonical_paths)
             }
         };
         resolved.intersection(&next)
@@ -2615,14 +2755,16 @@ fn collect_unused_agent_config_paths(
 #[cfg(test)]
 mod tool_binding_tests {
     use super::{
-        effective_remote_tool_bindings, resolve_secret_scope, validate_effective_tool_binding,
+        effective_remote_tool_bindings, resolve_config_scope, resolve_secret_scope,
+        validate_effective_tool_binding,
     };
-    use crate::model::app_raw::ManifestSecretKeyScope;
+    use crate::model::app_raw::{ManifestConfigKeyScope, ManifestSecretKeyScope};
     use crate::model::tool_deployment::{
         ToolEntityPath, ToolValidationCode, ToolValidationSeverity,
     };
     use golem_common::model::account::AccountEmail;
     use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
     use golem_common::model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::model::component::ComponentName;
     use golem_common::model::json::NormalizedJsonValue;
@@ -2645,6 +2787,7 @@ mod tool_binding_tests {
             version: Some("1.0.0".to_string()),
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
             account: Some(AccountEmail::new("owner@example.com")),
+            config_keys_readable: golem_common::model::tool::ConfigKeyScope::All,
             secret_keys_readable: readable,
             secret_keys_revealable: revealable,
         }
@@ -2692,6 +2835,28 @@ mod tool_binding_tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].code, ToolValidationCode::InvalidSecretScope);
         assert_eq!(issues[0].source.as_deref(), Some(Path::new("golem.yaml")));
+    }
+
+    #[test]
+    fn config_scope_uses_config_path_type_and_canonicalization() {
+        let mut issues = Vec::new();
+        let scope = resolve_config_scope(
+            &mut issues,
+            &[ManifestConfigKeyScope::Keys(vec![
+                "Service.APIKey".to_string(),
+                "service.api-key".to_string(),
+            ])],
+            ToolEntityPath::tool("grep", "tools.grep.configKeysReadable"),
+            Some(Path::new("golem.yaml")),
+        );
+
+        assert!(issues.is_empty());
+        assert_eq!(
+            scope,
+            golem_common::model::tool::ConfigKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentConfigPath(vec!["service".to_string(), "apiKey".to_string()]),
+            ]))
+        );
     }
 
     #[test]

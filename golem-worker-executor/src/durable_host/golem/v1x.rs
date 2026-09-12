@@ -129,7 +129,7 @@ pub(super) async fn resolve_agent_owner<Ctx: WorkerCtx>(
     agent: Option<&str>,
 ) -> Result<(AgentOwnerPattern, EnvironmentId), WorkerExecutorError> {
     let component = if *component_id == ctx.owned_agent_id.component_id() {
-        ctx.component_metadata().clone()
+        ctx.owner_component_metadata().clone()
     } else {
         ctx.state
             .component_service
@@ -1384,9 +1384,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .component_service
                     .resolve_component(
                         component_slug.clone(),
-                        self.state.component_metadata.environment_id,
-                        self.state.component_metadata.application_id,
-                        self.state.component_metadata.account_id,
+                        self.owner_component_metadata().environment_id,
+                        self.owner_component_metadata().application_id,
+                        self.owner_component_metadata().account_id,
                     )
                     .await;
                 match handle

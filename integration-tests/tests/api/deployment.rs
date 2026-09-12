@@ -123,6 +123,7 @@ fn remote_tool_request(
                 version: None,
                 parameters: NormalizedJsonValue::new(json!({"index": "consumer-documents"})),
                 account: None,
+                config_keys_readable: Default::default(),
                 secret_keys_readable: consumer_secret_scope(),
                 secret_keys_revealable: consumer_secret_scope(),
             },
@@ -155,6 +156,7 @@ fn remote_tool_hash_input(
                 parameters: NormalizedJsonValue::new(json!({
                     "index": "consumer-documents"
                 })),
+                config_keys_readable: Default::default(),
                 secret_keys_readable: consumer_secret_scope(),
                 secret_keys_revealable: consumer_secret_scope(),
                 filesystem_access: ToolFilesystemAccess::Unset,

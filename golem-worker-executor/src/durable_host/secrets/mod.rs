@@ -171,9 +171,9 @@ fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretReveal
 
 fn environment_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> EnvironmentOwnerPattern {
     EnvironmentOwnerPattern::Environment {
-        account: ctx.state.component_metadata.account_email.clone(),
-        application: ctx.state.component_metadata.application_name.clone(),
-        environment: ctx.state.component_metadata.environment_name.clone(),
+        account: ctx.owner_component_metadata().account_email.clone(),
+        application: ctx.owner_component_metadata().application_name.clone(),
+        environment: ctx.owner_component_metadata().environment_name.clone(),
     }
 }
 
@@ -504,7 +504,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                     .state
                     .environment_state_service
                     .get_agent_secret_revision(
-                        self.state.component_metadata.environment_id,
+                        self.owner_component_metadata().environment_id,
                         entry.secret_id,
                         config_key.clone(),
                         entry.pinned_revision,
@@ -588,7 +588,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                 .state
                 .environment_state_service
                 .get_agent_secret_revision(
-                    self.state.component_metadata.environment_id,
+                    self.owner_component_metadata().environment_id,
                     entry.secret_id,
                     match canonical_config_key(&entry) {
                         Ok(path) => path,

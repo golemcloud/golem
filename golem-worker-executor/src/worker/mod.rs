@@ -81,9 +81,9 @@ use crate::services::{
     All, HasActiveAgents, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasQuotaService,
-    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
-    HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
+    HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService, HasPromiseService,
+    HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
+    HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
@@ -93,7 +93,7 @@ use crate::worker::invocation_loop::{
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
 };
-use crate::workerctx::{WorkerCtx, WorkerFilesystemContext};
+use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::durable_stream::{
@@ -1201,8 +1201,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         runtime: OwnerRuntime,
         execution_mode: InvocationExecutionMode,
         filesystem: FilesystemCapability,
-        executable_component: golem_service_base::model::component::Component,
-        activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
+        executable: WorkerCtxExecutable,
+        activation: Arc<golem_common::model::entity::EntityActivation>,
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
@@ -1219,7 +1219,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )?,
             None => golem_common::model::card::EffectiveSurface::default(),
         };
-        let executable_revision = executable_component.revision;
+        use golem_common::model::entity::EntityActivationSource;
+        let executable_revision = match (&executable, activation.source()) {
+            (
+                WorkerCtxExecutable::Component(component),
+                EntityActivationSource::Component { executable },
+            ) if component.id == executable.component_id
+                && component.revision == executable.component_revision =>
+            {
+                component.revision
+            }
+            (
+                WorkerCtxExecutable::Native {
+                    host_tool_id,
+                    implementation_version,
+                },
+                EntityActivationSource::Host {
+                    host_tool_id: expected_id,
+                    implementation_version: expected_version,
+                },
+            ) if host_tool_id == expected_id && implementation_version == expected_version => {
+                owner_component_metadata.revision
+            }
+            (WorkerCtxExecutable::Component(_), _) | (WorkerCtxExecutable::Native { .. }, _) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Entity context executable does not match its validated activation source",
+                ));
+            }
+        };
         let initial_agent_config = match &self.parsed_agent_id {
             Some(agent_id) => {
                 let component_config = owner_component_metadata
@@ -1237,10 +1264,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let filesystem_generation = self
             .owner_runtime_resources
             .filesystem_generation_handle()?;
-        if let Some(files) = activation
-            .as_ref()
-            .map(|activation| &activation.policy().provision().files)
-            .filter(|files| !files.is_empty())
+        if let Some(files) =
+            Some(&activation.policy().provision().files).filter(|files| !files.is_empty())
         {
             provision_initial_files(
                 &filesystem_generation,
@@ -1253,7 +1278,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         }
         let filesystem_context = create_filesystem_context(filesystem_generation).await?;
-        let initial_linear_memory = executable_component.metadata.initial_linear_memory_bytes();
+        let initial_linear_memory = match &executable {
+            WorkerCtxExecutable::Component(component) => {
+                component.metadata.initial_linear_memory_bytes()
+            }
+            WorkerCtxExecutable::Native { .. } => 0,
+        };
         if initial_linear_memory > self.resource_entry.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 self.agent_id(),
@@ -1315,6 +1345,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.card_service(),
             self.card_interest_index.clone(),
             self.component_service(),
+            self.native_tool_catalog(),
             self.extra_deps(),
             self.config(),
             filesystem_context,
@@ -1348,8 +1379,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.owner_execution(),
             self.owner_runtime_resources(),
             filesystem,
-            executable_component,
-            activation,
+            executable,
+            Some(activation),
         )
         .await
     }
@@ -7477,6 +7508,7 @@ impl RunningWorker {
             parent.card_service(),
             parent.card_interest_index.clone(),
             parent.component_service(),
+            parent.native_tool_catalog(),
             parent.extra_deps(),
             parent.config(),
             filesystem_context,
@@ -7510,7 +7542,7 @@ impl RunningWorker {
             parent.owner_execution(),
             parent.owner_runtime_resources(),
             FilesystemCapability::Capable,
-            component_metadata_for_replay,
+            WorkerCtxExecutable::Component(Box::new(component_metadata_for_replay)),
             None,
         )
         .await

@@ -15,6 +15,7 @@
 pub mod account;
 pub mod account_usage;
 pub mod agent;
+pub mod agent_config;
 pub mod agent_secret;
 pub mod api;
 pub mod application;
@@ -852,4 +853,12 @@ mod sql {
 
 pub fn render_config_path(path: &[String]) -> String {
     path.join(".")
+}
+
+#[cfg(feature = "full")]
+fn canonicalize_agent_path(path: &[String]) -> Vec<String> {
+    use heck::ToLowerCamelCase;
+    path.iter()
+        .map(|segment| segment.to_lower_camel_case())
+        .collect()
 }

@@ -97,8 +97,9 @@ use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_registry_service::repo::model::tool_release::{
-    TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
-    TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
+    SYSTEM_TOOL_AVAILABILITY_GRANTABLE, TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
+    TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
 };
 use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -2377,6 +2378,7 @@ pub async fn test_environment_default_card_tracks_application_rename(deps: &Deps
 
 struct EnvironmentServiceDeps {
     environment_service: Arc<EnvironmentService>,
+    component_service: Arc<ComponentService>,
     card_service: CardService,
 }
 
@@ -2419,6 +2421,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -2432,13 +2437,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -2479,6 +2485,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -2492,13 +2501,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -4652,6 +4662,34 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
     );
     assert_eq!(read.release.source_kind, TOOL_RELEASE_SOURCE_COMPONENT);
 
+    let protected_component_record = ToolReleaseRecord::from_system_provision(
+        actor,
+        SystemToolReleaseProvision {
+            name: ToolName::try_from("protected-component-tool").unwrap(),
+            version: "1.0.0".to_string(),
+            source: component_source,
+            definition: make_test_tool("protected-component-tool", "1.0.0"),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            availability: SystemToolAvailability::Grantable,
+        },
+        actor,
+    )
+    .unwrap();
+    let protected_component = deps
+        .tool_release_repo
+        .create(protected_component_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(protected_component.release, protected_component_record);
+    assert_eq!(
+        protected_component.release.origin,
+        TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM
+    );
+    assert_eq!(
+        protected_component.release.system_availability,
+        Some(SYSTEM_TOOL_AVAILABILITY_GRANTABLE)
+    );
+
     let mut invalid_component = component_record.clone();
     invalid_component.tool_release_id = new_repo_uuid();
     invalid_component.tool_version = "invalid-component-fk".to_string();
@@ -5220,6 +5258,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                         parameters: NormalizedJsonValue::new(serde_json::json!({
                             "revision": deployment_revision_id
                         })),
+                        config_keys_readable: Default::default(),
                         secret_keys_readable: SecretKeyScope::All,
                         secret_keys_revealable: SecretKeyScope::All,
                         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -5535,6 +5574,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         account_id: AccountId(owner_account_id),
         account_email: remote_registered_tool.owner_account_email.clone(),
         parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 10 })),
+        config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -5612,15 +5652,18 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(staged.remote_tools.len(), 1);
     assert!(staged.published_tools.is_empty());
 
+    let component_service = environment_service_deps(deps).component_service;
     let tool_release_service = match &deps.test_db {
         TestDb::Postgres(pool) => ToolReleaseService::new(
             Arc::new(DbToolReleaseRepo::new(pool.clone())),
             deps.account_service(),
+            component_service.clone(),
             AccountId(owner_account_id),
         ),
         TestDb::Sqlite(pool) => ToolReleaseService::new(
             Arc::new(DbToolReleaseRepo::new(pool.clone())),
             deps.account_service(),
+            component_service,
             AccountId(owner_account_id),
         ),
     };

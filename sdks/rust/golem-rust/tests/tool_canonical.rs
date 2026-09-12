@@ -471,11 +471,11 @@ mod canonical {
     mod git_canonical {
         use chrono::{DateTime, Utc};
         use golem_rust::agentic::{
-            EffectiveCommandField, ExtendedConstraint, ExtendedOptionShape, ExtendedRef,
-            ExtendedRepeatableListShape, ExtendedToolType, ExtendedValueIsLiteral,
-            get_extended_tool_by_name, get_tool_by_name, option_collected_graph, render_help,
+            EffectiveCommandField, ErrorKind, ExtendedConstraint, ExtendedOptionShape, ExtendedRef,
+            ExtendedRepeatableListShape, ExtendedToolType, ExtendedValueIsLiteral, FlagShape,
+            Repetition, get_extended_tool_by_name, get_tool_by_name, option_collected_graph,
+            render_help,
         };
-        use golem_rust::schema::tool::wit::wire::{ErrorKind, FlagShape, Repetition};
         use golem_rust::schema::{SchemaType, SchemaValue};
         use golem_rust::{FromSchema, IntoSchema, tool_definition, tool_implementation};
         use golem_rust_macro::ToolError;

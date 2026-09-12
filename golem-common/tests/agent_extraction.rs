@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use assert2::assert;
-use golem_common::model::agent::extraction::extract_agent_type_schemas;
+use golem_common::model::agent::extraction::{
+    extract_agent_type_schemas, extract_component_metadata_from_bytes,
+};
 use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -64,5 +66,14 @@ async fn can_extract_agent_type_schemas_from_component_importing_p3_http() -> an
     let result = extract_agent_type_schemas(&wasm_path, false, false).await;
     assert!(let Ok(_) = &result);
     assert!(!result?.is_empty());
+    Ok(())
+}
+
+#[test]
+async fn can_extract_tool_metadata_from_component_bytes() -> anyhow::Result<()> {
+    let wasm =
+        std::fs::read("../test-components/golem_it_tool_streaming_rust_provider_release.wasm")?;
+    let metadata = extract_component_metadata_from_bytes(&wasm, true, false).await?;
+    assert!(!metadata.tools.is_empty());
     Ok(())
 }

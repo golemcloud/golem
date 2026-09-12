@@ -223,11 +223,16 @@ pub trait HasEnvironmentStateService {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService>;
 }
 
+pub trait HasNativeToolCatalog<Ctx: WorkerCtx> {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveAgents<Ctx>
     + HasAgentTypesService
     + HasAgentWebhooksService
+    + HasNativeToolCatalog<Ctx>
     + HasCardService
     + HasComponentService
     + HasConfig
@@ -268,6 +273,7 @@ impl<
     T: HasActiveAgents<Ctx>
         + HasAgentTypesService
         + HasAgentWebhooksService
+        + HasNativeToolCatalog<Ctx>
         + HasCardService
         + HasComponentService
         + HasConfig
@@ -341,6 +347,7 @@ pub struct All<Ctx: WorkerCtx> {
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     extra_deps: Ctx::ExtraDeps,
     /// A no-op sentinel that participates in the `All` lifecycle.
     /// Tests can hold a `Weak<()>` to it and verify that `All` (and all
@@ -384,6 +391,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            native_tool_catalog: self.native_tool_catalog.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -428,6 +436,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -465,6 +474,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             http_connection_pool,
             websocket_connection_pool,
             environment_state_service,
+            native_tool_catalog,
             extra_deps,
             leak_sentinel,
         }
@@ -512,6 +522,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.http_connection_pool(),
             this.websocket_connection_pool(),
             this.environment_state_service(),
+            this.native_tool_catalog(),
             this.extra_deps(),
             this.leak_sentinel(),
         )
@@ -725,6 +736,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWebSocketConnectionPool for T
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEnvironmentStateService for T {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.all().environment_state_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasNativeToolCatalog<Ctx> for T {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>> {
+        self.all().native_tool_catalog.clone()
     }
 }
 

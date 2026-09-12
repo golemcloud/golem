@@ -11610,6 +11610,33 @@ components:
         allowIncompatibleConfig:
           type: boolean
           default: false
+    ConfigKeyScope:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - all
+      - type: object
+        required:
+        - kind
+        - keys
+        properties:
+          kind:
+            type: string
+            enum:
+            - keys
+          keys:
+            type: array
+            items:
+              type: array
+              title: Canonical representation of an agent config path (segments are each camelCase)
+              items:
+                type: string
     Constraint:
       type: object
       oneOf:
@@ -11935,6 +11962,7 @@ components:
       - mcpDeployments
       - remoteTools
       - publishedTools
+      - ambientTools
       properties:
         currentRevision:
           type: integer
@@ -11962,6 +11990,55 @@ components:
           type: array
           items:
             type: string
+        ambientTools:
+          type: array
+          description: |-
+            Registry-owned ambient tool catalog inputs. These are read-only deployment inputs;
+            applications neither declare nor receive grants for them.
+          items:
+            $ref: '#/components/schemas/DeploymentPlanAmbientToolEntry'
+    DeploymentPlanAmbientToolEntry:
+      type: object
+      title: DeploymentPlanAmbientToolEntry
+      required:
+      - releaseId
+      - name
+      - version
+      - sourceDigest
+      - ownerAccountId
+      - ownerAccountEmail
+      - metadataVersion
+      - metadataDigest
+      - definition
+      - provision
+      - environmentBinding
+      properties:
+        releaseId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        sourceDigest:
+          type: string
+          format: hash
+        ownerAccountId:
+          type: string
+          format: uuid
+        ownerAccountEmail:
+          type: string
+        metadataVersion:
+          type: string
+        metadataDigest:
+          type: string
+          format: hash
+        definition:
+          $ref: '#/components/schemas/Tool'
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfig'
+        environmentBinding:
+          $ref: '#/components/schemas/ToolBindingInput'
     DeploymentPlanComponentEntry:
       type: object
       title: DeploymentPlanComponentEntry
@@ -17215,6 +17292,7 @@ components:
       title: ToolBindingInput
       required:
       - parameters
+      - configKeysReadable
       - secretKeysReadable
       - secretKeysRevealable
       properties:
@@ -17224,6 +17302,8 @@ components:
           $ref: '#/components/schemas/NormalizedJsonValue'
         account:
           type: string
+        configKeysReadable:
+          $ref: '#/components/schemas/ConfigKeyScope'
         secretKeysReadable:
           $ref: '#/components/schemas/SecretKeyScope'
         secretKeysRevealable:

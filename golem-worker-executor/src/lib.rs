@@ -20,6 +20,7 @@ pub mod grpc;
 pub mod identity;
 pub mod metrics;
 pub mod model;
+pub mod native_tool;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;
@@ -174,6 +175,12 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    fn create_native_tool_catalog(
+        &self,
+    ) -> anyhow::Result<Arc<crate::native_tool::NativeToolCatalog<Ctx>>> {
+        Ok(Arc::new(crate::native_tool::NativeToolCatalog::default()))
+    }
+
     /// Creates the [`ActiveAgents`] service, including the measured-headroom
     /// admission gate. The default builds the memory probe from the config
     /// (cgroup/process/override). The in-process test harness overrides this to
@@ -368,6 +375,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
+        let native_tool_catalog = self.create_native_tool_catalog()?;
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -399,6 +407,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             environment_state_service.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
@@ -441,6 +450,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             resource_limits.clone(),
             shutdown_token.clone(),
             environment_state_service.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
@@ -484,6 +494,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             http_connection_pool,
             websocket_connection_pool.clone(),
             environment_state_service.clone(),
+            native_tool_catalog,
             additional_deps,
             leak_sentinel,
         ))

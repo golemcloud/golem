@@ -681,6 +681,7 @@ mod protobuf {
     use crate::base_model::json::NormalizedJsonValue;
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
+    use crate::model::agent_config::CanonicalAgentConfigPath;
     use crate::model::agent_secret::CanonicalAgentSecretPath;
     use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
     use crate::model::component_metadata::{
@@ -1031,6 +1032,10 @@ mod protobuf {
                 version: value.version,
                 parameters,
                 account: value.account.map(AccountEmail::new),
+                config_keys_readable: value
+                    .config_keys_readable
+                    .ok_or_else(|| "Missing ToolBindingInput.config_keys_readable".to_string())?
+                    .try_into()?,
                 secret_keys_readable: value
                     .secret_keys_readable
                     .ok_or_else(|| "Missing ToolBindingInput.secret_keys_readable".to_string())?
@@ -1049,9 +1054,60 @@ mod protobuf {
                 version: value.version,
                 parameters_json: value.parameters.to_string(),
                 account: value.account.map(AccountEmail::into_inner),
+                config_keys_readable: Some(value.config_keys_readable.into()),
                 secret_keys_readable: Some(value.secret_keys_readable.into()),
                 secret_keys_revealable: Some(value.secret_keys_revealable.into()),
             }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::ConfigKeyScope>
+        for crate::model::tool::ConfigKeyScope
+    {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::ConfigKeyScope,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::component::config_key_scope::Value;
+            match value
+                .value
+                .ok_or_else(|| "Missing ConfigKeyScope.value".to_string())?
+            {
+                Value::All(_) => Ok(Self::All),
+                Value::Keys(keys) => Ok(Self::Keys(
+                    keys.paths
+                        .into_iter()
+                        .map(|path| CanonicalAgentConfigPath(path.segments))
+                        .collect(),
+                )),
+            }
+        }
+    }
+
+    impl From<crate::model::tool::ConfigKeyScope>
+        for golem_api_grpc::proto::golem::component::ConfigKeyScope
+    {
+        fn from(value: crate::model::tool::ConfigKeyScope) -> Self {
+            use golem_api_grpc::proto::golem::component::config_key_scope::Value;
+            let value = match value {
+                crate::model::tool::ConfigKeyScope::All => {
+                    Value::All(golem_api_grpc::proto::golem::common::Empty {})
+                }
+                crate::model::tool::ConfigKeyScope::Keys(keys) => {
+                    Value::Keys(golem_api_grpc::proto::golem::component::ConfigKeyPaths {
+                        paths: keys
+                            .into_iter()
+                            .map(
+                                |path| golem_api_grpc::proto::golem::component::ConfigKeyPath {
+                                    segments: path.0,
+                                },
+                            )
+                            .collect(),
+                    })
+                }
+            };
+            Self { value: Some(value) }
         }
     }
 
@@ -1347,6 +1403,7 @@ mod protobuf {
                 account_id: Some(value.account_id.into()),
                 account_email: value.account_email.into_inner(),
                 parameters_json: value.parameters.to_string(),
+                config_keys_readable: Some(value.config_keys_readable.into()),
                 secret_keys_readable: Some(value.secret_keys_readable.into()),
                 secret_keys_revealable: Some(value.secret_keys_revealable.into()),
                 source,
@@ -1392,6 +1449,10 @@ mod protobuf {
                     serde_json::from_str(&value.parameters_json)
                         .map_err(|error| format!("invalid tool binding parameters: {error}"))?,
                 ),
+                config_keys_readable: value
+                    .config_keys_readable
+                    .ok_or("missing CompiledToolBinding.config_keys_readable")?
+                    .try_into()?,
                 secret_keys_readable: value
                     .secret_keys_readable
                     .ok_or("missing CompiledToolBinding.secret_keys_readable")?
@@ -1743,6 +1804,7 @@ mod tests {
             account: Some(crate::model::account::AccountEmail::new(
                 "owner@example.com",
             )),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([CanonicalAgentSecretPath(
                 vec!["credentials".to_string(), "github".to_string()],
             )])),
@@ -1786,9 +1848,22 @@ mod tests {
         let metadata = metadata_with_tool();
         let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
             metadata.clone().try_into().unwrap();
-        let decoded = ComponentMetadata::try_from(proto).unwrap();
+        let decoded = ComponentMetadata::try_from(proto.clone()).unwrap();
 
         assert_eq!(decoded, metadata);
+
+        let mut missing_scope = proto;
+        missing_scope
+            .tools
+            .values_mut()
+            .next()
+            .unwrap()
+            .environment_binding
+            .as_mut()
+            .unwrap()
+            .config_keys_readable = None;
+        let error = ComponentMetadata::try_from(missing_scope).unwrap_err();
+        assert!(error.contains("Missing ToolBindingInput.config_keys_readable"));
     }
 
     #[test]
@@ -1876,6 +1951,7 @@ mod tests {
             account_id: owner_account_id,
             account_email: owner_account_email,
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::Keys(BTreeSet::new()),
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
@@ -1936,6 +2012,7 @@ mod tests {
             account_id: owner_account_id,
             account_email: owner_account_email,
             parameters: NormalizedJsonValue::new(serde_json::json!({ "root": "/workspace" })),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: crate::model::tool::ToolFilesystemAccess::Allowed,
@@ -1985,6 +2062,11 @@ mod tests {
         let decoded = ToolDeploymentState::try_from(proto.clone()).unwrap();
 
         assert_eq!(decoded, state);
+
+        let mut missing_scope_proto = proto.clone();
+        missing_scope_proto.agent_tool_bindings[0].config_keys_readable = None;
+        let error = ToolDeploymentState::try_from(missing_scope_proto).unwrap_err();
+        assert!(error.contains("missing CompiledToolBinding.config_keys_readable"));
 
         let mut legacy_proto = proto;
         legacy_proto.registered_tools[0].tagged_source = None;

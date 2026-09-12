@@ -365,6 +365,13 @@ pub enum ManifestSecretKeyScope {
     Keys(Vec<String>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ManifestConfigKeyScope {
+    All(String),
+    Keys(Vec<String>),
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolBinding {
@@ -376,6 +383,10 @@ pub struct ToolBinding {
     pub parameters: Option<IndexMap<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_keys_readable_merge_mode: Option<SecretKeyMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_keys_readable: Option<ManifestConfigKeyScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_keys_readable_merge_mode: Option<SecretKeyMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1728,6 +1739,14 @@ mod test {
         .boxed()
     }
 
+    fn arb_config_key_scope_model() -> BoxedStrategy<ManifestConfigKeyScope> {
+        prop_oneof![
+            Just(ManifestConfigKeyScope::All("*".to_string())),
+            prop::collection::vec(arb_ident(), 0..=3).prop_map(ManifestConfigKeyScope::Keys),
+        ]
+        .boxed()
+    }
+
     fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
         (
             arb_opt(arb_semver()),
@@ -1743,6 +1762,8 @@ mod test {
                     .boxed(),
             ),
             arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
+            arb_opt(arb_config_key_scope_model()),
+            arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
             arb_opt(arb_secret_key_scope_model()),
             arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
             arb_opt(arb_secret_key_scope_model()),
@@ -1753,6 +1774,8 @@ mod test {
                     parameters_merge_mode,
                     parameters,
                     account,
+                    config_keys_readable_merge_mode,
+                    config_keys_readable,
                     secret_keys_readable_merge_mode,
                     secret_keys_readable,
                     secret_keys_revealable_merge_mode,
@@ -1762,6 +1785,8 @@ mod test {
                     parameters_merge_mode,
                     parameters,
                     account,
+                    config_keys_readable_merge_mode,
+                    config_keys_readable,
                     secret_keys_readable_merge_mode,
                     secret_keys_readable,
                     secret_keys_revealable_merge_mode,
@@ -2923,6 +2948,8 @@ mod test {
                     version: "1.0.0"
                     parametersMergeMode: replace
                     parameters: { root: /workspace/src }
+                    configKeysReadableMergeMode: intersect
+                    configKeysReadable: [runtime.logLevel]
                     secretKeysReadableMergeMode: intersect
                     secretKeysReadable: [credentials.github]
                     secretKeysRevealable: []
@@ -2953,6 +2980,20 @@ mod test {
         assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
         assert!(!app.tools.is_empty());
         assert_eq!(app.tool_releases.len(), 1);
+    }
+
+    #[test]
+    fn tool_binding_rejects_unknown_config_scope_field() {
+        let source = indoc::indoc! { r#"
+            app: test-app
+            agents:
+              CoderAgent:
+                tools:
+                  grep:
+                    configKeysReadble: "*"
+        "# };
+
+        assert!(Application::from_yaml_str(source).is_err());
     }
 
     #[test]

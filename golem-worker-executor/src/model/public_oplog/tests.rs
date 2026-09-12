@@ -165,6 +165,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                 account_id: AccountId::new(),
                 account_email: AccountEmail::new("owner@example.com"),
                 parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                config_keys_readable: Default::default(),
                 secret_keys_readable: SecretKeyScope::All,
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: ToolFilesystemAccess::Unset,

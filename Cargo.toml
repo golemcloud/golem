@@ -6,6 +6,8 @@ members = [
     "golem-client",
     "golem-common",
     "golem-debugging-service",
+    "golem-native-tool",
+    "golem-rust-macro",
     "golem-service-base",
     "golem-component-compilation-service",
     "golem-registry-service",
@@ -17,6 +19,7 @@ members = [
     "integration-tests",
     "golem-schema",
     "golem-schema-derive",
+    "golem-tool-metadata",
     "cli/golem",
     "cli/golem-cli",
     "golem-openapi-client-generator",
@@ -37,14 +40,17 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
+golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
+golem-rust-macro = { version = "=0.0.0", path = "golem-rust-macro" }
 golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = false }
 golem-schema-derive = { version = "=0.0.0", path = "golem-schema-derive" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
+golem-tool-metadata = { version = "=0.0.0", path = "golem-tool-metadata", default-features = false }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }

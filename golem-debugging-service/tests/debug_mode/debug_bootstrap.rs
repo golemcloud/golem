@@ -214,6 +214,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             agent_webhooks_service,
             resource_limits,
             quota_service,
+            self.create_native_tool_catalog()?,
             additional_deps,
             shutdown_token,
             http_connection_pool,

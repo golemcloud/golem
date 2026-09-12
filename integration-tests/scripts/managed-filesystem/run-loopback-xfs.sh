@@ -638,8 +638,8 @@ if [[ ${filesystem_workload_benchmark} == false && ${filesystem_native_workload_
       sdks/rust/golem-rust/Cargo.toml \
       sdks/rust/golem-rust/src/**/*.rs \
       sdks/rust/golem-rust/wit/**/*.wit \
-      sdks/rust/golem-rust-macro/Cargo.toml \
-      sdks/rust/golem-rust-macro/src/**/*.rs \
+      golem-rust-macro/Cargo.toml \
+      golem-rust-macro/src/**/*.rs \
       test-components/initial-file-system/src/**/*.rs; do
       if [[ ${source} -nt ${initial_file_wasm} ]]; then
         rebuild_initial_file_wasm=true

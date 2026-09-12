@@ -1,0 +1,24 @@
+[package]
+description = "Golem Rust tooling library that facilitates writing Golem backends in Rust"
+ edition = "2024"
+homepage = "https://golem.cloud"
+license = "Apache-2.0"
+name = "golem-rust-macro"
+repository = "https://github.com/golemcloud/golem-rust"
+version = "0.0.0"
+
+[lib]
+harness = false
+path = "src/lib.rs"
+proc-macro = true
+
+[dependencies]
+heck = { workspace = true }
+humantime = { workspace = true }
+proc-macro-crate = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["extra-traits", "full", "fold", "parsing", "visit-mut"] }
+
+[dev-dependencies]
+test-r = { workspace = true }

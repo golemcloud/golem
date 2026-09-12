@@ -1365,7 +1365,7 @@ where
             let (component_size, active_plugins) = store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
                 (
-                    ctx.state.component_metadata.component_size,
+                    ctx.component_metadata().component_size,
                     HashSet::from_iter({
                         ctx.agent_type_provision_config()
                             .map(|c| c.plugins.as_slice())
@@ -1411,7 +1411,7 @@ where
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            current_revision: ctx.state.component_metadata.revision,
+            current_revision: ctx.component_metadata().revision,
         }
     });
 
@@ -1494,7 +1494,8 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     update: AccessRevisionUpdate,
 ) -> Result<(), WorkerExecutorError> {
-    ctx.state.component_metadata = update.metadata;
+    ctx.state.component_metadata = update.metadata.clone();
+    ctx.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(update.metadata));
 
     if let Some((agent_config, initial_wallet_cards)) = update.agent_state {
         ctx.state.agent_config = agent_config;
