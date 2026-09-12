@@ -41,12 +41,13 @@ inherit_test_dep!(Tracing);
 // `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
-// `deploy`. The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+// `deploy`, except suites requiring prebuilt WASMs, which run in `prebuilt_components`.
+// The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(directory_source_ifs, deploy);
-tag_suite!(durable_streams, deploy);
+tag_suite!(durable_streams, prebuilt_components);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);

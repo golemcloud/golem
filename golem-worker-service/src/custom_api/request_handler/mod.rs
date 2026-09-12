@@ -1,0 +1,245 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::call_agent::CallAgentHandler;
+use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
+use super::durable_streams::DurableStreamsHandler;
+use super::error::RequestHandlerError;
+use super::model::RichRouteBehaviour;
+use super::oidc::handler::OidcHandler;
+use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
+use super::session_from_header_security::apply_session_from_header_security_middleware;
+use super::webhooks::WebhookCallbackHandler;
+use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
+use crate::custom_api::RichRequest;
+use anyhow::anyhow;
+use golem_schema::schema::render::json_value::to_json_value_redacted;
+use golem_service_base::custom_api::OpenApiSpecBehaviour;
+use golem_service_base::custom_api::OpenApiSpecFormat;
+use http::StatusCode;
+use poem::{Request, Response};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::{Instrument, debug};
+
+pub struct RequestHandler {
+    route_resolver: Arc<RouteResolver>,
+    call_agent_handler: Arc<CallAgentHandler>,
+    durable_streams_handler: Arc<DurableStreamsHandler>,
+    oidc_handler: Arc<OidcHandler>,
+    webhook_callback_handler: Arc<WebhookCallbackHandler>,
+}
+
+#[allow(irrefutable_let_patterns)]
+impl RequestHandler {
+    pub fn new(
+        route_resolver: Arc<RouteResolver>,
+        call_agent_handler: Arc<CallAgentHandler>,
+        durable_streams_handler: Arc<DurableStreamsHandler>,
+        oidc_handler: Arc<OidcHandler>,
+        webhook_callback_handler: Arc<WebhookCallbackHandler>,
+    ) -> Self {
+        Self {
+            route_resolver,
+            call_agent_handler,
+            durable_streams_handler,
+            oidc_handler,
+            webhook_callback_handler,
+        }
+    }
+
+    pub async fn handle_request(&self, request: Request) -> Result<Response, RequestHandlerError> {
+        debug!("Begin http request handling for request {request:?}");
+
+        let matching_route = self.route_resolver.resolve_matching_route(&request).await?;
+        let mut request = RichRequest::new(request);
+
+        let execution_result = self
+            .execute_route_and_middlewares(&mut request, &matching_route)
+            .instrument(tracing::span!(
+                tracing::Level::INFO,
+                "handle_route",
+                domain = %matching_route.domain,
+                method = %matching_route.route.method,
+                route = %matching_route.route.path.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
+            ))
+            .await?;
+
+        let response = route_execution_result_to_response(execution_result)?;
+
+        Ok(response)
+    }
+
+    async fn execute_route_and_middlewares(
+        &self,
+        request: &mut RichRequest,
+        resolved_route: &ResolvedRouteEntry,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        if let Some(short_circuit) = self
+            .oidc_handler
+            .apply_oidc_incoming_middleware(request, resolved_route)
+            .await?
+        {
+            return Ok(short_circuit);
+        }
+
+        if let Some(short_circuit) =
+            apply_session_from_header_security_middleware(request, resolved_route)?
+        {
+            return Ok(short_circuit);
+        }
+
+        let mut result = self.execute_route(request, resolved_route).await?;
+
+        apply_cors_outgoing_middleware(&mut result, request, resolved_route).await?;
+
+        Ok(result)
+    }
+
+    async fn execute_route(
+        &self,
+        request: &mut RichRequest,
+        resolved_route: &ResolvedRouteEntry,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        match &resolved_route.route.behavior {
+            RichRouteBehaviour::CallAgent(behaviour)
+                if behaviour.route_mode
+                    == golem_service_base::custom_api::AgentRouteMode::DurableStreams =>
+            {
+                self.durable_streams_handler
+                    .handle(request, resolved_route, behaviour)
+                    .await
+                    .or_else(super::durable_streams::error_response)
+            }
+            RichRouteBehaviour::CallAgent(behaviour) => {
+                self.call_agent_handler
+                    .handle_call_agent_behaviour(request, resolved_route, behaviour)
+                    .await
+            }
+
+            RichRouteBehaviour::CorsPreflight(cors_preflight) => {
+                handle_cors_preflight_behaviour(request, cors_preflight)
+            }
+
+            RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour { security_scheme }) => {
+                self.oidc_handler
+                    .handle_oidc_callback_behaviour(request, security_scheme)
+                    .await
+            }
+
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }) => {
+                let spec = resolved_route
+                    .openapi_spec
+                    .clone()
+                    .ok_or(RequestHandlerError::OpenApiSpecGenerationFailed)?;
+
+                Ok(RouteExecutionResult {
+                    status: StatusCode::OK,
+                    headers: HashMap::new(),
+                    body: ResponseBody::OpenApiSchema {
+                        spec,
+                        format: *format,
+                    },
+                })
+            }
+
+            RichRouteBehaviour::WebhookCallback(behaviour) => {
+                self.webhook_callback_handler
+                    .handle_webhook_callback_behaviour(request, resolved_route, behaviour)
+                    .await
+            }
+        }
+    }
+}
+
+fn route_execution_result_to_response(
+    result: RouteExecutionResult,
+) -> Result<Response, RequestHandlerError> {
+    let mut response_builder = Response::builder().status(result.status);
+
+    for (name, value) in result.headers {
+        response_builder = response_builder.header(name, value);
+    }
+
+    match result.body {
+        ResponseBody::NoBody => Ok(response_builder.finish()),
+
+        ResponseBody::PoemBody { body, content_type } => {
+            let response = response_builder.body(body);
+            Ok(match content_type {
+                Some(content_type) => response.set_content_type(content_type),
+                None => response,
+            })
+        }
+
+        ResponseBody::ComponentModelJsonBody { body } => {
+            let body = poem::Body::from_json(
+                to_json_value_redacted(body.graph(), body.root_type(), body.value())
+                    .map_err(|e| anyhow!("ComponentModelJsonBody conversion error: {e}"))?,
+            )
+            .map_err(anyhow::Error::from)?;
+
+            Ok(response_builder
+                .body(body)
+                .set_content_type("application/json"))
+        }
+
+        ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
+            .body(body.data)
+            .set_content_type(body.binary_type.mime_type)),
+
+        ResponseBody::UnstructuredTextBody { body } => {
+            let mut response_builder = response_builder.content_type("text/plain; charset=utf-8");
+            if let Some(text_type) = &body.text_type {
+                let trimmed = text_type.language_code.trim();
+                if !trimmed.is_empty()
+                    && !trimmed.contains(',')
+                    && trimmed
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                {
+                    response_builder =
+                        response_builder.header(http::header::CONTENT_LANGUAGE, trimmed);
+                }
+            }
+            Ok(response_builder.body(body.data))
+        }
+
+        ResponseBody::OpenApiSchema { spec: body, format } => {
+            let response = match format {
+                OpenApiSpecFormat::Json => {
+                    let body_json = serde_json::to_vec(&body.0)
+                        .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
+
+                    response_builder
+                        .body(body_json)
+                        .set_content_type("application/json")
+                }
+                OpenApiSpecFormat::Yaml => {
+                    let body_yaml = serde_yaml::to_string(&body.0)
+                        .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
+
+                    response_builder
+                        .body(body_yaml)
+                        .set_content_type("application/yaml")
+                }
+            };
+
+            Ok(response)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
