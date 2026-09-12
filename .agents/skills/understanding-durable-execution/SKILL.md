@@ -144,6 +144,15 @@ terminal interrupt already claimed by the invocation loop is not recorded again,
 or failed invocation is not overwritten. Test:
 `tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart`.
 
+`recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
+turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
+remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
+restart does not fail the invocation waiter or append `Interrupted`.
+
+Environment and application deletion invalidate component metadata, environment state and agent
+type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
+of admitting requests against a retiring cached owner.
+
 Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
 The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
 If normal archival already fenced the owner, lookup joins archival through cache removal, then

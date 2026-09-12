@@ -2424,7 +2424,15 @@ async fn caller_recovery_restarts_input_drain_after_rpc_result_commit(
         .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
         .await?;
 
-    let _ = executor.simulated_crash(&caller).await;
+    executor.simulated_crash(&caller).await?;
+    let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "a simulated crash of a suspended caller must not permanently interrupt it"
+    );
+    assert!(!invocation.is_finished());
     executor.complete_promise(&gate, Vec::new()).await?;
 
     let result = invocation

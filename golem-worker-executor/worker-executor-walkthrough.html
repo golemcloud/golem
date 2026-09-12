@@ -1794,12 +1794,16 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <p>An explicit interrupt retires the cached owner and fences replacement startup. If the worker already unloaded for OOM backoff or permit acquisition, the retiring owner commits the still-unclaimed <code>Interrupted</code> marker and notifies invocation waiters before removal. It does not need a new Store to do this. An interrupt already handled by the invocation loop is not recorded twice, and completed or failed invocations retain their outcome.</p>
 
+<p>A simulated crash (<code>recover_immediately = true</code>) requests <code>Restart</code> for Running, Suspended and Retrying workers; it never permanently interrupts a parked invocation. If no invocation loop remains, the existing promise, scheduler or permit wakeup starts reconstruction. The pending restart neither appends <code>Interrupted</code> nor fails the invocation waiter.</p>
+
+<p>Environment and application deletion invalidate component metadata, environment state and agent type caches before awaiting owner retirement. New metadata lookups see deletion rather than admitting requests against a retiring cached owner.</p>
+
 <div class="table-wrap">
 <table>
   <thead><tr><th scope="col">Trigger</th><th scope="col">Mechanism</th><th scope="col">Oplog</th><th scope="col">Comes back when</th></tr></thead>
   <tbody>
     <tr><td><strong>Interrupt</strong> (API)</td><td><code>Worker::set_interrupting(InterruptKind::Interrupt(ts))</code>; the running invocation is aborted at the next host-call boundary</td><td><code>Interrupted</code> (h)</td><td>An explicit resume; status stays <code>Interrupted</code> until then</td></tr>
-    <tr><td><strong>Restart</strong> (simulated crash, API)</td><td><code>InterruptKind::Restart</code></td><td><code>Restart</code> (h) — or nothing at all for a real crash</td><td>Immediately: the outer loop reconstructs at once</td></tr>
+    <tr><td><strong>Restart</strong> (simulated crash, API)</td><td><code>InterruptKind::Restart</code></td><td><code>Restart</code> (h) — or nothing at all for a real crash</td><td>The resident loop reconstructs immediately; an already-unloaded worker reconstructs on its next wakeup</td></tr>
     <tr><td><strong>Suspend</strong></td><td><code>InterruptKind::Suspend(ts)</code>, used when the guest sleeps or waits for a promise long enough to unload</td><td><code>Suspend</code> (h)</td><td>On demand: a new invocation, a promise completion, or a <code>ScheduledAction::Resume</code></td></tr>
     <tr><td><strong>Jump</strong></td><td><code>InterruptKind::Jump</code> ("jumping back in time"): atomic-region rollback or <code>set-oplog-index</code></td><td><code>Jump { region }</code> (positional)</td><td>Immediately, replaying with the region skipped</td></tr>
     <tr><td><strong>Eviction</strong> (memory / filesystem pressure)</td><td><code>EvictionClass</code> ordering: <code>LoadedIdle</code> first (cheapest), then <code>WarmRunnable</code> (has durable pending invocations). Executing workers and workers with non-durable in-memory work (internal queue, <code>ResumeReplay</code>, interrupt) are <em>never</em> evicted.</td><td>none</td><td>On the next invocation or scheduled action</td></tr>
