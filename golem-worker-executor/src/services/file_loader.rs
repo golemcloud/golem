@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::sandbox_filesystem::{HostDirectory, HostPath};
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
@@ -20,11 +21,11 @@ use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
-use std::{path::PathBuf, sync::Arc};
-use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
@@ -36,13 +37,13 @@ pub struct FileUseToken {
 
 #[derive(Debug, Clone)]
 pub(crate) struct InitialFileSource {
-    path: PathBuf,
+    path: HostPath,
     size: u64,
     _token: FileUseToken,
 }
 
 impl InitialFileSource {
-    pub(crate) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &HostPath {
         &self.path
     }
 
@@ -54,7 +55,7 @@ impl InitialFileSource {
 /// Interface for loading immutable, content-addressed initial-file sources.
 pub struct FileLoader {
     initial_agent_files_service: Arc<InitialAgentFilesService>,
-    cache_dir: TempDir,
+    cache_dir: HostDirectory,
     // Note: The cache is shared between accounts. One account no accessing data from another account
     // is implicitly done by the key being a hash of the content.
     cache: Cache,
@@ -65,23 +66,20 @@ pub struct FileLoader {
 }
 
 impl FileLoader {
-    pub fn new(
+    /// Makes a loader that keeps its sources in `cache_dir`.
+    ///
+    /// The loader owns the directory, so the directory and the sources in it go away with the
+    /// loader.
+    pub(crate) fn new(
         initial_agent_files_service: Arc<InitialAgentFilesService>,
-        cache_parent: Option<&Path>,
-    ) -> Result<Self, anyhow::Error> {
-        let mut cache = tempfile::Builder::new();
-        cache.prefix("golem-initial-component-files");
-        let cache_dir = match cache_parent {
-            Some(parent) => cache.tempdir_in(parent)?,
-            None => cache.tempdir()?,
-        };
-
-        Ok(Self {
+        cache_dir: HostDirectory,
+    ) -> Self {
+        Self {
             initial_agent_files_service,
             cache: Mutex::new(HashMap::new()),
             cache_dir,
             item_counter: AtomicU64::new(0),
-        })
+        }
     }
 
     pub(crate) async fn get_source(
@@ -158,16 +156,28 @@ impl FileLoader {
                 let counter = self
                     .item_counter
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let path = self.cache_dir.path().join(counter.to_string());
-
-                match self
-                    .download_file_to_path_as_read_only(environment_id, &path, key, file_size)
-                    .await
+                let downloaded = match self
+                    .cache_dir
+                    .path()
+                    .child(OsStr::new(&counter.to_string()))
                 {
-                    Ok(()) => {
+                    Ok(path) => self
+                        .download_file_to_path_as_read_only(
+                            environment_id,
+                            path.as_path(),
+                            key,
+                            file_size,
+                        )
+                        .await
+                        .map(|()| path),
+                    Err(error) => Err(error.into()),
+                };
+
+                match downloaded {
+                    Ok(path) => {
                         // we successfully downloaded the file and set it to read-only, set the cache entry to the file
                         *prelocked_entry = Ok(InitializedCacheEntry {
-                            path: path.clone(),
+                            path,
                             size: file_size,
                         });
                     }
@@ -192,7 +202,7 @@ impl FileLoader {
         key: AgentFileContentHash,
         expected_size: u64,
     ) -> Result<(), anyhow::Error> {
-        let temporary = tempfile::NamedTempFile::new_in(self.cache_dir.path())?;
+        let temporary = tempfile::NamedTempFile::new_in(self.cache_dir.path().as_path())?;
         self.download_file(environment_id, &temporary, key, expected_size)
             .await?;
         crate::sandbox_filesystem::set_file_permissions(temporary.as_file(), true)?;
@@ -267,27 +277,29 @@ type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
 
 #[derive(Debug)]
 struct InitializedCacheEntry {
-    path: PathBuf,
+    path: HostPath,
     size: u64,
 }
 
 impl InitializedCacheEntry {
     #[cfg(test)]
-    fn new_for_test(path: PathBuf) -> Self {
+    fn new_for_test(path: HostPath) -> Self {
         Self { path, size: 0 }
     }
 }
 
 impl Drop for InitializedCacheEntry {
     fn drop(&mut self) {
-        debug!("Removing file {}", self.path.display());
-        std::fs::remove_file(&self.path).expect("Failed to remove cached component file — executor filesystem is in an inconsistent state");
+        debug!("Removing file {}", self.path.as_path().display());
+        std::fs::remove_file(self.path.as_path()).expect("Failed to remove cached component file — executor filesystem is in an inconsistent state");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+    use golem_common::model::RetryConfig;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
     use golem_service_base::replayable_stream::ReplayableStream as _;
@@ -296,6 +308,15 @@ mod tests {
     use test_r::test;
 
     test_r::enable!();
+
+    /// Makes the cache directory of a loader on unmanaged storage with a temporary root.
+    async fn cache_directory() -> HostDirectory {
+        let provisioning =
+            SandboxFilesystemProvisioning::new(None, None, RetryConfig::default()).unwrap();
+        HostDirectory::create_at_root(&provisioning, OsStr::new(".initial-files"))
+            .await
+            .unwrap()
+    }
 
     /// Build a `FileLoader` sharing a single in-memory blob store,
     /// and upload `content` so it can be fetched as a verified source.
@@ -307,7 +328,7 @@ mod tests {
         let upload_svc = Arc::new(InitialAgentFilesService::new(blob.clone()));
         let loader_svc = Arc::new(InitialAgentFilesService::new(blob));
 
-        let loader = FileLoader::new(loader_svc, None).unwrap();
+        let loader = FileLoader::new(loader_svc, cache_directory().await);
 
         let env_id = EnvironmentId::new();
         let data: Vec<u8> = content.to_vec();
@@ -332,12 +353,12 @@ mod tests {
             .get_source(env_id, hash, content.len() as u64)
             .await
             .unwrap();
-        let path = source1.path().to_path_buf();
+        let path = source1.path().as_path().to_path_buf();
         let source2 = loader
             .get_source(env_id, hash, content.len() as u64)
             .await
             .unwrap();
-        assert_eq!(source2.path(), path);
+        assert_eq!(source2.path().as_path(), path);
         drop(source1);
         assert!(path.exists());
         drop(source2);
@@ -349,16 +370,37 @@ mod tests {
     /// delete files is in an inconsistent state and the process should not
     /// continue. This is preferable to silently over-committing disk space.
     #[test]
-    fn ro_panics_when_file_deletion_fails() {
-        let result = std::panic::catch_unwind(|| {
-            let nonexistent =
-                std::path::PathBuf::from("/tmp/golem-test-nonexistent-file-12345.wasm");
+    async fn ro_panics_when_file_deletion_fails() {
+        let directory = cache_directory().await;
+        let nonexistent = directory.path().child(OsStr::new("missing.wasm")).unwrap();
+        let result = std::panic::catch_unwind(move || {
             let entry = InitializedCacheEntry::new_for_test(nonexistent);
             drop(entry);
         });
         assert!(
             result.is_err(),
             "dropping an InitializedCacheEntry with a nonexistent path must panic"
+        );
+    }
+
+    #[test]
+    async fn loader_keeps_sources_in_its_cache_directory_until_it_is_dropped() {
+        let content = b"cached content";
+        let (loader, hash, env_id) = setup(content).await;
+        let cache = loader.cache_dir.path().as_path().to_path_buf();
+
+        let source = loader
+            .get_source(env_id, hash, content.len() as u64)
+            .await
+            .unwrap();
+
+        assert_eq!(source.path().as_path().parent(), Some(cache.as_path()));
+        assert_eq!(std::fs::read(source.path().as_path()).unwrap(), content);
+        drop(source);
+        drop(loader);
+        assert!(
+            !cache.exists(),
+            "the cache directory must go away with the loader"
         );
     }
 

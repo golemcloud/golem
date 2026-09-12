@@ -612,6 +612,52 @@ impl SandboxFilePermissions {
     }
 }
 
+/// One item for [`SandboxFilesystemAdapter::seed`].
+///
+/// The entry does not own what is at its source. The source must stay until the seed call that
+/// takes the entry returns.
+#[derive(Clone, Debug)]
+pub(crate) struct SeedEntry {
+    /// The host object that goes into the sandbox.
+    pub source: HostPath,
+    /// Where the object goes in the sandbox.
+    pub target: SandboxPath,
+    /// The write permission of the files that the entry makes.
+    pub access: SeedAccess,
+    /// What the entry does with a target path that is already there.
+    pub existing: OnExisting,
+}
+
+/// The write permission of the files that a seed entry makes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SeedAccess {
+    /// A file keeps the permissions of its source.
+    #[allow(dead_code)]
+    FromSource,
+    /// A file gets the permissions of its source without write permission.
+    ReadOnly,
+    /// A file gets the permissions of its source with write permission for its owner.
+    ReadWrite,
+}
+
+/// What a seed entry does with a target path that is already there.
+///
+/// A directory entry merges into a directory that is already at its target. Below it, each path
+/// that is already there follows the rule, unless that path is a directory in both the source and
+/// the sandbox: such a directory merges too. A file where the source has a directory, or a
+/// directory where the source has a file, is a path that is already there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OnExisting {
+    /// The entry fails with an `AlreadyExists` error at the first path that is already there.
+    Fail,
+    /// What is there goes away, together with all that is under it, and the source takes its
+    /// place.
+    #[allow(dead_code)]
+    Replace,
+    /// What is there stays as it is, together with all that is under it.
+    Keep,
+}
+
 /// Whether path resolution follows the final symlink.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SandboxFollow {
@@ -734,9 +780,9 @@ pub(crate) trait SandboxFilesystemAllocationReader: Clone + Send + Sync + 'stati
 /// [`SandboxFile`], [`SandboxDirectory`], or [`SandboxNode`] operate on a handle returned by `open` and
 /// remain valid after its path is renamed or unlinked.
 ///
-/// No path operation provides ambient access to the executor node. [`Self::seed_file`] is the sole
-/// asymmetric operation: its `source` is a host path, while `sandbox_path` remains confined to this
-/// filesystem.
+/// No path operation provides ambient access to the executor node. [`Self::seed`] and
+/// [`Self::copy_contents`] are the asymmetric operations: seed reads host paths and copy_contents
+/// writes into a host path, while sandbox paths stay confined to this filesystem.
 pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// Backend-specific configuration consumed when a fresh filesystem is created.
     type Provisioning: Send + 'static;
@@ -913,16 +959,22 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
         node: SandboxNode,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
 
-    /// Seeds the sandbox with a host file at a capability-relative path.
+    /// Puts host content into this sandbox, one entry after the other. The opposite of
+    /// copy_contents.
     ///
-    /// The caller retains ownership of `source` and any lease that keeps it available.
-    /// `permissions` controls the seeded file's resulting write permission. Use this when the
-    /// source belongs to the host or a shared volume rather than this sandbox's namespace.
-    fn seed_file(
+    /// Each source is read without following a symlink. A file becomes one file, a directory
+    /// brings all that is under it, and a symlink becomes a symlink. Directories and symlinks are
+    /// made again, and permissions and modification times are copied. `access` sets the write
+    /// permission of seeded files, or keeps the permissions of the source. `existing` decides
+    /// what happens to a target path that is already there. On managed XFS each file is one
+    /// reflink into the project of this filesystem, so the quota is charged here, and EDQUOT and
+    /// ENOSPC appear here. On unmanaged storage each file is copied. Nothing is written outside
+    /// the sandbox root. The first entry that fails stops the call. The entries before it stay.
+    /// On managed XFS, what the call wrote is on stable storage when the call returns, also when
+    /// an entry fails.
+    fn seed(
         &self,
-        source: &Path,
-        sandbox_path: SandboxPath,
-        permissions: SandboxFilePermissions,
+        entries: Box<[SeedEntry]>,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
 
     /// Reads authoritative allocation for a quota-managed filesystem.
@@ -940,6 +992,24 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
         &self,
         limits: FilesystemLimits,
     ) -> impl Future<Output = Result<InstalledLimits, FilesystemStorageError>> + Send;
+
+    /// Takes a stable copy of the contents under `source` out of this sandbox into `target`,
+    /// minus the paths in `excluded`. The opposite of seed.
+    ///
+    /// `target` must be an empty directory, or the call fails. The caller decides what to leave
+    /// out. The sandbox applies the set and nothing else. The set is shared and already
+    /// normalized, so a copy does no work per excluded path before the walk. Directories and
+    /// symlinks are made again. Permissions and modification times are copied. On managed XFS
+    /// each file is one reflink: the cost follows the number of files, not the bytes, and the
+    /// copy adds nothing to any quota, because a HostPath is outside every agent project. On
+    /// unmanaged storage each file is copied.
+    #[allow(dead_code)]
+    fn copy_contents(
+        &self,
+        source: SandboxPath,
+        excluded: Arc<TreeExclusions>,
+        target: &HostPath,
+    ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
 
     /// Consumes exclusive ownership, deletes the runtime filesystem, and verifies its absence.
     fn delete_and_verify(self) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send
@@ -1618,43 +1688,54 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         Ok(())
     }
 
-    fn seed_file(
+    fn seed(
         &self,
-        source: &Path,
-        sandbox_path: SandboxPath,
-        permissions: SandboxFilePermissions,
+        entries: Box<[SeedEntry]>,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
-        let materialization_root = self.root().to_path_buf();
-        let operation_path = sandbox_path.operation_path(&materialization_root);
+        let materialization_root: Arc<Path> = Arc::from(self.root());
         let root_directory = self.root_directory_state();
-        let copy_mode = self.file_copy_mode;
+        let mode = self.file_copy_mode;
         let quota_authority = self.quota_authority;
         let storage_profile = self.storage_profile();
-        let source_path = source.to_path_buf();
         async move {
-            execute_native(storage_profile, NativeOperation::SeedFile, move || {
-                let destination_directory = directory_for(&root_directory, &sandbox_path)?;
-                copy_file_at_blocking(
-                    copy_mode,
-                    quota_authority,
-                    &materialization_root,
-                    &source_path,
-                    &destination_directory,
-                    &sandbox_path.path,
-                    permissions.read_only(),
-                )
+            let error_path = Arc::clone(&materialization_root);
+            execute_native(storage_profile, NativeOperation::TreeCopy, move || {
+                let seeded = entries.iter().try_for_each(|entry| {
+                    let context = tree_copy::SeedContext {
+                        mode,
+                        quota_authority,
+                        access: entry.access,
+                        existing: entry.existing,
+                    };
+                    directory_for(&root_directory, &entry.target)
+                        .and_then(|base| {
+                            tree_copy::seed_entry(
+                                context,
+                                &base,
+                                entry.source.as_path(),
+                                &entry.target.path,
+                            )
+                        })
+                        .map_err(|error| {
+                            FilesystemStorageError::io(
+                                "seed sandbox filesystem entry",
+                                &entry.target.operation_path(&materialization_root),
+                                error,
+                            )
+                        })
+                });
+                let synced =
+                    tree_copy::sync_after_reflink(mode, &materialization_root).map_err(|error| {
+                        FilesystemStorageError::io(
+                            "sync seeded sandbox filesystem",
+                            &materialization_root,
+                            error,
+                        )
+                    });
+                seeded.and(synced)
             })
             .await
-            .map_err(|error| {
-                FilesystemStorageError::task_failure(
-                    "seed sandbox filesystem file",
-                    &operation_path,
-                    error,
-                )
-            })?
-            .map_err(|error| {
-                FilesystemStorageError::io("seed sandbox filesystem file", &operation_path, error)
-            })
+            .map_err(|error| task_error("seed sandbox filesystem", &error_path, error))?
         }
     }
 
@@ -1673,6 +1754,42 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         limits: FilesystemLimits,
     ) -> impl Future<Output = Result<InstalledLimits, FilesystemStorageError>> + Send {
         SandboxFilesystem::install_limits(self, limits)
+    }
+
+    fn copy_contents(
+        &self,
+        source: SandboxPath,
+        excluded: Arc<TreeExclusions>,
+        target: &HostPath,
+    ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
+        let operation_path = source.operation_path(self.root());
+        let root_directory = self.root_directory_state();
+        let copy_mode = self.file_copy_mode;
+        let storage_profile = self.storage_profile();
+        let target = target.clone();
+        async move {
+            execute_native(storage_profile, NativeOperation::TreeCopy, move || {
+                let base = directory_for(&root_directory, &source)?;
+                tree_copy::copy_contents(
+                    &base,
+                    &source.path,
+                    &excluded,
+                    target.as_path(),
+                    copy_mode,
+                )
+            })
+            .await
+            .map_err(|error| {
+                task_error("copy sandbox filesystem contents", &operation_path, error)
+            })?
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "copy sandbox filesystem contents",
+                    &operation_path,
+                    error,
+                )
+            })
+        }
     }
 
     async fn delete_and_verify(self) -> Result<(), FilesystemStorageError> {
@@ -2213,9 +2330,10 @@ mod scripted {
         unlink_file: VecDeque<Result<(), FilesystemStorageError>>,
         flush: VecDeque<Result<(), FilesystemStorageError>>,
         close: VecDeque<Result<(), FilesystemStorageError>>,
-        seed_file: VecDeque<Result<(), FilesystemStorageError>>,
+        seed: VecDeque<Result<(), FilesystemStorageError>>,
         observe_allocation: VecDeque<Result<FilesystemAllocation, FilesystemStorageError>>,
         install_limits: VecDeque<Result<InstalledLimits, FilesystemStorageError>>,
+        copy_contents: VecDeque<Result<(), FilesystemStorageError>>,
         delete_and_verify: VecDeque<Result<(), FilesystemStorageError>>,
     }
 
@@ -2408,8 +2526,8 @@ mod scripted {
             self.state().close.push_back(outcome);
         }
 
-        pub(crate) fn push_seed_file(&self, outcome: Result<(), FilesystemStorageError>) {
-            self.state().seed_file.push_back(outcome);
+        pub(crate) fn push_seed(&self, outcome: Result<(), FilesystemStorageError>) {
+            self.state().seed.push_back(outcome);
         }
 
         pub(crate) fn push_observe_allocation(
@@ -2424,6 +2542,10 @@ mod scripted {
             outcome: Result<InstalledLimits, FilesystemStorageError>,
         ) {
             self.state().install_limits.push_back(outcome);
+        }
+
+        pub(crate) fn push_copy_contents(&self, outcome: Result<(), FilesystemStorageError>) {
+            self.state().copy_contents.push_back(outcome);
         }
 
         pub(crate) fn push_delete_and_verify(&self, outcome: Result<(), FilesystemStorageError>) {
@@ -2762,19 +2884,26 @@ mod scripted {
             self.outcome(format!("close(node={node:?})"), |state| &mut state.close)
         }
 
-        fn seed_file(
+        fn seed(
             &self,
-            source: &Path,
-            sandbox_path: SandboxPath,
-            permissions: SandboxFilePermissions,
+            entries: Box<[SeedEntry]>,
         ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
-            self.outcome(
-                format!(
-                    "seed_file(source={}, sandbox_path={sandbox_path:?}, permissions={permissions:?})",
-                    source.display()
-                ),
-                |state| &mut state.seed_file,
-            )
+            let entries = entries
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{{source={}, target={:?}, access={:?}, existing={:?}}}",
+                        entry.source.as_path().display(),
+                        entry.target,
+                        entry.access,
+                        entry.existing
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.outcome(format!("seed(entries=[{entries}])"), |state| {
+                &mut state.seed
+            })
         }
 
         fn observe_allocation(
@@ -2797,6 +2926,27 @@ mod scripted {
             self.outcome(format!("install_limits(limits={limits:?})"), |state| {
                 &mut state.install_limits
             })
+        }
+
+        fn copy_contents(
+            &self,
+            source: SandboxPath,
+            excluded: Arc<TreeExclusions>,
+            target: &HostPath,
+        ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
+            let mut excluded = excluded
+                .paths()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            excluded.sort();
+            self.outcome(
+                format!(
+                    "copy_contents(source={source:?}, excluded={excluded:?}, target={})",
+                    target.as_path().display()
+                ),
+                |state| &mut state.copy_contents,
+            )
         }
 
         fn delete_and_verify(
@@ -2825,37 +2975,42 @@ mod scripted {
             call: String,
             outcomes: fn(&mut ScriptedState) -> &mut VecDeque<Result<T, FilesystemStorageError>>,
         ) -> impl Future<Output = Result<T, FilesystemStorageError>> + Send + use<T> {
-            let state = Arc::clone(&self.state);
-            async move {
-                let operation = call
-                    .split_once('(')
-                    .map_or_else(|| call.clone(), |(operation, _)| operation.to_string());
-                let (gate, outcome) = {
-                    let mut state = state
-                        .lock()
-                        .expect("scripted sandbox filesystem lock poisoned");
-                    state.calls.push(call);
-                    let gate = state.gates.remove(&operation);
-                    let outcome = outcomes(&mut state).pop_front().unwrap_or_else(|| {
-                        Err(FilesystemStorageError::verification(
-                            "consume programmed scripted sandbox filesystem outcome",
-                            Path::new("<scripted-sandbox-filesystem>"),
-                        ))
-                    });
-                    (gate, outcome)
-                };
-                if let Some(gate) = gate {
-                    gate.started.add_permits(1);
-                    gate.released
-                        .acquire()
-                        .await
-                        .expect("scripted sandbox filesystem release gate closed")
-                        .forget();
-                    gate.completed.add_permits(1);
-                }
-                outcome
-            }
+            scripted_outcome(Arc::clone(&self.state), call, outcomes)
         }
+    }
+
+    async fn scripted_outcome<T: Send + 'static>(
+        state: Arc<Mutex<ScriptedState>>,
+        call: String,
+        outcomes: fn(&mut ScriptedState) -> &mut VecDeque<Result<T, FilesystemStorageError>>,
+    ) -> Result<T, FilesystemStorageError> {
+        let operation = call
+            .split_once('(')
+            .map_or_else(|| call.clone(), |(operation, _)| operation.to_string());
+        let (gate, outcome) = {
+            let mut state = state
+                .lock()
+                .expect("scripted sandbox filesystem lock poisoned");
+            state.calls.push(call);
+            let gate = state.gates.remove(&operation);
+            let outcome = outcomes(&mut state).pop_front().unwrap_or_else(|| {
+                Err(FilesystemStorageError::verification(
+                    "consume programmed scripted sandbox filesystem outcome",
+                    Path::new("<scripted-sandbox-filesystem>"),
+                ))
+            });
+            (gate, outcome)
+        };
+        if let Some(gate) = gate {
+            gate.started.add_permits(1);
+            gate.released
+                .acquire()
+                .await
+                .expect("scripted sandbox filesystem release gate closed")
+                .forget();
+            gate.completed.add_permits(1);
+        }
+        outcome
     }
 
     fn scripted_namespace_resolution(
@@ -3027,6 +3182,50 @@ mod tests {
         SandboxFilesystemProvisioning::new(Some(root), None, RetryConfig::default()).unwrap()
     }
 
+    /// Makes a host directory with `name` under `root` on unmanaged storage.
+    async fn host_directory_at(root: &Path, name: &str) -> HostDirectory {
+        HostDirectory::create_at_root(
+            &unmanaged_provisioning(root.to_path_buf()),
+            std::ffi::OsStr::new(name),
+        )
+        .await
+        .unwrap()
+    }
+
+    fn host_child(directory: &HostDirectory, name: &str) -> HostPath {
+        directory.path().child(std::ffi::OsStr::new(name)).unwrap()
+    }
+
+    fn seed_entry(
+        source: HostPath,
+        target: impl Into<PathBuf>,
+        access: SeedAccess,
+        existing: OnExisting,
+    ) -> SeedEntry {
+        SeedEntry {
+            source,
+            target: SandboxPath::at_root(target),
+            access,
+            existing,
+        }
+    }
+
+    async fn seed_one(
+        filesystem: &SandboxFilesystem,
+        entry: SeedEntry,
+    ) -> Result<(), FilesystemStorageError> {
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(filesystem, Box::new([entry])).await
+    }
+
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    }
+
     #[cfg(target_os = "linux")]
     fn linux_parent_key(device: u64) -> SandboxDirectoryCoordinationKey {
         SandboxDirectoryCoordinationKey(NativeFileIdentity::Unix { device, inode: 1 })
@@ -3169,6 +3368,13 @@ mod tests {
     #[test]
     async fn scripted_adapter_returns_programmed_outcomes_and_records_exact_order() {
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+        let seed_parent = tempfile::tempdir().unwrap();
+        let seed_directory = host_directory_at(seed_parent.path(), ".seed-source").await;
+        let seed_source = host_child(&seed_directory, "seed-source");
+        let seed_call = format!(
+            "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"seed-destination\" }}, access=ReadWrite, existing=Fail}}])",
+            seed_source.as_path().display()
+        );
         let file = SandboxFile::scripted(7);
         let directory = SandboxDirectory::scripted(9);
         let attributes = SandboxAttributes {
@@ -3205,7 +3411,7 @@ mod tests {
         control.push_unlink_file(Ok(()));
         control.push_flush(Ok(()));
         control.push_close(Ok(()));
-        control.push_seed_file(Ok(()));
+        control.push_seed(Ok(()));
         control.push_observe_allocation(Ok(allocation));
         control.push_install_limits(Ok(InstalledLimits { limits, allocation }));
         control.push_delete_and_verify(Ok(()));
@@ -3323,11 +3529,12 @@ mod tests {
             .await
             .unwrap();
         filesystem
-            .seed_file(
-                Path::new("seed-source"),
-                SandboxPath::at_root("seed-destination"),
-                SandboxFilePermissions::ReadWrite,
-            )
+            .seed(Box::new([seed_entry(
+                seed_source,
+                "seed-destination",
+                SeedAccess::ReadWrite,
+                OnExisting::Fail,
+            )]))
             .await
             .unwrap();
         assert_eq!(filesystem.observe_allocation().await.unwrap(), allocation);
@@ -3359,7 +3566,7 @@ mod tests {
                 "unlink_file(path=SandboxPath { base: Directory(directory(9)), path: \"old-file\" })",
                 "flush(node=File(file(7)), level=DataAndMetadata)",
                 "close(node=File(file(7)))",
-                "seed_file(source=seed-source, sandbox_path=SandboxPath { base: Root, path: \"seed-destination\" }, permissions=ReadWrite)",
+                seed_call.as_str(),
                 "observe_allocation()",
                 "install_limits(limits=FilesystemLimits { allocated_bytes: 4096, filesystem_objects: 8 })",
                 "delete_and_verify()",
@@ -3631,6 +3838,980 @@ mod tests {
     }
 
     #[test]
+    async fn scripted_adapter_programs_copy_contents_with_gates() {
+        let parent = tempfile::tempdir().unwrap();
+        let copies = host_directory_at(parent.path(), ".copies").await;
+        let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+        control.push_copy_contents(Ok(()));
+        control.push_copy_contents(Err(scripted_error("programmed copy failure")));
+        let filesystem = create_scripted(provisioning).await;
+        let target = host_child(&copies, "copy");
+        let excluded = Arc::new(TreeExclusions::new([
+            PathBuf::from("lib/b.txt"),
+            PathBuf::from("a.txt"),
+        ]));
+
+        let gate = control.block("copy_contents");
+        let copying = tokio::spawn({
+            let filesystem = filesystem.clone();
+            let excluded = Arc::clone(&excluded);
+            let target = target.clone();
+            async move {
+                filesystem
+                    .copy_contents(SandboxPath::at_root("data"), excluded, &target)
+                    .await
+            }
+        });
+        gate.wait_started().await;
+        assert!(!copying.is_finished());
+        gate.release();
+        gate.wait_completed().await;
+        copying.await.unwrap().unwrap();
+        let failed = filesystem
+            .copy_contents(
+                SandboxPath::at_root(""),
+                Arc::new(TreeExclusions::default()),
+                &target,
+            )
+            .await
+            .unwrap_err();
+        let unprogrammed = filesystem
+            .copy_contents(SandboxPath::at_root(""), excluded, &target)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            failed.to_string(),
+            "failed to programmed copy failure filesystem <scripted-test>"
+        );
+        assert_eq!(
+            unprogrammed.to_string(),
+            "failed to consume programmed scripted sandbox filesystem outcome filesystem <scripted-sandbox-filesystem>"
+        );
+        let target_path = target.as_path().display();
+        assert_eq!(
+            control.calls(),
+            vec![
+                "create_fresh(name=environment/component/filesystem, limits=None)".to_string(),
+                format!(
+                    "copy_contents(source=SandboxPath {{ base: Root, path: \"data\" }}, excluded=[\"a.txt\", \"lib/b.txt\"], target={target_path})"
+                ),
+                format!(
+                    "copy_contents(source=SandboxPath {{ base: Root, path: \"\" }}, excluded=[], target={target_path})"
+                ),
+                format!(
+                    "copy_contents(source=SandboxPath {{ base: Root, path: \"\" }}, excluded=[\"a.txt\", \"lib/b.txt\"], target={target_path})"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    async fn copy_contents_copies_what_is_under_the_source_minus_the_exclusions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let copies = host_directory_at(parent.path(), ".copies").await;
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        std::fs::create_dir_all(root.join("data/nested")).unwrap();
+        std::fs::write(root.join("data/nested/note"), b"note").unwrap();
+        std::fs::write(root.join("data/db"), b"db").unwrap();
+        std::fs::write(root.join("static.bin"), b"static").unwrap();
+        std::fs::set_permissions(root.join("data/db"), std::fs::Permissions::from_mode(0o640))
+            .unwrap();
+        std::os::unix::fs::symlink("data/db", root.join("link")).unwrap();
+        let whole = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("whole"))
+            .await
+            .unwrap();
+        let part = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("part"))
+            .await
+            .unwrap();
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root(""),
+            Arc::new(TreeExclusions::new([
+                PathBuf::from("static.bin"),
+                PathBuf::from("data/nested"),
+            ])),
+            whole.path(),
+        )
+        .await
+        .unwrap();
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root("data"),
+            Arc::new(TreeExclusions::new([PathBuf::from("db")])),
+            part.path(),
+        )
+        .await
+        .unwrap();
+
+        let whole_root = whole.path().as_path();
+        assert_eq!(
+            tree_copy::tree_listing(whole_root),
+            std::collections::BTreeSet::from(["data", "data/db", "link"].map(String::from))
+        );
+        assert_eq!(std::fs::read(whole_root.join("data/db")).unwrap(), b"db");
+        assert_eq!(mode(&whole_root.join("data/db")), 0o640);
+        assert_eq!(
+            std::fs::read_link(whole_root.join("link")).unwrap(),
+            PathBuf::from("data/db")
+        );
+        assert_eq!(
+            tree_copy::tree_listing(part.path().as_path()),
+            std::collections::BTreeSet::from(["nested", "nested/note"].map(String::from))
+        );
+        assert_eq!(
+            std::fs::read(root.join("static.bin")).unwrap(),
+            b"static",
+            "the sandbox must stay as it is"
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn copy_contents_refuses_a_target_that_is_not_an_empty_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let copies = host_directory_at(parent.path(), ".copies").await;
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        std::fs::write(filesystem.root().join("file"), b"file").unwrap();
+        let copies_root = copies.path().as_path().to_path_buf();
+        std::fs::create_dir(copies_root.join("full")).unwrap();
+        std::fs::write(copies_root.join("full/kept"), b"kept").unwrap();
+        std::fs::write(copies_root.join("plain-file"), b"plain").unwrap();
+        std::fs::create_dir(copies_root.join("real")).unwrap();
+        std::os::unix::fs::symlink("real", copies_root.join("alias")).unwrap();
+
+        let results = futures::future::join_all(
+            [
+                ("full", std::io::ErrorKind::DirectoryNotEmpty),
+                ("absent", std::io::ErrorKind::NotFound),
+                ("plain-file", std::io::ErrorKind::NotADirectory),
+                ("alias", std::io::ErrorKind::NotADirectory),
+            ]
+            .into_iter()
+            .map(|(name, expected)| {
+                let target = host_child(&copies, name);
+                let filesystem = &filesystem;
+                async move {
+                    let result = <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+                        filesystem,
+                        SandboxPath::at_root(""),
+                        Arc::new(TreeExclusions::default()),
+                        &target,
+                    )
+                    .await;
+                    (name, expected, result)
+                }
+            }),
+        )
+        .await;
+
+        results.into_iter().for_each(|(name, expected, result)| {
+            assert_eq!(
+                result.unwrap_err().io_kind(),
+                Some(expected),
+                "a copy into {name} must be refused"
+            );
+        });
+        assert_eq!(
+            tree_copy::tree_listing(&copies_root),
+            std::collections::BTreeSet::from(
+                ["alias", "full", "full/kept", "plain-file", "real"].map(String::from)
+            )
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn scripted_adapter_programs_seed_with_gates() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+        control.push_seed(Ok(()));
+        control.push_seed(Err(scripted_error("programmed seed failure")));
+        let filesystem = create_scripted(provisioning).await;
+        let entries = || -> Box<[SeedEntry]> {
+            Box::new([
+                seed_entry(
+                    host_child(&sources, "tree"),
+                    "",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "file"),
+                    "lib/file",
+                    SeedAccess::ReadOnly,
+                    OnExisting::Replace,
+                ),
+            ])
+        };
+
+        let gate = control.block("seed");
+        let seeding = tokio::spawn({
+            let filesystem = filesystem.clone();
+            let entries = entries();
+            async move { filesystem.seed(entries).await }
+        });
+        gate.wait_started().await;
+        assert!(!seeding.is_finished());
+        gate.release();
+        gate.wait_completed().await;
+        seeding.await.unwrap().unwrap();
+        let failed = filesystem.seed(entries()).await.unwrap_err();
+        let unprogrammed = filesystem.seed(entries()).await.unwrap_err();
+
+        assert_eq!(
+            failed.to_string(),
+            "failed to programmed seed failure filesystem <scripted-test>"
+        );
+        assert_eq!(
+            unprogrammed.to_string(),
+            "failed to consume programmed scripted sandbox filesystem outcome filesystem <scripted-sandbox-filesystem>"
+        );
+        let call = format!(
+            "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"\" }}, access=FromSource, existing=Fail}}, {{source={}, target=SandboxPath {{ base: Root, path: \"lib/file\" }}, access=ReadOnly, existing=Replace}}])",
+            sources.path().as_path().join("tree").display(),
+            sources.path().as_path().join("file").display()
+        );
+        assert_eq!(
+            control.calls(),
+            vec![
+                "create_fresh(name=environment/component/filesystem, limits=None)".to_string(),
+                call.clone(),
+                call.clone(),
+                call,
+            ]
+        );
+    }
+
+    #[test]
+    async fn seed_puts_entries_in_order_and_stops_at_the_first_failure() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        std::fs::write(sources.path().as_path().join("file"), b"first").unwrap();
+        std::fs::write(sources.path().as_path().join("after"), b"after").unwrap();
+        std::os::unix::fs::symlink("file", sources.path().as_path().join("link")).unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+
+        let error = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([
+                seed_entry(
+                    host_child(&sources, "file"),
+                    "nested/file",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "link"),
+                    "nested/link",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "after"),
+                    "nested/file",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "after"),
+                    "after",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+            ]),
+        )
+        .await
+        .unwrap_err();
+
+        let root = filesystem.root();
+        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        assert!(
+            error.to_string().contains("nested/file"),
+            "the error must name the target of the failed entry: {error}"
+        );
+        assert_eq!(std::fs::read(root.join("nested/file")).unwrap(), b"first");
+        assert_eq!(
+            std::fs::read_link(root.join("nested/link")).unwrap(),
+            PathBuf::from("file")
+        );
+        assert!(
+            !root.join("after").exists(),
+            "an entry after the failed entry must not be seeded"
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_access_sets_the_write_permission_of_seeded_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
+        [
+            ("tool", 0o755),
+            ("locked", 0o555),
+            ("private", 0o640),
+            ("writable", 0o644),
+        ]
+        .into_iter()
+        .for_each(|(name, mode)| {
+            let path = sources.path().as_path().join(name);
+            std::fs::write(&path, name).unwrap();
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        });
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([
+                seed_entry(
+                    host_child(&sources, "tool"),
+                    "tool",
+                    SeedAccess::ReadOnly,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "locked"),
+                    "locked",
+                    SeedAccess::ReadWrite,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "private"),
+                    "private",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "writable"),
+                    "writable",
+                    SeedAccess::ReadWrite,
+                    OnExisting::Fail,
+                ),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        let root = filesystem.root();
+        [
+            ("tool", 0o555),
+            ("locked", 0o755),
+            ("private", 0o640),
+            ("writable", 0o644),
+        ]
+        .into_iter()
+        .for_each(|(name, expected)| {
+            assert_eq!(
+                mode(&root.join(name)),
+                expected,
+                "{name} must have mode {expected:o}"
+            );
+            assert_eq!(
+                std::fs::metadata(root.join(name))
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                modified,
+                "{name} must have the modification time of its source"
+            );
+        });
+        assert_eq!(std::fs::read(root.join("tool")).unwrap(), b"tool");
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_gives_a_made_target_directory_the_source_attributes_and_keeps_a_merged_one() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        let tree = sources.path().as_path().join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::write(tree.join("file"), b"file").unwrap();
+        std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+        File::open(&tree).unwrap().set_modified(modified).unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        std::fs::create_dir(root.join("merged")).unwrap();
+        std::fs::set_permissions(root.join("merged"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([
+                seed_entry(
+                    host_child(&sources, "tree"),
+                    "made",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "tree"),
+                    "merged",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            mode(&root.join("made")),
+            0o750,
+            "the made directory must have the mode of its source"
+        );
+        assert_eq!(
+            std::fs::metadata(root.join("made"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            modified,
+            "the made directory must have the modification time of its source"
+        );
+        assert_eq!(
+            mode(&root.join("merged")),
+            0o700,
+            "the merged directory must keep its own mode"
+        );
+        assert_eq!(std::fs::read(root.join("merged/file")).unwrap(), b"file");
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_reports_the_error_of_a_directory_that_it_cannot_make() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        std::fs::create_dir(sources.path().as_path().join("tree")).unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let locked = filesystem.root().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let error = seed_one(
+            &filesystem,
+            seed_entry(
+                host_child(&sources, "tree"),
+                "locked/new",
+                SeedAccess::FromSource,
+                OnExisting::Fail,
+            ),
+        )
+        .await
+        .unwrap_err();
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            error.io_kind(),
+            Some(std::io::ErrorKind::PermissionDenied),
+            "{error}"
+        );
+        assert!(!locked.join("new").exists());
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_file_entries_follow_the_existing_rule() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        std::fs::write(sources.path().as_path().join("new"), b"new").unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        ["fail", "keep", "replace"].into_iter().for_each(|name| {
+            std::fs::write(root.join(name), b"old").unwrap();
+        });
+        std::fs::create_dir(root.join("directory")).unwrap();
+        std::fs::write(root.join("directory/child"), b"child").unwrap();
+        let new = || host_child(&sources, "new");
+
+        let failed = seed_one(
+            &filesystem,
+            seed_entry(new(), "fail", SeedAccess::ReadWrite, OnExisting::Fail),
+        )
+        .await
+        .unwrap_err();
+        seed_one(
+            &filesystem,
+            seed_entry(new(), "keep", SeedAccess::ReadWrite, OnExisting::Keep),
+        )
+        .await
+        .unwrap();
+        seed_one(
+            &filesystem,
+            seed_entry(new(), "absent", SeedAccess::ReadWrite, OnExisting::Keep),
+        )
+        .await
+        .unwrap();
+        seed_one(
+            &filesystem,
+            seed_entry(new(), "replace", SeedAccess::ReadOnly, OnExisting::Replace),
+        )
+        .await
+        .unwrap();
+        let failed_over_directory = seed_one(
+            &filesystem,
+            seed_entry(new(), "directory", SeedAccess::ReadWrite, OnExisting::Fail),
+        )
+        .await
+        .unwrap_err();
+        seed_one(
+            &filesystem,
+            seed_entry(new(), "directory", SeedAccess::ReadWrite, OnExisting::Keep),
+        )
+        .await
+        .unwrap();
+        assert!(root.join("directory/child").is_file());
+        seed_one(
+            &filesystem,
+            seed_entry(
+                new(),
+                "directory",
+                SeedAccess::ReadWrite,
+                OnExisting::Replace,
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failed.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        assert_eq!(std::fs::read(root.join("fail")).unwrap(), b"old");
+        assert_eq!(std::fs::read(root.join("keep")).unwrap(), b"old");
+        assert_eq!(std::fs::read(root.join("absent")).unwrap(), b"new");
+        assert_eq!(std::fs::read(root.join("replace")).unwrap(), b"new");
+        assert_eq!(mode(&root.join("replace")) & 0o222, 0);
+        assert_eq!(
+            failed_over_directory.io_kind(),
+            Some(std::io::ErrorKind::AlreadyExists)
+        );
+        assert_eq!(std::fs::read(root.join("directory")).unwrap(), b"new");
+        assert!(
+            std::fs::read_dir(&root).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".golem-copy-")),
+            "a temporary file must not stay in the root"
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_symlink_entries_follow_the_existing_rule() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        std::os::unix::fs::symlink("new-target", sources.path().as_path().join("link")).unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        ["fail", "keep", "replace"].into_iter().for_each(|name| {
+            std::os::unix::fs::symlink("old-target", root.join(name)).unwrap();
+        });
+        std::fs::create_dir(root.join("directory")).unwrap();
+        std::fs::write(root.join("directory/child"), b"child").unwrap();
+        let link = || host_child(&sources, "link");
+
+        let failed = seed_one(
+            &filesystem,
+            seed_entry(link(), "fail", SeedAccess::FromSource, OnExisting::Fail),
+        )
+        .await
+        .unwrap_err();
+        seed_one(
+            &filesystem,
+            seed_entry(link(), "keep", SeedAccess::FromSource, OnExisting::Keep),
+        )
+        .await
+        .unwrap();
+        seed_one(
+            &filesystem,
+            seed_entry(
+                link(),
+                "replace",
+                SeedAccess::FromSource,
+                OnExisting::Replace,
+            ),
+        )
+        .await
+        .unwrap();
+        seed_one(
+            &filesystem,
+            seed_entry(link(), "absent", SeedAccess::FromSource, OnExisting::Keep),
+        )
+        .await
+        .unwrap();
+        seed_one(
+            &filesystem,
+            seed_entry(
+                link(),
+                "directory",
+                SeedAccess::FromSource,
+                OnExisting::Replace,
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failed.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        [
+            ("fail", "old-target"),
+            ("keep", "old-target"),
+            ("replace", "new-target"),
+            ("absent", "new-target"),
+            ("directory", "new-target"),
+        ]
+        .into_iter()
+        .for_each(|(name, expected)| {
+            assert_eq!(
+                std::fs::read_link(root.join(name)).unwrap(),
+                PathBuf::from(expected),
+                "{name} must point to {expected}"
+            );
+        });
+        assert!(
+            std::fs::read_dir(&root).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".golem-copy-")),
+            "a temporary symlink must not stay in the root"
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_reads_a_source_symlink_without_following_it() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), b"secret").unwrap();
+        std::fs::create_dir(sources.path().as_path().join("real")).unwrap();
+        std::fs::write(sources.path().as_path().join("real/file"), b"file").unwrap();
+        std::os::unix::fs::symlink("real", sources.path().as_path().join("alias")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret"),
+            sources.path().as_path().join("outside"),
+        )
+        .unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([
+                seed_entry(
+                    host_child(&sources, "alias"),
+                    "alias",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "outside"),
+                    "outside",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        let root = filesystem.root();
+        assert!(
+            std::fs::symlink_metadata(root.join("alias"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_link(root.join("alias")).unwrap(),
+            PathBuf::from("real")
+        );
+        assert!(
+            std::fs::symlink_metadata(root.join("outside"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_link(root.join("outside")).unwrap(),
+            outside.path().join("secret")
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_cannot_write_outside_the_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        std::fs::write(sources.path().as_path().join("file"), b"file").unwrap();
+        std::os::unix::fs::symlink("file", sources.path().as_path().join("link")).unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("data")).unwrap();
+
+        let errors = futures::future::join_all(
+            [
+                ("file", "../escaped", OnExisting::Fail),
+                ("file", "data/file", OnExisting::Fail),
+                ("file", "data/file", OnExisting::Keep),
+                ("file", "data/file", OnExisting::Replace),
+                ("file", "data/nested/file", OnExisting::Fail),
+                ("link", "data/link", OnExisting::Fail),
+                ("link", "data/link", OnExisting::Replace),
+            ]
+            .into_iter()
+            .map(|(source, target, existing)| {
+                let entry = seed_entry(
+                    host_child(&sources, source),
+                    target,
+                    SeedAccess::FromSource,
+                    existing,
+                );
+                let filesystem = &filesystem;
+                async move { (target, existing, seed_one(filesystem, entry).await) }
+            }),
+        )
+        .await;
+
+        errors.into_iter().for_each(|(target, existing, result)| {
+            assert_eq!(
+                result.unwrap_err().io_kind(),
+                Some(std::io::ErrorKind::PermissionDenied),
+                "seed to {target} with {existing:?} must be refused"
+            );
+        });
+        let tree = host_child(&sources, "tree");
+        std::fs::create_dir_all(tree.as_path().join("data/nested")).unwrap();
+        std::fs::write(tree.as_path().join("data/nested/file"), b"file").unwrap();
+        let fail = seed_one(
+            &filesystem,
+            seed_entry(tree.clone(), "", SeedAccess::FromSource, OnExisting::Fail),
+        )
+        .await
+        .unwrap_err();
+        seed_one(
+            &filesystem,
+            seed_entry(tree.clone(), "", SeedAccess::FromSource, OnExisting::Keep),
+        )
+        .await
+        .unwrap();
+        assert!(
+            std::fs::symlink_metadata(root.join("data"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "keep must leave the symlink in place"
+        );
+        seed_one(
+            &filesystem,
+            seed_entry(tree, "", SeedAccess::FromSource, OnExisting::Replace),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(fail.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        assert!(root.join("data/nested/file").is_file());
+        assert!(
+            !std::fs::symlink_metadata(root.join("data"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "replace must put a directory in place of the symlink"
+        );
+        assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+        assert!(!root.parent().unwrap().join("escaped").exists());
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_directory_entries_merge_and_follow_the_existing_rule() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        let tree = sources.path().as_path().join("tree");
+        std::fs::create_dir_all(tree.join("data")).unwrap();
+        std::fs::write(tree.join("data/added"), b"added").unwrap();
+        std::fs::write(tree.join("data/same"), b"new").unwrap();
+        std::fs::create_dir_all(tree.join("fresh")).unwrap();
+        std::fs::write(tree.join("fresh/deep"), b"deep").unwrap();
+        std::fs::set_permissions(tree.join("fresh"), std::fs::Permissions::from_mode(0o750))
+            .unwrap();
+        std::fs::set_permissions(tree.join("data"), std::fs::Permissions::from_mode(0o750))
+            .unwrap();
+        std::os::unix::fs::symlink("new", tree.join("link")).unwrap();
+        std::fs::write(tree.join("was-directory"), b"file").unwrap();
+        std::fs::create_dir(tree.join("was-file")).unwrap();
+        std::fs::write(tree.join("was-file/inner"), b"inner").unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        ["fail", "keep", "replace"].into_iter().for_each(|rule| {
+            let target = root.join(rule);
+            std::fs::create_dir_all(target.join("data")).unwrap();
+            std::fs::set_permissions(target.join("data"), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            std::fs::write(target.join("data/same"), b"old").unwrap();
+            std::fs::write(target.join("data/only-sandbox"), b"sandbox").unwrap();
+            std::os::unix::fs::symlink("old", target.join("link")).unwrap();
+            std::fs::create_dir(target.join("was-directory")).unwrap();
+            std::fs::write(target.join("was-directory/child"), b"child").unwrap();
+            std::fs::write(target.join("was-file"), b"file").unwrap();
+        });
+        std::fs::write(root.join("top-file"), b"top").unwrap();
+        let seed = |target: &'static str, existing| {
+            let entry = seed_entry(
+                host_child(&sources, "tree"),
+                target,
+                SeedAccess::FromSource,
+                existing,
+            );
+            let filesystem = &filesystem;
+            async move { seed_one(filesystem, entry).await }
+        };
+
+        let failed = seed("fail", OnExisting::Fail).await.unwrap_err();
+        seed("keep", OnExisting::Keep).await.unwrap();
+        seed("replace", OnExisting::Replace).await.unwrap();
+        seed("absent", OnExisting::Fail).await.unwrap();
+        let failed_top = seed("top-file", OnExisting::Fail).await.unwrap_err();
+        seed("top-file", OnExisting::Keep).await.unwrap();
+        assert_eq!(std::fs::read(root.join("top-file")).unwrap(), b"top");
+        seed("top-file", OnExisting::Replace).await.unwrap();
+
+        assert_eq!(failed.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        assert_eq!(std::fs::read(root.join("fail/data/same")).unwrap(), b"old");
+        assert_eq!(
+            std::fs::read(root.join("fail/data/added")).unwrap(),
+            b"added",
+            "a path before the failed path must stay"
+        );
+        assert!(
+            !root.join("fail/fresh").exists(),
+            "a path after the failed path must not be seeded"
+        );
+        assert_eq!(
+            failed_top.io_kind(),
+            Some(std::io::ErrorKind::AlreadyExists)
+        );
+
+        let read = |path: &str| std::fs::read(root.join(path)).unwrap();
+        assert_eq!(read("keep/data/same"), b"old");
+        assert_eq!(read("keep/data/added"), b"added");
+        assert_eq!(read("keep/data/only-sandbox"), b"sandbox");
+        assert_eq!(read("keep/fresh/deep"), b"deep");
+        assert_eq!(read("keep/was-file"), b"file");
+        assert_eq!(read("keep/was-directory/child"), b"child");
+        assert_eq!(
+            std::fs::read_link(root.join("keep/link")).unwrap(),
+            PathBuf::from("old")
+        );
+
+        assert_eq!(read("replace/data/same"), b"new");
+        assert_eq!(read("replace/data/added"), b"added");
+        assert_eq!(read("replace/data/only-sandbox"), b"sandbox");
+        assert_eq!(read("replace/fresh/deep"), b"deep");
+        assert_eq!(read("replace/was-file/inner"), b"inner");
+        assert_eq!(read("replace/was-directory"), b"file");
+        assert_eq!(
+            std::fs::read_link(root.join("replace/link")).unwrap(),
+            PathBuf::from("new")
+        );
+
+        assert_eq!(
+            tree_copy::tree_listing(&root.join("absent")),
+            tree_copy::tree_listing(&tree)
+        );
+        assert_eq!(read("top-file/data/same"), b"new");
+        ["keep", "replace"].into_iter().for_each(|rule| {
+            assert_eq!(
+                mode(&root.join(rule).join("data")),
+                0o700,
+                "a merged directory in {rule} must keep its permissions"
+            );
+            assert_eq!(
+                mode(&root.join(rule).join("fresh")),
+                0o750,
+                "a made directory in {rule} must get the permissions of its source"
+            );
+        });
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
     async fn production_adapter_uses_concrete_static_dispatch_for_creation_and_deletion() {
         async fn create<A: SandboxFilesystemAdapter>(
             provisioning: A::Provisioning,
@@ -3678,6 +4859,8 @@ mod tests {
     #[test]
     async fn production_adapter_executes_the_filesystem_method_families() {
         let parent = tempfile::tempdir().unwrap();
+        let seed_sources = host_directory_at(parent.path(), ".seed-sources").await;
+        std::fs::write(seed_sources.path().as_path().join("file"), b"seeded").unwrap();
         let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
         let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
             provisioning,
@@ -3809,11 +4992,14 @@ mod tests {
         )
         .await
         .unwrap();
-        <SandboxFilesystem as SandboxFilesystemAdapter>::seed_file(
+        seed_one(
             &filesystem,
-            &root.join("file"),
-            SandboxPath::at_root("seeded"),
-            SandboxFilePermissions::ReadWrite,
+            seed_entry(
+                host_child(&seed_sources, "file"),
+                "seeded",
+                SeedAccess::ReadWrite,
+                OnExisting::Fail,
+            ),
         )
         .await
         .unwrap();
@@ -4041,14 +5227,17 @@ mod tests {
         std::fs::rename(root.join("pinned"), root.join("renamed")).unwrap();
         std::fs::create_dir(root.join("pinned")).unwrap();
 
-        let host_source = tempfile::tempdir().unwrap();
-        let source = host_source.path().join("source");
-        std::fs::write(&source, b"seeded").unwrap();
-        <SandboxFilesystem as SandboxFilesystemAdapter>::seed_file(
+        let host_source = host_directory_at(parent.path(), ".seed-source").await;
+        std::fs::write(host_source.path().as_path().join("source"), b"seeded").unwrap();
+        let source = host_child(&host_source, "source");
+        seed_one(
             &filesystem,
-            &source,
-            SandboxPath::at(pinned.clone(), "destination"),
-            SandboxFilePermissions::ReadOnly,
+            SeedEntry {
+                source: source.clone(),
+                target: SandboxPath::at(pinned.clone(), "destination"),
+                access: SeedAccess::ReadOnly,
+                existing: OnExisting::Fail,
+            },
         )
         .await
         .unwrap();
@@ -4064,11 +5253,14 @@ mod tests {
                 .readonly()
         );
         assert!(!root.join("pinned/destination").exists());
-        let existing = <SandboxFilesystem as SandboxFilesystemAdapter>::seed_file(
+        let existing = seed_one(
             &filesystem,
-            &source,
-            SandboxPath::at(pinned, "destination"),
-            SandboxFilePermissions::ReadOnly,
+            SeedEntry {
+                source,
+                target: SandboxPath::at(pinned, "destination"),
+                access: SeedAccess::ReadOnly,
+                existing: OnExisting::Fail,
+            },
         )
         .await
         .unwrap_err();
@@ -4211,9 +5403,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let host_source = tempfile::tempdir().unwrap();
-        let source = host_source.path().join("source");
-        std::fs::write(&source, b"seeded contents").unwrap();
+        let host_source = host_directory_at(parent.path(), ".seed-source").await;
+        std::fs::write(
+            host_source.path().as_path().join("source"),
+            b"seeded contents",
+        )
+        .unwrap();
+        let source = || host_child(&host_source, "source");
         let root_directory = directory_for(
             &filesystem.root_directory_state(),
             &SandboxPath::at_root("."),
@@ -4221,14 +5417,17 @@ mod tests {
         .unwrap();
         let probe = CapabilityCopyParentProbe::install(root_directory);
 
-        filesystem
-            .seed_file(
-                &source,
-                SandboxPath::at_root("destination"),
-                SandboxFilePermissions::ReadOnly,
-            )
-            .await
-            .unwrap();
+        seed_one(
+            &filesystem,
+            seed_entry(
+                source(),
+                "destination",
+                SeedAccess::ReadOnly,
+                OnExisting::Fail,
+            ),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             probe.reused_base(),
@@ -4246,28 +5445,34 @@ mod tests {
                 .readonly()
         );
 
-        let existing = filesystem
-            .seed_file(
-                &source,
-                SandboxPath::at_root("destination"),
-                SandboxFilePermissions::ReadWrite,
-            )
-            .await
-            .unwrap_err();
+        let existing = seed_one(
+            &filesystem,
+            seed_entry(
+                source(),
+                "destination",
+                SeedAccess::ReadWrite,
+                OnExisting::Fail,
+            ),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
         assert_eq!(
             std::fs::read(filesystem.root().join("destination")).unwrap(),
             b"seeded contents"
         );
         let escaped_path = filesystem.root().parent().unwrap().join("escaped-seed");
-        let escaped = filesystem
-            .seed_file(
-                &source,
-                SandboxPath::at_root("../escaped-seed"),
-                SandboxFilePermissions::ReadWrite,
-            )
-            .await
-            .unwrap_err();
+        let escaped = seed_one(
+            &filesystem,
+            seed_entry(
+                source(),
+                "../escaped-seed",
+                SeedAccess::ReadWrite,
+                OnExisting::Fail,
+            ),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(
             escaped.io_kind(),
             Some(std::io::ErrorKind::PermissionDenied)

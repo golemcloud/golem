@@ -201,6 +201,7 @@ impl ManagedProvisioning {
         let validated_name_mode =
             validated_managed_xfs_name_mode(filesystem.f_type as u64, identity)
                 .expect("validated XFS filesystem type must produce a name-mode proof");
+        clear_root_project_assignment(&root_fd, &stable_root)?;
         let root_fd = Arc::new(root_fd);
         let backend = Self {
             volume: FilesystemVolume::managed(Arc::clone(&root_fd), identity),
@@ -215,7 +216,6 @@ impl ManagedProvisioning {
             validated_name_mode,
             cleanup_retry: cleanup_retry.clone(),
         };
-        backend.clear_root_project_assignment()?;
         backend.validate_project_quota_state()?;
         backend.validate_project_assignment(cleanup_retry)?;
 
@@ -417,42 +417,6 @@ impl ManagedProvisioning {
         };
         self.get_quota_state(&mut state)?;
         validate_project_quota_state_record(&state)
-    }
-
-    fn clear_root_project_assignment(&self) -> Result<(), FilesystemStorageError> {
-        let mut attributes = get_fsxattr(&self.root_fd).map_err(|error| {
-            FilesystemStorageError::io(
-                "inspect managed XFS root project attributes",
-                &self.root,
-                error,
-            )
-        })?;
-        attributes.fsx_projid = 0;
-        attributes.fsx_xflags &= !linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
-        attributes.fsx_pad = [0; 8];
-        set_fsxattr(&self.root_fd, attributes).map_err(|error| {
-            FilesystemStorageError::io(
-                "clear managed XFS root project inheritance",
-                &self.root,
-                error,
-            )
-        })?;
-        let assigned = get_fsxattr(&self.root_fd).map_err(|error| {
-            FilesystemStorageError::io(
-                "verify managed XFS root project attributes",
-                &self.root,
-                error,
-            )
-        })?;
-        if assigned.fsx_projid != 0
-            || assigned.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
-        {
-            return Err(FilesystemStorageError::verification(
-                "verify managed XFS root has neutral project identity",
-                &self.root,
-            ));
-        }
-        Ok(())
     }
 
     fn validate_project_assignment(
@@ -698,6 +662,60 @@ impl ManagedProvisioning {
     }
 }
 
+// The root must have no project id and no inheritance before anything is created under it,
+// so a host directory made under it belongs to no project.
+fn clear_root_project_assignment(
+    root_fd: &File,
+    root: &Path,
+) -> Result<(), FilesystemStorageError> {
+    let mut attributes = get_fsxattr(root_fd).map_err(|error| {
+        FilesystemStorageError::io("inspect managed XFS root project attributes", root, error)
+    })?;
+    attributes.fsx_projid = 0;
+    attributes.fsx_xflags &= !linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
+    attributes.fsx_pad = [0; 8];
+    set_fsxattr(root_fd, attributes).map_err(|error| {
+        FilesystemStorageError::io("clear managed XFS root project inheritance", root, error)
+    })?;
+    let assigned = get_fsxattr(root_fd).map_err(|error| {
+        FilesystemStorageError::io("verify managed XFS root project attributes", root, error)
+    })?;
+    if assigned.fsx_projid != 0
+        || assigned.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
+    {
+        return Err(FilesystemStorageError::verification(
+            "verify managed XFS root has neutral project identity",
+            root,
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that a host directory has no project id and gives no project id to what is made in it.
+pub(super) fn verify_host_directory_has_no_project(
+    path: &Path,
+) -> Result<(), FilesystemStorageError> {
+    let directory = File::open(path).map_err(|error| {
+        FilesystemStorageError::io("open managed XFS host directory", path, error)
+    })?;
+    let attributes = get_fsxattr(&directory).map_err(|error| {
+        FilesystemStorageError::io(
+            "inspect managed XFS host directory project attributes",
+            path,
+            error,
+        )
+    })?;
+    if attributes.fsx_projid != 0
+        || attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
+    {
+        return Err(FilesystemStorageError::verification(
+            "verify managed XFS host directory has no project identity",
+            path,
+        ));
+    }
+    Ok(())
+}
+
 fn validate_managed_xfs_root_location(
     root_fd: &File,
     root: &Path,
@@ -790,6 +808,34 @@ pub(super) fn file_project_id(file: &File) -> std::io::Result<Option<NonZeroU32>
     Ok(NonZeroU32::new(get_fsxattr(file)?.fsx_projid))
 }
 
+// The kernel default copy-on-write extent size hint, in filesystem blocks, for a volume whose
+// root inode carries no hint of its own.
+#[cfg(test)]
+const XFS_DEFAULT_COW_EXTENT_SIZE_BLOCKS: u64 = 32;
+
+/// Reads the copy-on-write extent size hint that a write into a shared extent of this volume
+/// allocates: the hint on the root inode when it has one, else the kernel default.
+#[cfg(test)]
+pub(super) fn cow_extent_size_hint(
+    root: &File,
+    filesystem_block_bytes: u64,
+) -> std::io::Result<u64> {
+    let attributes = get_fsxattr(root)?;
+    if attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_COWEXTSIZE != 0
+        && attributes.fsx_cowextsize != 0
+    {
+        Ok(u64::from(attributes.fsx_cowextsize))
+    } else {
+        Ok(XFS_DEFAULT_COW_EXTENT_SIZE_BLOCKS * filesystem_block_bytes)
+    }
+}
+
+/// Makes `target` share the extents of `source`. The kernel writes the page cache of `source`
+/// back before it copies the extents, so an unsynced write is in the clone.
+pub(super) fn clone_file(target: &File, source: &File) -> std::io::Result<()> {
+    ioctl_ficlone(target, source).map_err(errno_to_io)
+}
+
 pub(super) fn reflink_file(
     root: &Path,
     project_id: NonZeroU32,
@@ -815,28 +861,26 @@ pub(super) fn reflink_file(
     rustix::fs::syncfs(&File::open(root)?).map_err(errno_to_io)
 }
 
-pub(super) fn reflink_file_at(
-    root: &Path,
+/// Makes the new file `target` share the extents of `source`.
+///
+/// `target` must have `project_id`, which it gets from its directory, so that the extents are
+/// charged to that project. A target with another project gives an `InvalidData` error.
+pub(super) fn reflink_into_project(
     project_id: NonZeroU32,
-    destination_directory: &cap_std::fs::Dir,
-    source: &Path,
-    destination: &Path,
-    read_only: bool,
+    target: &File,
+    source: &File,
 ) -> std::io::Result<()> {
-    let (parent, destination) = create_capability_copy_parent(destination_directory, destination)?;
-    let temporary = CapabilityTempFile::new(parent)?;
-    let temporary_file = temporary.as_file().try_clone()?.into_std();
-    let source = File::open(source)?;
-    if NonZeroU32::new(get_fsxattr(&temporary_file)?.fsx_projid) != Some(project_id) {
+    if NonZeroU32::new(get_fsxattr(target)?.fsx_projid) != Some(project_id) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "managed XFS file-copy destination did not inherit its project identity",
         ));
     }
-    ioctl_ficlone(&temporary_file, &source).map_err(errno_to_io)?;
-    temporary_file.sync_all()?;
-    set_file_permissions(&temporary_file, read_only)?;
-    temporary.persist_noclobber(&destination)?;
+    ioctl_ficlone(target, source).map_err(errno_to_io)
+}
+
+/// Writes the pending changes of the volume that holds `root` to stable storage.
+pub(super) fn sync_volume(root: &Path) -> std::io::Result<()> {
     rustix::fs::syncfs(&File::open(root)?).map_err(errno_to_io)
 }
 
@@ -1186,7 +1230,7 @@ impl ManagedProvisioning {
             NativeRoot::new(root, root_fd),
             LeaseState {
                 lifecycle: lifecycle.expect("managed XFS lifecycle owner must exist"),
-                cleanup: NativeCleanup::Managed(ManagedProjectCleanup {
+                cleanup: NativeCleanup::Managed(Box::new(ManagedProjectCleanup {
                     project: ProjectCleanup::new(
                         self.clone(),
                         project_id,
@@ -1194,7 +1238,7 @@ impl ManagedProvisioning {
                         self.cleanup_retry.clone(),
                     ),
                     _parent: parent,
-                }),
+                })),
             },
             volume,
             FileCopyMode::Reflink,
@@ -1325,7 +1369,7 @@ impl ProjectCleanup {
                     &self.path,
                     error,
                 );
-                failure.cleanup_failed = true;
+                failure.inner.cleanup_failed = true;
                 failure
             })?;
             match attempt {
@@ -1669,10 +1713,18 @@ mod tests {
                 .is_err()
         );
 
-        let source = root.join(format!(".sandbox-filesystem-source-{}", std::process::id()));
-        let _ = std::fs::remove_file(&source);
-        std::fs::write(&source, vec![0x5a; 8192]).unwrap();
-        let source_descriptor = File::open(&source).unwrap();
+        let sources = HostDirectory::create_at_root(
+            &provisioning,
+            std::ffi::OsStr::new(".sandbox-filesystem-source"),
+        )
+        .await
+        .unwrap();
+        let source = sources
+            .path()
+            .child(std::ffi::OsStr::new("source"))
+            .unwrap();
+        std::fs::write(source.as_path(), vec![0x5a; 8192]).unwrap();
+        let source_descriptor = File::open(source.as_path()).unwrap();
         assert_eq!(file_project_id(&source_descriptor).unwrap(), None);
         drop(source_descriptor);
 
@@ -1724,11 +1776,14 @@ mod tests {
 
         let project_id = filesystem.project_id_for_test();
         let copied = filesystem.root().join("copied");
-        <SandboxFilesystem as SandboxFilesystemAdapter>::seed_file(
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
-            &source,
-            SandboxPath::at_root("copied"),
-            SandboxFilePermissions::ReadWrite,
+            Box::new([SeedEntry {
+                source: source.clone(),
+                target: SandboxPath::at_root("copied"),
+                access: SeedAccess::ReadWrite,
+                existing: OnExisting::Fail,
+            }]),
         )
         .await
         .unwrap();
@@ -1774,10 +1829,10 @@ mod tests {
         copied_file.write_all(b"COW!").unwrap();
         copied_file.sync_all().unwrap();
         drop(copied_file);
-        assert_eq!(&std::fs::read(&source).unwrap()[..4], b"ZZZZ");
+        assert_eq!(&std::fs::read(source.as_path()).unwrap()[..4], b"ZZZZ");
         assert_eq!(&std::fs::read(&copied).unwrap()[..4], b"COW!");
 
-        let before_open_unlinked = filesystem.observe_allocation().await.unwrap().unwrap();
+        let before_open_unlinked = settled_allocation(&filesystem).await;
         let open_unlinked_path = filesystem.root().join("open-unlinked");
         let mut open_unlinked = File::create(&open_unlinked_path).unwrap();
         open_unlinked.write_all(&vec![0x3c; 1024 * 1024]).unwrap();
@@ -1938,6 +1993,589 @@ mod tests {
                 filesystem_objects: 0,
             }
         );
-        std::fs::remove_file(source).unwrap();
+        sources.discard().await.unwrap();
+    }
+
+    fn managed_test_root() -> PathBuf {
+        std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+            .map(PathBuf::from)
+            .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
+    }
+
+    fn managed_test_name(filesystem: &str) -> SandboxFilesystemName {
+        SandboxFilesystemName::new(
+            "native-test-environment".to_string(),
+            "native-test-component".to_string(),
+            format!("{filesystem}-{}", std::process::id()),
+        )
+        .unwrap()
+    }
+
+    fn volume_root(provisioning: &SandboxFilesystemProvisioning) -> Arc<File> {
+        Arc::clone(
+            provisioning
+                .volume()
+                .managed_root()
+                .expect("managed test provisioning must have a managed volume"),
+        )
+    }
+
+    fn filesystem_block_bytes(root: &File) -> u64 {
+        fstatfs(root).unwrap().f_bsize as u64
+    }
+
+    /// Reads the allocation of the project of `filesystem` after XFS frees its unlinked inodes.
+    ///
+    /// XFS keeps an unlinked inode, with its blocks, charged to its project until background
+    /// inactivation frees it. The reading is the first one whose object count equals the inodes
+    /// that are reachable from the root. The readings are 25 ms apart. After 5 s the function
+    /// panics with the last reading and the reachable count.
+    async fn settled_allocation(filesystem: &SandboxFilesystem) -> FilesystemAllocation {
+        use futures::StreamExt as _;
+
+        let reachable = reachable_inodes(filesystem.root());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let last = futures::stream::unfold(Some(Duration::ZERO), move |delay| async move {
+            tokio::time::sleep(delay?).await;
+            let reading = filesystem.observe_allocation().await.unwrap().unwrap();
+            let next = (reading.filesystem_objects != reachable
+                && tokio::time::Instant::now() < deadline)
+                .then_some(Duration::from_millis(25));
+            Some((reading, next))
+        })
+        .fold(None, |_, reading| std::future::ready(Some(reading)))
+        .await
+        .expect("the first allocation reading always happens");
+        assert_eq!(
+            last.filesystem_objects, reachable,
+            "project allocation did not settle within 5 s: last reading {last:?}, reachable inodes {reachable}"
+        );
+        last
+    }
+
+    /// Counts the root and every entry below it, without following symlinks.
+    fn reachable_inodes(root: &Path) -> u64 {
+        std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .fold(1, |count, entry| {
+                match entry.file_type().unwrap().is_dir() {
+                    true => count + reachable_inodes(&entry.path()),
+                    false => count + 1,
+                }
+            })
+    }
+
+    async fn available_bytes(provisioning: &SandboxFilesystemProvisioning) -> u64 {
+        rustix::fs::syncfs(&*volume_root(provisioning)).unwrap();
+        match crate::sandbox_filesystem::observe_space(provisioning.volume())
+            .await
+            .unwrap()
+        {
+            FilesystemSpace::Observed {
+                available_bytes, ..
+            } => available_bytes,
+            FilesystemSpace::Unlimited => panic!("managed volume must observe space"),
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the privileged managed XFS test runner"]
+    #[timeout("120s")]
+    async fn managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const FILE_COUNT: usize = 48;
+        const FILE_BYTES: usize = 64 * 1024;
+
+        let root = managed_test_root();
+        let stale_copies = root.join(".native-test-copies").join("stale-copy");
+        std::fs::create_dir_all(&stale_copies).unwrap();
+        std::fs::write(stale_copies.join("garbage"), b"stale").unwrap();
+        let inherited_project = NonZeroU32::new(0x7fff_0001).unwrap();
+        assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
+        let provisioning =
+            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
+                .unwrap();
+        let copies = HostDirectory::create_at_root(
+            &provisioning,
+            std::ffi::OsStr::new(".native-test-copies"),
+        )
+        .await
+        .unwrap();
+        let copies_root = root.join(".native-test-copies");
+        assert!(std::fs::read_dir(&copies_root).unwrap().next().is_none());
+        let copies_attributes = get_fsxattr(&File::open(&copies_root).unwrap()).unwrap();
+        assert_eq!(copies_attributes.fsx_projid, 0);
+        assert_eq!(
+            copies_attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
+            0
+        );
+        let root_attributes = get_fsxattr(&File::open(&root).unwrap()).unwrap();
+        assert_eq!(root_attributes.fsx_projid, 0);
+        assert_eq!(
+            root_attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
+            0
+        );
+        let volume_root = volume_root(&provisioning);
+        let block_bytes = filesystem_block_bytes(&volume_root);
+
+        let filesystem = provisioning
+            .create_fresh(managed_test_name("native-test-copy"))
+            .await
+            .unwrap();
+        let project_id = filesystem.project_id_for_test();
+        let agent_root = filesystem.root().to_path_buf();
+        std::fs::create_dir_all(agent_root.join("data/nested")).unwrap();
+        std::fs::create_dir(agent_root.join("static")).unwrap();
+        (0..FILE_COUNT).for_each(|index| {
+            std::fs::write(
+                agent_root.join(format!("data/file-{index}")),
+                vec![index as u8; FILE_BYTES],
+            )
+            .unwrap();
+        });
+        std::fs::write(agent_root.join("data/nested/hidden"), b"excluded directory").unwrap();
+        std::fs::write(agent_root.join("static/asset.bin"), b"excluded file").unwrap();
+        std::fs::write(agent_root.join("config.toml"), b"[config]").unwrap();
+        std::fs::set_permissions(
+            agent_root.join("config.toml"),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("data/file-0", agent_root.join("link")).unwrap();
+        rustix::fs::syncfs(&*volume_root).unwrap();
+
+        let unsynced = vec![0xa5; FILE_BYTES];
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(agent_root.join("data/file-0"))
+                .unwrap();
+            file.write_all(&unsynced).unwrap();
+        }
+        let available_before = match crate::sandbox_filesystem::observe_space(provisioning.volume())
+            .await
+            .unwrap()
+        {
+            FilesystemSpace::Observed {
+                available_bytes, ..
+            } => available_bytes,
+            FilesystemSpace::Unlimited => panic!("managed volume must observe space"),
+        };
+        let allocation_before = filesystem.observe_allocation().await.unwrap().unwrap();
+
+        let excluded = Arc::new(TreeExclusions::new([
+            PathBuf::from("static/asset.bin"),
+            PathBuf::from("data/nested"),
+        ]));
+        let copy = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("copy"))
+            .await
+            .unwrap();
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root(""),
+            excluded,
+            copy.path(),
+        )
+        .await
+        .unwrap();
+        let copy_root = copy.path().as_path().to_path_buf();
+
+        let available_after = available_bytes(&provisioning).await;
+        let copy_bytes = available_before.saturating_sub(available_after);
+        let tree_bytes = (FILE_COUNT * FILE_BYTES) as u64;
+        println!(
+            "COPY_METADATA_BYTES={copy_bytes} tree_bytes={tree_bytes} block_bytes={block_bytes}"
+        );
+        assert!(
+            copy_bytes <= 32 * block_bytes,
+            "the copy consumed {copy_bytes} bytes for a {tree_bytes} byte tree"
+        );
+        let allocation_after = filesystem.observe_allocation().await.unwrap().unwrap();
+        assert_eq!(allocation_after, allocation_before);
+
+        assert_eq!(copy_root.parent(), Some(copies.path().as_path()));
+        assert_eq!(
+            std::fs::read(copy_root.join("data/file-0")).unwrap(),
+            unsynced
+        );
+        (1..FILE_COUNT).for_each(|index| {
+            assert_eq!(
+                std::fs::read(copy_root.join(format!("data/file-{index}"))).unwrap(),
+                vec![index as u8; FILE_BYTES],
+                "data/file-{index} in the copy must have the bytes of the agent file"
+            );
+        });
+        let mut expected = tree_copy::tree_listing(&agent_root);
+        ["static/asset.bin", "data/nested", "data/nested/hidden"]
+            .into_iter()
+            .for_each(|absent| {
+                assert!(
+                    expected.remove(absent),
+                    "{absent} must be in the agent tree listing"
+                );
+            });
+        assert_eq!(tree_copy::tree_listing(&copy_root), expected);
+        assert_eq!(
+            std::fs::metadata(copy_root.join("config.toml"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o444
+        );
+        assert_eq!(
+            std::fs::read_link(copy_root.join("link")).unwrap(),
+            PathBuf::from("data/file-0")
+        );
+        ["data", "data/file-1", "config.toml"]
+            .into_iter()
+            .for_each(|relative| {
+                assert_eq!(
+                    file_project_id(&File::open(copy_root.join(relative)).unwrap()).unwrap(),
+                    None,
+                    "{relative} in the copy must belong to no project"
+                );
+            });
+        assert_eq!(
+            file_project_id(&File::open(agent_root.join("data/file-1")).unwrap()).unwrap(),
+            Some(project_id)
+        );
+
+        copy.discard().await.unwrap();
+        assert!(!copy_root.exists());
+        copies.discard().await.unwrap();
+        assert!(!copies_root.exists());
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+        assert_eq!(
+            provisioning
+                .project_allocation_for_test(project_id)
+                .unwrap(),
+            FilesystemAllocation {
+                allocated_bytes: 0,
+                filesystem_objects: 0,
+            }
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the privileged managed XFS test runner"]
+    #[timeout("120s")]
+    async fn managed_xfs_write_after_copy_contents_consumes_one_cow_extent() {
+        const FILE_BYTES: usize = 1024 * 1024;
+
+        let root = managed_test_root();
+        let provisioning =
+            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
+                .unwrap();
+        let volume_root = volume_root(&provisioning);
+        let block_bytes = filesystem_block_bytes(&volume_root);
+        let cow_extent_size = cow_extent_size_hint(&volume_root, block_bytes).unwrap();
+
+        let filesystem = provisioning
+            .create_fresh(managed_test_name("native-test-cow"))
+            .await
+            .unwrap();
+        let agent_file = filesystem.root().join("db");
+        std::fs::write(&agent_file, vec![0x11; FILE_BYTES]).unwrap();
+        let copies = HostDirectory::create_at_root(
+            &provisioning,
+            std::ffi::OsStr::new(".native-test-cow-copies"),
+        )
+        .await
+        .unwrap();
+        let copy = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("copy"))
+            .await
+            .unwrap();
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root(""),
+            Arc::new(TreeExclusions::default()),
+            copy.path(),
+        )
+        .await
+        .unwrap();
+        let available_before = available_bytes(&provisioning).await;
+        let allocation_before = filesystem.observe_allocation().await.unwrap().unwrap();
+
+        let written = vec![0x22u8; block_bytes as usize];
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&agent_file)
+            .unwrap();
+        file.write_all(&written).unwrap();
+        file.sync_all().unwrap();
+
+        let available_while_open = available_bytes(&provisioning).await;
+        let consumed = available_before.saturating_sub(available_while_open);
+        let allocation_after = filesystem.observe_allocation().await.unwrap().unwrap();
+        let charged = allocation_after
+            .allocated_bytes
+            .saturating_sub(allocation_before.allocated_bytes);
+        drop(file);
+        let available_after_close = available_bytes(&provisioning).await;
+        let kept_after_close = available_before.saturating_sub(available_after_close);
+        println!(
+            "COW_EXTENT_SIZE_BYTES={consumed} charged_to_agent={charged} kept_after_close={kept_after_close} volume_hint={cow_extent_size} block_bytes={block_bytes}"
+        );
+        assert_eq!(
+            consumed, cow_extent_size,
+            "a {block_bytes} byte write into a shared extent must consume one copy-on-write extent"
+        );
+        // The agent project gains at most the new extent. The overwritten block stays allocated
+        // because the copy still maps it.
+        assert!(
+            charged > 0 && charged <= cow_extent_size,
+            "the agent project must pay for the copy-on-write extent and nothing more: charged={charged}"
+        );
+        assert!(
+            (block_bytes..=cow_extent_size).contains(&kept_after_close),
+            "the changed extent must stay allocated after the file is closed"
+        );
+        assert_eq!(
+            &std::fs::read(&agent_file).unwrap()[..block_bytes as usize],
+            &written[..]
+        );
+        assert_eq!(
+            std::fs::read(copy.path().as_path().join("db")).unwrap(),
+            vec![0x11; FILE_BYTES]
+        );
+
+        copy.discard().await.unwrap();
+        copies.discard().await.unwrap();
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires the privileged managed XFS test runner"]
+    #[timeout("120s")]
+    async fn managed_xfs_seed_charges_the_project_and_follows_the_existing_rule() {
+        let root = managed_test_root();
+        let provisioning =
+            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
+                .unwrap();
+        let sources = HostDirectory::create_at_root(
+            &provisioning,
+            std::ffi::OsStr::new(".native-test-seed-sources"),
+        )
+        .await
+        .unwrap();
+        let sources_root = sources.path().as_path().to_path_buf();
+        assert_eq!(
+            file_project_id(&File::open(&sources_root).unwrap()).unwrap(),
+            None
+        );
+        let tree = sources.path().child(std::ffi::OsStr::new("tree")).unwrap();
+        std::fs::create_dir_all(tree.as_path().join("data")).unwrap();
+        std::fs::write(tree.as_path().join("data/large"), vec![0x31; 256 * 1024]).unwrap();
+        std::fs::write(tree.as_path().join("data/small"), vec![0x32; 64 * 1024]).unwrap();
+        std::os::unix::fs::symlink("data/small", tree.as_path().join("link")).unwrap();
+        let replacement = sources
+            .path()
+            .child(std::ffi::OsStr::new("replacement"))
+            .unwrap();
+        std::fs::write(replacement.as_path(), vec![0x33; 128 * 1024]).unwrap();
+        let entry = |source: &HostPath, target: &str, access, existing| SeedEntry {
+            source: source.clone(),
+            target: SandboxPath::at_root(target),
+            access,
+            existing,
+        };
+
+        let filesystem = provisioning
+            .create_fresh(managed_test_name("native-test-seed"))
+            .await
+            .unwrap();
+        let project_id = filesystem.project_id_for_test();
+        let allocation_before = settled_allocation(&filesystem).await;
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Fail)]),
+        )
+        .await
+        .unwrap();
+
+        let allocation_after = settled_allocation(&filesystem).await;
+        assert!(
+            allocation_after.allocated_bytes >= allocation_before.allocated_bytes + 320 * 1024,
+            "seed did not charge the agent project: before={allocation_before:?}, after={allocation_after:?}"
+        );
+        assert_eq!(
+            allocation_after.filesystem_objects,
+            allocation_before.filesystem_objects + 4
+        );
+        assert_eq!(
+            std::fs::read(filesystem.root().join("data/large")).unwrap(),
+            vec![0x31; 256 * 1024]
+        );
+        assert_eq!(
+            std::fs::read_link(filesystem.root().join("link")).unwrap(),
+            PathBuf::from("data/small")
+        );
+        ["data", "data/large", "data/small"]
+            .into_iter()
+            .for_each(|relative| {
+                assert_eq!(
+                    file_project_id(&File::open(filesystem.root().join(relative)).unwrap())
+                        .unwrap(),
+                    Some(project_id),
+                    "{relative} must belong to the agent project"
+                );
+            });
+        assert!(tree.as_path().join("data/large").is_file());
+
+        let existing = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Fail)]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(existing.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        assert_eq!(settled_allocation(&filesystem).await, allocation_after);
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([
+                entry(
+                    &replacement,
+                    "data/small",
+                    SeedAccess::ReadOnly,
+                    OnExisting::Replace,
+                ),
+                entry(
+                    &replacement,
+                    "data/large",
+                    SeedAccess::ReadWrite,
+                    OnExisting::Keep,
+                ),
+            ]),
+        )
+        .await
+        .unwrap();
+        let allocation_replaced = settled_allocation(&filesystem).await;
+        assert_eq!(
+            std::fs::read(filesystem.root().join("data/small")).unwrap(),
+            vec![0x33; 128 * 1024]
+        );
+        assert_eq!(
+            std::fs::read(filesystem.root().join("data/large")).unwrap(),
+            vec![0x31; 256 * 1024]
+        );
+        assert!(
+            std::fs::metadata(filesystem.root().join("data/small"))
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
+        assert_eq!(
+            file_project_id(&File::open(filesystem.root().join("data/small")).unwrap()).unwrap(),
+            Some(project_id)
+        );
+        assert!(
+            allocation_replaced.allocated_bytes >= allocation_after.allocated_bytes + 64 * 1024,
+            "a replacement with more bytes must charge the agent project: before={allocation_after:?}, after={allocation_replaced:?}"
+        );
+        assert_eq!(
+            allocation_replaced.filesystem_objects,
+            allocation_after.filesystem_objects
+        );
+
+        std::fs::write(filesystem.root().join("data/agent"), vec![0x34; 32 * 1024]).unwrap();
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Keep)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read(filesystem.root().join("data/small")).unwrap(),
+            vec![0x33; 128 * 1024],
+            "keep must leave a file below a merged directory"
+        );
+        let allocation_kept = settled_allocation(&filesystem).await;
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([entry(
+                &tree,
+                "",
+                SeedAccess::FromSource,
+                OnExisting::Replace,
+            )]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read(filesystem.root().join("data/small")).unwrap(),
+            vec![0x32; 64 * 1024],
+            "replace must put the source file below a merged directory"
+        );
+        assert_eq!(
+            std::fs::read(filesystem.root().join("data/agent")).unwrap(),
+            vec![0x34; 32 * 1024],
+            "a merge must leave a path that only the sandbox has"
+        );
+        assert_eq!(
+            file_project_id(&File::open(filesystem.root().join("data/small")).unwrap()).unwrap(),
+            Some(project_id)
+        );
+        let allocation_restored = settled_allocation(&filesystem).await;
+        assert!(
+            allocation_restored.allocated_bytes < allocation_kept.allocated_bytes,
+            "a replacement with fewer bytes must release project bytes: before={allocation_kept:?}, after={allocation_restored:?}"
+        );
+        assert_eq!(
+            allocation_restored.filesystem_objects,
+            allocation_kept.filesystem_objects
+        );
+
+        let limited = provisioning
+            .create_fresh(managed_test_name("native-test-seed-limited"))
+            .await
+            .unwrap();
+        let limited_project_id = limited.project_id_for_test();
+        limited
+            .install_limits(FilesystemLimits {
+                allocated_bytes: 128 * 1024,
+                filesystem_objects: 64,
+            })
+            .await
+            .unwrap();
+        let exhausted = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &limited,
+            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Fail)]),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            exhausted.is_storage_exhaustion(),
+            "seed into a small quota must fail with a quota error: {exhausted}"
+        );
+
+        sources.discard().await.unwrap();
+        assert!(!sources_root.exists());
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+        SandboxFilesystem::delete_and_verify(&limited)
+            .await
+            .unwrap();
+        [project_id, limited_project_id]
+            .into_iter()
+            .for_each(|project| {
+                assert_eq!(
+                    provisioning.project_allocation_for_test(project).unwrap(),
+                    FilesystemAllocation {
+                        allocated_bytes: 0,
+                        filesystem_objects: 0,
+                    },
+                    "project {project} must have no allocation after cleanup"
+                );
+            });
     }
 }

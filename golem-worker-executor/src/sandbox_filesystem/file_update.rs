@@ -14,6 +14,9 @@
 
 use super::*;
 
+// TODO: Fold this update into `SandboxFilesystemAdapter::seed` later, so that the module does not
+// keep 2 methods that do almost the same work. A live component update replaces initial files
+// with a backup and a rollback. `seed` does not give a backup or a rollback.
 pub(super) fn apply_update(
     root: PathBuf,
     copy_mode: FileCopyMode,

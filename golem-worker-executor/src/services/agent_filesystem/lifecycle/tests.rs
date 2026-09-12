@@ -1,8 +1,9 @@
 use super::*;
 use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
 use crate::sandbox_filesystem::{
-    FilesystemAllocation, ScriptedSandboxFilesystemControl, ScriptedSandboxFilesystemProvisioning,
-    ScriptedSandboxPath, ScriptedSandboxPathBase, ScriptedSandboxPathCall,
+    FilesystemAllocation, HostDirectory, ScriptedSandboxFilesystemControl,
+    ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath, ScriptedSandboxPathBase,
+    ScriptedSandboxPathCall,
 };
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
@@ -138,6 +139,14 @@ fn sandbox_provisioning(
     )
 }
 
+/// Makes the cache directory of a file loader on unmanaged storage with a temporary root.
+async fn initial_files_directory() -> HostDirectory {
+    let provisioning = sandbox_provisioning(&FilesystemStorageConfig::default()).unwrap();
+    HostDirectory::create_at_root(&provisioning, std::ffi::OsStr::new(".initial-files"))
+        .await
+        .unwrap()
+}
+
 async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
     let id = agent_id();
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
@@ -154,7 +163,7 @@ async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
         &loader,
         id.environment_id,
@@ -752,7 +761,7 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
         &loader,
         id.environment_id,
@@ -767,12 +776,72 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
     .unwrap();
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    control.push_seed_file(Ok(()));
+    control.push_seed(Ok(()));
 
     let filesystem = materialize_initial_files(filesystem, prepared)
         .await
         .unwrap();
-    assert!(has_call(&control, "seed_file("));
+    assert!(has_call(&control, "seed("));
+    control.push_delete_and_verify(Ok(()));
+    delete(abort_reconstruction(filesystem)).await.unwrap();
+    drop(loader);
+}
+
+#[test]
+async fn initial_files_are_seeded_as_one_file_entry_each_that_fails_on_an_existing_target() {
+    let id = agent_id();
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let content = b"initial file".to_vec();
+    let content_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            content
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    let files = [
+        ("/read-only", AgentFilePermissions::ReadOnly),
+        ("/read-write", AgentFilePermissions::ReadWrite),
+    ]
+    .map(|(path, permissions)| InitialAgentFile {
+        content_hash,
+        path: AgentFilePath::from_abs_str(path).unwrap(),
+        permissions,
+        size: content.len() as u64,
+    });
+    let prepared = prepare_initial_files(&loader, id.environment_id, &files)
+        .await
+        .unwrap();
+    let source = prepared.files[0].source.path().as_path().to_path_buf();
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Ok(()));
+    control.push_seed(Ok(()));
+
+    let filesystem = materialize_initial_files(filesystem, prepared)
+        .await
+        .unwrap();
+
+    let seeds = control
+        .calls()
+        .into_iter()
+        .filter(|call| call.starts_with("seed("))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        seeds,
+        [("read-only", "ReadOnly"), ("read-write", "ReadWrite")].map(|(target, access)| {
+            format!(
+                "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"{target}\" }}, access={access}, existing=Fail}}])",
+                source.display()
+            )
+        })
+    );
     control.push_delete_and_verify(Ok(()));
     delete(abort_reconstruction(filesystem)).await.unwrap();
     drop(loader);
@@ -782,11 +851,11 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
 #[timeout("5s")]
 async fn external_seed_source_retains_its_cache_lease_through_seeding() {
     let (prepared, loader) = prepared_initial_file().await;
-    let source_path = prepared.files[0].source.path().to_path_buf();
+    let source_path = prepared.files[0].source.path().as_path().to_path_buf();
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    control.push_seed_file(Ok(()));
-    let gate = control.block("seed_file");
+    control.push_seed(Ok(()));
+    let gate = control.block("seed");
 
     let materializing = tokio::spawn(materialize_initial_files(filesystem, prepared));
     gate.wait_started().await;
@@ -794,7 +863,7 @@ async fn external_seed_source_retains_its_cache_lease_through_seeding() {
     let seed_call = control
         .calls()
         .into_iter()
-        .find(|call| call.starts_with("seed_file("))
+        .find(|call| call.starts_with("seed("))
         .unwrap();
     assert!(seed_call.contains(&format!("source={}", source_path.display())));
 
@@ -815,7 +884,7 @@ async fn reconstruction_seed_storage_full_at_limit_is_agent_quota() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
@@ -844,7 +913,7 @@ async fn managed_quota_behavior_remains_active_with_storage_metering_disabled() 
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
@@ -879,7 +948,7 @@ async fn managed_pressure_behavior_remains_active_with_storage_metering_disabled
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
@@ -915,7 +984,7 @@ async fn reconstruction_seed_storage_full_below_limit_is_physical_capacity() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
@@ -947,12 +1016,12 @@ async fn reconstruction_seed_retries_after_physical_capacity_recovery() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
     control.push_observe_allocation(Ok(allocation(512, 1)));
-    control.push_seed_file(Ok(()));
+    control.push_seed(Ok(()));
     control.push_observe_allocation(Ok(allocation(1024, 1)));
     let (prepared, loader) = prepared_initial_file().await;
 
@@ -961,7 +1030,7 @@ async fn reconstruction_seed_retries_after_physical_capacity_recovery() {
         .unwrap();
 
     assert_eq!(recovery.calls(), 1);
-    assert_eq!(call_count(&control, "seed_file("), 2);
+    assert_eq!(call_count(&control, "seed("), 2);
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -978,7 +1047,7 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Err(sandbox_error(
+    control.push_seed(Err(sandbox_error(
         "seed initial file",
         std::io::ErrorKind::StorageFull,
     )));
@@ -1001,7 +1070,7 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    control.push_seed_file(Ok(()));
+    control.push_seed(Ok(()));
     control.push_observe_allocation(Ok(allocation(4096, 1)));
     let (prepared, loader) = prepared_initial_file().await;
 
@@ -1009,7 +1078,7 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
         .await
         .unwrap();
 
-    assert_eq!(call_count(&control, "seed_file("), 1);
+    assert_eq!(call_count(&control, "seed("), 1);
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -4764,7 +4833,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         )
         .await
         .unwrap();
-    let loader = Arc::new(FileLoader::new(service, None).unwrap());
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let files = vec![
         InitialAgentFile {
             content_hash: read_only_hash,

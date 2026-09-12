@@ -116,12 +116,11 @@ impl AgentFilesystems {
         })
     }
 
-    /// Returns the managed filesystem root that the file loader may use for its cache.
+    /// Returns the provisioning that makes agent filesystems and host directories on the volume.
     ///
-    /// Callers use this while wiring shared services, before agent creation. Unmanaged storage
-    /// returns `None`; managed storage returns its root so cached sources stay on the same volume.
-    pub(crate) fn initial_file_cache_root(&self) -> Option<&Path> {
-        self.provisioning.initial_file_cache_root()
+    /// Callers use this while wiring shared services, before agent creation.
+    pub(crate) fn provisioning(&self) -> &SandboxFilesystemProvisioning {
+        &self.provisioning
     }
 
     /// Returns the pressure thresholds used to recover writes on the provisioned volume.

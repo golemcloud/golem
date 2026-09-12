@@ -17,14 +17,45 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct UnmanagedProvisioning {
     deterministic_root: Option<PathBuf>,
+    temporary_host_root: Option<Arc<tempfile::TempDir>>,
     cleanup_retry: RetryConfig,
 }
 
 impl UnmanagedProvisioning {
-    pub(super) fn new(deterministic_root: Option<PathBuf>, cleanup_retry: RetryConfig) -> Self {
-        Self {
+    /// Keeps the storage settings. Without a deterministic root, it makes a temporary directory
+    /// that holds the host directories while this provisioning lives.
+    pub(super) fn new(
+        deterministic_root: Option<PathBuf>,
+        cleanup_retry: RetryConfig,
+    ) -> std::io::Result<Self> {
+        let temporary_host_root = match &deterministic_root {
+            Some(_) => None,
+            None => Some(Arc::new(
+                tempfile::Builder::new()
+                    .prefix("golem-host-directories")
+                    .tempdir()?,
+            )),
+        };
+        Ok(Self {
             deterministic_root,
+            temporary_host_root,
             cleanup_retry,
+        })
+    }
+
+    /// The temporary directory that holds the host directories when no root is configured.
+    pub(super) fn temporary_host_root(&self) -> Option<&Arc<tempfile::TempDir>> {
+        self.temporary_host_root.as_ref()
+    }
+
+    /// The directory in which host directories are made.
+    pub(super) fn host_root(&self) -> &Path {
+        match (&self.deterministic_root, &self.temporary_host_root) {
+            (Some(root), _) => root,
+            (None, Some(temporary)) => temporary.path(),
+            (None, None) => {
+                unreachable!("unmanaged provisioning without a root has a temporary host root")
+            }
         }
     }
 
@@ -171,20 +202,4 @@ pub(super) fn copy_file(
         .persist_noclobber(target)
         .map_err(|error| error.error)?;
     Ok(())
-}
-
-pub(super) fn copy_file_at(
-    destination_directory: &cap_std::fs::Dir,
-    source: &Path,
-    destination: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let (parent, destination) = create_capability_copy_parent(destination_directory, destination)?;
-    let mut temporary = CapabilityTempFile::new(parent)?;
-    let mut source = File::open(source)?;
-    std::io::copy(&mut source, temporary.as_file_mut())?;
-    temporary.as_file().sync_all()?;
-    let temporary_file = temporary.as_file().try_clone()?.into_std();
-    set_file_permissions(&temporary_file, read_only)?;
-    temporary.persist_noclobber(&destination)
 }

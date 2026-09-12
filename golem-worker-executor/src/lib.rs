@@ -837,14 +837,15 @@ pub async fn create_worker_executor_impl<
 
     let active_agents = bootstrap.create_active_agents(&golem_config, shutdown_token.clone())?;
 
-    let initial_file_cache_root = active_agents
-        .agent_filesystems()
-        .initial_file_cache_root()
-        .map(|path| path.to_path_buf());
+    let initial_files = sandbox_filesystem::HostDirectory::create_at_root(
+        active_agents.agent_filesystems().provisioning(),
+        std::ffi::OsStr::new(".initial-files"),
+    )
+    .await?;
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
-        initial_file_cache_root.as_deref(),
-    )?);
+        initial_files,
+    ));
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
         active_agents.clone(),

@@ -16,7 +16,8 @@ use cap_fs_ext::DirExt as _;
 use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Display, Formatter};
+use std::ffi::OsStr;
+use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Component, Path, PathBuf};
@@ -25,10 +26,14 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 mod adapter;
 mod file_update;
+mod host_directory;
+mod tree_copy;
 mod unmanaged;
 
 #[allow(unused_imports)]
 pub(crate) use adapter::*;
+pub(crate) use host_directory::{HostDirectory, HostPath};
+pub(crate) use tree_copy::TreeExclusions;
 
 #[cfg(target_os = "linux")]
 mod xfs;
@@ -42,8 +47,13 @@ enum FilesystemStorageErrorKind {
     AllocationUnsupported,
 }
 
-#[derive(Debug)]
 pub struct FilesystemStorageError {
+    inner: Box<FilesystemStorageErrorInner>,
+}
+
+/// The facts of one [`FilesystemStorageError`]. They stay behind one box, so that the error is one
+/// pointer wide.
+struct FilesystemStorageErrorInner {
     operation: &'static str,
     path: PathBuf,
     source: Option<std::io::Error>,
@@ -55,67 +65,79 @@ pub struct FilesystemStorageError {
 impl FilesystemStorageError {
     pub(crate) fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(source),
-            cleanup_failed: false,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: Some(source),
+                cleanup_failed: false,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     pub(crate) fn verification(operation: &'static str, path: &Path) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: false,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: None,
+                cleanup_failed: false,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     pub(crate) fn allocation_unsupported(path: &Path) -> Self {
         Self {
-            operation: "observe allocation without quota authority",
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: false,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::AllocationUnsupported,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation: "observe allocation without quota authority",
+                path: path.to_path_buf(),
+                source: None,
+                cleanup_failed: false,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::AllocationUnsupported,
+            }),
         }
     }
 
     pub(crate) fn cleanup_io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(source),
-            cleanup_failed: true,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: Some(source),
+                cleanup_failed: true,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     fn cleanup_verification(operation: &'static str, path: &Path) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: true,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: None,
+                cleanup_failed: true,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     fn task_failure(operation: &'static str, path: &Path, source: NativeExecutionError) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(std::io::Error::other(source)),
-            cleanup_failed: false,
-            task_failed: true,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: Some(std::io::Error::other(source)),
+                cleanup_failed: false,
+                task_failed: true,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
@@ -129,11 +151,11 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn cleanup_failed(&self) -> bool {
-        self.cleanup_failed
+        self.inner.cleanup_failed
     }
 
     pub(crate) fn is_storage_exhaustion(&self) -> bool {
-        self.source.as_ref().is_some_and(|source| {
+        self.inner.source.as_ref().is_some_and(|source| {
             matches!(
                 source.kind(),
                 std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
@@ -142,8 +164,8 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn is_terminal_failure(&self) -> bool {
-        self.task_failed
-            || self.source.as_ref().is_some_and(|source| {
+        self.inner.task_failed
+            || self.inner.source.as_ref().is_some_and(|source| {
                 matches!(
                     source.kind(),
                     std::io::ErrorKind::InvalidData
@@ -154,15 +176,15 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
-        self.source.as_ref().map(std::io::Error::kind)
+        self.inner.source.as_ref().map(std::io::Error::kind)
     }
 
     pub(crate) fn io_error(&self) -> Option<&std::io::Error> {
-        self.source.as_ref()
+        self.inner.source.as_ref()
     }
 
     pub(crate) fn allocation_is_unsupported(&self) -> bool {
-        self.kind == FilesystemStorageErrorKind::AllocationUnsupported
+        self.inner.kind == FilesystemStorageErrorKind::AllocationUnsupported
     }
 }
 
@@ -182,11 +204,11 @@ enum NativeOperation {
     Read(usize),
     Write(usize),
     DirectoryEnumeration,
-    SeedFile,
     FileUpdate,
     RecursiveCleanup,
     Flush,
     Quota,
+    TreeCopy,
 }
 
 impl NativeOperation {
@@ -195,11 +217,11 @@ impl NativeOperation {
             Self::Metadata | Self::Open | Self::Namespace => true,
             Self::Read(bytes) | Self::Write(bytes) => bytes <= MAX_SHORT_TRANSFER_BYTES,
             Self::DirectoryEnumeration
-            | Self::SeedFile
             | Self::FileUpdate
             | Self::RecursiveCleanup
             | Self::Flush
-            | Self::Quota => false,
+            | Self::Quota
+            | Self::TreeCopy => false,
         }
     }
 }
@@ -287,15 +309,29 @@ fn is_terminal_storage_errno(_error: &std::io::Error) -> bool {
     false
 }
 
+impl Debug for FilesystemStorageError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FilesystemStorageError")
+            .field("operation", &self.inner.operation)
+            .field("path", &self.inner.path)
+            .field("source", &self.inner.source)
+            .field("cleanup_failed", &self.inner.cleanup_failed)
+            .field("task_failed", &self.inner.task_failed)
+            .field("kind", &self.inner.kind)
+            .finish()
+    }
+}
+
 impl Display for FilesystemStorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
             "failed to {} filesystem {}",
-            self.operation,
-            self.path.display()
+            self.inner.operation,
+            self.inner.path.display()
         )?;
-        if let Some(source) = &self.source {
+        if let Some(source) = &self.inner.source {
             write!(formatter, ": {source}")?;
         }
         Ok(())
@@ -304,7 +340,8 @@ impl Display for FilesystemStorageError {
 
 impl std::error::Error for FilesystemStorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
+        self.inner
+            .source
             .as_ref()
             .map(|source| source as &(dyn std::error::Error + 'static))
     }
@@ -641,7 +678,7 @@ enum NativeCleanup {
         cleanup_retry: RetryConfig,
     },
     #[cfg(target_os = "linux")]
-    Managed(xfs::ManagedProjectCleanup),
+    Managed(Box<xfs::ManagedProjectCleanup>),
 }
 
 impl NativeCleanup {
@@ -686,6 +723,7 @@ enum QuotaAuthority {
 pub(crate) struct SandboxFilesystemProvisioning {
     volume: FilesystemVolume,
     mode: SandboxFilesystemProvisioningMode,
+    host_directory_names: Arc<Mutex<HashSet<Box<OsStr>>>>,
 }
 
 #[derive(Clone)]
@@ -712,29 +750,46 @@ impl SandboxFilesystemProvisioning {
             Some(root) => configured_managed(root, &cleanup_retry),
             None => {
                 let volume = FilesystemVolume::unmanaged_development();
+                let unmanaged =
+                    unmanaged::UnmanagedProvisioning::new(deterministic_root_dir, cleanup_retry)
+                        .map_err(|error| {
+                            FilesystemStorageError::io(
+                                "create temporary host directory root",
+                                Path::new("<temp>"),
+                                error,
+                            )
+                        })?;
                 Ok(Self {
                     volume: volume.clone(),
-                    mode: SandboxFilesystemProvisioningMode::Unmanaged(
-                        unmanaged::UnmanagedProvisioning::new(
-                            deterministic_root_dir,
-                            cleanup_retry,
-                        ),
-                    ),
+                    mode: SandboxFilesystemProvisioningMode::Unmanaged(unmanaged),
+                    host_directory_names: Arc::default(),
                 })
             }
         }
     }
 
-    pub(crate) fn initial_file_cache_root(&self) -> Option<&Path> {
-        match &self.mode {
-            SandboxFilesystemProvisioningMode::Unmanaged(_) => None,
-            #[cfg(target_os = "linux")]
-            SandboxFilesystemProvisioningMode::Managed(managed) => Some(managed.root()),
-        }
-    }
-
     pub(crate) fn volume(&self) -> &FilesystemVolume {
         &self.volume
+    }
+
+    fn host_root(&self) -> HostRoot<'_> {
+        match &self.mode {
+            SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => HostRoot {
+                path: unmanaged.host_root(),
+                anchor: None,
+                temporary_root: unmanaged.temporary_host_root().cloned(),
+                names: &self.host_directory_names,
+                verify_no_project: false,
+            },
+            #[cfg(target_os = "linux")]
+            SandboxFilesystemProvisioningMode::Managed(managed) => HostRoot {
+                path: managed.root(),
+                anchor: self.volume.managed_root().cloned(),
+                temporary_root: None,
+                names: &self.host_directory_names,
+                verify_no_project: true,
+            },
+        }
     }
 
     pub(crate) async fn create_fresh(
@@ -761,6 +816,15 @@ impl SandboxFilesystemProvisioning {
     }
 }
 
+/// Where the host directories of a provisioning are made, and what a new one must satisfy.
+struct HostRoot<'a> {
+    path: &'a Path,
+    anchor: Option<Arc<File>>,
+    temporary_root: Option<Arc<tempfile::TempDir>>,
+    names: &'a Mutex<HashSet<Box<OsStr>>>,
+    verify_no_project: bool,
+}
+
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
@@ -771,6 +835,7 @@ fn configured_managed(
     Ok(SandboxFilesystemProvisioning {
         volume,
         mode: SandboxFilesystemProvisioningMode::Managed(managed),
+        host_directory_names: Arc::default(),
     })
 }
 
@@ -798,10 +863,11 @@ impl SandboxFilesystemName {
         let components = [environment, component, filesystem];
         if components.iter().all(|component| {
             let path = Path::new(component);
-            matches!(
-                path.components().collect::<Vec<_>>().as_slice(),
-                [Component::Normal(_)]
-            )
+            !component.starts_with('.')
+                && matches!(
+                    path.components().collect::<Vec<_>>().as_slice(),
+                    [Component::Normal(_)]
+                )
         }) {
             Ok(Self { components })
         } else {
@@ -1081,40 +1147,6 @@ fn copy_file_blocking(
             #[cfg(target_os = "linux")]
             {
                 xfs::reflink_file(materialization_root, project_id, source, target, read_only)
-            }
-            #[cfg(not(target_os = "linux"))]
-            unreachable!("managed XFS is unavailable on this platform");
-        }
-    }
-}
-
-fn copy_file_at_blocking(
-    copy_mode: FileCopyMode,
-    quota_authority: QuotaAuthority,
-    materialization_root: &Path,
-    source: &Path,
-    destination_directory: &cap_std::fs::Dir,
-    destination: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    match copy_mode {
-        FileCopyMode::Buffered => {
-            unmanaged::copy_file_at(destination_directory, source, destination, read_only)
-        }
-        FileCopyMode::Reflink => {
-            let QuotaAuthority::Project { project_id, .. } = quota_authority else {
-                unreachable!("reflink copy requires project quota authority")
-            };
-            #[cfg(target_os = "linux")]
-            {
-                xfs::reflink_file_at(
-                    materialization_root,
-                    project_id,
-                    destination_directory,
-                    source,
-                    destination,
-                    read_only,
-                )
             }
             #[cfg(not(target_os = "linux"))]
             unreachable!("managed XFS is unavailable on this platform");
@@ -1496,6 +1528,33 @@ impl<'a> CapabilityTempFile<'a> {
         self.name = None;
         Ok(())
     }
+
+    /// Gives the file the name `destination`, in place of what is at that name. A directory at
+    /// that name goes away first, together with all that is in it.
+    fn persist_replacing(mut self, destination: &Path) -> std::io::Result<()> {
+        let name = self
+            .name
+            .as_ref()
+            .expect("capability temporary file name missing");
+        remove_directory_in_the_way(self.directory.as_dir(), destination)?;
+        self.directory
+            .as_dir()
+            .rename(name, self.directory.as_dir(), destination)?;
+        self.name = None;
+        Ok(())
+    }
+}
+
+/// Removes the directory at `path` in `directory`, together with all that is in it.
+///
+/// Another kind of object at the path, or no object, stays as it is. A symlink is not followed.
+fn remove_directory_in_the_way(directory: &cap_std::fs::Dir, path: &Path) -> std::io::Result<()> {
+    match directory.symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => directory.remove_dir_all(path),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 impl Drop for CapabilityTempFile<'_> {
@@ -1694,11 +1753,11 @@ mod tests {
             NativeOperation::Read(MAX_SHORT_TRANSFER_BYTES + 1),
             NativeOperation::Write(MAX_SHORT_TRANSFER_BYTES + 1),
             NativeOperation::DirectoryEnumeration,
-            NativeOperation::SeedFile,
             NativeOperation::FileUpdate,
             NativeOperation::RecursiveCleanup,
             NativeOperation::Flush,
             NativeOperation::Quota,
+            NativeOperation::TreeCopy,
         ] {
             assert_eq!(
                 select_native_execution(NativeStorageProfile::KnownLocal, operation, true,),
@@ -1864,6 +1923,54 @@ mod tests {
         SandboxFilesystem::delete_and_verify(&first).await.unwrap();
         let second = second.await.unwrap().unwrap();
         SandboxFilesystem::delete_and_verify(&second).await.unwrap();
+    }
+
+    #[test]
+    fn storage_error_is_one_pointer_wide() {
+        assert_eq!(
+            std::mem::size_of::<FilesystemStorageError>(),
+            std::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn storage_error_debug_output_names_each_fact() {
+        let error =
+            FilesystemStorageError::cleanup_verification("remove directory", Path::new("/root/a"));
+
+        assert_eq!(
+            format!("{error:?}"),
+            "FilesystemStorageError { operation: \"remove directory\", path: \"/root/a\", source: None, cleanup_failed: true, task_failed: false, kind: General }"
+        );
+    }
+
+    #[test]
+    fn native_name_rejects_a_component_that_starts_with_a_dot() {
+        [
+            [".environment", "component", "filesystem"],
+            ["environment", ".component", "filesystem"],
+            ["environment", "component", ".filesystem"],
+        ]
+        .into_iter()
+        .for_each(|[environment, component, filesystem]| {
+            assert!(
+                SandboxFilesystemName::new(
+                    environment.to_string(),
+                    component.to_string(),
+                    filesystem.to_string()
+                )
+                .is_err(),
+                "{environment}/{component}/{filesystem} must be refused"
+            );
+        });
+        assert!(
+            SandboxFilesystemName::new(
+                "environment.".to_string(),
+                "compo.nent".to_string(),
+                "filesystem".to_string()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
