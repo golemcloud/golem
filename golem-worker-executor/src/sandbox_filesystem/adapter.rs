@@ -4169,19 +4169,24 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let sources = host_directory_at(parent.path(), ".sources").await;
         let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
-        [("tool", 0o755), ("locked", 0o555), ("private", 0o640)]
-            .into_iter()
-            .for_each(|(name, mode)| {
-                let path = sources.path().as_path().join(name);
-                std::fs::write(&path, name).unwrap();
-                File::options()
-                    .write(true)
-                    .open(&path)
-                    .unwrap()
-                    .set_modified(modified)
-                    .unwrap();
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-            });
+        [
+            ("tool", 0o755),
+            ("locked", 0o555),
+            ("private", 0o640),
+            ("writable", 0o644),
+        ]
+        .into_iter()
+        .for_each(|(name, mode)| {
+            let path = sources.path().as_path().join(name);
+            std::fs::write(&path, name).unwrap();
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        });
         let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
             .create_fresh(name())
             .await
@@ -4208,30 +4213,148 @@ mod tests {
                     SeedAccess::FromSource,
                     OnExisting::Fail,
                 ),
+                seed_entry(
+                    host_child(&sources, "writable"),
+                    "writable",
+                    SeedAccess::ReadWrite,
+                    OnExisting::Fail,
+                ),
             ]),
         )
         .await
         .unwrap();
 
         let root = filesystem.root();
-        [("tool", 0o555), ("locked", 0o755), ("private", 0o640)]
-            .into_iter()
-            .for_each(|(name, expected)| {
-                assert_eq!(
-                    mode(&root.join(name)),
-                    expected,
-                    "{name} must have mode {expected:o}"
-                );
-                assert_eq!(
-                    std::fs::metadata(root.join(name))
-                        .unwrap()
-                        .modified()
-                        .unwrap(),
-                    modified,
-                    "{name} must have the modification time of its source"
-                );
-            });
+        [
+            ("tool", 0o555),
+            ("locked", 0o755),
+            ("private", 0o640),
+            ("writable", 0o644),
+        ]
+        .into_iter()
+        .for_each(|(name, expected)| {
+            assert_eq!(
+                mode(&root.join(name)),
+                expected,
+                "{name} must have mode {expected:o}"
+            );
+            assert_eq!(
+                std::fs::metadata(root.join(name))
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                modified,
+                "{name} must have the modification time of its source"
+            );
+        });
         assert_eq!(std::fs::read(root.join("tool")).unwrap(), b"tool");
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_gives_a_made_target_directory_the_source_attributes_and_keeps_a_merged_one() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        let tree = sources.path().as_path().join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::write(tree.join("file"), b"file").unwrap();
+        std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+        File::open(&tree).unwrap().set_modified(modified).unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        std::fs::create_dir(root.join("merged")).unwrap();
+        std::fs::set_permissions(root.join("merged"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([
+                seed_entry(
+                    host_child(&sources, "tree"),
+                    "made",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+                seed_entry(
+                    host_child(&sources, "tree"),
+                    "merged",
+                    SeedAccess::FromSource,
+                    OnExisting::Fail,
+                ),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            mode(&root.join("made")),
+            0o750,
+            "the made directory must have the mode of its source"
+        );
+        assert_eq!(
+            std::fs::metadata(root.join("made"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            modified,
+            "the made directory must have the modification time of its source"
+        );
+        assert_eq!(
+            mode(&root.join("merged")),
+            0o700,
+            "the merged directory must keep its own mode"
+        );
+        assert_eq!(std::fs::read(root.join("merged/file")).unwrap(), b"file");
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn seed_reports_the_error_of_a_directory_that_it_cannot_make() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let sources = host_directory_at(parent.path(), ".sources").await;
+        std::fs::create_dir(sources.path().as_path().join("tree")).unwrap();
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let locked = filesystem.root().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let error = seed_one(
+            &filesystem,
+            seed_entry(
+                host_child(&sources, "tree"),
+                "locked/new",
+                SeedAccess::FromSource,
+                OnExisting::Fail,
+            ),
+        )
+        .await
+        .unwrap_err();
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            error.io_kind(),
+            Some(std::io::ErrorKind::PermissionDenied),
+            "{error}"
+        );
+        assert!(!locked.join("new").exists());
         SandboxFilesystem::delete_and_verify(&filesystem)
             .await
             .unwrap();
