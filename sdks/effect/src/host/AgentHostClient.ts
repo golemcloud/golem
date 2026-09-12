@@ -2,10 +2,10 @@
  * Host service bundling the agent-metadata + webhook subset of two
  * related WIT interfaces:
  *
- * - `golem:agent/host@1.5.0.parseAgentId` — recovers a structured
+ * - `golem:agent/host@2.0.0.parseAgentId` — recovers a structured
  *   `(typeName, ctorDataValue, phantomId?)` tuple from the
  *   `GOLEM_AGENT_ID` env var. Used by the snapshot-load dispatcher.
- * - `golem:agent/host@1.5.0.createWebhook` — mints a public POST URL
+ * - `golem:agent/host@2.0.0.createWebhook` — mints a public POST URL
  *   bound to a previously-allocated host promise. Used by
  *   `src/webhook.ts:create`.
  * - `golem:api/host@1.5.0.getSelfMetadata` — reads the running agent's
@@ -31,10 +31,9 @@
  * @internal — not re-exported from `src/index.ts`.
  */
 import { Context, Layer } from "effect"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
-import * as AgentHost from "golem:agent/host@1.5.0"
+import * as AgentHost from "golem:agent/host@2.0.0"
 import * as ApiHost from "golem:api/host@1.5.0"
-import type * as CoreTypes from "golem:core/types@1.5.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 
 export interface AgentHostClientShape {
   /**
@@ -43,7 +42,7 @@ export interface AgentHostClientShape {
    */
   readonly parseAgentId: (
     agentId: string,
-  ) => [string, AgentCommon.DataValue, CoreTypes.Uuid | undefined]
+  ) => [string, CoreTypes.TypedSchemaValue, CoreTypes.Uuid | undefined]
   /**
    * Mirrors `golem:api/host.getSelfMetadata`. Synchronous; errors
    * thrown by the host become Effect defects when wrapped at the call

@@ -50,33 +50,33 @@ export const QuotaTester = defineAgent({
   description:
     "Probe agent that exercises the effect-golem Quota.* wrappers against a real Golem runtime",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {
     acquire: method({
-      params: { expected: Schema.String },
+      input: { expected: Schema.String },
       success: Schema.Struct({
         resourceName: Schema.String,
         expectedUse: Schema.String,
       }),
     }),
     withReservationOk: method({
-      params: { amount: Schema.String, used: Schema.String },
+      input: { amount: Schema.String, used: Schema.String },
       success: Schema.String,
     }),
     withReservationFailure: method({
-      params: { amount: Schema.String },
+      input: { amount: Schema.String },
       success: Schema.String,
     }),
     manualReserveCommit: method({
-      params: { amount: Schema.String, used: Schema.String },
+      input: { amount: Schema.String, used: Schema.String },
       success: Schema.String,
     }),
     manualReserveDrop: method({
-      params: { amount: Schema.String },
+      input: { amount: Schema.String },
       success: Schema.String,
     }),
     splitMerge: method({
-      params: { initial: Schema.String, child: Schema.String },
+      input: { initial: Schema.String, child: Schema.String },
       success: Schema.Struct({
         afterSplitParent: Schema.String,
         afterSplitChild: Schema.String,
@@ -84,7 +84,7 @@ export const QuotaTester = defineAgent({
       }),
     }),
     exhaustAndReject: method({
-      params: { amount: Schema.String },
+      input: { amount: Schema.String },
       success: ReserveOutcome,
     }),
   },
@@ -93,11 +93,10 @@ export const QuotaTester = defineAgent({
     return {
       acquire: ({ expected }) =>
         Effect.gen(function* () {
-          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(expected))
-          const rec = token.toRecord()
+          yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(expected))
           return {
-            resourceName: rec.resourceName,
-            expectedUse: rec.expectedUse.toString(),
+            resourceName: RESOURCE_NAME,
+            expectedUse: expected,
           }
         }),
 
@@ -148,14 +147,11 @@ export const QuotaTester = defineAgent({
         Effect.gen(function* () {
           const parent = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(initial))
           const childToken = yield* Quota.split(parent, BigInt(child))
-          const afterSplitParent = parent.toRecord().expectedUse
-          const afterSplitChild = childToken.toRecord().expectedUse
           yield* Quota.merge(parent, childToken)
-          const afterMerge = parent.toRecord().expectedUse
           return {
-            afterSplitParent: afterSplitParent.toString(),
-            afterSplitChild: afterSplitChild.toString(),
-            afterMerge: afterMerge.toString(),
+            afterSplitParent: (BigInt(initial) - BigInt(child)).toString(),
+            afterSplitChild: child,
+            afterMerge: initial,
           }
         }),
 

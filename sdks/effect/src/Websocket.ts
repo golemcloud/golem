@@ -284,31 +284,11 @@ export const fromConnection = <RO>(
           const runFork = yield* FiberSet.runtime(fiberSet)<R>()
 
           yield* Effect.tryPromise({
-            // The signal here fires when the surrounding fiber is
-            // interrupted (Effect's `tryPromise` wires its own
-            // AbortController to the fiber's interrupt observer).
-            // Threading it through `pollable.abortablePromise(signal)`
-            // makes the read loop wake up promptly on interruption
-            // instead of leaking a host promise that will never
-            // resolve.
             try: async (signal) => {
               while (true) {
                 if (signal.aborted) return
-                // Wait for a message to be available. The pollable's
-                // abortablePromise() resolves when the host has
-                // buffered a frame, or rejects if `signal` aborts.
-                const pollable = ws.subscribe()
-                try {
-                  await pollable.abortablePromise(signal)
-                } catch (err) {
-                  if (signal.aborted) return
-                  throw err
-                }
+                const msg = await ws.receive()
                 if (signal.aborted) return
-                // Now `receive()` is guaranteed non-blocking. Any thrown
-                // error here (including `closed`) terminates the loop;
-                // it will be classified by the catch handler below.
-                const msg = ws.receive()
                 const data: string | Uint8Array = msg.tag === "text" ? msg.val : msg.val
                 const result = handler(data)
                 if (Effect.isEffect(result)) runFork(result)

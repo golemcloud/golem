@@ -15,7 +15,7 @@ import {
 } from "./wasi-blobstore-types.js"
 
 interface ObjectEntry {
-  bytes: Uint8Array
+  bytes: () => Uint8Array
   createdAt: bigint
 }
 
@@ -85,7 +85,7 @@ export class Container {
   getData(name: string, start: bigint, end: bigint): IncomingValue {
     const obj = this._entry.objects.get(name)
     maybeFail("getData", obj === undefined, `object ${name} not found`)
-    const bytes = obj!.bytes
+    const bytes = obj!.bytes()
     const s = Number(start)
     // Mock follows the in-memory backend: `end` is exclusive (Rust slice).
     const e = Math.min(Number(end), bytes.length)
@@ -94,12 +94,12 @@ export class Container {
   }
 
   writeData(name: string, ov: OutgoingValue): void {
-    const bytes = ov.__getBytes()
-    this._entry.objects.set(name, { bytes, createdAt: BigInt(Date.now()) })
+    this._entry.objects.set(name, { bytes: () => ov.__getBytes(), createdAt: BigInt(Date.now()) })
   }
 
-  listObjects(): StreamObjectNames {
-    return new StreamObjectNames(Array.from(this._entry.objects.keys()))
+  async *listObjects(): AsyncIterable<string> {
+    const names = Array.from(this._entry.objects.keys())
+    while (names.length > 0) yield names.pop()!
   }
 
   deleteObject(name: string): void {
@@ -121,7 +121,7 @@ export class Container {
       name,
       container: this._entry.name,
       createdAt: obj!.createdAt,
-      size: BigInt(obj!.bytes.length),
+      size: BigInt(obj!.bytes().length),
     }
   }
 

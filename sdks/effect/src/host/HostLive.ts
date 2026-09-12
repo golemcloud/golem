@@ -28,7 +28,9 @@ import { PromiseClient, PromiseLive } from "./PromiseClient.js"
 import { QuotaClient, QuotaLive } from "./QuotaClient.js"
 import { RetryClient, RetryLive } from "./RetryClient.js"
 import { RpcClient, RpcLive } from "./RpcClient.js"
+import { SecretsClient, SecretsLive } from "./SecretsClient.js"
 import { SqliteHostExtClient, SqliteHostExtLive } from "./SqliteHostExtClient.js"
+import { ToolClient, ToolClientLive } from "./ToolClient.js"
 import { TracingHost, TracingHostLive } from "./TracingHost.js"
 import { WebsocketClient, WebsocketLive } from "./WebsocketClient.js"
 
@@ -50,7 +52,9 @@ export {
   QuotaClient,
   RetryClient,
   RpcClient,
+  SecretsClient,
   SqliteHostExtClient,
+  ToolClient,
   TracingHost,
   WebsocketClient,
 }
@@ -71,6 +75,8 @@ export type HostServices =
   | DurabilityModeClient
   | OplogClient
   | RpcClient
+  | SecretsClient
+  | ToolClient
   | LoggingHost
   | TracingHost
   | QuotaClient
@@ -93,6 +99,8 @@ export const HostLive: Layer.Layer<HostServices> = Layer.mergeAll(
   DurabilityModeLive,
   OplogLive,
   RpcLive,
+  SecretsLive,
+  ToolClientLive,
   LoggingHostLive,
   TracingHostLive,
   QuotaLive,

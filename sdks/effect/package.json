@@ -30,6 +30,10 @@
       "types": "./dist/effect-golem.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./middleware": {
+      "types": "./dist/effect-golem-middleware.d.ts",
+      "import": "./dist/middleware.mjs"
+    },
     "./sqlite": {
       "types": "./dist/effect-golem-sqlite.d.ts",
       "import": "./dist/sqlite.mjs"
@@ -53,6 +57,52 @@
       "import": "./dist/src/*.js"
     }
   },
+  "typesVersions": {
+    "*": {
+      "agent-guest": [
+        "golem-types/exports.d.ts"
+      ],
+      "tool-middleware-guest": [
+        "golem-types/tool_middleware_exports.d.ts"
+      ],
+      "agent-tool-middleware-guest": [
+        "golem-types/agent_tool_middleware_exports.d.ts"
+      ],
+      "golem:agent/common@2.0.0": [
+        "golem-types/golem_agent_2_0_0_common.d.ts"
+      ],
+      "golem:agent/host@2.0.0": [
+        "golem-types/golem_agent_2_0_0_host.d.ts"
+      ],
+      "golem:core/types@2.0.0": [
+        "golem-types/golem_core_2_0_0_types.d.ts"
+      ],
+      "golem:durability/durability@1.6.0": [
+        "golem-types/golem_durability_1_6_0_durability.d.ts"
+      ],
+      "golem:secrets/reveal@0.1.0": [
+        "golem-types/golem_secrets_0_1_0_reveal.d.ts"
+      ],
+      "golem:secrets/types@0.1.0": [
+        "golem-types/golem_secrets_0_1_0_types.d.ts"
+      ],
+      "golem:tool/common@0.1.0": [
+        "golem-types/golem_tool_0_1_0_common.d.ts"
+      ],
+      "golem:tool/host@0.1.0": [
+        "golem-types/golem_tool_0_1_0_host.d.ts"
+      ],
+      "wasi:cli/environment@0.3.0": [
+        "golem-types/wasi_cli_0_3_0_environment.d.ts"
+      ],
+      "wasi:clocks/system-clock@0.3.0": [
+        "golem-types/wasi_clocks_0_3_0_system_clock.d.ts"
+      ],
+      "wasi:clocks/types@0.3.0": [
+        "golem-types/wasi_clocks_0_3_0_types.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist",
     "wasm",
@@ -61,9 +111,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node ./scripts/build-types-entry.mjs",
     "build:bundle": "rollup -c",
-    "generate-dts": "wasm-rquickjs generate-dts --wit ./wit --output golem-types-generated --world agent-guest",
+    "generate-dts": "node ./scripts/generate-dts.mjs",
+    "check:dts": "node ./scripts/check-dts.mjs",
+    "check:contracts": "node ./scripts/check-stale-contracts.mjs",
+    "check:artifacts": "node ./scripts/check-artifacts.mjs",
+    "clean": "node ./scripts/clean.mjs",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
-    "compile-agent-template": "cargo build --target wasm32-wasip2 --target-dir agent-template/target --manifest-path=agent-template/Cargo.toml --release --features full,golem",
+    "compile-agent-template": "node ./scripts/compile-agent-templates.mjs",
     "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
     "build-agent-template": "npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
     "typecheck": "tsc --noEmit",
@@ -74,6 +128,7 @@
     "test:e2e:rdbms": "cd integration-test && npm run infra:up && golem -L build && golem -L -Y deploy && npm run test:rdbms"
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "effect": "4.0.0-beta.98"
   },
   "devDependencies": {

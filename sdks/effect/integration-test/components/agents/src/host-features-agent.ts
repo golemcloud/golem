@@ -52,28 +52,28 @@ import {
   SelfAgentId,
   Snapshot,
 } from "@golemcloud/effect-golem"
-import * as CoreTypes from "golem:core/types@1.5.0"
+import * as CoreTypes from "golem:core/types@2.0.0"
 
 const uuidToString = (uuid: { highBits: bigint; lowBits: bigint }): string =>
   CoreTypes.uuidToString(uuid)
 
-export const HostFeatures = defineAgent({
+const HostFeaturesSpec = defineAgent({
   name: "HostFeatures",
   description:
     "Probe agent that exercises Durability/Oplog/Agents wrappers against a real Golem runtime",
   mode: "durable",
-  constructorParams: { name: Schema.String },
-  snapshot: Snapshot.define({
+  id: { name: Schema.String },
+  snapshotting: Snapshot.define({
     schema: Schema.Struct({ count: Schema.Number }),
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
-    oplogIndex: method({ params: {}, success: Schema.String }),
-    withAtomic: method({ params: { by: Schema.Number }, success: Schema.Number }),
-    withPersistNothing: method({ params: { by: Schema.Number }, success: Schema.Number }),
-    idempotencyKey: method({ params: {}, success: Schema.String }),
+    oplogIndex: method({ input: {}, success: Schema.String }),
+    withAtomic: method({ input: { by: Schema.Number }, success: Schema.Number }),
+    withPersistNothing: method({ input: { by: Schema.Number }, success: Schema.Number }),
+    idempotencyKey: method({ input: {}, success: Schema.String }),
     selfMetadata: method({
-      params: {},
+      input: {},
       success: Schema.Struct({
         agentName: Schema.String,
         componentRevision: Schema.String,
@@ -82,32 +82,34 @@ export const HostFeatures = defineAgent({
       }),
     }),
     forkSelf: method({
-      params: {},
+      input: {},
       success: Schema.Literals(["original", "forked"]),
     }),
     readOplog: method({
-      params: { count: Schema.Number },
+      input: { count: Schema.Number },
       success: Schema.Array(Schema.String),
     }),
     searchOplog: method({
-      params: { query: Schema.String, count: Schema.Number },
+      input: { query: Schema.String, count: Schema.Number },
       success: Schema.Array(Schema.String),
     }),
     promiseRoundtrip: method({
-      params: { payload: Schema.String },
+      input: { payload: Schema.String },
       success: Schema.String,
     }),
     wrappedQuote: method({
-      params: { symbol: Schema.String },
+      input: { symbol: Schema.String },
       success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
     }),
     wrappedQuoteFailing: method({
-      params: { symbol: Schema.String },
+      input: { symbol: Schema.String },
       success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
       error: Schema.Struct({ code: Schema.String, symbol: Schema.String }),
     }),
   },
-}).implement((_input, snap) =>
+})
+
+const HostFeaturesFactory: Parameters<typeof HostFeaturesSpec.implement>[0] = (_input, snap) =>
   Effect.gen(function* () {
     const state = yield* snap.init({ count: 0 })
 
@@ -126,8 +128,8 @@ export const HostFeatures = defineAgent({
         ),
 
       withPersistNothing: ({ by }) =>
-        Durability.withPersistenceLevel(
-          Durability.PersistenceLevel.persistNothing,
+        Durability.withIdempotenceMode(
+          false,
           Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
             Effect.map((s) => s.count),
           ),
@@ -233,5 +235,8 @@ export const HostFeatures = defineAgent({
           Effect.fail({ code: "UNAVAILABLE", symbol }),
         ),
     }
-  }),
+  })
+
+export const HostFeatures = HostFeaturesSpec.implement(HostFeaturesFactory, (_context, ...args) =>
+  HostFeaturesFactory(...args),
 )

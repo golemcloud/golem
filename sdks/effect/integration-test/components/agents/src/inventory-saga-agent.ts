@@ -44,34 +44,36 @@ const RunResult = Schema.Struct({
   totalAttempts: Schema.Number,
 })
 
-export const InventorySaga = defineAgent({
+const InventorySagaSpec = defineAgent({
   name: "InventorySaga",
   description: "Inventory saga that exercises Saga.infallibleTransaction (rewind-on-failure)",
   mode: "durable",
-  constructorParams: { name: Schema.String },
-  snapshot: Snapshot.define({
+  id: { name: Schema.String },
+  snapshotting: Snapshot.define({
     schema: Schema.Struct({ totalAttempts: Schema.Number }),
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     runOnceOk: method({
-      params: {},
+      input: {},
       success: RunResult,
       description: "Happy-path infallible saga; returns the body's value.",
     }),
     runOnceAndJump: method({
-      params: {},
+      input: {},
       success: Schema.Void,
       description:
         "Drives a deliberate first-attempt failure to emit a JUMP oplog entry. Loops forever; interrupt manually.",
     }),
     totalAttempts: method({
-      params: {},
+      input: {},
       success: Schema.Number,
       description: "Total method invocations (incl. host-driven replays after a JUMP).",
     }),
   },
-}).implement(({ name }, snap) =>
+})
+
+const InventorySagaFactory: Parameters<typeof InventorySagaSpec.implement>[0] = ({ name }, snap) =>
   Effect.gen(function* () {
     const state = yield* snap.init({ totalAttempts: 0 })
 
@@ -152,5 +154,9 @@ export const InventorySaga = defineAgent({
 
       totalAttempts: () => Ref.get(state).pipe(Effect.map((s) => s.totalAttempts)),
     }
-  }),
+  })
+
+export const InventorySaga = InventorySagaSpec.implement(
+  InventorySagaFactory,
+  (_context, ...args) => InventorySagaFactory(...args),
 )

@@ -16,13 +16,13 @@ import {
 const roundtrip = <S extends Schema.Codec<any, any, never, never>>(s: S, value: S["Type"]) =>
   Effect.gen(function* () {
     const wc = yield* toWitCodec(s)
-    const wv = yield* Schema.encodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(
+    const sv = yield* Schema.encodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(
       value,
     )
     const back = yield* Schema.decodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(
-      wv,
+      sv,
     )
-    return { wc, wv, back }
+    return { wc, sv, back }
   })
 
 describe("toWitCodec — option-shaped types", () => {
@@ -31,7 +31,7 @@ describe("toWitCodec — option-shaped types", () => {
       const S = Schema.NullOr(Schema.String)
       const a = yield* roundtrip(S, "hi")
       expect(a.back).toBe("hi")
-      expect(a.wc.witType.nodes[0]?.type.tag).toBe("option-type")
+      expect(a.wc.graph.root.body.tag).toBe("option")
 
       const b = yield* roundtrip(S, null)
       expect(b.back).toBeNull()
@@ -58,7 +58,7 @@ describe("toWitCodec — option-shaped types", () => {
 
       const b = yield* roundtrip(S, Option.none())
       expect(Option.isNone(b.back)).toBe(true)
-      expect(b.wc.witType.nodes[0]?.type.tag).toBe("option-type")
+      expect(b.wc.graph.root.body.tag).toBe("option")
     }),
   )
 })
@@ -70,7 +70,7 @@ describe("toWitCodec — Result", () => {
       const ok = yield* roundtrip(S, Result.succeed(7))
       expect(Result.isSuccess(ok.back)).toBe(true)
       expect((ok.back as Result.Result<number, string>).pipe(Result.getOrThrow)).toBe(7)
-      expect(ok.wc.witType.nodes[0]?.type.tag).toBe("result-type")
+      expect(ok.wc.graph.root.body.tag).toBe("result")
 
       const err = yield* roundtrip(S, Result.fail("nope"))
       expect(Result.isFailure(err.back)).toBe(true)
@@ -97,7 +97,7 @@ describe("toWitCodec — Maps", () => {
         ["b", 2],
       ])
       // Root is list<tuple<k, v>>
-      expect(r.wc.witType.nodes[0]?.type.tag).toBe("list-type")
+      expect(r.wc.graph.root.body.tag).toBe("list")
     }),
   )
 
@@ -126,49 +126,49 @@ describe("toWitCodec — sized integer schemas", () => {
     readonly valueTag: string
     readonly value: number | bigint
   }> = [
-    { name: "Uint8", schema: Uint8, typeTag: "prim-u8-type", valueTag: "prim-u8", value: 200 },
+    { name: "Uint8", schema: Uint8, typeTag: "u8", valueTag: "u8", value: 200 },
     {
       name: "Uint16",
       schema: Uint16,
-      typeTag: "prim-u16-type",
-      valueTag: "prim-u16",
+      typeTag: "u16",
+      valueTag: "u16",
       value: 65000,
     },
     {
       name: "Uint32",
       schema: Uint32,
-      typeTag: "prim-u32-type",
-      valueTag: "prim-u32",
+      typeTag: "u32",
+      valueTag: "u32",
       value: 4_000_000_000,
     },
-    { name: "Int8", schema: Int8, typeTag: "prim-s8-type", valueTag: "prim-s8", value: -100 },
-    { name: "Int16", schema: Int16, typeTag: "prim-s16-type", valueTag: "prim-s16", value: -32000 },
+    { name: "Int8", schema: Int8, typeTag: "s8", valueTag: "s8", value: -100 },
+    { name: "Int16", schema: Int16, typeTag: "s16", valueTag: "s16", value: -32000 },
     {
       name: "Int32",
       schema: Int32,
-      typeTag: "prim-s32-type",
-      valueTag: "prim-s32",
+      typeTag: "s32",
+      valueTag: "s32",
       value: -2_000_000_000,
     },
     {
       name: "Float32",
       schema: Float32,
-      typeTag: "prim-f32-type",
-      valueTag: "prim-float32",
+      typeTag: "f32",
+      valueTag: "f32",
       value: 1.5,
     },
     {
       name: "Int64",
       schema: Int64,
-      typeTag: "prim-s64-type",
-      valueTag: "prim-s64",
+      typeTag: "s64",
+      valueTag: "s64",
       value: -9_000_000_000_000n,
     },
     {
       name: "Uint64",
       schema: Uint64,
-      typeTag: "prim-u64-type",
-      valueTag: "prim-u64",
+      typeTag: "u64",
+      valueTag: "u64",
       value: 9_000_000_000_000n,
     },
   ]
@@ -177,11 +177,11 @@ describe("toWitCodec — sized integer schemas", () => {
     it.effect(`${c.name} maps to ${c.typeTag} and round-trips`, () =>
       Effect.gen(function* () {
         const wc = yield* toWitCodec(c.schema as any)
-        expect(wc.witType.nodes[0]?.type.tag).toBe(c.typeTag)
+        expect(wc.graph.root.body.tag).toBe(c.typeTag)
         const codec = wc.codec as Schema.Codec<any, any, never, never>
-        const wv = yield* Schema.encodeEffect(codec)(c.value)
-        expect(wv.nodes[0]?.tag).toBe(c.valueTag)
-        const back = yield* Schema.decodeEffect(codec)(wv)
+        const sv = yield* Schema.encodeEffect(codec)(c.value)
+        expect((sv as any).tag).toBe(c.valueTag)
+        const back = yield* Schema.decodeEffect(codec)(sv)
         expect(back).toEqual(c.value)
       }),
     )
@@ -190,14 +190,14 @@ describe("toWitCodec — sized integer schemas", () => {
   it.effect("default Schema.Number stays f64", () =>
     Effect.gen(function* () {
       const wc = yield* toWitCodec(Schema.Number)
-      expect(wc.witType.nodes[0]?.type.tag).toBe("prim-f64-type")
+      expect(wc.graph.root.body.tag).toBe("f64")
     }),
   )
 
   it.effect("default Schema.BigInt stays s64", () =>
     Effect.gen(function* () {
       const wc = yield* toWitCodec(Schema.BigInt)
-      expect(wc.witType.nodes[0]?.type.tag).toBe("prim-s64-type")
+      expect(wc.graph.root.body.tag).toBe("s64")
     }),
   )
 })

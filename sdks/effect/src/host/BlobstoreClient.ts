@@ -1,14 +1,13 @@
 /**
  * Host service for `wasi:blobstore/blobstore` +
  * `wasi:blobstore/container` + `wasi:blobstore/types` +
- * `wasi:io/streams@0.2.3`. Wraps the host's blobstore surface as
+ * Preview 3 byte streams. Wraps the host's blobstore surface as
  * Effect-typed methods so SDK code can acquire / mutate object
  * containers via DI rather than reaching directly into the WIT
  * specifier imports.
  *
- * The 4096-byte chunking required by `wasi:io/streams.blocking-write
- * -and-flush` lives inside the Live `writeData` impl; consumers see
- * a single `(name, bytes)` Effect.
+ * The Live `writeData` implementation owns the Preview 3 output stream;
+ * consumers see a single `(name, bytes)` Effect.
  *
  * Resource handles are *not* exposed; the service surface is purely
  * by-value (records of `Effect`-returning methods). The public
@@ -19,7 +18,7 @@
  *
  * @internal — not re-exported from `src/index.ts`.
  */
-import { Context, Effect, Layer, Option, Stream } from "effect"
+import { Context, Effect, Layer, Stream } from "effect"
 import type * as Scope from "effect/Scope"
 import { BlobstoreHostError } from "../Blobstore.js"
 import * as Blob from "wasi:blobstore/blobstore"
@@ -133,30 +132,30 @@ const consumeIncomingSync = (
 const buildOutgoingValue = (
   bytes: Uint8Array,
 ): Effect.Effect<Types.OutgoingValue, BlobstoreHostError> =>
-  Effect.gen(function* () {
-    const ov = yield* Effect.try({
-      try: () => Types.OutgoingValue.newOutgoingValue(),
-      catch: (cause) => new BlobstoreHostError(cause, "newOutgoingValue"),
-    })
-    const stream = yield* Effect.try({
-      try: () => ov.outgoingValueWriteBody(),
-      catch: (cause) => new BlobstoreHostError(cause, "outgoingValueWriteBody"),
-    })
-    yield* Effect.try({
-      try: () => {
-        const total = bytes.length
-        let offset = 0
-        while (offset < total) {
-          const remaining = total - offset
-          const chunkLen = remaining > 4096 ? 4096 : remaining
-          const chunk = bytes.subarray(offset, offset + chunkLen)
-          stream.blockingWriteAndFlush(chunk)
-          offset += chunkLen
+  Effect.tryPromise({
+    try: async () => {
+      const ov = Types.OutgoingValue.newOutgoingValue()
+      let complete!: () => void
+      let fail!: (cause: unknown) => void
+      const consumed = new Promise<void>((resolve, reject) => {
+        complete = resolve
+        fail = reject
+      })
+      const chunks = async function* (): AsyncIterable<number> {
+        let finished = false
+        try {
+          yield* bytes
+          finished = true
+          complete()
+        } finally {
+          if (!finished) fail(new Error("blob body consumer closed before all bytes were written"))
         }
-      },
-      catch: (cause) => new BlobstoreHostError(cause, "outputStream.blockingWriteAndFlush"),
-    })
-    return ov
+      }
+      ov.outgoingValueWriteBody(chunks())
+      await consumed
+      return ov
+    },
+    catch: (cause) => new BlobstoreHostError(cause, "outgoingValueWriteBody"),
   })
 
 const decodeContainerMetadata = (
@@ -173,34 +172,19 @@ const decodeObjectMetadata = (m: Types.ObjectMetadata): HostObjectMetadata => ({
   size: m.size,
 })
 
-const LIST_PAGE_SIZE = 256n
-
 const listObjectsStream = (
   handle: ContainerNS.Container,
 ): Stream.Stream<string, BlobstoreHostError> =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const iter = yield* Effect.try({
+      const names = yield* Effect.try({
         try: () => handle.listObjects(),
         catch: (cause) => new BlobstoreHostError(cause, "container.listObjects"),
       })
-      return Stream.paginate(false as boolean, (done) => {
-        if (done) {
-          return Effect.succeed([[] as ReadonlyArray<string>, Option.none<boolean>()] as const)
-        }
-        return Effect.try({
-          try: () => iter.readStreamObjectNames(LIST_PAGE_SIZE),
-          catch: (cause) => new BlobstoreHostError(cause, "streamObjectNames.read"),
-        }).pipe(
-          Effect.map(
-            ([names, end]) =>
-              [
-                names as ReadonlyArray<string>,
-                end ? Option.none<boolean>() : Option.some(false),
-              ] as const,
-          ),
-        )
-      })
+      return Stream.fromAsyncIterable(
+        names,
+        (cause) => new BlobstoreHostError(cause, "container.listObjects"),
+      )
     }),
   )
 

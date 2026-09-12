@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "effect-fixture-guest-client": [
+        "../golem-temp/bridge-sdk/ts/internal/effect-fixture-guest-client/effect-fixture-guest-client.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "../golem-temp/bridge-sdk/ts/internal/effect-fixture-guest-client/*.ts"
+  ]
+}

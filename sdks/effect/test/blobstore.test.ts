@@ -9,6 +9,17 @@ const u8 = (s: string): Uint8Array => new TextEncoder().encode(s)
 const s = (b: Uint8Array): string => new TextDecoder().decode(b)
 
 describe("Blobstore.createContainer / getContainer / containerExists", () => {
+  it.effect("Live writes await asynchronous body consumption before persisting", () =>
+    Effect.gen(function* () {
+      const container = yield* Blobstore.createContainer("live-body-drain")
+      const bytes = Uint8Array.from({ length: 9001 }, (_, index) => index % 251)
+      yield* container.writeData("body", bytes)
+      expect(yield* container.getData("body")).toEqual(bytes)
+      yield* container.writeData("empty", new Uint8Array())
+      expect(yield* container.getData("empty")).toEqual(new Uint8Array())
+    }).pipe(Effect.provide(BlobstoreLive)),
+  )
+
   it.effect("createContainer succeeds for new names and returns a Container", () =>
     Effect.gen(function* () {
       const fake = yield* makeBlobFake

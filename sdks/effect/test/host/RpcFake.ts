@@ -2,8 +2,7 @@
  * Layer-based test fake for {@link RpcClient}. Mirrors the legacy
  * `test/mocks/golem-agent-host.ts` RPC pump (recorded calls,
  * responder dispatch, future + abortable-promise plumbing,
- * cancellation log, and the one-shot `failConstructorOnce` /
- * `failSubscribeOnce` hooks) but moves all state into per-instance
+ * cancellation log, and the one-shot `failConstructorOnce` hook) but moves all state into per-instance
  * JS closures + Effect-typed accessors so each test gets fresh state.
  *
  * Use with `Effect.provide(eff, fake.layer)` once per test (NOT via
@@ -12,12 +11,11 @@
  */
 
 import { Effect, Layer } from "effect"
-import type * as AgentHost from "golem:agent/host@1.5.0"
-import type * as CoreTypes from "golem:core/types@1.5.0"
+import type * as AgentHost from "golem:agent/host@2.0.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 import {
   RpcClient,
   RpcHostError,
-  type RpcCancellationToken,
   type RpcConnection,
   type RpcInvocationHandle,
 } from "../../src/host/RpcClient.js"
@@ -25,12 +23,12 @@ import {
 /** A single recorded call against any fake `RpcConnection` instance. */
 export interface RecordedRpcCall {
   readonly agentTypeName: string
-  readonly constructorValue: CoreTypes.DataValue
+  readonly constructorValue: CoreTypes.SchemaValueTree
   readonly phantomId: CoreTypes.Uuid | undefined
   readonly agentConfig: ReadonlyArray<unknown>
   readonly kind: "invokeAndAwait" | "invoke" | "asyncInvokeAndAwait" | "schedule"
   readonly methodName: string
-  readonly input: CoreTypes.DataValue
+  readonly input: CoreTypes.SchemaValueTree
   readonly scheduledTime?: AgentHost.Datetime
 }
 
@@ -45,7 +43,7 @@ export interface RecordedRpcCall {
  * on `setTimeout` races.
  */
 export type RpcResponse =
-  | { readonly tag: "ok"; readonly val: CoreTypes.DataValue }
+  | { readonly tag: "ok"; readonly val: CoreTypes.SchemaValueTree }
   | { readonly tag: "err"; readonly val: AgentHost.RpcError }
   | { readonly tag: "throw"; readonly error: unknown }
   | { readonly tag: "pending" }
@@ -85,14 +83,6 @@ export interface RpcFake {
   readonly failConstructorOnce: (
     predicate: (agentTypeName: string) => unknown | undefined,
   ) => Effect.Effect<void>
-  /**
-   * One-shot hook to make the next `FutureInvokeResult.subscribe()`
-   * call throw synchronously. Lets tests exercise the SDK's
-   * register-function-level try/catch guard inside `asyncInvoke`.
-   */
-  readonly failSubscribeOnce: (
-    predicate: (methodName: string) => unknown | undefined,
-  ) => Effect.Effect<void>
 }
 
 /**
@@ -112,14 +102,13 @@ export const make: Effect.Effect<RpcFake> = Effect.sync(() => {
     error: { tag: "remote-internal-error", val: "no responder configured" },
   })
   let constructorThrow: ((agentTypeName: string) => unknown | undefined) | null = null
-  let subscribeThrow: ((methodName: string) => unknown | undefined) | null = null
 
   // --- internal: mock pollable + future -----------------------------------
 
   class FakeFuture {
     private resolved = false
     private result:
-      | { tag: "ok"; val: CoreTypes.DataValue }
+      | { tag: "ok"; val: CoreTypes.SchemaValueTree }
       | { tag: "err"; val: AgentHost.RpcError }
       | undefined
     private throwError: unknown = null
@@ -136,17 +125,8 @@ export const make: Effect.Effect<RpcFake> = Effect.sync(() => {
       })
     }
 
-    subscribe(): AgentHost.Pollable {
-      if (subscribeThrow !== null) {
-        const e = subscribeThrow(this.methodName)
-        subscribeThrow = null
-        if (e !== undefined) throw e
-      }
-      return new FakePollable(this) as unknown as AgentHost.Pollable
-    }
-
     get():
-      | { tag: "ok"; val: CoreTypes.DataValue }
+      | { tag: "ok"; val: CoreTypes.SchemaValueTree }
       | { tag: "err"; val: AgentHost.RpcError }
       | undefined {
       if (!this.resolved) return undefined
@@ -201,56 +181,18 @@ export const make: Effect.Effect<RpcFake> = Effect.sync(() => {
     }
   }
 
-  class FakePollable {
-    constructor(private readonly fut: FakeFuture) {}
-    ready(): boolean {
-      this.fut.ensureResolved()
-      return this.fut.isReady()
-    }
-    block(): void {
-      this.fut.ensureResolved()
-    }
-    promise(): Promise<void> {
-      this.fut.ensureResolved()
-      if (this.fut.isReady()) return Promise.resolve()
-      return this.fut.awaitReady()
-    }
-    /**
-     * Honours the AbortSignal: rejects with an `AbortError`-shaped
-     * DOMException if the signal aborts before the future resolves.
-     */
-    abortablePromise(signal: AbortSignal): Promise<void> {
-      if (signal.aborted) {
-        return Promise.reject(new DOMException("aborted", "AbortError"))
-      }
-      this.fut.ensureResolved()
-      if (this.fut.isReady()) return Promise.resolve()
-      return new Promise<void>((resolve, reject) => {
-        const onAbort = (): void => {
-          signal.removeEventListener("abort", onAbort)
-          reject(new DOMException("aborted", "AbortError"))
-        }
-        signal.addEventListener("abort", onAbort, { once: true })
-        this.fut.awaitReady().then(() => {
-          signal.removeEventListener("abort", onAbort)
-          resolve()
-        })
-      })
-    }
-  }
-
   // --- internal: build a single connection --------------------------------
 
   const makeConnection = (
     agentTypeName: string,
-    constructorValue: CoreTypes.DataValue,
+    constructorValue: CoreTypes.SchemaValueTree,
     phantomId: CoreTypes.Uuid | undefined,
     agentConfig: ReadonlyArray<unknown>,
   ): RpcConnection => {
     const record = (
       kind: RecordedRpcCall["kind"],
       methodName: string,
-      input: CoreTypes.DataValue,
+      input: CoreTypes.SchemaValueTree,
       scheduledTime?: AgentHost.Datetime,
     ): RecordedRpcCall => {
       const call: RecordedRpcCall = {
@@ -270,11 +212,16 @@ export const make: Effect.Effect<RpcFake> = Effect.sync(() => {
     const dispatch = (
       kind: RecordedRpcCall["kind"],
       methodName: string,
-      input: CoreTypes.DataValue,
+      input: CoreTypes.SchemaValueTree,
     ) => {
       record(kind, methodName, input)
       return responder({ agentTypeName, methodName, input })
     }
+
+    const metadata = (methodName: string): AgentHost.InvocationMetadata => ({
+      agentId: `${agentTypeName}(fake)`,
+      idempotencyKey: `fake-${methodName}`,
+    })
 
     return {
       invokeAndAwait: (methodName, input) => {
@@ -286,12 +233,13 @@ export const make: Effect.Effect<RpcFake> = Effect.sync(() => {
             `${methodName}: synchronous invokeAndAwait cannot honour a 'pending' responder; use asyncInvokeAndAwait`,
           )
         }
-        return out.val
+        return { metadata: metadata(methodName), result: out.val }
       },
       invoke: (methodName, input) => {
         const out = dispatch("invoke", methodName, input)
         if (out.tag === "throw") throw out.error
         // fire-and-forget: ok / err / pending are dropped
+        return metadata(methodName)
       },
       asyncInvokeAndAwait: (methodName, input): RpcInvocationHandle => {
         record("asyncInvokeAndAwait", methodName, input)
@@ -299,19 +247,35 @@ export const make: Effect.Effect<RpcFake> = Effect.sync(() => {
           responder({ agentTypeName, methodName, input }),
         )
         return {
-          subscribe: () => fut.subscribe(),
-          get: () => fut.get(),
+          metadata: metadata(methodName),
+          get: async () => {
+            fut.ensureResolved()
+            if (!fut.isReady()) await fut.awaitReady()
+            const result = fut.get()
+            if (result?.tag === "err") throw result.val
+            return result?.val
+          },
           cancel: () => fut.cancel(),
+          drop: () => {},
         }
       },
-      scheduleCancelableInvocation: (scheduledAt, methodName, input): RpcCancellationToken => {
+      scheduleInvocation: (scheduledAt, methodName, input) => {
+        record("schedule", methodName, input, scheduledAt)
+        return { metadata: metadata(methodName) }
+      },
+      scheduleCancelableInvocation: (scheduledAt, methodName, input) => {
         record("schedule", methodName, input, scheduledAt)
         return {
-          cancel: () => {
-            cancellationsObserved.push({ kind: "scheduled", methodName })
+          metadata: metadata(methodName),
+          token: {
+            cancel: () => {
+              cancellationsObserved.push({ kind: "scheduled", methodName })
+            },
+            drop: () => {},
           },
         }
       },
+      drop: () => {},
     }
   }
 
@@ -361,10 +325,6 @@ export const make: Effect.Effect<RpcFake> = Effect.sync(() => {
     failConstructorOnce: (predicate) =>
       Effect.sync(() => {
         constructorThrow = predicate
-      }),
-    failSubscribeOnce: (predicate) =>
-      Effect.sync(() => {
-        subscribeThrow = predicate
       }),
   }
 })

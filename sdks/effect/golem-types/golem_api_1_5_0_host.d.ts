@@ -3,8 +3,7 @@
  * the durability and transactional guarantees the executor provides.
  */
 declare module 'golem:api/host@1.5.0' {
-  import * as golemCore150Types from 'golem:core/types@1.5.0';
-  import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
+  import * as golemCore200Types from 'golem:core/types@2.0.0';
   /**
    * Create a new promise
    */
@@ -53,15 +52,6 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function trap(reason: string): void;
   /**
-   * Gets the agent's current persistence level.
-   */
-  export function getOplogPersistenceLevel(): PersistenceLevel;
-  /**
-   * Sets the agent's current persistence level. This can increase the performance of execution in cases where durable
-   * execution is not required.
-   */
-  export function setOplogPersistenceLevel(newPersistenceLevel: PersistenceLevel): void;
-  /**
    * Gets the current idempotence mode. See `set-idempotence-mode` for details.
    */
   export function getIdempotenceMode(): boolean;
@@ -81,10 +71,12 @@ declare module 'golem:api/host@1.5.0' {
   /**
    * Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
    * not waiting for the agent to get updated.
+   * @throws AgentOperationError
    */
   export function updateAgent(agentId: AgentId, targetRevision: ComponentRevision, mode: UpdateMode): void;
   /**
    * Get the current agent's metadata
+   * @throws AgentOperationError
    */
   export function getSelfMetadata(): AgentMetadata;
   /**
@@ -93,10 +85,12 @@ declare module 'golem:api/host@1.5.0' {
   export function getAgentMetadata(agentId: AgentId): AgentMetadata | undefined;
   /**
    * Fork an agent to another agent at a given oplog index
+   * @throws AgentOperationError
    */
   export function forkAgent(sourceAgentId: AgentId, targetAgentId: AgentId, oplogIdxCutOff: OplogIndex): void;
   /**
    * Revert an agent to a previous state
+   * @throws AgentOperationError
    */
   export function revertAgent(agentId: AgentId, revertTarget: RevertAgentTarget): void;
   /**
@@ -125,6 +119,7 @@ declare module 'golem:api/host@1.5.0' {
    * with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
    * both sides. The newly created agent continues running from the same point, but the return value is
    * going to be different in this agent and the forked agent.
+   * @throws AgentOperationError
    */
   export function fork(): ForkResult;
   export class GetAgents {
@@ -137,26 +132,21 @@ declare module 'golem:api/host@1.5.0' {
     constructor(componentId: ComponentId, filter: AgentAnyFilter | undefined, precise: boolean);
     /**
      * Retrieves the next batch of agent metadata.
+     * @throws AgentOperationError
      */
     getNext(): AgentMetadata[] | undefined;
   }
   export class GetPromiseResult {
     /**
-     * Returns a pollable that can be used to wait for the promise to become ready.j
+     * Awaits the result of the promise.
      */
-    subscribe(): Pollable;
-    /**
-     * Poll the result of the promise, returning none if it is not yet ready.
-     */
-    get(): Uint8Array | undefined;
+    get(): Promise<Uint8Array>;
   }
-  export type ComponentId = golemCore150Types.ComponentId;
-  export type Uuid = golemCore150Types.Uuid;
-  export type ValueAndType = golemCore150Types.ValueAndType;
-  export type AgentId = golemCore150Types.AgentId;
-  export type PromiseId = golemCore150Types.PromiseId;
-  export type OplogIndex = golemCore150Types.OplogIndex;
-  export type Pollable = wasiIo023Poll.Pollable;
+  export type ComponentId = golemCore200Types.ComponentId;
+  export type Uuid = golemCore200Types.Uuid;
+  export type AgentId = golemCore200Types.AgentId;
+  export type PromiseId = golemCore200Types.PromiseId;
+  export type OplogIndex = golemCore200Types.OplogIndex;
   /**
    * Represents a Golem component's version
    */
@@ -166,19 +156,6 @@ declare module 'golem:api/host@1.5.0' {
    */
   export type EnvironmentId = {
     uuid: Uuid;
-  };
-  /**
-   * Configurable persistence level for agents
-   */
-  export type PersistenceLevel = 
-  {
-    tag: 'persist-nothing'
-  } |
-  {
-    tag: 'persist-remote-side-effects'
-  } |
-  {
-    tag: 'smart'
   };
   /**
    * Describes how to update an agent to a different component version
@@ -243,7 +220,7 @@ declare module 'golem:api/host@1.5.0' {
   /**
    * Describes one filter condition for enumerating agents
    */
-  export type AgentPropertyFilter = 
+  export type AgentPropertyFilter =
   {
     tag: 'name'
     val: AgentNameFilter
@@ -304,7 +281,7 @@ declare module 'golem:api/host@1.5.0' {
   /**
    * Target parameter for the `revert-agent` operation
    */
-  export type RevertAgentTarget = 
+  export type RevertAgentTarget =
   /** Revert to a specific oplog index. The given index will be the last one to be kept. */
   {
     tag: 'revert-to-oplog-index'
@@ -314,6 +291,17 @@ declare module 'golem:api/host@1.5.0' {
   {
     tag: 'revert-last-invocations'
     val: bigint
+  };
+  /**
+   * Error returned by an operation targeting another agent.
+   */
+  export type AgentOperationError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'backend-error'
+    val: string
   };
   /**
    * Details about the fork result
@@ -326,7 +314,7 @@ declare module 'golem:api/host@1.5.0' {
    * The parameter contains details about the fork result, such as the phantom-ID of the newly
    * created agent.
    */
-  export type ForkResult = 
+  export type ForkResult =
   /** The original agent that called `fork` */
   {
     tag: 'original'
@@ -344,4 +332,5 @@ declare module 'golem:api/host@1.5.0' {
     payload: Uint8Array;
     mimeType: string;
   };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

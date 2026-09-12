@@ -33,9 +33,9 @@ describe("toWitCodec with Schema.Enum", () => {
       const SchemaEnum = Schema.Enum(UserConnectionType)
       const wc = yield* toWitCodec(SchemaEnum)
 
-      expect(wc.witType.nodes[0]?.type).toEqual({
-        tag: "enum-type",
-        val: ["Friend", "Follower", "Following"],
+      expect(wc.graph.root.body).toEqual({
+        tag: "enum",
+        cases: ["Friend", "Follower", "Following"],
       })
 
       for (const val of [
@@ -55,9 +55,9 @@ describe("toWitCodec with Schema.Enum", () => {
       const SchemaEnum = Schema.Enum(LikeType)
       const wc = yield* toWitCodec(SchemaEnum)
 
-      expect(wc.witType.nodes[0]?.type).toEqual({
-        tag: "enum-type",
-        val: ["like", "insightful", "love", "dislike"],
+      expect(wc.graph.root.body).toEqual({
+        tag: "enum",
+        cases: ["like", "insightful", "love", "dislike"],
       })
 
       for (const val of [LikeType.Like, LikeType.Insightful, LikeType.Love, LikeType.Dislike]) {
@@ -73,9 +73,9 @@ describe("toWitCodec with Schema.Enum", () => {
       const SchemaEnum = Schema.Enum(Status)
       const wc = yield* toWitCodec(SchemaEnum)
 
-      expect(wc.witType.nodes[0]?.type).toEqual({
-        tag: "enum-type",
-        val: ["Pending", "Active", "Completed"],
+      expect(wc.graph.root.body).toEqual({
+        tag: "enum",
+        cases: ["Pending", "Active", "Completed"],
       })
 
       for (const val of [Status.Pending, Status.Active, Status.Completed]) {
@@ -91,9 +91,9 @@ describe("toWitCodec with Schema.Enum", () => {
       const SchemaEnum = Schema.Enum(HttpCode)
       const wc = yield* toWitCodec(SchemaEnum)
 
-      expect(wc.witType.nodes[0]?.type).toEqual({
-        tag: "enum-type",
-        val: ["Ok", "NotFound"],
+      expect(wc.graph.root.body).toEqual({
+        tag: "enum",
+        cases: ["Ok", "NotFound"],
       })
 
       for (const val of [HttpCode.Ok, HttpCode.NotFound]) {
@@ -141,7 +141,7 @@ describe("toWitCodec with Schema.Enum", () => {
       const Nullable = Schema.NullOr(Schema.Enum(UserConnectionType))
       const wc = yield* toWitCodec(Nullable)
 
-      expect(wc.witType.nodes[0]?.type.tag).toBe("option-type")
+      expect(wc.graph.root.body.tag).toBe("option")
 
       const val1 = UserConnectionType.Friend
       const wv1 = yield* Schema.encodeEffect(wc.codec)(val1)
@@ -160,7 +160,7 @@ describe("toWitCodec with Schema.Enum", () => {
       const UnionSchema = Schema.Union([Schema.Enum(UserConnectionType), Schema.Number])
       const wc = yield* toWitCodec(UnionSchema)
 
-      expect(wc.witType.nodes[0]?.type.tag).toBe("variant-type")
+      expect(wc.graph.root.body.tag).toBe("variant")
 
       const val1 = UserConnectionType.Following
       const wv1 = yield* Schema.encodeEffect(wc.codec)(val1)
@@ -177,16 +177,16 @@ describe("toWitCodec with Schema.Enum", () => {
   it("works in defineAgent with HTTP endpoint bindings", () => {
     const AgentDef = defineAgent({
       name: "EnumAgent",
-      constructorParams: { name: Schema.String },
+      id: { name: Schema.String },
       http: Http.mount("/enum-agent/{name}"),
       methods: {
         getConnection: method({
-          params: { type: Schema.Enum(UserConnectionType) },
+          input: { type: Schema.Enum(UserConnectionType) },
           success: Schema.Enum(UserConnectionType),
           http: [Http.get("/connection?type={type}")],
         }),
         getStatus: method({
-          params: { status: Schema.Enum(Status) },
+          input: { status: Schema.Enum(Status) },
           success: Schema.Enum(Status),
           http: [Http.get("/status/{status}")],
         }),
@@ -197,4 +197,32 @@ describe("toWitCodec with Schema.Enum", () => {
     expect(AgentDef.methods.getConnection).toBeDefined()
     expect(AgentDef.methods.getStatus).toBeDefined()
   })
+
+  it.effect("rejects mismatched tags, composite arity, and invalid cases", () =>
+    Effect.gen(function* () {
+      const expectRejected = (schema: Schema.Codec<any, any, never, never>, value: unknown) =>
+        Effect.gen(function* () {
+          const wc = yield* toWitCodec(schema)
+          const exit = yield* Effect.exit(Schema.decodeEffect(wc.codec)(value as any))
+          expect(exit._tag).toBe("Failure")
+        })
+
+      yield* expectRejected(Schema.Number, { tag: "u32", value: 1 })
+      yield* expectRejected(Schema.Struct({ n: Schema.Number }), { tag: "record", fields: [] })
+      yield* expectRejected(Schema.Array(Schema.Number), {
+        tag: "list",
+        elements: [{ tag: "string", value: "not-a-number" }],
+      })
+      yield* expectRejected(Schema.Tuple([Schema.String, Schema.Number]), {
+        tag: "tuple",
+        elements: [{ tag: "string", value: "only-one" }],
+      })
+      yield* expectRejected(Schema.Enum(Status), { tag: "enum", caseIndex: 3 })
+      yield* expectRejected(Schema.TaggedUnion({ empty: {}, value: { value: Schema.String } }), {
+        tag: "variant",
+        caseIndex: 0,
+        payload: { tag: "record", fields: [] },
+      })
+    }),
+  )
 })

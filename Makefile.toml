@@ -109,6 +109,7 @@ args = [
     "run", "--quiet", "--manifest-path", "dev-tools/Cargo.toml", "-p", "dir-mirror", "--",
     "--src", "wit/deps", "--dst", "sdks/rust/golem-rust/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/ts/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/effect/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
 ]
@@ -129,7 +130,7 @@ args = [
 private = true
 script_runner = "@duckscript"
 script = '''
-status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
+status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/effect/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
 ok = eq ${status.code} 0
 if not ${ok}
     echo "git status failed (exit ${status.code}):"
@@ -379,32 +380,32 @@ end
 env = { NPX_BIN = "npx.cmd" }
 
 [tasks.build-sdk-effect]
-description = "Builds the Effect SDK if dist or agent_guest.wasm doesn't exist"
+description = "Builds every Effect SDK bundle and template artifact when outputs are missing or stale"
 cwd = "./sdks/effect"
 script_runner = "@duckscript"
 env = { NPM_BIN = "npm" }
 script = '''
-dist_exists = is_path_exists dist/index.mjs
-agent_wasm_exists = is_path_exists wasm/agent_guest.wasm
-
-build_required = set true
-if ${dist_exists}
-    if ${agent_wasm_exists}
-        build_required = set false
-    end
-end
-
-if ${build_required}
-    exec --fail-on-error %{NPM_BIN} install
+fresh = exec %{NPM_BIN} run check:artifacts
+fresh_ok = eq ${fresh.code} 0
+if not ${fresh_ok}
+    echo "Effect SDK artifacts are stale; rebuilding"
+    exec --fail-on-error %{NPM_BIN} ci
     exec --fail-on-error %{NPM_BIN} run build
     exec --fail-on-error %{NPM_BIN} run build-agent-template
+    exec --fail-on-error %{NPM_BIN} run check:artifacts
 else
-    echo "Effect SDK already built, skipping"
+    echo "Effect SDK artifacts are fresh, skipping"
 end
 '''
 
 [tasks.build-sdk-effect.windows]
 env = { NPM_BIN = "npm.cmd" }
+
+[tasks.clean-sdk-effect]
+description = "Cleans generated Effect SDK bundles, wrappers, declarations, and WASM artifacts"
+cwd = "./sdks/effect"
+command = "node"
+args = ["./scripts/clean.mjs"]
 
 [tasks.clean-sdk-ts]
 description = "Cleans the TypeScript SDK"

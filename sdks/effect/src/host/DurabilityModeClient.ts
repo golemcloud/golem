@@ -2,8 +2,6 @@
  * Host service for the execution-mode subset of
  * `golem:api/host@1.5.0`:
  *
- * - persistence level (`getOplogPersistenceLevel` /
- *   `setOplogPersistenceLevel`)
  * - idempotence mode (`getIdempotenceMode` / `setIdempotenceMode`)
  * - atomic regions (`markBeginOperation` / `markEndOperation`)
  * - `oplogCommit` (replication barrier)
@@ -16,14 +14,9 @@
 import { Context, Layer } from "effect"
 import * as ApiHost from "golem:api/host@1.5.0"
 
-type RawPersistenceLevel = ApiHost.PersistenceLevel
 type RawOplogIndex = ApiHost.OplogIndex
 
 export interface DurabilityModeClientShape {
-  /** Mirrors `golem:api/host.getOplogPersistenceLevel`. */
-  readonly getOplogPersistenceLevel: () => RawPersistenceLevel
-  /** Mirrors `golem:api/host.setOplogPersistenceLevel`. */
-  readonly setOplogPersistenceLevel: (next: RawPersistenceLevel) => void
   /** Mirrors `golem:api/host.getIdempotenceMode`. */
   readonly getIdempotenceMode: () => boolean
   /** Mirrors `golem:api/host.setIdempotenceMode`. */
@@ -46,8 +39,6 @@ export class DurabilityModeClient extends Context.Service<
 export const DurabilityModeLive: Layer.Layer<DurabilityModeClient> = Layer.succeed(
   DurabilityModeClient,
   DurabilityModeClient.of({
-    getOplogPersistenceLevel: () => ApiHost.getOplogPersistenceLevel(),
-    setOplogPersistenceLevel: (next) => ApiHost.setOplogPersistenceLevel(next),
     getIdempotenceMode: () => ApiHost.getIdempotenceMode(),
     setIdempotenceMode: (next) => ApiHost.setIdempotenceMode(next),
     markBeginOperation: () => ApiHost.markBeginOperation(),

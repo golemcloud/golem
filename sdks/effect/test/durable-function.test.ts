@@ -1,588 +1,215 @@
-import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
 import * as Durability from "../src/Durability.js"
 import { DurabilityClient, DurabilityLive } from "../src/host/DurabilityClient.js"
-import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { toWitCodec } from "../src/WitCodec.js"
-import * as ApiHostMock from "./mocks/golem-api-host.js"
-import * as DurabilityMock from "./mocks/golem-durability.js"
+import { typedSchemaValueToWit } from "../src/internal/schema-model/wit.js"
+import * as Host from "./mocks/golem-durability.js"
 
-/**
- * Per-test layer that wires the mock-backed `DurabilityHost`
- * implementations up as a fresh `DurabilityClient` instance. The
- * vitest alias on `golem:durability/durability@1.5.0` already points
- * at `test/mocks/golem-durability.ts`, so `DurabilityLive` (which
- * delegates straight to that import) reads/writes the mock module's
- * state.
- */
-const TestLayer: Layer.Layer<DurabilityClient | DurabilityModeClient> = Layer.mergeAll(
-  DurabilityLive,
-  DurabilityModeLive,
-)
-
-beforeEach(() => {
-  ApiHostMock.__resetAll()
-  DurabilityMock.__resetAll()
-})
-afterEach(() => {
-  ApiHostMock.__resetAll()
-  DurabilityMock.__resetAll()
-})
-
+const TestLayer: Layer.Layer<DurabilityClient> = DurabilityLive
 const Req = Schema.Struct({ symbol: Schema.String })
 const Ok = Schema.Struct({ price: Schema.Number })
 const Err = Schema.Struct({ code: Schema.String })
+const options = {
+  iface: "quotes",
+  function: "get",
+  functionType: Durability.FunctionType.writeRemote,
+  requestSchema: Req,
+  success: Ok,
+  error: Err,
+}
 
-describe("Durability.wrap — observation + bracketing", () => {
-  it.effect("emits observe-function-call with (iface, function)", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      yield* Durability.wrap(
-        {
-          iface: "myapp",
-          function: "fetchQuote",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "AAPL" },
-        Effect.succeed({ price: 1 }),
-      )
-      expect(DurabilityMock.__getObservedCalls()).toEqual([["myapp", "fetchQuote"]])
-    }).pipe(Effect.provide(TestLayer)),
-  )
+beforeEach(() => Host.__resetAll())
 
-  it.effect("opens and closes exactly one durable bracket on success", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      yield* Durability.wrap(
-        {
-          iface: "myapp",
-          function: "fetchQuote",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "AAPL" },
-        Effect.succeed({ price: 1 }),
-      )
-      const begins = DurabilityMock.__getBeginCalls()
-      const ends = DurabilityMock.__getEndCalls()
-      expect(begins).toHaveLength(1)
-      expect(ends).toHaveLength(1)
-      expect(ends[0]!.beginIndex).toBe(begins[0]!.index)
-      expect(ends[0]!.functionType.tag).toBe("write-remote")
-      expect(ends[0]!.forcedCommit).toBe(false)
-      expect(DurabilityMock.__getOpenBrackets()).toEqual([])
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("forwards forcedCommit=true to end-durable-function", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      yield* Durability.wrap(
-        {
-          iface: "i",
-          function: "f",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-          forcedCommit: true,
-        },
-        { symbol: "x" },
-        Effect.succeed({ price: 0 }),
-      )
-      expect(DurabilityMock.__getEndCalls()[0]!.forcedCommit).toBe(true)
-    }).pipe(Effect.provide(TestLayer)),
-  )
-})
-
-describe("Durability.wrap — live mode", () => {
-  it.effect("returns body's success and persists Result.succeed(value)", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      const out = yield* Durability.wrap(
-        {
-          iface: "i",
-          function: "f",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "AAPL" },
-        Effect.succeed({ price: 42 }),
-      )
-      expect(out).toEqual({ price: 42 })
-
-      const persisted = DurabilityMock.__getPersistedCalls()
-      expect(persisted).toHaveLength(1)
-      expect(persisted[0]!.functionName).toBe("i::f")
-      expect(persisted[0]!.functionType.tag).toBe("write-remote")
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("re-raises typed failures and persists Result.fail(error)", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      const ex = yield* Effect.exit(
-        Durability.wrap(
-          {
-            iface: "i",
-            function: "f",
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Req,
-            success: Ok,
-            error: Err,
-          },
-          { symbol: "AAPL" },
-          Effect.fail({ code: "boom" }),
-        ),
-      )
-      expect(Exit.isFailure(ex)).toBe(true)
-      if (Exit.isFailure(ex)) {
-        const fr = ex.cause.reasons.find(Cause.isFailReason)
-        expect(fr?.error).toEqual({ code: "boom" })
-      }
-      expect(DurabilityMock.__getPersistedCalls()).toHaveLength(1)
-      expect(DurabilityMock.__getEndCalls()).toHaveLength(1)
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("does NOT persist or end on defect", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      const ex = yield* Effect.exit(
-        Durability.wrap(
-          {
-            iface: "i",
-            function: "f",
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Req,
-            success: Ok,
-            error: Err,
-          },
-          { symbol: "AAPL" },
-          Effect.die("kaboom"),
-        ),
-      )
-      expect(Exit.isFailure(ex)).toBe(true)
-      expect(DurabilityMock.__getPersistedCalls()).toHaveLength(0)
-      expect(DurabilityMock.__getEndCalls()).toHaveLength(0)
-      // The bracket stays open, mirroring Rust on panic.
-      expect(DurabilityMock.__getOpenBrackets()).toHaveLength(1)
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("does NOT persist or end on interruption", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      const ex = yield* Effect.exit(
-        Durability.wrap(
-          {
-            iface: "i",
-            function: "f",
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Req,
-            success: Ok,
-            error: Err,
-          },
-          { symbol: "AAPL" },
-          Effect.interrupt,
-        ),
-      )
-      expect(Exit.isFailure(ex)).toBe(true)
-      expect(DurabilityMock.__getPersistedCalls()).toHaveLength(0)
-      expect(DurabilityMock.__getEndCalls()).toHaveLength(0)
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("temporarily installs persist-nothing while body runs and restores it", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      let observed: ApiHostMock.PersistenceLevel | undefined
-      yield* Durability.wrap(
-        {
-          iface: "i",
-          function: "f",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "AAPL" },
-        Effect.sync(() => {
-          observed = ApiHostMock.getOplogPersistenceLevel()
-          return { price: 0 }
-        }),
-      )
-      expect(observed).toEqual({ tag: "persist-nothing" })
-      // Restored afterwards.
-      expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "smart" })
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("does NOT push persist-nothing when already in persist-nothing", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      ApiHostMock.setOplogPersistenceLevel({ tag: "persist-nothing" })
-      let levelDuringBody: ApiHostMock.PersistenceLevel | undefined
-      yield* Durability.wrap(
-        {
-          iface: "i",
-          function: "f",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "AAPL" },
-        Effect.sync(() => {
-          levelDuringBody = ApiHostMock.getOplogPersistenceLevel()
-          return { price: 0 }
-        }),
-      )
-      expect(levelDuringBody).toEqual({ tag: "persist-nothing" })
-      // Still persist-nothing afterward — the wrap did not toggle.
-      expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "persist-nothing" })
-    }).pipe(Effect.provide(TestLayer)),
-  )
-})
-
-describe("Durability.wrap — replay mode", () => {
-  // Build the on-the-wire shape an oplog entry would carry. Exercising
-  // the same `wit-codec` codec keeps the test bit-compatible with what
-  // the live path produces.
-  const buildResponseValueAndType = <A, E>(input: {
-    value: A
-    error?: E
-    success: Schema.Top
-    failure: Schema.Top
-    failed?: boolean
-  }) =>
-    Effect.gen(function* () {
-      const wc = yield* toWitCodec(Schema.Result(input.success, input.failure))
-      const r = input.failed ? Result.fail(input.error) : Result.succeed(input.value)
-      const wv = yield* Schema.encodeEffect(wc.codec)(r) as Effect.Effect<unknown, never>
-      return { value: wv, typ: wc.witType }
-    })
-
-  it.effect("returns the decoded success value without invoking body", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(false)
-      let bodyRan = false
-      const respVT = yield* buildResponseValueAndType({
-        value: { price: 99 },
-        success: Ok,
-        failure: Err,
-      })
-      DurabilityMock.__seedReplay({
-        timestamp: { seconds: 0n, nanoseconds: 0 },
-        functionName: "i::f",
-        response: respVT,
-        functionType: { tag: "write-remote" },
-        entryVersion: "v2",
-      })
-
-      const out = yield* Durability.wrap(
-        {
-          iface: "i",
-          function: "f",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "AAPL" },
-        Effect.sync(() => {
-          bodyRan = true
-          return { price: 0 }
-        }),
-      )
-      expect(out).toEqual({ price: 99 })
-      expect(bodyRan).toBe(false)
-      expect(DurabilityMock.__getEndCalls()).toHaveLength(1)
-      // No new persist call during replay.
-      expect(DurabilityMock.__getPersistedCalls()).toHaveLength(0)
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("re-raises a typed failure recorded in the oplog", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(false)
-      const respVT = yield* buildResponseValueAndType({
-        value: { price: 0 },
-        error: { code: "BOOM" },
-        success: Ok,
-        failure: Err,
-        failed: true,
-      })
-      DurabilityMock.__seedReplay({
-        timestamp: { seconds: 0n, nanoseconds: 0 },
-        functionName: "i::f",
-        response: respVT,
-        functionType: { tag: "write-remote" },
-        entryVersion: "v2",
-      })
-
-      const ex = yield* Effect.exit(
-        Durability.wrap(
-          {
-            iface: "i",
-            function: "f",
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Req,
-            success: Ok,
-            error: Err,
-          },
-          { symbol: "AAPL" },
-          Effect.succeed({ price: 0 }),
-        ),
-      )
-      expect(Exit.isFailure(ex)).toBe(true)
-      if (Exit.isFailure(ex)) {
-        const fr = ex.cause.reasons.find(Cause.isFailReason)
-        expect(fr?.error).toEqual({ code: "BOOM" })
-      }
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("fails with DurabilityReplayMismatchError when functionName differs", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(false)
-      const respVT = yield* buildResponseValueAndType({
-        value: { price: 0 },
-        success: Ok,
-        failure: Err,
-      })
-      DurabilityMock.__seedReplay({
-        timestamp: { seconds: 0n, nanoseconds: 0 },
-        functionName: "other::name",
-        response: respVT,
-        functionType: { tag: "write-remote" },
-        entryVersion: "v2",
-      })
-
-      const ex = yield* Effect.exit(
-        Durability.wrap(
-          {
-            iface: "i",
-            function: "f",
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Req,
-            success: Ok,
-            error: Err,
-          },
-          { symbol: "AAPL" },
-          Effect.succeed({ price: 0 }),
-        ),
-      )
-      expect(Exit.isFailure(ex)).toBe(true)
-      if (Exit.isFailure(ex)) {
-        expect(JSON.stringify(ex.cause)).toMatch(/DurabilityReplayMismatchError/)
-      }
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("fails with DurabilityReplayMismatchError when functionType differs", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(false)
-      const respVT = yield* buildResponseValueAndType({
-        value: { price: 0 },
-        success: Ok,
-        failure: Err,
-      })
-      DurabilityMock.__seedReplay({
-        timestamp: { seconds: 0n, nanoseconds: 0 },
-        functionName: "i::f",
-        response: respVT,
-        functionType: { tag: "read-remote" },
-        entryVersion: "v2",
-      })
-
-      const ex = yield* Effect.exit(
-        Durability.wrap(
-          {
-            iface: "i",
-            function: "f",
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Req,
-            success: Ok,
-            error: Err,
-          },
-          { symbol: "AAPL" },
-          Effect.succeed({ price: 0 }),
-        ),
-      )
-      expect(Exit.isFailure(ex)).toBe(true)
-      if (Exit.isFailure(ex)) {
-        expect(JSON.stringify(ex.cause)).toMatch(/DurabilityReplayMismatchError/)
-      }
-    }).pipe(Effect.provide(TestLayer)),
-  )
-})
-
-describe("Durability.wrap — nesting", () => {
-  it.effect("allows a nested wrap inside the outer body", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      const inner = Durability.wrap(
-        {
-          iface: "i",
-          function: "inner",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "i" },
-        Effect.succeed({ price: 1 }),
-      )
-      const outer = yield* Durability.wrap(
-        {
-          iface: "i",
-          function: "outer",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-          error: Err,
-        },
-        { symbol: "o" },
-        inner,
-      )
-      expect(outer).toEqual({ price: 1 })
-      // Both the outer and inner brackets opened and closed cleanly:
-      // nesting is allowed because `runLiveBody` explicitly wraps the
-      // body in `withPersistenceLevel(persist-nothing, ...)` in live
-      // mode, so the inner `wrap` does not double-record.
-      expect(DurabilityMock.__getOpenBrackets()).toEqual([])
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("runs concurrent wraps to completion", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      const op = (n: number) =>
-        Durability.wrap(
-          {
-            iface: "i",
-            function: `op-${n}`,
-            functionType: Durability.FunctionType.writeRemote,
-            requestSchema: Req,
-            success: Ok,
-            error: Err,
-          },
-          { symbol: `s${n}` },
-          Effect.succeed({ price: n }),
-        )
-
-      const all = yield* Effect.all([op(1), op(2), op(3)], { concurrency: "unbounded" })
-      expect(all).toEqual([{ price: 1 }, { price: 2 }, { price: 3 }])
-      expect(DurabilityMock.__getPersistedCalls()).toHaveLength(3)
-      // Brackets all closed.
-      expect(DurabilityMock.__getOpenBrackets()).toEqual([])
-    }).pipe(Effect.provide(TestLayer)),
-  )
-})
-
-describe("Durability.wrapInfallible", () => {
-  it.effect("persists the bare success value (no Result envelope)", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      const out = yield* Durability.wrapInfallible(
-        {
-          iface: "i",
-          function: "marker",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-        },
-        { symbol: "x" },
-        Effect.succeed({ price: 7 }),
-      )
-      expect(out).toEqual({ price: 7 })
-      expect(DurabilityMock.__getPersistedCalls()).toHaveLength(1)
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it.effect("decodes the bare success value on replay", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(false)
-      const wc = yield* toWitCodec(Ok)
-      const wv = yield* Schema.encodeEffect(wc.codec)({ price: 13 }) as Effect.Effect<
-        unknown,
-        never
-      >
-      DurabilityMock.__seedReplay({
-        timestamp: { seconds: 0n, nanoseconds: 0 },
-        functionName: "i::marker",
-        response: { value: wv, typ: wc.witType },
-        functionType: { tag: "write-remote" },
-        entryVersion: "v2",
-      })
-      const out = yield* Durability.wrapInfallible(
-        {
-          iface: "i",
-          function: "marker",
-          functionType: Durability.FunctionType.writeRemote,
-          requestSchema: Req,
-          success: Ok,
-        },
-        { symbol: "x" },
-        Effect.succeed({ price: 0 }),
-      )
-      expect(out).toEqual({ price: 13 })
-    }).pipe(Effect.provide(TestLayer)),
-  )
-})
-
-describe("Durability — escape hatches", () => {
-  it.effect("isLive reflects host state (live or persist-nothing)", () =>
-    Effect.gen(function* () {
-      DurabilityMock.__setIsLive(true)
-      expect(yield* Durability.isLive).toBe(true)
-      DurabilityMock.__setIsLive(false)
-      expect(yield* Durability.isLive).toBe(false)
-      // persist-nothing forces live regardless of the flag.
-      ApiHostMock.setOplogPersistenceLevel({ tag: "persist-nothing" })
-      expect(yield* Durability.isLive).toBe(true)
-    }).pipe(Effect.provide(TestLayer)),
-  )
-
-  it("FunctionType constructors emit the WIT-shape variants", () => {
-    expect(Durability.FunctionType.readLocal).toEqual({ tag: "read-local" })
-    expect(Durability.FunctionType.writeLocal).toEqual({ tag: "write-local" })
-    expect(Durability.FunctionType.readRemote).toEqual({ tag: "read-remote" })
-    expect(Durability.FunctionType.writeRemote).toEqual({ tag: "write-remote" })
-    expect(Durability.FunctionType.writeRemoteBatched()).toEqual({
-      tag: "write-remote-batched",
-      val: undefined,
-    })
-    expect(Durability.FunctionType.writeRemoteBatched(42n)).toEqual({
-      tag: "write-remote-batched",
-      val: 42n,
-    })
-    expect(Durability.FunctionType.writeRemoteTransaction(7n)).toEqual({
-      tag: "write-remote-transaction",
-      val: 7n,
-    })
+const response = (value: Result.Result<{ readonly price: number }, { readonly code: string }>) =>
+  Effect.gen(function* () {
+    const codec = yield* toWitCodec(Schema.Result(Ok, Err))
+    const encoded = yield* Schema.encodeEffect(codec.codec)(value)
+    return typedSchemaValueToWit({ graph: codec.graph, value: encoded })
   })
 
-  it.effect("low-level beginDurableFunction/endDurableFunction round-trip", () =>
+describe("Durability.wrap 1.6", () => {
+  it.effect("finishes live successes with a typed schema value and forced commit", () =>
     Effect.gen(function* () {
-      const idx = yield* Durability.beginDurableFunction(
-        Durability.FunctionType.writeRemoteBatched(),
+      const value = yield* Durability.wrap(
+        { ...options, forcedCommit: true },
+        { symbol: "A" },
+        Effect.succeed({ price: 42 }),
       )
-      yield* Durability.endDurableFunction(
-        Durability.FunctionType.writeRemoteBatched(idx),
-        idx,
-        true,
+      expect(value).toEqual({ price: 42 })
+      expect(Host.__getObservedCalls()).toEqual([["quotes", "get"]])
+      expect(Host.__getBeginCalls()[0]!.functionName).toBe("quotes::get")
+      expect(Host.__getFinishCalls()).toHaveLength(1)
+      expect(Host.__getFinishCalls()[0]!.forcedCommit).toBe(true)
+      expect(Host.__getDrops()).toBe(0)
+    }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect("persists a typed failure and returns it in the Effect error channel", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        Durability.wrap(options, { symbol: "A" }, Effect.fail({ code: "no" })),
       )
-      expect(DurabilityMock.__getEndCalls()).toHaveLength(1)
-      expect(DurabilityMock.__getEndCalls()[0]!.forcedCommit).toBe(true)
+      expect(Host.__getFinishCalls()).toHaveLength(1)
+      if (Exit.isFailure(exit))
+        expect(exit.cause.reasons.find(Cause.isFailReason)?.error).toEqual({ code: "no" })
+    }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect("drops unfinished resources on defect, interruption, and response encode failure", () =>
+    Effect.gen(function* () {
+      yield* Effect.exit(Durability.wrap(options, { symbol: "A" }, Effect.die("boom")))
+      yield* Effect.exit(Durability.wrap(options, { symbol: "B" }, Effect.interrupt))
+      yield* Effect.exit(
+        Durability.wrap(options, { symbol: "C" }, Effect.succeed({ price: "bad" } as never)),
+      )
+      expect(Host.__getFinishCalls()).toHaveLength(0)
+      expect(Host.__getDrops()).toBe(3)
+    }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect("does not persist typed failures combined with abnormal termination", () =>
+    Effect.gen(function* () {
+      const defectExit = yield* Effect.exit(
+        Durability.wrap(
+          options,
+          { symbol: "cleanup-defect" },
+          Effect.failCause(Cause.combine(Cause.fail({ code: "domain" }), Cause.die("cleanup"))),
+        ),
+      )
+      expect(Exit.isFailure(defectExit)).toBe(true)
+      if (Exit.isFailure(defectExit)) {
+        expect(defectExit.cause.reasons.some(Cause.isDieReason)).toBe(true)
+      }
+      const interruptedExit = yield* Effect.exit(
+        Durability.wrap(
+          options,
+          { symbol: "cleanup-interrupt" },
+          Effect.failCause(Cause.combine(Cause.fail({ code: "domain" }), Cause.interrupt())),
+        ),
+      )
+      expect(Exit.isFailure(interruptedExit)).toBe(true)
+      if (Exit.isFailure(interruptedExit)) {
+        expect(interruptedExit.cause.reasons.some(Cause.isInterruptReason)).toBe(true)
+      }
+      expect(Host.__getFinishCalls()).toHaveLength(0)
+      expect(Host.__getDrops()).toBe(2)
+    }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect("does not begin or evaluate the body when request encoding fails", () =>
+    Effect.gen(function* () {
+      let ran = false
+      yield* Effect.exit(
+        Durability.wrap(
+          options,
+          { symbol: 1 } as never,
+          Effect.sync(() => {
+            ran = true
+            return { price: 1 }
+          }),
+        ),
+      )
+      expect(ran).toBe(false)
+      expect(Host.__getBeginCalls()).toHaveLength(0)
+    }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect("replays typed success and failure without evaluating user Effects", () =>
+    Effect.gen(function* () {
+      Host.__setIsLive(false)
+      Host.__seedReplay({
+        timestamp: { seconds: 0n, nanoseconds: 0 },
+        functionName: "quotes::get",
+        response: yield* response(Result.succeed({ price: 9 })),
+        functionType: Durability.FunctionType.writeRemote,
+        entryVersion: "v2",
+      })
+      let ran = false
+      expect(
+        yield* Durability.wrap(
+          options,
+          { symbol: "A" },
+          Effect.sync(() => {
+            ran = true
+            return { price: 0 }
+          }),
+        ),
+      ).toEqual({ price: 9 })
+      Host.__seedReplay({
+        timestamp: { seconds: 0n, nanoseconds: 0 },
+        functionName: "quotes::get",
+        response: yield* response(Result.fail({ code: "cached" })),
+        functionType: Durability.FunctionType.writeRemote,
+        entryVersion: "v2",
+      })
+      const exit = yield* Effect.exit(
+        Durability.wrap(options, { symbol: "A" }, Effect.die("must not run")),
+      )
+      expect(ran).toBe(false)
+      if (Exit.isFailure(exit))
+        expect(exit.cause.reasons.find(Cause.isFailReason)?.error).toEqual({ code: "cached" })
+    }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect("rejects replay name and full batched kind mismatches", () =>
+    Effect.gen(function* () {
+      Host.__setIsLive(false)
+      const payload = yield* response(Result.succeed({ price: 1 }))
+      Host.__seedReplay({
+        timestamp: { seconds: 0n, nanoseconds: 0 },
+        functionName: "wrong",
+        response: payload,
+        functionType: Durability.FunctionType.writeRemote,
+        entryVersion: "v2",
+      })
+      const nameExit = yield* Effect.exit(
+        Durability.wrap(options, { symbol: "A" }, Effect.succeed({ price: 0 })),
+      )
+      expect(Exit.isFailure(nameExit)).toBe(true)
+      Host.__seedReplay({
+        timestamp: { seconds: 0n, nanoseconds: 0 },
+        functionName: "quotes::get",
+        response: payload,
+        functionType: Durability.FunctionType.writeRemoteBatched(1n),
+        entryVersion: "v2",
+      })
+      const kindExit = yield* Effect.exit(
+        Durability.wrap(
+          { ...options, functionType: Durability.FunctionType.writeRemoteBatched(2n) },
+          { symbol: "A" },
+          Effect.succeed({ price: 0 }),
+        ),
+      )
+      expect(Exit.isFailure(kindExit)).toBe(true)
+    }).pipe(Effect.provide(TestLayer)),
+  )
+
+  it.effect("supports nested and transaction invocations with independent owned lifecycles", () =>
+    Effect.gen(function* () {
+      const inner = Durability.wrap(
+        {
+          ...options,
+          function: "inner",
+          functionType: Durability.FunctionType.writeRemoteTransaction(),
+        },
+        { symbol: "I" },
+        Effect.succeed({ price: 1 }),
+      )
+      expect(
+        yield* Durability.wrap(
+          {
+            ...options,
+            function: "outer",
+            functionType: Durability.FunctionType.writeRemoteBatched(),
+          },
+          { symbol: "O" },
+          inner,
+        ),
+      ).toEqual({ price: 1 })
+      expect(Host.__getBeginCalls()).toHaveLength(2)
+      expect(Host.__getFinishCalls()).toHaveLength(2)
+      expect(Host.__getDrops()).toBe(0)
     }).pipe(Effect.provide(TestLayer)),
   )
 })

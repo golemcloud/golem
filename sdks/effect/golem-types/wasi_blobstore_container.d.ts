@@ -3,7 +3,6 @@
  */
 declare module 'wasi:blobstore/container' {
   import * as wasiBlobstoreTypes from 'wasi:blobstore/types';
-  import * as wasiIo023Streams from 'wasi:io/streams@0.2.3';
   export class Container {
     /**
      * returns container name
@@ -32,7 +31,7 @@ declare module 'wasi:blobstore/container' {
      * returns list of objects in the container. Order is undefined.
      * @throws Error
      */
-    listObjects(): StreamObjectNames;
+    listObjects(): AsyncIterable<ObjectName>;
     /**
      * deletes object.
      * does not return error if object did not exist.
@@ -60,22 +59,6 @@ declare module 'wasi:blobstore/container' {
      */
     clear(): void;
   }
-  export class StreamObjectNames {
-    /**
-     * reads the next number of objects from the stream
-     * This function returns the list of objects read, and a boolean indicating if the end of the stream was reached.
-     * @throws Error
-     */
-    readStreamObjectNames(len: bigint): [ObjectName[], boolean];
-    /**
-     * skip the next number of objects in the stream
-     * This function returns the number of objects skipped, and a boolean indicating if the end of the stream was reached.
-     * @throws Error
-     */
-    skipStreamObjectNames(num: bigint): [bigint, boolean];
-  }
-  export type InputStream = wasiIo023Streams.InputStream;
-  export type OutputStream = wasiIo023Streams.OutputStream;
   export type ContainerMetadata = wasiBlobstoreTypes.ContainerMetadata;
   export type Error = wasiBlobstoreTypes.Error;
   export type IncomingValue = wasiBlobstoreTypes.IncomingValue;

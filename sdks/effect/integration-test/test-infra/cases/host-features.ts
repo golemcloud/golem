@@ -60,7 +60,7 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   const atomic = yield* liftCliError(cli.invoke(r, "withAtomic", ["3"]))
   yield* expectMatch(atomic.stdout, /\b3\b/, "HostFeatures.withAtomic returns 3")
 
-  // Durability.withPersistenceLevel(persistNothing, …) — adds 5, total 8.
+  // Durability.withIdempotenceMode(false, …) — adds 5, total 8.
   const persistNothing = yield* liftCliError(cli.invoke(r, "withPersistNothing", ["5"]))
   yield* expectMatch(persistNothing.stdout, /\b8\b/, "HostFeatures.withPersistNothing returns 8")
 
@@ -159,9 +159,18 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   const oplog = yield* liftCliError(cli.oplog(r))
   yield* expectMatch(oplog.stdout, /SNAPSHOT/i, "HostFeatures oplog has SNAPSHOT entry")
 
+  const persistedBeforeUpdate = yield* liftCliError(cli.invoke(r, "withAtomic", ["0"]))
+  yield* expectMatch(persistedBeforeUpdate.stdout, /\b18\b/, "HostFeatures persisted live result")
+
   // update --await proves the snapshot+restore path lights up; the
   // restored agent state is observable via the next invocation.
   yield* updateTolerant(r, "manual")
+  const persistedAfterUpdate = yield* liftCliError(cli.invoke(r, "withAtomic", ["0"]))
+  yield* expectMatch(
+    persistedAfterUpdate.stdout,
+    /\b18\b/,
+    "HostFeatures persisted result survives update/restart replay",
+  )
   const idxAfterUpdate = yield* liftCliError(cli.invoke(r, "oplogIndex"))
   yield* expectMatch(
     idxAfterUpdate.stdout,

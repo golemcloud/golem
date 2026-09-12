@@ -321,7 +321,15 @@ export class GetAgents {
     this.cursor += 1
     return out
   }
+
+  [Symbol.dispose](): void {
+    _getAgentsDisposeCount += 1
+  }
 }
+
+let _getAgentsDisposeCount = 0
+
+export const __getGetAgentsDisposeCount = (): number => _getAgentsDisposeCount
 
 export const __seedAgentsForComponent = (
   componentId: ComponentId,
@@ -343,6 +351,11 @@ interface PendingPromise {
 
 const _promises = new Map<string, PendingPromise>()
 const promiseKey = (id: PromiseId): string => `${agentIdKey(id.agentId)}::${id.oplogIdx.toString()}`
+let _promiseGetError: unknown | undefined
+
+export const __setPromiseGetError = (error: unknown | undefined): void => {
+  _promiseGetError = error
+}
 
 export const createPromise = (): PromiseId => {
   const id: PromiseId = {
@@ -367,50 +380,23 @@ export class GetPromiseResult {
   constructor(id: PromiseId) {
     this.id = id
   }
-  subscribe(): {
-    promise(): Promise<void>
-    abortablePromise(signal: AbortSignal): Promise<void>
-  } {
-    const promise = (): Promise<void> =>
-      new Promise<void>((resolve) => {
-        const entry = _promises.get(promiseKey(this.id))
-        if (entry === undefined || entry.payload !== undefined) {
-          resolve()
-          return
-        }
-        entry.subscribers.push(resolve)
-      })
-    return {
-      promise,
-      abortablePromise: (signal: AbortSignal) => {
-        if (signal.aborted) {
-          return Promise.reject(new DOMException("aborted", "AbortError"))
-        }
-        const entry = _promises.get(promiseKey(this.id))
-        if (entry === undefined || entry.payload !== undefined) {
-          return Promise.resolve()
-        }
-        return new Promise<void>((resolve, reject) => {
-          const onAbort = (): void => {
-            const idx = entry.subscribers.indexOf(onReady)
-            if (idx >= 0) entry.subscribers.splice(idx, 1)
-            signal.removeEventListener("abort", onAbort)
-            reject(new DOMException("aborted", "AbortError"))
-          }
-          const onReady = (): void => {
-            signal.removeEventListener("abort", onAbort)
-            resolve()
-          }
-          entry.subscribers.push(onReady)
-          signal.addEventListener("abort", onAbort, { once: true })
-        })
-      },
-    }
+  get(): Promise<Uint8Array> {
+    if (_promiseGetError !== undefined) return Promise.reject(_promiseGetError)
+    const entry = _promises.get(promiseKey(this.id))
+    if (entry?.payload !== undefined) return Promise.resolve(entry.payload)
+    return new Promise<Uint8Array>((resolve) => {
+      entry?.subscribers.push(() => resolve(entry.payload!))
+    })
   }
-  get(): Uint8Array | undefined {
-    return _promises.get(promiseKey(this.id))?.payload
+
+  [Symbol.dispose](): void {
+    _getPromiseResultDisposeCount += 1
   }
 }
+
+let _getPromiseResultDisposeCount = 0
+
+export const __getGetPromiseResultDisposeCount = (): number => _getPromiseResultDisposeCount
 
 export const getPromise = (id: PromiseId): GetPromiseResult => new GetPromiseResult(id)
 
@@ -448,6 +434,9 @@ export const __resetAll = (): void => {
   _strictAgentIdsByRef.clear()
   _agentsByComponent.clear()
   _promises.clear()
+  _promiseGetError = undefined
+  _getAgentsDisposeCount = 0
+  _getPromiseResultDisposeCount = 0
   _trapReasons.length = 0
 }
 

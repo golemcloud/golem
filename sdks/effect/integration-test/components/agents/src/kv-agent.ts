@@ -12,44 +12,44 @@ export const KvAgent = defineAgent({
   name: "KvAgent",
   description: "Probe agent for wasi:keyvalue eventual + eventual-batch",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {
     putBytes: method({
-      params: { key: Schema.String, value: Schema.String },
+      input: { key: Schema.String, value: Schema.String },
       success: Schema.Void,
     }),
     getBytes: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.NullOr(Schema.String),
     }),
     exists: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.Boolean,
     }),
     deleteKey: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.Void,
     }),
     keys: method({
-      params: {},
+      input: {},
       success: Schema.Array(Schema.String),
     }),
     putUser: method({
-      params: { id: Schema.String, name: Schema.String },
+      input: { id: Schema.String, name: Schema.String },
       success: Schema.Void,
     }),
     getUser: method({
-      params: { id: Schema.String },
+      input: { id: Schema.String },
       success: Schema.NullOr(User),
     }),
     putBatch: method({
-      params: {
+      input: {
         entries: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
       },
       success: Schema.Void,
     }),
     getBatch: method({
-      params: { keys: Schema.Array(Schema.String) },
+      input: { keys: Schema.Array(Schema.String) },
       success: Schema.Array(Schema.NullOr(Schema.String)),
     }),
   },

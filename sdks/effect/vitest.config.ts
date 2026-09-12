@@ -7,23 +7,26 @@ const mockDir = resolve(here, "test/mocks")
 
 /**
  * The Golem runtime exposes a number of host modules with WIT-style
- * specifiers like `golem:agent/host@1.5.0` and `wasi:io/streams@0.2.3`.
+ * specifiers like `golem:agent/host@2.0.0`.
  * These are not resolvable by node, so for tests we alias every such
  * specifier to a hand-written mock under `test/mocks/`.
  */
 const golemAliases = [
-  { find: "golem:agent/host@1.5.0", replacement: resolve(mockDir, "golem-agent-host.ts") },
-  { find: "golem:agent/common@1.5.0", replacement: resolve(mockDir, "golem-agent-common.ts") },
-  { find: "golem:core/types@1.5.0", replacement: resolve(mockDir, "golem-core-types.ts") },
+  { find: "golem:agent/host@2.0.0", replacement: resolve(mockDir, "golem-agent-host.ts") },
+  { find: "golem:agent/common@2.0.0", replacement: resolve(mockDir, "golem-agent-common.ts") },
+  { find: "golem:core/types@2.0.0", replacement: resolve(mockDir, "golem-core-types.ts") },
+  { find: "golem:secrets/reveal@0.1.0", replacement: resolve(mockDir, "golem-secrets.ts") },
+  { find: "golem:secrets/types@0.1.0", replacement: resolve(mockDir, "golem-secrets.ts") },
+  { find: "golem:tool/host@0.1.0", replacement: resolve(mockDir, "golem-tool-host.ts") },
   { find: "golem:api/host@1.5.0", replacement: resolve(mockDir, "golem-api-host.ts") },
   { find: "golem:api/oplog@1.5.0", replacement: resolve(mockDir, "golem-api-oplog.ts") },
   { find: "golem:api/retry@1.5.0", replacement: resolve(mockDir, "golem-api-retry.ts") },
   {
-    find: "golem:durability/durability@1.5.0",
+    find: "golem:durability/durability@1.6.0",
     replacement: resolve(mockDir, "golem-durability.ts"),
   },
   { find: "golem:quota/types@1.5.0", replacement: resolve(mockDir, "golem-quota-types.ts") },
-  { find: "wasi:cli/environment@0.2.3", replacement: resolve(mockDir, "wasi-cli-environment.ts") },
+  { find: "wasi:cli/environment@0.3.0", replacement: resolve(mockDir, "wasi-cli-environment.ts") },
   { find: "wasi:logging/logging", replacement: resolve(mockDir, "wasi-logging.ts") },
   { find: "golem:api/context@1.5.0", replacement: resolve(mockDir, "golem-api-context.ts") },
   { find: "node:sqlite", replacement: resolve(mockDir, "node-sqlite.ts") },
@@ -46,10 +49,6 @@ const golemAliases = [
   {
     find: "golem:websocket/client@1.5.0",
     replacement: resolve(mockDir, "golem-websocket-client.ts"),
-  },
-  {
-    find: "wasi:io/streams@0.2.3",
-    replacement: resolve(mockDir, "wasi-io-streams.ts"),
   },
   {
     find: "wasi:keyvalue/types@0.1.0",

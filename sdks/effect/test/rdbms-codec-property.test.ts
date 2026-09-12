@@ -27,6 +27,48 @@ const bytesArb = fc.uint8Array({ maxLength: 64 })
  * encoders only persist `getUTCMilliseconds() * 1_000_000` worth of nanos. */
 const dateArb = fc.date({ noInvalidDate: true }).map((d) => new Date(d.getTime()))
 
+const earlyPostgresTimestampArb = fc.record({
+  year: fc.integer({ min: 0, max: 99 }),
+  month: fc.integer({ min: 1, max: 12 }),
+  day: fc.integer({ min: 1, max: 28 }),
+  hour: fc.integer({ min: 0, max: 23 }),
+  minute: fc.integer({ min: 0, max: 59 }),
+  second: fc.integer({ min: 0, max: 59 }),
+  millisecond: fc.integer({ min: 0, max: 999 }),
+})
+
+describe("Postgres early-year temporal decoding", () => {
+  it.prop(
+    "preserves years 0000 through 0099",
+    { value: earlyPostgresTimestampArb },
+    ({ value }) => {
+      const timestamp = {
+        date: { year: value.year, month: value.month, day: value.day },
+        time: {
+          hour: value.hour,
+          minute: value.minute,
+          second: value.second,
+          nanosecond: value.millisecond * 1_000_000,
+        },
+      }
+      const decoded = Pg.timestampToDate(timestamp)
+      expect(decoded.getUTCFullYear()).toBe(value.year)
+      expect(decoded.getUTCMonth()).toBe(value.month - 1)
+      expect(decoded.getUTCDate()).toBe(value.day)
+      expect(decoded.getUTCHours()).toBe(value.hour)
+      expect(decoded.getUTCMinutes()).toBe(value.minute)
+      expect(decoded.getUTCSeconds()).toBe(value.second)
+      expect(decoded.getUTCMilliseconds()).toBe(value.millisecond)
+      expect(Pg.dateOnlyToDate(timestamp.date).getUTCFullYear()).toBe(value.year)
+    },
+  )
+
+  it("regresses year 42 instead of coercing it to 1942", () => {
+    const decoded = Pg.dateOnlyToDate({ year: 42, month: 3, day: 4 })
+    expect(decoded.toISOString()).toBe("0042-03-04T00:00:00.000Z")
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Per-adapter properties
 // ---------------------------------------------------------------------------

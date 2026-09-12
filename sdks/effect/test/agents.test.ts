@@ -301,24 +301,32 @@ describe("Agents — getAgents stream", () => {
 
       const out = yield* Stream.runCollect(Agents.getAgents({ componentId }))
       expect(out.map((m) => m.agentId.agentId)).toEqual(["A()", "B()", "C()"])
+      expect(ApiHostMock.__getGetAgentsDisposeCount()).toBe(1)
+    }).pipe(Effect.provide(HostLayer)),
+  )
+
+  it.effect("disposes the pager when downstream stops early", () =>
+    Effect.gen(function* () {
+      const componentId: Agents.ComponentId = { uuid: { highBits: 0n, lowBits: 8n } }
+      const metadata: Agents.AgentMetadata = {
+        agentId: makeAgentId("A()"),
+        args: [],
+        env: [],
+        config: [],
+        status: "running",
+        componentRevision: 0n,
+        retryCount: 0n,
+        environmentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      }
+      ApiHostMock.__seedAgentsForComponent(componentId, [[metadata], [metadata]])
+
+      yield* Stream.runCollect(Agents.getAgents({ componentId }).pipe(Stream.take(1)))
+      expect(ApiHostMock.__getGetAgentsDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
 })
 
 describe("Agents — Promises", () => {
-  it.effect("create + complete + poll returns the payload", () =>
-    Effect.gen(function* () {
-      const id = yield* Agents.Promises.create
-      const polled1 = yield* Agents.Promises.poll(id)
-      expect(polled1).toBeUndefined()
-
-      ApiHostMock.completePromise(id, new Uint8Array([1, 2, 3]))
-
-      const polled2 = yield* Agents.Promises.poll(id)
-      expect(Array.from(polled2!)).toEqual([1, 2, 3])
-    }).pipe(Effect.provide(HostLayer)),
-  )
-
   it.effect("complete fails with PromiseAlreadyCompletedError on a second call", () =>
     Effect.gen(function* () {
       const id = yield* Agents.Promises.create
@@ -343,6 +351,7 @@ describe("Agents — Promises", () => {
       })
       const payload = yield* Agents.Promises.await(id)
       expect(Array.from(payload)).toEqual([7])
+      expect(ApiHostMock.__getGetPromiseResultDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
 
@@ -352,14 +361,25 @@ describe("Agents — Promises", () => {
       ApiHostMock.completePromise(id, new Uint8Array([42]))
       const payload = yield* Agents.Promises.await(id)
       expect(Array.from(payload)).toEqual([42])
+      expect(ApiHostMock.__getGetPromiseResultDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
 
-  it.live("await is interruptible: fiber-interrupt unparks the abortable promise", () =>
+  it.effect("await disposes the result handle when get fails", () =>
+    Effect.gen(function* () {
+      const id = yield* Agents.Promises.create
+      ApiHostMock.__setPromiseGetError(new Error("get failed"))
+
+      const exit = yield* Effect.exit(Agents.Promises.await(id))
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(ApiHostMock.__getGetPromiseResultDisposeCount()).toBe(1)
+    }).pipe(Effect.provide(HostLayer)),
+  )
+
+  it.live("await is interruptible while the host promise remains pending", () =>
     Effect.gen(function* () {
       const id = yield* Agents.Promises.create
       // The promise is never completed; the awaiting fiber is interrupted.
-      // Without `pollable.abortablePromise(signal)` this would hang the test.
       const fiber = yield* Effect.forkChild(Agents.Promises.await(id))
       yield* Effect.sleep("1 millis")
       yield* Fiber.interrupt(fiber)
@@ -367,6 +387,7 @@ describe("Agents — Promises", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return
       expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+      expect(ApiHostMock.__getGetPromiseResultDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
 

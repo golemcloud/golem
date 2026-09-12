@@ -1,7 +1,7 @@
 import { Schema } from "effect"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
-import * as CoreTypes from "golem:core/types@1.5.0"
+import * as CoreTypes from "golem:core/types@2.0.0"
 import {
   decodeMultipart,
   encodeMultipart,
@@ -413,21 +413,12 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
 
 const decodeBinaryEnvelope = (
   payload: Uint8Array,
-  fallbackPrincipal: AgentCommon.Principal,
+  _fallbackPrincipal: AgentCommon.Principal,
 ): DecodedBinaryEnvelope => {
   if (payload.length < 1) {
     throw new SnapshotEnvelopeError(`binary envelope: payload is empty`)
   }
   const version = payload[0]!
-  if (version === 1) {
-    // Legacy: byte 0 = 1, no embedded principal; the rest is the raw
-    // user payload. Use the supplied fallback principal.
-    return {
-      kind: "binary",
-      principal: fallbackPrincipal,
-      userPayload: payload.slice(1),
-    }
-  }
   if (version === 2) {
     if (payload.length < 5) {
       throw new SnapshotEnvelopeError(`binary envelope (v2): truncated header`)

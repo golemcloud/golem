@@ -2,7 +2,7 @@
  * Lifecycle for the local `golem server run` instance.
  *
  * On layer acquire:
- *   1. Pre-flight: probe TCP port 9881. If it's already accepting
+ *   1. Pre-flight: probe TCP port 9882. If it's already accepting
  *      connections, FAIL with a clear "an existing Golem server is
  *      running, please kill it before running the integration tests"
  *      error. We do not want to talk to a server we did not provision.
@@ -10,7 +10,7 @@
  *      stderr are tee'd into a per-run log file under
  *      `golem-temp/test-logs/server.log` so the user can inspect the
  *      server output post-mortem.
- *   3. Poll port 9881 until it accepts connections (timeout ~2 min).
+ *   3. Poll port 9882 until it accepts connections (timeout ~2 min).
  *
  * On layer release: scope close kills the spawned child process via
  * the spawner's built-in `acquireRelease` (SIGTERM with a SIGKILL
@@ -33,13 +33,14 @@ import * as net from "node:net"
 import * as path from "node:path"
 import * as url from "node:url"
 import * as fs from "node:fs"
+import * as os from "node:os"
 
 const here = path.dirname(url.fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, "..", "..")
 const logDir = path.resolve(repoRoot, "golem-temp", "test-logs")
 const serverLogPath = path.join(logDir, "server.log")
 
-const ROUTER_PORT = 9881
+const ROUTER_PORT = 9882
 
 export class GolemServerError extends Data.TaggedError("GolemServerError")<{
   readonly reason: "already-running" | "spawn-failed" | "did-not-become-ready" | "exited-early"
@@ -123,9 +124,14 @@ const startServer = Effect.gen(function* () {
   yield* ensureLogDir
   yield* Console.log(`[server] starting golem server (log: ${serverLogPath})`)
 
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "effect-golem-integration-"))
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => fs.rmSync(dataDir, { recursive: true, force: true })),
+  )
+
   // Spawn the server. We collect stdout+stderr into the log file in
   // the background so failure diagnostics survive the test run.
-  const cmd = ChildProcess.make("golem", ["server", "run"], {})
+  const cmd = ChildProcess.make("golem", ["server", "run", "--data-dir", dataDir], {})
   const handle = yield* cmd
 
   const logStream = fs.createWriteStream(serverLogPath, { flags: "w" })

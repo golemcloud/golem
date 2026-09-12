@@ -92,7 +92,10 @@ export class WebsocketConnection {
     this._outbound.push(message)
   }
 
-  receive(): Message {
+  async receive(): Promise<Message> {
+    if (this._inbound.length === 0) {
+      await new Promise<void>((resolve) => this._waiters.push(resolve))
+    }
     const frame = this._inbound.shift()
     if (!frame) {
       throw {
@@ -106,7 +109,7 @@ export class WebsocketConnection {
     return frame.msg!
   }
 
-  receiveWithTimeout(_timeoutMs: bigint): Message | undefined {
+  async receiveWithTimeout(_timeoutMs: bigint): Promise<Message | undefined> {
     const frame = this._inbound.shift()
     if (!frame) return undefined
     if (frame.kind === "err") throw frame.err

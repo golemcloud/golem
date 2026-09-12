@@ -493,32 +493,40 @@ export const getAgents = (input: {
   readonly precise?: boolean
 }): Stream.Stream<RawAgentMetadata, AgentsHostError, AgentHostClient> => {
   const rawFilter = isFilter(input.filter) ? toRawFilter(input.filter) : input.filter
-  return Stream.unwrap(
-    Effect.gen(function* () {
-      const ah = yield* AgentHostClient
-      return yield* Effect.try({
-        try: () => ah.getAgentsCtor(input.componentId, rawFilter, input.precise ?? false),
-        catch: (e) => new AgentsHostError(e),
-      })
-    }).pipe(
-      Effect.map((handle) =>
-        Stream.paginate<ApiHost.GetAgents, RawAgentMetadata, AgentsHostError>(handle, (state) =>
+  return Stream.scoped(
+    Stream.unwrap(
+      Effect.gen(function* () {
+        const ah = yield* AgentHostClient
+        const handle = yield* Effect.acquireRelease(
           Effect.try({
-            try: () => state.getNext(),
+            try: () => ah.getAgentsCtor(input.componentId, rawFilter, input.precise ?? false),
             catch: (e) => new AgentsHostError(e),
-          }).pipe(
-            Effect.map((chunk) =>
-              chunk === undefined
-                ? ([[], Option.none()] as const)
-                : chunk.length === 0
-                  ? ([[], Option.some(state)] as const)
-                  : ([Array.from(chunk), Option.some(state)] as const),
+          }),
+          (handle) => Effect.sync(() => disposeHostResource(handle)),
+        )
+        return Stream.paginate<ApiHost.GetAgents, RawAgentMetadata, AgentsHostError>(
+          handle,
+          (state) =>
+            Effect.try({
+              try: () => state.getNext(),
+              catch: (e) => new AgentsHostError(e),
+            }).pipe(
+              Effect.map((chunk) =>
+                chunk === undefined
+                  ? ([[], Option.none()] as const)
+                  : chunk.length === 0
+                    ? ([[], Option.some(state)] as const)
+                    : ([Array.from(chunk), Option.some(state)] as const),
+              ),
             ),
-          ),
-        ),
-      ),
+        )
+      }),
     ),
   )
+}
+
+const disposeHostResource = (resource: unknown): void => {
+  ;(resource as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.()
 }
 
 // ---------------------------------------------------------------------------
@@ -559,88 +567,28 @@ export const Promises = {
     })
   }) as Effect.Effect<ApiHost.PromiseId, AgentsHostError, PromiseClient>,
 
-  /** Poll a promise: returns `undefined` until completed. */
-  poll: (
-    id: ApiHost.PromiseId,
-  ): Effect.Effect<Uint8Array | undefined, AgentsHostError, PromiseClient> =>
-    Effect.gen(function* () {
-      const pc = yield* PromiseClient
-      return yield* Effect.try({
-        try: () => pc.getPromise(id).get(),
-        catch: (e) => new AgentsHostError(e),
-      })
-    }),
-
   /**
    * Await a promise's completion, returning the payload.
    *
-   * Bridges the host's `Pollable.subscribe()` →
-   * `.abortablePromise(signal)` chain into Effect via `Effect.callback`.
-   * The returned Effect is **fully interruptible**: interrupting the
-   * surrounding fiber rejects the abortable promise synchronously
-   * via `signal.aborted` and the Effect resolves to interruption.
-   *
-   * Note: unlike `RemoteMethod` invocations, there is **no host-level
-   * cancel** for `golem:api/host` promises — `wasi:io/poll`'s
-   * `Pollable` resource exposes no `.cancel()` and `getPromise(...)`
-   * doesn't either. The interruption is therefore purely JS-side
-   * (the in-flight `.then(...)` chain is dropped), and the underlying
-   * host promise remains pending until some peer calls `complete`.
+   * Bridges the Preview 3 async resource method directly into Effect.
+   * Fiber interruption drops the JavaScript continuation; the host
+   * promise remains pending until some peer calls `complete`.
    */
   await: (id: ApiHost.PromiseId): Effect.Effect<Uint8Array, AgentsHostError, PromiseClient> =>
     Effect.gen(function* () {
       const pc = yield* PromiseClient
-      const handle = yield* Effect.try({
-        try: () => pc.getPromise(id),
-        catch: (e) => new AgentsHostError(e),
-      })
-      // Fast path: already completed.
-      const ready = yield* Effect.try({
-        try: () => handle.get(),
-        catch: (e) => new AgentsHostError(e),
-      })
-      if (ready !== undefined) return ready
-      return yield* Effect.callback<Uint8Array, AgentsHostError>((resume, signal) => {
-        // Guard the setup phase against synchronous throws from
-        // `handle.subscribe()` / `pollable.abortablePromise(...)`.
-        // Without this, a misbehaving host could escape the register
-        // function as an Effect defect rather than a typed
-        // `AgentsHostError`.
-        try {
-          const pollable = handle.subscribe()
-          pollable
-            .abortablePromise(signal)
-            .then(() => {
-              if (signal.aborted) return
-              try {
-                const value = handle.get()
-                if (value === undefined) {
-                  resume(
-                    Effect.fail(
-                      new AgentsHostError(
-                        "Promises.await: pollable signalled ready but get() returned undefined",
-                      ),
-                    ),
-                  )
-                  return
-                }
-                resume(Effect.succeed(value))
-              } catch (e) {
-                resume(Effect.fail(new AgentsHostError(e)))
-              }
-            })
-            .catch((e: unknown) => {
-              // `abortablePromise` rejects with an `AbortError`-shaped
-              // DOMException when `signal` aborts; that path is the
-              // fiber-interrupt path and must NOT be reported as a
-              // typed `AgentsHostError`.
-              if (signal.aborted) return
-              resume(Effect.fail(new AgentsHostError(e)))
-            })
-        } catch (e) {
-          if (!signal.aborted) resume(Effect.fail(new AgentsHostError(e)))
-        }
-      })
+      return yield* Effect.acquireUseRelease(
+        Effect.try({
+          try: () => pc.getPromise(id),
+          catch: (e) => new AgentsHostError(e),
+        }),
+        (handle) =>
+          Effect.tryPromise({
+            try: () => handle.get(),
+            catch: (e) => new AgentsHostError(e),
+          }),
+        (handle) => Effect.sync(() => disposeHostResource(handle)),
+      )
     }),
 
   /**

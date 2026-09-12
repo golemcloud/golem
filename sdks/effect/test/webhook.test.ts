@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Fiber, Layer, Schema } from "effect"
 import * as Webhook from "../src/Webhook.js"
 import * as Http from "../src/Http.js"
 import { AgentHostLive } from "../src/host/AgentHostClient.js"
@@ -60,7 +60,7 @@ describe("Webhook.create", () => {
   )
 })
 
-describe("Webhook handle — await / poll", () => {
+describe("Webhook handle — await", () => {
   beforeEach(() => {
     ApiHostMock.__resetAll()
     AgentHostMock.__resetCreateWebhookImpl()
@@ -75,19 +75,18 @@ describe("Webhook handle — await / poll", () => {
       AgentHostMock.__setCreateWebhookImpl(() => "https://hooks.example/x")
       const hook = yield* Webhook.create
 
-      const polled1 = yield* hook.poll
-      expect(polled1).toBeUndefined()
+      const fiber = yield* Effect.forkChild(hook.await)
+      const pending = yield* Effect.sync(() => fiber.pollUnsafe())
+      expect(pending).toBeUndefined()
 
       setTimeout(() => {
         ApiHostMock.completePromise(hook.promiseId, new TextEncoder().encode("hello"))
       }, 5)
 
-      const payload = yield* hook.await
+      const payload = yield* Fiber.join(fiber)
       expect(payload).toBeInstanceOf(Webhook.WebhookPayload)
       expect(payload.text()).toBe("hello")
-
-      const polled2 = yield* hook.poll
-      expect(polled2).toBeInstanceOf(Webhook.WebhookPayload)
+      expect(ApiHostMock.__getGetPromiseResultDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
 
@@ -98,6 +97,7 @@ describe("Webhook handle — await / poll", () => {
       ApiHostMock.completePromise(hook.promiseId, new TextEncoder().encode("ready"))
       const payload = yield* hook.await
       expect(payload.text()).toBe("ready")
+      expect(ApiHostMock.__getGetPromiseResultDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
 })

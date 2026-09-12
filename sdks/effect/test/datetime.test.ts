@@ -1,7 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { DateTime, Effect, Exit, Schema } from "effect"
 import * as Datetime from "../src/Datetime.js"
-import * as Quota from "../src/Quota.js"
 import { toWitCodec } from "../src/WitCodec.js"
 
 const expectConversionFailure = <A>(effect: Effect.Effect<A, Datetime.DatetimeConversionError>) =>
@@ -17,15 +16,13 @@ describe("Datetime", () => {
   it.effect("uses the WASI u64/u32 wire shape and preserves nanosecond precision", () =>
     Effect.gen(function* () {
       const codec = yield* toWitCodec(Datetime.Datetime)
-      const root = codec.witType.nodes[0]?.type as {
-        readonly tag: string
-        readonly val: ReadonlyArray<readonly [string, number]>
-      }
-      expect(root.tag).toBe("record-type")
-      const seconds = root.val.find(([name]) => name === "seconds")![1]
-      const nanoseconds = root.val.find(([name]) => name === "nanoseconds")![1]
-      expect(codec.witType.nodes[seconds]?.type.tag).toBe("prim-u64-type")
-      expect(codec.witType.nodes[nanoseconds]?.type.tag).toBe("prim-u32-type")
+      const root = codec.graph.root.body
+      expect(root.tag).toBe("record")
+      if (root.tag !== "record") throw new Error()
+      const seconds = root.fields.find(({ name }) => name === "seconds")!
+      const nanoseconds = root.fields.find(({ name }) => name === "nanoseconds")!
+      expect(seconds.body.body.tag).toBe("u64")
+      expect(nanoseconds.body.body.tag).toBe("u32")
 
       const value = { seconds: 42n, nanoseconds: 123_456_789 }
       const wire = yield* Schema.encodeEffect(codec.codec)(value)
@@ -113,7 +110,8 @@ describe("Datetime", () => {
     }),
   )
 
-  it("keeps Quota.Datetime as the canonical schema alias", () => {
-    expect(Quota.Datetime).toBe(Datetime.Datetime)
+  it("exports the canonical Datetime schema from its owning module", () => {
+    expect(Datetime.Datetime.fields.seconds).toBeDefined()
+    expect(Datetime.Datetime.fields.nanoseconds).toBeDefined()
   })
 })

@@ -30,39 +30,41 @@ export class PgCounterConfig extends defineConfig("PgCounter.Config", {
   connectionAddress: Schema.Redacted(Schema.String),
 }) {}
 
-export const PgCounter = defineAgent({
+const PgCounterSpec = defineAgent({
   name: "PgCounter",
   description: "A named integer counter backed by Postgres",
   mode: "durable",
   config: PgCounterConfig,
-  constructorParams: { name: Schema.String },
-  snapshot: Snapshot.define({
+  id: { name: Schema.String },
+  snapshotting: Snapshot.define({
     schema: Schema.Struct({}),
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     value: method({
-      params: {},
+      input: {},
       success: Schema.Number,
     }),
     add: method({
-      params: { by: Schema.Number },
+      input: { by: Schema.Number },
       success: Schema.Number,
     }),
     transferAdd: method({
-      params: { from: Schema.String, by: Schema.Number },
+      input: { from: Schema.String, by: Schema.Number },
       success: Schema.Number,
     }),
     failingAdd: method({
-      params: { by: Schema.Number },
+      input: { by: Schema.Number },
       success: Schema.String,
     }),
     streamAll: method({
-      params: {},
+      input: {},
       success: Schema.Array(Schema.Struct({ id: Schema.String, count: Schema.Number })),
     }),
   },
-}).implement(({ name }, snap) =>
+})
+
+const PgCounterFactory: Parameters<typeof PgCounterSpec.implement>[0] = ({ name }, snap) =>
   Effect.gen(function* () {
     yield* snap.init({})
     // Resolve the redacted DSN via the agent's config tag.
@@ -118,5 +120,8 @@ export const PgCounter = defineAgent({
           ),
         ),
     }
-  }),
+  })
+
+export const PgCounter = PgCounterSpec.implement(PgCounterFactory, (_context, ...args) =>
+  PgCounterFactory(...args),
 )

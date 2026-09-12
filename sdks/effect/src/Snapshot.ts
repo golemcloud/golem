@@ -1,5 +1,6 @@
 import { Duration, Effect, Ref, Schema } from "effect"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
 import type { Principal } from "./Principal.js"
 import {
@@ -80,7 +81,7 @@ export const policy = {
 /**
  * Local WIT-drift exhaustiveness witness for {@link policy} +
  * {@link policyToWit}: every tag in
- * `golem:agent/common@1.5.0.snapshotting-config` must have a corresponding
+ * `golem:agent/common@2.0.0.snapshotting-config` must have a corresponding
  * SDK constructor. If `golem-types/*.d.ts` is regenerated with a new
  * variant, this `satisfies` clause fails to compile and points directly
  * at the wrapper that needs updating.
@@ -454,7 +455,24 @@ export interface CustomSnapshotBinding<R = Principal> {
  */
 export interface CustomSnapshotHandlers<R = Principal> {
   readonly save: Effect.Effect<Uint8Array, unknown, R>
-  readonly load: (payload: Uint8Array) => Effect.Effect<void, unknown, R>
+  readonly load: (
+    payload: Uint8Array,
+    context: SnapshotRestorationContext,
+  ) => Effect.Effect<void, unknown, R>
+}
+
+/** Context supplied when restoring a fresh custom-snapshot instance. @since 1.6.0 @category models */
+export interface SnapshotRestorationContext<
+  Id = Readonly<Record<string, unknown>>,
+  Config = unknown,
+> {
+  readonly id: Id
+  readonly principal: AgentCommon.Principal
+  readonly phantomId: CoreTypes.Uuid | undefined
+  readonly agentId: CoreTypes.AgentId
+  /** Complete host-parsed agent id string, including any phantom identity. */
+  readonly parsedAgentId: string
+  readonly config: Config
 }
 
 // ---------------------------------------------------------------------------

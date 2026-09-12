@@ -365,17 +365,10 @@ export const uuidToString = (uuid: Uuid): string => {
 /** @internal */
 export const timestampToDate = (ts: Timestamp): Date => {
   const ms = Math.floor(ts.time.nanosecond / 1_000_000)
-  return new Date(
-    Date.UTC(
-      ts.date.year,
-      ts.date.month - 1,
-      ts.date.day,
-      ts.time.hour,
-      ts.time.minute,
-      ts.time.second,
-      ms,
-    ),
-  )
+  const result = new Date(0)
+  result.setUTCFullYear(ts.date.year, ts.date.month - 1, ts.date.day)
+  result.setUTCHours(ts.time.hour, ts.time.minute, ts.time.second, ms)
+  return result
 }
 
 /** @internal */
@@ -386,8 +379,12 @@ export const timestamptzToDate = (tstz: Timestamptz): Date => {
 }
 
 /** @internal */
-export const dateOnlyToDate = (d: { year: number; month: number; day: number }): Date =>
-  new Date(Date.UTC(d.year, d.month - 1, d.day))
+export const dateOnlyToDate = (d: { year: number; month: number; day: number }): Date => {
+  const result = new Date(0)
+  result.setUTCFullYear(d.year, d.month - 1, d.day)
+  result.setUTCHours(0, 0, 0, 0)
+  return result
+}
 
 const decodeBound = (
   bound: ValuesRange["start"] | ValuesRange["end"],

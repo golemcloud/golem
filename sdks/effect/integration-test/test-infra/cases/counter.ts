@@ -5,7 +5,7 @@
  *   - config-driven methods (currentGreeting reads `greeting` from
  *     `golem.yaml`; keyTail reads the secret `apiKey` from
  *     `secretDefaults`)
- *   - HTTP routes via the deployed httpApi (effect-golem.localhost:9006)
+ *   - HTTP routes via the deployed httpApi (effect-golem.localhost:9008)
  *   - snapshot drill (everyN(10)) + update --await
  */
 import { Effect } from "effect"
@@ -21,7 +21,7 @@ import {
   updateTolerant,
 } from "../harness/case.ts"
 
-const httpHost = "effect-golem.localhost:9006"
+const httpHost = "effect-golem.localhost:9008"
 
 const httpGet = (
   pathname: string,
@@ -125,7 +125,7 @@ const httpGetWithRepeatedHeader = (
           const req = NodeHttp.get(
             {
               hostname: "127.0.0.1",
-              port: 9006,
+              port: 9008,
               path: pathname,
               headers: {
                 host: httpHost,

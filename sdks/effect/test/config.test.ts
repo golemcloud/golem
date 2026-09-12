@@ -1,391 +1,357 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Redacted, Schema } from "effect"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 import { ConfigError, compileConfig, defineConfig, encodeOverrides } from "../src/Config.js"
-import type { CompiledConfig } from "../src/Config.js"
 import { ConfigClient } from "../src/host/ConfigClient.js"
-import { toWitCodec } from "../src/WitCodec.js"
-import type * as CoreTypes from "golem:core/types@1.5.0"
+import { SecretsClient } from "../src/host/SecretsClient.js"
 
-type WitType = CoreTypes.WitType
-type WitValue = CoreTypes.WitValue
+const compile = <F extends Readonly<Record<string, Schema.Top>>>(fields: F) =>
+  compileConfig(fields, "test")
 
-const encode = <S extends Schema.Top>(
-  schema: S,
-  value: S["Type"],
-): Effect.Effect<WitValue, unknown> =>
-  Effect.gen(function* () {
-    const codec = yield* toWitCodec(schema)
-    return yield* Schema.encodeEffect(codec.codec)(value) as Effect.Effect<WitValue, unknown, never>
-  })
+const configLayer = (
+  get: (path: ReadonlyArray<string>, expected: CoreTypes.SchemaGraph) => CoreTypes.SchemaValueTree,
+) =>
+  Layer.mergeAll(
+    Layer.succeed(ConfigClient, ConfigClient.of({ getConfigValue: get })),
+    secretsLayer(() => {
+      throw new Error("unexpected secret reveal")
+    }),
+  )
 
-const compile = <F extends Record<string, Schema.Top>>(
-  fields: F,
-): Effect.Effect<CompiledConfig, unknown> => compileConfig(fields, "test")
-
-/**
- * Build a `ConfigClient` test layer over a synchronous responder. The
- * layer is local to each `it.effect` body so per-test state never
- * leaks across tests (replaces the previous module-level
- * `__setGetConfigValueForTest` / `__resetGetConfigValueForTest`
- * indirection).
- */
-const ConfigStub = (
-  responder: (key: ReadonlyArray<string>, expectedType: WitType) => WitValue,
-): Layer.Layer<ConfigClient> =>
+const secretsLayer = (
+  reveal: (secret: CoreTypes.Secret, expected: CoreTypes.SchemaGraph) => CoreTypes.SchemaValueTree,
+) =>
   Layer.succeed(
-    ConfigClient,
-    ConfigClient.of({
-      getConfigValue: responder,
+    SecretsClient,
+    SecretsClient.of({
+      reveal,
+      id: () => ({}) as never,
+      metadata: () => ({}) as never,
     }),
   )
 
-/** Default stub — fails any unexpected call (used when a test never reads a leaf). */
-const ConfigStubFail: Layer.Layer<ConfigClient> = ConfigStub(() => {
-  throw new Error("ConfigClient: unexpected getConfigValue call in test")
-})
-
-describe("compileConfig", () => {
-  it.effect("emits one local declaration per primitive field", () =>
+describe("Config 1.6", () => {
+  it.effect("flattens nested fields and emits graph indices", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({
+      const compiled = yield* compile({
         greeting: Schema.String,
-        port: Schema.Number,
-      })
-      expect(cc.declarations.length).toBe(2)
-      const greet = cc.declarations.find((d) => d.path[0] === "greeting")!
-      expect(greet.source).toBe("local")
-      expect(greet.path).toEqual(["greeting"])
-      expect(greet.valueType.nodes[0]!.type.tag).toBe("prim-string-type")
-      const port = cc.declarations.find((d) => d.path[0] === "port")!
-      expect(port.source).toBe("local")
-      expect(port.valueType.nodes[0]!.type.tag).toBe("prim-f64-type")
-    }),
-  )
-
-  it.effect("Schema.Redacted leaves are emitted as `secret` source", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({
-        apiKey: Schema.Redacted(Schema.String),
-      })
-      expect(cc.declarations.length).toBe(1)
-      const decl = cc.declarations[0]!
-      expect(decl.source).toBe("secret")
-      expect(decl.path).toEqual(["apiKey"])
-      // valueType uses the inner schema's WIT representation.
-      expect(decl.valueType.nodes[0]!.type.tag).toBe("prim-string-type")
-    }),
-  )
-
-  it.effect("recurses into nested Struct, prefixing the path", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({
         database: Schema.Struct({
-          host: Schema.String,
+          port: Schema.Number,
           password: Schema.Redacted(Schema.String),
         }),
       })
-      expect(cc.declarations.length).toBe(2)
-      const host = cc.declarations.find((d) => d.path.join(".") === "database.host")!
-      expect(host.source).toBe("local")
-      const pwd = cc.declarations.find((d) => d.path.join(".") === "database.password")!
-      expect(pwd.source).toBe("secret")
+      expect(compiled.leaves.map((leaf) => [leaf.source, leaf.path])).toEqual([
+        ["local", ["greeting"]],
+        ["local", ["database", "port"]],
+        ["secret", ["database", "password"]],
+      ])
+      expect(compiled.declarations([4, 7, 9])).toEqual([
+        { source: "local", path: ["greeting"], valueType: 4 },
+        { source: "local", path: ["database", "port"], valueType: 7 },
+        { source: "secret", path: ["database", "password"], valueType: 9 },
+      ])
     }),
   )
 
-  it.effect("memoizes regular fields per buildShape (per-invocation cache)", () =>
+  it.effect("option-lifts required leaves below optional objects", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({ greeting: Schema.String })
-      const greetingWv = yield* encode(Schema.String, "hi")
-      let calls = 0
-      const stub = ConfigStub((_path, _type) => {
-        calls++
-        return greetingWv
+      const compiled = yield* compile({
+        database: Schema.optional(
+          Schema.Struct({ required: Schema.String, optional: Schema.optional(Schema.Number) }),
+        ),
       })
+      expect(compiled.leaves.map((leaf) => leaf.path)).toEqual([
+        ["database", "required"],
+        ["database", "optional"],
+      ])
+      expect(compiled.leaves[0]!.declarationGraph.root.body.tag).toBe("option")
+      expect(compiled.leaves[1]!.declarationGraph.root.body.tag).toBe("option")
+      expect(compiled.leaves[0]!.required).toBe(true)
+      expect(compiled.leaves[1]!.required).toBe(false)
+    }),
+  )
 
-      // One invocation: build shape, read field twice → 1 host call.
-      const shape1 = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
-        greeting: Effect.Effect<string, ConfigError>
+  it.effect("exposes optional object descendants through the public config service", () =>
+    Effect.gen(function* () {
+      const PublicConfig = defineConfig("PublicConfig", {
+        database: Schema.optional(
+          Schema.Struct({
+            host: Schema.String,
+            password: Schema.Redacted(Schema.String),
+          }),
+        ),
+      })
+      const compiled = yield* PublicConfig.__compile()
+      const hostLeaf = compiled.leaves.find((leaf) => leaf.path.join("/") === "database/host")!
+      const passwordLeaf = compiled.leaves.find(
+        (leaf) => leaf.path.join("/") === "database/password",
+      )!
+      expect(hostLeaf.declarationGraph.root.body.tag).toBe("option")
+      expect(passwordLeaf.declarationGraph.root.body.tag).toBe("secret")
+      if (passwordLeaf.declarationGraph.root.body.tag === "secret")
+        expect(passwordLeaf.declarationGraph.root.body.inner.body.tag).toBe("option")
+
+      const handle = {} as CoreTypes.Secret
+      const secretTree: CoreTypes.SchemaValueTree = {
+        root: 0,
+        valueNodes: [{ tag: "secret-value", val: handle }],
       }
-      const v1 = yield* shape1.greeting
-      const v2 = yield* shape1.greeting
-      expect(v1).toBe("hi")
-      expect(v2).toBe("hi")
+      let password: string | undefined
+      let reveals = 0
+      const shape = yield* compiled.buildShape().pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            configLayer((path) => {
+              if (path.join("/") === "database/password") return secretTree
+              return Effect.runSync(hostLeaf.codec.encode(undefined) as Effect.Effect<any, any>)
+            }),
+            secretsLayer(() => {
+              reveals++
+              return Effect.runSync(passwordLeaf.codec.encode(password) as Effect.Effect<any, any>)
+            }),
+          ),
+        ),
+      )
+      yield* Effect.gen(function* () {
+        const cfg = yield* PublicConfig
+        expect(yield* cfg.database.host).toBeUndefined()
+        expect(Redacted.value(yield* cfg.database.password.get)).toBeUndefined()
+        password = "updated-value"
+        expect(Redacted.value(yield* cfg.database.password.get)).toBe("updated-value")
+      }).pipe(Effect.provideService(PublicConfig, shape as never))
+      expect(reveals).toBe(2)
+    }),
+  )
+
+  it.effect("memoizes local values per shape", () =>
+    Effect.gen(function* () {
+      const compiled = yield* compile({ greeting: Schema.String })
+      let current = "first"
+      let calls = 0
+      const shape = (yield* compiled.buildShape().pipe(
+        Effect.provide(
+          configLayer(() => {
+            calls++
+            return Effect.runSync(
+              compiled.leaves[0]!.codec.encode(current) as Effect.Effect<any, any>,
+            )
+          }),
+        ),
+      )) as { greeting: Effect.Effect<string, ConfigError> }
+      expect(yield* shape.greeting).toBe("first")
+      current = "second"
+      expect(yield* shape.greeting).toBe("first")
       expect(calls).toBe(1)
 
-      // A *different* shape (next invocation) re-fetches.
-      const shape2 = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
-        greeting: Effect.Effect<string, ConfigError>
-      }
-      yield* shape2.greeting
+      const nextShape = (yield* compiled.buildShape().pipe(
+        Effect.provide(
+          configLayer(() => {
+            calls++
+            return Effect.runSync(
+              compiled.leaves[0]!.codec.encode(current) as Effect.Effect<any, any>,
+            )
+          }),
+        ),
+      )) as { greeting: Effect.Effect<string, ConfigError> }
+      expect(yield* nextShape.greeting).toBe("second")
       expect(calls).toBe(2)
     }),
   )
 
-  it.effect("never caches secret leaves", () =>
+  it.effect("reveals an opaque secret freshly and returns a redacted value", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({ apiKey: Schema.Redacted(Schema.String) })
-      const wv = yield* encode(Schema.String, "sk-1234")
-      let calls = 0
-      const stub = ConfigStub(() => {
-        calls++
-        return wv
-      })
-      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
+      const compiled = yield* compile({ apiKey: Schema.Redacted(Schema.String) })
+      const handle = {} as CoreTypes.Secret
+      const secretTree: CoreTypes.SchemaValueTree = {
+        root: 0,
+        valueNodes: [{ tag: "secret-value", val: handle }],
+      }
+      let current = "one"
+      let reveals = 0
+      const layer = Layer.mergeAll(
+        configLayer(() => secretTree),
+        secretsLayer((_secret, _expected) => {
+          reveals++
+          return Effect.runSync(
+            compiled.leaves[0]!.codec.encode(current) as Effect.Effect<any, any>,
+          )
+        }),
+      )
+      const shape = (yield* compiled.buildShape().pipe(Effect.provide(layer))) as {
         apiKey: { get: Effect.Effect<Redacted.Redacted<string>, ConfigError> }
       }
-      const r1 = yield* shape.apiKey.get
-      const r2 = yield* shape.apiKey.get
-      expect(Redacted.value(r1)).toBe("sk-1234")
-      expect(Redacted.value(r2)).toBe("sk-1234")
-      // N reads = N host calls for secret leaves.
-      expect(calls).toBe(2)
+      expect(Redacted.value(yield* shape.apiKey.get)).toBe("one")
+      current = "two"
+      expect(Redacted.value(yield* shape.apiKey.get)).toBe("two")
+      expect(reveals).toBe(2)
     }),
   )
 
-  it.effect("Schema.Redacted(Schema.Struct(...)) — structured secret round-trip", () =>
+  it.effect("reveals a structured redacted secret", () =>
     Effect.gen(function* () {
-      // Mirrors `golem-ts-sdk` PR #3329: `Secret<T>` accepts structured
-      // record types, not just strings. Round-trips a redacted struct
-      // value through the host.
-      const InnerStruct = Schema.Struct({ foo: Schema.String, bar: Schema.Number })
-      const cc = yield* compile({ apiToken: Schema.Redacted(InnerStruct) })
-      const wv = yield* encode(InnerStruct, { foo: "abc", bar: 42 })
-      const stub = ConfigStub(() => wv)
-      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
-        apiToken: {
-          get: Effect.Effect<Redacted.Redacted<{ foo: string; bar: number }>, ConfigError>
+      const schema = Schema.Struct({ token: Schema.String, generation: Schema.Number })
+      const compiled = yield* compile({ credentials: Schema.Redacted(schema) })
+      const handle = {} as CoreTypes.Secret
+      const layer = Layer.mergeAll(
+        configLayer(() => ({ root: 0, valueNodes: [{ tag: "secret-value", val: handle }] })),
+        secretsLayer(() =>
+          Effect.runSync(
+            compiled.leaves[0]!.codec.encode({ token: "abc", generation: 2 }) as Effect.Effect<
+              any,
+              any
+            >,
+          ),
+        ),
+      )
+      const shape = (yield* compiled.buildShape().pipe(Effect.provide(layer))) as {
+        credentials: {
+          get: Effect.Effect<Redacted.Redacted<{ token: string; generation: number }>, ConfigError>
         }
       }
-      const r = yield* shape.apiToken.get
-      const v = Redacted.value(r)
-      expect(v.foo).toBe("abc")
-      expect(v.bar).toBe(42)
+      expect(Redacted.value(yield* shape.credentials.get)).toEqual({ token: "abc", generation: 2 })
     }),
   )
 
-  it.effect("surfaces host traps as ConfigError(_, HostTrap)", () =>
+  it.effect("round-trips Option none and some and declares an option graph", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({ greeting: Schema.String })
-      const stub = ConfigStub(() => {
-        throw new Error("nope")
-      })
-      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
-        greeting: Effect.Effect<string, ConfigError>
+      const compiled = yield* compile({ redisUrl: Schema.Option(Schema.String) })
+      expect(compiled.leaves[0]!.declarationGraph.root.body.tag).toBe("option")
+      for (const expected of [Option.none(), Option.some("redis://localhost")]) {
+        const tree = yield* compiled.leaves[0]!.codec.encode(expected) as Effect.Effect<any, any>
+        const shape = (yield* compiled
+          .buildShape()
+          .pipe(Effect.provide(configLayer(() => tree)))) as {
+          redisUrl: Effect.Effect<Option.Option<string>, ConfigError>
+        }
+        const actual = yield* shape.redisUrl
+        expect(Option.isSome(actual)).toBe(Option.isSome(expected))
+        if (Option.isSome(actual)) expect(actual.value).toBe("redis://localhost")
       }
-      const result = yield* Effect.result(shape.greeting)
-      expect(result._tag).toBe("Failure")
-      if (result._tag !== "Failure") return
-      const err = result.failure as ConfigError
-      expect(err).toBeInstanceOf(ConfigError)
-      expect(err.path).toEqual(["greeting"])
-      expect(err.reason._tag).toBe("HostTrap")
     }),
   )
 
-  it.effect("surfaces decode mismatches as ConfigError(_, DecodeFailure)", () =>
+  it.effect("materializes empty structs without reading the host", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({ port: Schema.Number })
-      // Return a string WitValue when a number is expected.
-      const stringWv = yield* encode(Schema.String, "not a number")
-      const stub = ConfigStub(() => stringWv)
-
-      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
-        port: Effect.Effect<number, ConfigError>
-      }
-      const result = yield* Effect.result(shape.port)
-      expect(result._tag).toBe("Failure")
-      if (result._tag !== "Failure") return
-      const err = result.failure as ConfigError
-      expect(err.path).toEqual(["port"])
-      expect(err.reason._tag).toBe("DecodeFailure")
+      const compiled = yield* compile({ empty: Schema.Struct({}) })
+      let calls = 0
+      const shape = (yield* compiled.buildShape().pipe(
+        Effect.provide(
+          configLayer(() => {
+            calls++
+            throw new Error("unexpected")
+          }),
+        ),
+      )) as { empty: Record<string, unknown> }
+      expect(shape.empty).toEqual({})
+      expect(calls).toBe(0)
     }),
   )
 
-  it.effect("rejects unsupported leaves (e.g. Schema.Any) with UnsupportedSchemaError", () =>
+  it.effect("does not require the secrets host for local-only config", () =>
     Effect.gen(function* () {
-      const result = yield* Effect.result(
-        compileConfig({ blob: Schema.Any }, "t") as Effect.Effect<unknown, unknown, never>,
-      )
-      expect(result._tag).toBe("Failure")
-    }),
-  )
-})
-
-describe("encodeOverrides", () => {
-  it.effect("encodes simple non-secret leaves", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({ greeting: Schema.String, port: Schema.Number })
-      const out = yield* encodeOverrides(cc, { greeting: "hello" }) as Effect.Effect<
-        ReadonlyArray<unknown>,
+      const compiled = yield* compile({ greeting: Schema.String })
+      const tree = yield* compiled.leaves[0]!.codec.encode("hello") as Effect.Effect<
+        CoreTypes.SchemaValueTree,
         unknown,
         never
       >
-      expect(out.length).toBe(1)
-      expect((out[0] as { path: Array<string> }).path).toEqual(["greeting"])
+      const shape = (yield* compiled
+        .buildShape()
+        .pipe(Effect.provide(configLayer(() => tree)))) as {
+        greeting: Effect.Effect<string, ConfigError>
+      }
+      expect(yield* shape.greeting).toBe("hello")
     }),
   )
 
-  it.effect("rejects overriding a secret leaf", () =>
+  it.effect("reports host and decode failures with the leaf path", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({
-        apiKey: Schema.Redacted(Schema.String),
-      })
-      const result = yield* Effect.result(
-        encodeOverrides(cc, { apiKey: "leak" }) as Effect.Effect<unknown, ConfigError, never>,
+      const compiled = yield* compile({ port: Schema.Number })
+      const trapped = yield* Effect.result(
+        Effect.gen(function* () {
+          const shape = (yield* compiled.buildShape().pipe(
+            Effect.provide(
+              configLayer(() => {
+                throw new Error("denied")
+              }),
+            ),
+          )) as { port: Effect.Effect<number, ConfigError> }
+          return yield* shape.port
+        }),
       )
-      expect(result._tag).toBe("Failure")
-      if (result._tag !== "Failure") return
-      const err = result.failure as ConfigError
-      expect(err.reason._tag).toBe("Unsupported")
+      expect(trapped._tag).toBe("Failure")
+      if (trapped._tag === "Failure") expect(trapped.failure.reason._tag).toBe("HostTrap")
+
+      const stringCompiled = yield* compile({ value: Schema.String })
+      const wrong = yield* stringCompiled.leaves[0]!.codec.encode("no") as Effect.Effect<
+        CoreTypes.SchemaValueTree,
+        unknown,
+        never
+      >
+      const shape = (yield* compiled
+        .buildShape()
+        .pipe(Effect.provide(configLayer(() => wrong)))) as {
+        port: Effect.Effect<number, ConfigError>
+      }
+      const decoded = yield* Effect.result(shape.port)
+      expect(decoded._tag).toBe("Failure")
+      if (decoded._tag === "Failure") {
+        expect(decoded.failure.path).toEqual(["port"])
+        expect(decoded.failure.reason._tag).toBe("DecodeFailure")
+      }
     }),
   )
 
-  it.effect("rejects unknown override paths", () =>
+  it.effect("encodes nested non-secret overrides and rejects secret or unknown paths", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({ greeting: Schema.String })
-      const result = yield* Effect.result(
-        encodeOverrides(cc, { unknownField: 1 }) as Effect.Effect<unknown, ConfigError, never>,
-      )
-      expect(result._tag).toBe("Failure")
-    }),
-  )
-
-  it.effect("can encode nested struct overrides", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({
+      const compiled = yield* compile({
         database: Schema.Struct({
           host: Schema.String,
           password: Schema.Redacted(Schema.String),
         }),
       })
-      const out = yield* encodeOverrides(cc, { database: { host: "db.example" } }) as Effect.Effect<
-        ReadonlyArray<unknown>,
-        unknown,
-        never
-      >
-      expect(out.length).toBe(1)
-      expect((out[0] as { path: Array<string> }).path).toEqual(["database", "host"])
+      const encoded = yield* encodeOverrides(compiled, { database: { host: "db" } })
+      expect(encoded).toHaveLength(1)
+      expect(encoded[0]!.path).toEqual(["database", "host"])
+      for (const overrides of [
+        { database: { password: "leak" } },
+        { database: { unknown: true } },
+        { database: { unknown: {} } },
+        { unknown: {} },
+      ]) {
+        const result = yield* Effect.result(encodeOverrides(compiled, overrides))
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure" && result.failure instanceof ConfigError)
+          expect(result.failure.reason._tag).toBe("Unsupported")
+      }
     }),
   )
 
-  it.effect("rejects an unknown top-level branch even when its value is an empty object", () =>
+  it.effect("rejects unsupported leaves and memoizes config compilation", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({ greeting: Schema.String })
-      const result = yield* Effect.result(
-        encodeOverrides(cc, { bogus: {} }) as Effect.Effect<unknown, ConfigError, never>,
+      expect((yield* Effect.result(compileConfig({ value: Schema.Any }, "test")))._tag).toBe(
+        "Failure",
       )
-      expect(result._tag).toBe("Failure")
+      const TestConfig = defineConfig("TestConfig", { greeting: Schema.String })
+      expect(yield* TestConfig.__compile()).toBe(yield* TestConfig.__compile())
     }),
   )
 
-  it.effect("rejects an unknown nested branch under a real struct", () =>
+  it.effect("keeps duplicate nested leaf paths distinct", () =>
     Effect.gen(function* () {
-      const cc = yield* compile({
-        database: Schema.Struct({
-          host: Schema.String,
-        }),
+      const compiled = yield* compile({
+        a: Schema.Struct({ value: Schema.String }),
+        b: Schema.Struct({ value: Schema.Number }),
       })
-      const result = yield* Effect.result(
-        encodeOverrides(cc, { database: { bogus: {} } }) as Effect.Effect<
-          unknown,
-          ConfigError,
-          never
-        >,
-      )
-      expect(result._tag).toBe("Failure")
-    }),
-  )
-})
-
-describe("buildShape — empty struct branches", () => {
-  it.effect("materialises an empty Schema.Struct({}) as `{}` in the shape", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({ empty: Schema.Struct({}) })
-      const shape = (yield* cc.buildShape().pipe(Effect.provide(ConfigStubFail))) as {
-        empty: Record<string, unknown>
-      }
-      expect(shape.empty).toBeDefined()
-      expect(typeof shape.empty).toBe("object")
-      expect(Object.keys(shape.empty).length).toBe(0)
-    }),
-  )
-})
-
-describe("Schema.Option leaves", () => {
-  it.effect("a Schema.Option leaf round-trips Option.none() returned by the host", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({ redisUrl: Schema.Option(Schema.String) })
-      // Pre-encode Option.none() through the same WitCodec the runtime
-      // uses, so the mock returns a WitValue the decoder will accept.
-      const noneWv = yield* encode(Schema.Option(Schema.String), Option.none())
-      const stub = ConfigStub(() => noneWv)
-
-      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
-        redisUrl: Effect.Effect<Option.Option<string>, ConfigError>
-      }
-      const v = yield* shape.redisUrl
-      expect(Option.isNone(v)).toBe(true)
-    }),
-  )
-
-  it.effect("a Schema.Option leaf round-trips Option.some(x) returned by the host", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({ redisUrl: Schema.Option(Schema.String) })
-      const someWv = yield* encode(Schema.Option(Schema.String), Option.some("redis://localhost"))
-      const stub = ConfigStub(() => someWv)
-
-      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
-        redisUrl: Effect.Effect<Option.Option<string>, ConfigError>
-      }
-      const v = yield* shape.redisUrl
-      expect(Option.isSome(v)).toBe(true)
-      if (Option.isSome(v)) expect(v.value).toBe("redis://localhost")
-    }),
-  )
-
-  it.effect("emits an option-type WitType in the AgentConfigDeclaration valueType", () =>
-    Effect.gen(function* () {
-      const cc = yield* compile({ redisUrl: Schema.Option(Schema.String) })
-      expect(cc.declarations.length).toBe(1)
-      expect(cc.declarations[0]!.valueType.nodes[0]!.type.tag).toBe("option-type")
-    }),
-  )
-})
-
-describe("compileConfig — duplicate-path guard", () => {
-  it.effect("the schema walker cannot naturally produce duplicate paths", () =>
-    Effect.gen(function* () {
-      // JS object semantics already guarantee unique keys at each level —
-      // this just sanity-checks that nested struct paths stay distinct.
-      const cc = yield* compile({
-        a: Schema.Struct({ x: Schema.String }),
-        b: Schema.Struct({ x: Schema.Number }),
-      })
-      const paths = cc.declarations.map((d) => d.path.join("/"))
+      const paths = compiled.leaves.map((leaf) => leaf.path.join("/"))
       expect(new Set(paths).size).toBe(paths.length)
-      expect(paths.sort()).toEqual(["a/x", "b/x"])
+      expect(paths.sort()).toEqual(["a/value", "b/value"])
     }),
   )
-})
 
-describe("defineConfig", () => {
-  it("returns a Context.Service-compatible class with static fields", () => {
-    const MyConfig = defineConfig("MyConfig", {
-      greeting: Schema.String,
-    })
-    expect((MyConfig as unknown as { fields: unknown }).fields).toBeDefined()
-    expect(typeof (MyConfig as unknown as { __compile: unknown }).__compile).toBe("function")
+  it("defines a Context service with config statics", () => {
+    const TestConfig = defineConfig("Statics", { greeting: Schema.String })
+    expect(TestConfig.fields).toEqual({ greeting: Schema.String })
+    expect(typeof TestConfig.__compile).toBe("function")
   })
-
-  it.effect("static __compile returns the same compile bundle on repeat calls", () =>
-    Effect.gen(function* () {
-      const MyConfig = defineConfig("Repeat", {
-        greeting: Schema.String,
-      })
-      const a = yield* MyConfig.__compile()
-      const b = yield* MyConfig.__compile()
-      // The cached compile cell returns the same bundle.
-      expect(a).toBe(b)
-    }),
-  )
 })

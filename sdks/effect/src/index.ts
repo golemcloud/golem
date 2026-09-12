@@ -35,6 +35,14 @@ export * as Agent from "./Agent.js"
 export * as Agents from "./Agents.js"
 
 /**
+ * Stream values used by streaming agent methods.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as AgentStream from "./AgentStream.js"
+
+/**
  * Effect-typed wrappers around `wasi:blobstore/*` — container CRUD, object
  * I/O, listing as a `Stream`, and a `forSchema` typed view per container.
  *
@@ -42,6 +50,14 @@ export * as Agents from "./Agents.js"
  * @category modules
  */
 export * as Blobstore from "./Blobstore.js"
+
+/**
+ * Agent and tool capability declarations.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as Capability from "./Capability.js"
 
 /**
  * Typed RPC client proxies attached to each `defineAgent` result.
@@ -135,6 +151,14 @@ export * as Logging from "./Logging.js"
 export * as Method from "./Method.js"
 
 /**
+ * Effect-native tool middleware definitions and runtime hooks.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as Middleware from "./Middleware.js"
+
+/**
  * Multipart payloads (text + binary parts) for agent inputs and outputs.
  *
  * @since 1.5.0
@@ -189,6 +213,14 @@ export * as Retry from "./Retry.js"
 export * as Saga from "./Saga.js"
 
 /**
+ * Golem schema-model constructors and helpers.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as Schema from "./Schema.js"
+
+/**
  * Accessors for the running agent's own identity (`SelfAgentId`).
  *
  * @since 1.5.0
@@ -216,6 +248,14 @@ export * as Snapshot from "./Snapshot.js"
 export * as Tracing from "./Tracing.js"
 
 /**
+ * Effect-native tool definitions, clients, and guest runtime.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as Tool from "./Tool.js"
+
+/**
  * Heterogeneous, JSON-like data payloads carried alongside structured agent
  * inputs.
  *
@@ -225,7 +265,7 @@ export * as Tracing from "./Tracing.js"
 export * as Unstructured from "./Unstructured.js"
 
 /**
- * Effect-typed wrapper around `golem:agent/host@1.5.0.create-webhook`.
+ * Effect-typed wrapper around `golem:agent/host@2.0.0.create-webhook`.
  * Bundles `Promises.create` with the host's URL minting and exposes a
  * `Webhook` handle whose `await` Effect resumes when the URL is POSTed to.
  *
@@ -308,4 +348,16 @@ export { method } from "./Method.js"
  * @since 1.5.0
  * @category internal
  */
-export { guest, saveSnapshot, loadSnapshot } from "./internal/guest.js"
+export { guest as golemAgent200Guest, saveSnapshot, loadSnapshot } from "./internal/guest.js"
+
+/**
+ * @since 1.6.0
+ * @category internal
+ */
+export { toolGuest as golemTool010Guest } from "./internal/tool/runtime.js"
+
+/**
+ * @since 1.6.0
+ * @category internal
+ */
+export { toolMiddlewareGuest } from "./internal/tool/middleware.js"

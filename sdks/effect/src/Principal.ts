@@ -1,15 +1,16 @@
 /**
  * @since 1.5.0
  */
-import { Context } from "effect"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
+import { Context, Schema } from "effect"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
+import { witPrincipalAnnotationKey } from "./WitTypes.js"
 
 /**
  * Identity of an authenticated agent caller. Mirrors the WIT
- * `golem:agent/common@1.5.0` `principal` discriminated union.
+ * `golem:agent/common@2.0.0` `principal` discriminated union.
  *
  * Re-exported here so users of `effect-golem` do not need to import the
- * ambient `golem:agent/common@1.5.0` module directly. (Named
+ * ambient `golem:agent/common@2.0.0` module directly. (Named
  * `PrincipalValue` to avoid a clash with the {@link Principal} service
  * class below — `yield* Principal` returns a `PrincipalValue`.)
  *
@@ -41,6 +42,15 @@ export type AgentPrincipal = AgentCommon.AgentPrincipal
  * @category models
  */
 export type GolemUserPrincipal = AgentCommon.GolemUserPrincipal
+
+/** Schema for principals as ordinary values and auto-injected agent inputs. @since 1.6.0 @category schemas */
+export const PrincipalSchema: Schema.Schema<PrincipalValue> = Schema.declare(
+  (value): value is PrincipalValue => {
+    if (typeof value !== "object" || value === null || !("tag" in value)) return false
+    const tag = (value as { readonly tag: unknown }).tag
+    return tag === "oidc" || tag === "agent" || tag === "golem-user" || tag === "anonymous"
+  },
+).pipe(Schema.annotate({ [witPrincipalAnnotationKey]: true }))
 
 /**
  * Effect service exposing the active {@link Principal}.

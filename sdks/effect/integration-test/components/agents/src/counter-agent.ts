@@ -28,34 +28,34 @@ export class CounterConfig extends defineConfig("Counter.Config", {
   apiKey: Schema.Redacted(Schema.String),
 }) {}
 
-export const Counter = defineAgent({
+const CounterSpec = defineAgent({
   name: "Counter",
   description: "A named integer counter (durable, snapshotted)",
   mode: "durable",
   config: CounterConfig,
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   http: Http.mount("/counters/{name}", { cors: ["*"] }),
-  snapshot: Snapshot.define({
+  snapshotting: Snapshot.define({
     schema: Schema.Struct({ count: Schema.Number }),
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     value: method({
-      params: {},
+      input: {},
       success: Schema.Number,
       description: "Returns the current value of the counter without modifying it.",
       promptHint: "Read the counter; never modifies state.",
       http: [Http.get("/value")],
     }),
     increment: method({
-      params: {},
+      input: {},
       success: Schema.Number,
       description: "Increments the counter by 1 and returns the new value.",
       promptHint: "Bump the counter by one.",
       http: [Http.post("/increment")],
     }),
     add: method({
-      params: { by: Schema.Number },
+      input: { by: Schema.Number },
       success: Schema.Number,
       description: "Adds `by` to the counter and returns the new value.",
       promptHint: "Add an arbitrary integer to the counter.",
@@ -65,61 +65,61 @@ export const Counter = defineAgent({
       ],
     }),
     reset: method({
-      params: {},
+      input: {},
       success: Schema.Void,
       description: "Resets the counter back to zero.",
       http: [Http.post("/reset")],
     }),
     /** Returns the principal that originally created this Counter. */
     owner: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/owner")],
     }),
     /** Returns the principal that issued THIS call. */
     caller: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/caller")],
     }),
     /** Greeting fetched fresh from config every invocation. */
     currentGreeting: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/greeting")],
     }),
     /** Last 4 chars of the secret, proving the secret pipeline works. */
     keyTail: method({
-      params: {},
+      input: {},
       success: Schema.String,
       http: [Http.get("/key-tail")],
     }),
     textResponse: method({
-      params: {},
+      input: {},
       success: Unstructured.UnstructuredText({
         restrictions: [{ languageCode: "en" }],
       }),
       http: [Http.get("/response/text")],
     }),
     binaryResponse: method({
-      params: {},
+      input: {},
       success: Unstructured.UnstructuredBinary({
         restrictions: [{ mimeType: "application/octet-stream" }],
       }),
       http: [Http.get("/response/binary")],
     }),
     jsonResponse: method({
-      params: {},
+      input: {},
       success: Schema.Struct({ kind: Schema.String, count: Schema.Number }),
       http: [Http.get("/response/json")],
     }),
     emptyResponse: method({
-      params: {},
+      input: {},
       success: Schema.Void,
       http: [Http.get("/response/empty")],
     }),
     collectionBindings: method({
-      params: {
+      input: {
         tags: Schema.Array(Schema.String),
         scores: Schema.Array(Schema.Number),
       },
@@ -141,11 +141,13 @@ export const Counter = defineAgent({
      * `future-invoke-result.cancel()` on the host.
      */
     slowValue: method({
-      params: { seconds: Schema.Number },
+      input: { seconds: Schema.Number },
       success: Schema.Number,
     }),
   },
-}).implement(({ name }, snap) =>
+})
+
+const CounterFactory: Parameters<typeof CounterSpec.implement>[0] = ({ name }, snap) =>
   Effect.gen(function* () {
     yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
     const state = yield* snap.init({ count: 0 })
@@ -193,18 +195,14 @@ export const Counter = defineAgent({
       textResponse: () =>
         Effect.succeed({
           _tag: "inline" as const,
-          val: {
-            data: "hello from Effect",
-            textType: { languageCode: "en" },
-          },
+          val: "hello from Effect",
+          languageCode: "en",
         }),
       binaryResponse: () =>
         Effect.succeed({
           _tag: "inline" as const,
-          val: {
-            data: new Uint8Array([0, 127, 255]),
-            binaryType: { mimeType: "application/octet-stream" },
-          },
+          val: new Uint8Array([0, 127, 255]),
+          mimeType: "application/octet-stream",
         }),
       jsonResponse: () =>
         Ref.get(state).pipe(Effect.map((s) => ({ kind: "counter", count: s.count }))),
@@ -218,5 +216,8 @@ export const Counter = defineAgent({
           return s.count
         }).pipe(Effect.withSpan("Counter.slowValue", { attributes: { seconds } })),
     }
-  }),
+  })
+
+export const Counter = CounterSpec.implement(CounterFactory, (_context, ...args) =>
+  CounterFactory(...args),
 )

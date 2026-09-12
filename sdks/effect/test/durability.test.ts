@@ -18,73 +18,6 @@ afterEach(() => {
   ApiHostMock.__resetAll()
 })
 
-describe("Durability — persistence level", () => {
-  it.effect("get returns the current host value", () =>
-    Effect.gen(function* () {
-      const out = yield* Durability.getPersistenceLevel
-      expect(out).toEqual({ tag: "smart" })
-    }).pipe(Effect.provide(DurabilityModeLive)),
-  )
-
-  it.effect("set persists into host state", () =>
-    Effect.gen(function* () {
-      yield* Durability.setPersistenceLevel(Durability.PersistenceLevel.persistNothing)
-      expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "persist-nothing" })
-    }).pipe(Effect.provide(DurabilityModeLive)),
-  )
-
-  it.effect("withPersistenceLevel restores the previous value on success", () =>
-    Effect.gen(function* () {
-      let inside: Durability.PersistenceLevelValue | undefined
-      yield* Durability.withPersistenceLevel(
-        Durability.PersistenceLevel.persistNothing,
-        Effect.sync(() => {
-          inside = ApiHostMock.getOplogPersistenceLevel()
-        }),
-      )
-      expect(inside).toEqual({ tag: "persist-nothing" })
-      expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "smart" })
-    }).pipe(Effect.provide(DurabilityModeLive)),
-  )
-
-  it.effect("withPersistenceLevel restores on failure too", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        Durability.withPersistenceLevel(
-          Durability.PersistenceLevel.persistRemoteSideEffects,
-          Effect.fail("boom" as const),
-        ),
-      )
-      expect(Exit.isFailure(exit)).toBe(true)
-      expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "smart" })
-    }).pipe(Effect.provide(DurabilityModeLive)),
-  )
-
-  it.effect("wraps host throws as DurabilityHostError", () => {
-    const live = DurabilityModeClient.of({
-      getOplogPersistenceLevel: () => ApiHostMock.getOplogPersistenceLevel(),
-      setOplogPersistenceLevel: () => {
-        throw new Error("nope")
-      },
-      getIdempotenceMode: () => ApiHostMock.getIdempotenceMode(),
-      setIdempotenceMode: (v) => ApiHostMock.setIdempotenceMode(v),
-      markBeginOperation: () => ApiHostMock.markBeginOperation(),
-      markEndOperation: (b) => ApiHostMock.markEndOperation(b),
-      oplogCommit: (n) => ApiHostMock.oplogCommit(n),
-      generateIdempotencyKey: () => ApiHostMock.generateIdempotencyKey(),
-    })
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        Durability.setPersistenceLevel(Durability.PersistenceLevel.smart),
-      )
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        expect(JSON.stringify(exit.cause)).toMatch(/DurabilityHostError/)
-      }
-    }).pipe(Effect.provide(Layer.succeed(DurabilityModeClient, live)))
-  })
-})
-
 describe("Durability — idempotence mode", () => {
   it.effect("get/set round-trip", () =>
     Effect.gen(function* () {
@@ -203,8 +136,6 @@ describe("Durability — idempotency key", () => {
 
   it.effect("wraps host throws as DurabilityHostError", () => {
     const live = DurabilityModeClient.of({
-      getOplogPersistenceLevel: () => ApiHostMock.getOplogPersistenceLevel(),
-      setOplogPersistenceLevel: (v) => ApiHostMock.setOplogPersistenceLevel(v),
       getIdempotenceMode: () => ApiHostMock.getIdempotenceMode(),
       setIdempotenceMode: (v) => ApiHostMock.setIdempotenceMode(v),
       markBeginOperation: () => ApiHostMock.markBeginOperation(),

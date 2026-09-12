@@ -132,7 +132,7 @@ export const layer: Layer.Layer<GolemCli, never, ChildProcessSpawner.ChildProces
         oplog: (ref) => run(["--local", "agent", "oplog", ref]),
         update: (ref, mode = "manual") =>
           run(["--local", "--yes", "agent", "update", "--await", ref, mode]),
-        build: () => run(["--local", "build"]),
+        build: () => run(["--local", "--yes", "build"]),
         deploy: () => run(["--local", "--yes", "deploy"]),
         serverStatus: () => run(["--local", "server", "status"], { allowFail: true }),
       })

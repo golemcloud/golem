@@ -449,17 +449,17 @@ describe("Http defineAgent integration", () => {
         name: "Counter1",
         description: "test counter",
         promptHint: "use this counter",
-        constructorParams: { name: Schema.String },
+        id: { name: Schema.String },
         http: mount("/counters/{name}", { cors: ["*"], auth: true }),
         methods: {
           value: method({
-            params: {},
+            input: {},
             success: Schema.Number,
             description: "current value",
             http: [get("/value")],
           }),
           add: method({
-            params: { by: Schema.Number },
+            input: { by: Schema.Number },
             success: Schema.Number,
             http: [post("/add"), get("/add?by={by}")],
           }),
@@ -471,7 +471,7 @@ describe("Http defineAgent integration", () => {
         }),
       )
 
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "Counter1")!
       expect(a.description).toBe("test counter")
       expect(a.constructor.promptHint).toBe("use this counter")
@@ -502,12 +502,12 @@ describe("Http defineAgent integration", () => {
     Effect.gen(function* () {
       defineAgent({
         name: "NoHttp",
-        constructorParams: {},
+        id: {},
         methods: {
-          ping: method({ params: {}, success: Schema.Void }),
+          ping: method({ input: {}, success: Schema.Void }),
         },
       }).implement(() => Effect.succeed({ ping: () => Effect.void }))
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "NoHttp")!
       expect(a.httpMount).toBeUndefined()
       expect(a.methods[0]!.httpEndpoint).toEqual([])
@@ -523,9 +523,9 @@ describe("Http defineAgent integration", () => {
         // fires; the runtime check below remains as defence-in-depth.
         defineAgent({
           name: "MissingMount",
-          constructorParams: {},
+          id: {},
           methods: {
-            value: method({ params: {}, success: Schema.Number, http: [get("/v")] }),
+            value: method({ input: {}, success: Schema.Number, http: [get("/v")] }),
           },
         }).implement(() => Effect.succeed({ value: () => Effect.succeed(0) })),
       /declares HTTP endpoints but no mount/,
@@ -537,7 +537,7 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "BadMountVar",
-          constructorParams: { name: Schema.String },
+          id: { name: Schema.String },
           http: mount("/x/{nonExistent}") as never,
           methods: {},
         }).implement(() => Effect.succeed({})),
@@ -550,7 +550,7 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "UncoveredCtor",
-          constructorParams: { name: Schema.String, region: Schema.String },
+          id: { name: Schema.String, region: Schema.String },
           http: mount("/x/{name}") as never,
           methods: {},
         }).implement(() => Effect.succeed({})),
@@ -563,7 +563,7 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "StructCtor",
-          constructorParams: {
+          id: {
             name: Schema.String,
             region: Schema.Struct({ code: Schema.String }),
           },
@@ -579,7 +579,7 @@ describe("Http defineAgent integration", () => {
     expect(() =>
       defineAgent({
         name: "BrandedCtor",
-        constructorParams: { name: Schema.String, region: Region },
+        id: { name: Schema.String, region: Region },
         http: mount("/x/{name}/{region}"),
         methods: {},
       }).implement(() => Effect.succeed({})),
@@ -591,11 +591,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "BadEndpointVar",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             getOne: method({
-              params: {} as Record<string, never>,
+              input: {} as Record<string, never>,
               success: Schema.String,
               http: [get("/items/{nope}")] as never,
             }),
@@ -614,11 +614,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "DualBind",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { id: Schema.String },
+              input: { id: Schema.String },
               success: Schema.String,
               http: [get("/items/{id}?id={id}")] as never,
             }),
@@ -636,11 +636,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "DupHeaders",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { a: Schema.String, b: Schema.String },
+              input: { a: Schema.String, b: Schema.String },
               success: Schema.String,
               http: [get("/items", { headers: { "X-Foo": "a", "x-foo": "b" } as const }) as never],
             }),
@@ -655,11 +655,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "GetWithBody",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { payload: Schema.String },
+              input: { payload: Schema.String },
               success: Schema.String,
               // @ts-expect-error — bodyless `Http.get(...)` cannot have
               // an unbound `payload` param. We silence the static error
@@ -679,11 +679,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "BadBindShape",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { obj: Schema.Struct({ a: Schema.String }) },
+              input: { obj: Schema.Struct({ a: Schema.String }) },
               success: Schema.String,
               http: [post("/items/{obj}")],
             }),
@@ -700,11 +700,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "CollectionPathBind",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { values: Schema.Array(Schema.String) },
+              input: { values: Schema.Array(Schema.String) },
               success: Schema.String,
               // @ts-expect-error — collections are query/header-only;
               // retain the runtime validation as defence-in-depth.
@@ -723,11 +723,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "NestedCollectionQueryBind",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { values: Schema.Array(Schema.Array(Schema.String)) },
+              input: { values: Schema.Array(Schema.Array(Schema.String)) },
               success: Schema.String,
               // @ts-expect-error — nested collections are not host-bindable;
               // retain the runtime validation as defence-in-depth.
@@ -744,11 +744,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "RecordCollectionHeaderBind",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { values: Schema.Array(Schema.Struct({ value: Schema.String })) },
+              input: { values: Schema.Array(Schema.Struct({ value: Schema.String })) },
               success: Schema.String,
               // @ts-expect-error — record elements are not host-bindable;
               // retain the runtime validation as defence-in-depth.
@@ -765,11 +765,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "UnstructuredBind",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { text: UnstructuredText() },
+              input: { text: UnstructuredText() },
               success: Schema.String,
               // @ts-expect-error — the type-level pre-filter rejects
               // ElementSpec params from path bindings; the runtime
@@ -787,11 +787,11 @@ describe("Http defineAgent integration", () => {
       () =>
         defineAgent({
           name: "MultimodalBind",
-          constructorParams: {},
+          id: {},
           http: mount("/x"),
           methods: {
             op: method({
-              params: { mm: multimodal({ chunk: UnstructuredText() }) },
+              input: { mm: multimodal({ chunk: UnstructuredText() }) },
               success: Schema.String,
               // @ts-expect-error — the type-level pre-filter rejects
               // Multimodal params from path bindings; the runtime
@@ -808,11 +808,11 @@ describe("Http defineAgent integration", () => {
     Effect.gen(function* () {
       defineAgent({
         name: "GoodBindings",
-        constructorParams: { tenant: Schema.String },
+        id: { tenant: Schema.String },
         http: mount("/api/{tenant}"),
         methods: {
           find: method({
-            params: { id: Schema.String, q: Schema.String, traceId: Schema.String },
+            input: { id: Schema.String, q: Schema.String, traceId: Schema.String },
             success: Schema.String,
             http: [get("/items/{id}?q={q}", { headers: { "X-Trace": "traceId" } as const })],
           }),
@@ -822,7 +822,7 @@ describe("Http defineAgent integration", () => {
           find: ({ id, q, traceId }) => Effect.succeed(`${id}/${q}/${traceId}`),
         }),
       )
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "GoodBindings")!
       const find = a.methods[0]!
       expect(find.httpEndpoint).toHaveLength(1)
@@ -837,11 +837,11 @@ describe("Http defineAgent integration", () => {
     Effect.gen(function* () {
       defineAgent({
         name: "CollectionBindings",
-        constructorParams: {},
+        id: {},
         http: mount("/api"),
         methods: {
           find: method({
-            params: {
+            input: {
               tags: Schema.Array(Schema.String),
               scores: Schema.Array(Schema.Number),
             },
@@ -858,7 +858,7 @@ describe("Http defineAgent integration", () => {
           find: ({ tags, scores }) => Effect.succeed(`${tags.join(",")}/${scores.join(",")}`),
         }),
       )
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const find = types.find((t) => t.typeName === "CollectionBindings")!.methods[0]!
       expect(find.httpEndpoint[0]!.queryVars).toEqual([
         { queryParamName: "tag", variableName: "tags" },
@@ -907,7 +907,7 @@ describe("Http pipeable combinators — endpoints", () => {
     // when wired into a method. This exercises the type-level union
     // widening in `withHeader` / `withHeaders`.
     method({
-      params: {
+      input: {
         id: Schema.String,
         traceId: Schema.String,
         idempotencyKey: Schema.String,
@@ -950,11 +950,11 @@ describe("Http pipeable combinators — endpoints", () => {
     Effect.gen(function* () {
       defineAgent({
         name: "PipedEndpoints",
-        constructorParams: { tenant: Schema.String },
+        id: { tenant: Schema.String },
         http: mount("/api/{tenant}"),
         methods: {
           find: method({
-            params: { id: Schema.String, traceId: Schema.String },
+            input: { id: Schema.String, traceId: Schema.String },
             success: Schema.String,
             http: [get("/items/{id}").pipe(withHeader("X-Trace", "traceId"), withAuth(true))],
           }),
@@ -964,7 +964,7 @@ describe("Http pipeable combinators — endpoints", () => {
           find: ({ id, traceId }) => Effect.succeed(`${id}/${traceId}`),
         }),
       )
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "PipedEndpoints")!
       const find = a.methods[0]!
       expect(find.httpEndpoint).toHaveLength(1)
@@ -1030,7 +1030,7 @@ describe("Http pipeable combinators — mounts", () => {
       () =>
         defineAgent({
           name: "PipedBadWebhook",
-          constructorParams: { tenant: Schema.String },
+          id: { tenant: Schema.String },
           // @ts-expect-error — `WebhookVarsValid` also catches this at
           // compile time. This test exercises the runtime
           // defence-in-depth path; the cast bypasses the static check
@@ -1046,17 +1046,17 @@ describe("Http pipeable combinators — mounts", () => {
     Effect.gen(function* () {
       defineAgent({
         name: "PipedMount",
-        constructorParams: { tenant: Schema.String },
+        id: { tenant: Schema.String },
         http: mount("/api/{tenant}").pipe(withAuth(true), withCors("https://x.com")),
         methods: {
           find: method({
-            params: {},
+            input: {},
             success: Schema.String,
             http: [get("/items")],
           }),
         },
       }).implement(() => Effect.succeed({ find: () => Effect.succeed("ok") }))
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "PipedMount")!
       expect(a.httpMount?.authDetails).toEqual({ required: true })
       expect(a.httpMount?.corsOptions).toEqual({ allowedPatterns: ["https://x.com"] })

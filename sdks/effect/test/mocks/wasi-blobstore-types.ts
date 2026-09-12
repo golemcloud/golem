@@ -10,8 +10,6 @@
  * consume path used by the SDK.
  */
 
-import { OutputStream } from "./wasi-io-streams.js"
-
 export type ContainerName = string
 export type ObjectName = string
 export type Timestamp = bigint
@@ -36,20 +34,19 @@ export interface ObjectId {
 }
 
 export class OutgoingValue {
-  /** @internal — the OutputStream whose buffer captures writes. */
-  __stream: OutputStream | undefined
+  /** @internal */
+  readonly __bytes: number[] = []
   static newOutgoingValue(): OutgoingValue {
     return new OutgoingValue()
   }
-  outgoingValueWriteBody(): OutputStream {
-    if (this.__stream === undefined) {
-      this.__stream = OutputStream.create()
-    }
-    return this.__stream
+  outgoingValueWriteBody(data: AsyncIterable<number>): void {
+    void (async () => {
+      for await (const byte of data) this.__bytes.push(byte)
+    })()
   }
   /** Test helper: read the bytes written so far. */
   __getBytes(): Uint8Array {
-    return this.__stream === undefined ? new Uint8Array() : this.__stream.__getBytes()
+    return new Uint8Array(this.__bytes)
   }
 }
 

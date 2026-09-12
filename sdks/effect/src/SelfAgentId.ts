@@ -2,7 +2,7 @@
  * @since 1.5.0
  */
 import { Context } from "effect"
-import type * as CoreTypes from "golem:core/types@1.5.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 
 /**
  * Effect service exposing the running agent's own structured

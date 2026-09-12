@@ -1,89 +1,60 @@
-#!/usr/bin/env node
-/**
- * Generates the Rust wrapper crate that embeds the bundled effect-golem
- * runtime into a QuickJS-backed WASM component, leaving a `user` slot to
- * be filled in later via `wasm-rquickjs inject-js`.
- *
- * Mirrors the corresponding script in golemcloud/golem's
- * sdks/ts/packages/golem-ts-sdk.
- */
 import { spawnSync } from "node:child_process"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { dirname, resolve } from "node:path"
-import { existsSync, rmSync, readFileSync, writeFileSync } from "node:fs"
+import { templateMatrix } from "./template-matrix.mjs"
 
-const here = dirname(fileURLToPath(import.meta.url))
-const root = resolve(here, "..")
-const wit = resolve(root, "wit")
-const output = resolve(root, "agent-template")
-const sdkBundle = resolve(root, "dist/index.mjs")
-const effectBundle = resolve(root, "dist/effect.mjs")
-const sqliteBundle = resolve(root, "dist/sqlite.mjs")
-const postgresBundle = resolve(root, "dist/postgres.mjs")
-const mysqlBundle = resolve(root, "dist/mysql.mjs")
-const igniteBundle = resolve(root, "dist/ignite.mjs")
+const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const sourceWit = join(packageDir, "wit")
+const witBindgenLine =
+  'wit-bindgen-p3 = { package = "wit-bindgen", version = "0.58.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
+const forkedLine =
+  'wit-bindgen-p3 = { package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", rev = "4407232ead86d9bcbd06cbebd790a52120a4087a", version = "=0.59.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
 
-for (const f of [
-  sdkBundle,
-  effectBundle,
-  sqliteBundle,
-  postgresBundle,
-  mysqlBundle,
-  igniteBundle,
-]) {
-  if (!existsSync(f)) {
-    console.error(`error: ${f} does not exist. Run "npm run build:bundle" first.`)
-    process.exit(1)
+const sharedModules = [
+  ["@golemcloud/effect-golem/sqlite", "dist/sqlite.mjs"],
+  ["@golemcloud/effect-golem/postgres", "dist/postgres.mjs"],
+  ["@golemcloud/effect-golem/mysql", "dist/mysql.mjs"],
+  ["@golemcloud/effect-golem/ignite2", "dist/ignite.mjs"],
+  ["effect", "dist/effect.mjs"],
+]
+
+for (const template of templateMatrix) {
+  const modules = [
+    [template.sdkModuleName, template.sdkEntry],
+    ...(template.role === "tool-middleware" ? [["effect", "dist/effect.mjs"]] : sharedModules),
+  ]
+  for (const [, entry] of modules) {
+    if (!existsSync(join(packageDir, entry))) {
+      throw new Error(`${entry} does not exist; run npm run build:bundle first`)
+    }
   }
-}
 
-if (existsSync(output)) {
+  const output = join(packageDir, template.wrapperDirectory)
   rmSync(output, { recursive: true, force: true })
-}
-
-const result = spawnSync(
-  "wasm-rquickjs",
-  [
+  const args = [
     "generate-wrapper-crate",
     "--wit",
-    wit,
+    sourceWit,
     "--output",
     output,
     "--world",
-    "agent-guest",
-    "--js-modules",
-    `@golemcloud/effect-golem=${sdkBundle}`,
-    "--js-modules",
-    `@golemcloud/effect-golem/sqlite=${sqliteBundle}`,
-    "--js-modules",
-    `@golemcloud/effect-golem/postgres=${postgresBundle}`,
-    "--js-modules",
-    `@golemcloud/effect-golem/mysql=${mysqlBundle}`,
-    "--js-modules",
-    `@golemcloud/effect-golem/ignite2=${igniteBundle}`,
-    "--js-modules",
-    `effect=${effectBundle}`,
-    "--js-modules",
-    "user=@slot",
-  ],
-  { stdio: "inherit", cwd: root },
-)
+    template.world,
+    "--target",
+    "wasi-p3",
+  ]
+  for (const [name, entry] of modules) args.push("--js-modules", `${name}=${entry}`)
+  args.push("--js-modules", "user=@slot")
 
-if (result.status !== 0) {
-  process.exit(result.status ?? 1)
-}
+  const result = spawnSync("wasm-rquickjs", args, { cwd: packageDir, stdio: "inherit" })
+  if (result.error) throw result.error
+  if (result.status !== 0) process.exit(result.status ?? 1)
 
-// Workaround: the generated `JS_ADDITIONAL_MODULES` Vec expects each
-// closure to return `String`, but for static (non-`@slot`) modules
-// wasm-rquickjs emits `include_str!(...)` which yields `&'static str`.
-// Coerce them with `.to_string()` so cargo will compile the crate.
-const libRsPath = resolve(output, "src/lib.rs")
-const original = readFileSync(libRsPath, "utf-8")
-const patched = original.replace(
-  /Box::new\(\|\|\s*\{\s*include_str!\("([^"]+)"\)\s*\}\)/g,
-  'Box::new(|| { include_str!("$1").to_string() })',
-)
-if (patched !== original) {
-  writeFileSync(libRsPath, patched, "utf-8")
-  console.log("patched JS_ADDITIONAL_MODULES include_str! to .to_string()")
+  const cargoToml = join(output, "Cargo.toml")
+  const original = readFileSync(cargoToml, "utf8")
+  const count = original.split(witBindgenLine).length - 1
+  if (count !== 1)
+    throw new Error(`Expected one pinned wit-bindgen line in ${cargoToml}, found ${count}`)
+  writeFileSync(cargoToml, original.replace(witBindgenLine, forkedLine))
+  rmSync(join(output, "Cargo.lock"), { force: true })
 }

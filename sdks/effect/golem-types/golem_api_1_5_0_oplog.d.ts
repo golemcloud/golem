@@ -5,9 +5,9 @@ declare module 'golem:api/oplog@1.5.0' {
   import * as golemApi150Context from 'golem:api/context@1.5.0';
   import * as golemApi150Host from 'golem:api/host@1.5.0';
   import * as golemApi150Retry from 'golem:api/retry@1.5.0';
-  import * as golemCore150Types from 'golem:core/types@1.5.0';
-  import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
-  import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
+  import * as golemCore200Types from 'golem:core/types@2.0.0';
+  import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
+  import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   /**
    * Enriches raw oplog entries into public oplog entries by resolving oplog payloads
    * and augmenting entries with component metadata.
@@ -16,26 +16,30 @@ declare module 'golem:api/oplog@1.5.0' {
   export function enrichOplogEntries(environmentId: EnvironmentId, agentId: AgentId, entries: [OplogIndex, OplogEntry][], componentRevision: ComponentRevision): PublicOplogEntry[];
   export class GetOplog {
     constructor(agentId: AgentId, start: OplogIndex);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): PublicOplogEntry[] | undefined;
   }
   export class SearchOplog {
     constructor(agentId: AgentId, text: string);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): [OplogIndex, PublicOplogEntry][] | undefined;
   }
-  export type Datetime = wasiClocks023WallClock.Datetime;
-  export type ValueAndType = golemCore150Types.ValueAndType;
-  export type AccountId = golemCore150Types.AccountId;
-  export type DataValue = golemCore150Types.DataValue;
-  export type DataSchema = golemCore150Types.DataSchema;
-  export type WitValue = golemCore150Types.WitValue;
+  export type Datetime = wasiClocks030SystemClock.Instant;
+  export type AccountId = golemCore200Types.AccountId;
+  export type CardId = golemCore200Types.CardId;
+  export type SchemaValueTree = golemCore200Types.SchemaValueTree;
+  export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
-  export type PersistenceLevel = golemApi150Host.PersistenceLevel;
   export type EnvironmentId = golemApi150Host.EnvironmentId;
   export type Uuid = golemApi150Host.Uuid;
   export type AgentId = golemApi150Host.AgentId;
   export type Snapshot = golemApi150Host.Snapshot;
-  export type Duration = wasiClocks023MonotonicClock.Duration;
+  export type Duration = wasiClocks030Types.Duration;
   export type Attribute = golemApi150Context.Attribute;
   export type AttributeValue = golemApi150Context.AttributeValue;
   export type SpanId = golemApi150Context.SpanId;
@@ -66,7 +70,7 @@ declare module 'golem:api/oplog@1.5.0' {
     left: StateNodeIndex;
     right: StateNodeIndex;
   };
-  export type StateNode = 
+  export type StateNode =
   /** Counter-based state (e.g. periodic, exponential, fibonacci). */
   {
     tag: 'counter'
@@ -106,7 +110,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type EnvironmentPluginGrantId = {
     uuid: Uuid;
   };
-  export type WrappedFunctionType = 
+  export type WrappedFunctionType =
   /**
    * The side-effect reads from the agent's local state (for example local file system,
    * random generator, etc.)
@@ -130,9 +134,10 @@ declare module 'golem:api/oplog@1.5.0' {
    * The side-effect manipulates external state through multiple invoked functions (for example
    * a HTTP request where reading the response involves multiple host function calls)
    * On the first invocation of the batch, the parameter should be `None` - this triggers
-   * writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
-   * this entry's index as the parameter. In batched remote writes it is the caller's responsibility
-   * to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+   * writing a scope `Start` entry in the oplog. Followup invocations should contain this
+   * entry's index as the parameter so their host-call `Start` entries can point back to the
+   * scope. In batched remote writes it is the caller's responsibility to manually write the
+   * matching scope `End` entry (using `end_function`) when the operation is completed.
    */
   {
     tag: 'write-remote-batched'
@@ -151,11 +156,11 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawLocalAgentConfigEntry = {
     path: string[];
-    value: WitValue;
+    value: SchemaValueTree;
   };
   export type LocalAgentConfigEntry = {
     path: string[];
-    value: ValueAndType;
+    value: TypedSchemaValue;
   };
   export type CreateParameters = {
     timestamp: Datetime;
@@ -173,12 +178,63 @@ declare module 'golem:api/oplog@1.5.0' {
     originalPhantomId?: Uuid;
     instanceId: Uuid;
   };
-  export type HostCallParameters = {
+  /**
+   * Parameters of an enriched durable host-call `start` entry.
+   * The recorded `request` payload of every durable host call — including
+   * durable P3 async calls such as HTTP send/consume-body, sockets, keyvalue,
+   * and blobstore operations — surfaces as a generic `typed-schema-value`
+   * tree, identified by `function-name`; there are no per-interface named WIT
+   * variants for the payload shapes.
+   */
+  export type StartParameters = {
     timestamp: Datetime;
+    parentStartIndex?: OplogIndex;
     functionName: string;
-    request: ValueAndType;
-    response: ValueAndType;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
+    request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
+  };
+  /**
+   * Parameters of an enriched durable host-call `end` entry. Like the
+   * `start` `request`, the recorded `response` payload surfaces as a generic
+   * `typed-schema-value` tree (no per-interface named WIT variants).
+   */
+  export type EndParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    response?: TypedSchemaValue;
+    forcedCommit: boolean;
+  };
+  /**
+   * Parameters of an enriched durable host-call `cancelled` entry. Like the
+   * `start` `request`, the optional recorded `partial` result surfaces as a
+   * generic `typed-schema-value` tree (no per-interface named WIT variants).
+   */
+  export type CancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: TypedSchemaValue;
+  };
+  /**
+   * Parameters of a `completion-discarded` entry: the durable host call started at
+   * `start-index` completed successfully (its `end` entry was persisted) but the response
+   * was never delivered to the agent, because the agent dropped the call's completion
+   * future after the `end` was already recorded.
+   */
+  export type CompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  /**
+   * Parameters of a `completion-delivered` entry: the successful result of the durable host
+   * call started at `start-index` was handed to the agent at this point in the recorded
+   * execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+   * agent until this marker and prevents later oplog entries from advancing until that handoff.
+   */
+  export type CompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
   };
   export type LocalSpanData = {
     spanId: SpanId;
@@ -192,7 +248,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type ExternalSpanData = {
     spanId: SpanId;
   };
-  export type SpanData = 
+  export type SpanData =
   {
     tag: 'local-span'
     val: LocalSpanData
@@ -231,21 +287,99 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     name: string;
   };
+  export type QueuedCardEventInstall = {
+    cardId: CardId;
+  };
+  export type QueuedCardEventRevoke = {
+    cardId: CardId;
+  };
+  export type QueuedCardEvent =
+  {
+    tag: 'install'
+    val: QueuedCardEventInstall
+  } |
+  {
+    tag: 'revoke'
+    val: QueuedCardEventRevoke
+  };
+  /**
+   * Parameters for a card-event-queued oplog entry.
+   */
+  export type CardEventQueuedParameters = {
+    timestamp: Datetime;
+    event: QueuedCardEvent;
+  };
+  /**
+   * Parameters for a card-installed oplog entry.
+   */
+  export type CardInstalledParameters = {
+    timestamp: Datetime;
+    queuedEventIndex?: OplogIndex;
+    cardId: CardId;
+  };
+  /**
+   * Raw parameters for a card-installed oplog entry.
+   */
+  export type RawCardInstalledParameters = {
+    timestamp: Datetime;
+    queuedEventIndex?: OplogIndex;
+    card: Uint8Array;
+  };
+  export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
+  /**
+   * Parameters for a card-install-failed oplog entry.
+   */
+  export type CardInstallFailedParameters = {
+    timestamp: Datetime;
+    queuedEventIndex: OplogIndex;
+    cardId: CardId;
+    reason: CardInstallFailure;
+  };
+  /**
+   * Parameters for a card-revoked oplog entry.
+   */
+  export type CardRevokedParameters = {
+    timestamp: Datetime;
+    queuedEventIndex: OplogIndex;
+    cardId: CardId;
+  };
+  /**
+   * Parameters for a card-expired oplog entry.
+   */
+  export type CardExpiredParameters = {
+    timestamp: Datetime;
+    cardId: CardId;
+  };
+  /**
+   * Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
+   * The kind determines how the entry's payload is interpreted.
+   */
+  export type HostStreamKind = "p3-http-request-body";
+  /**
+   * Parameters for a host-stream-frame oplog entry: a durably recorded frame of a
+   * host-owned stream (e.g. the outgoing request body of a P3 HTTP client send),
+   * attached to the durable host call identified by its start entry's index.
+   */
+  export type HostStreamFrameParameters = {
+    timestamp: Datetime;
+    parentStartIndex: OplogIndex;
+    kind: HostStreamKind;
+    payload: TypedSchemaValue;
+  };
+  /**
+   * A public durable-stream producer record rendered as a typed schema value.
+   */
+  export type DurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: TypedSchemaValue;
+  };
   export type EndAtomicRegionParameters = {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
-  export type EndRemoteWriteParameters = {
-    timestamp: Datetime;
-    beginIndex: OplogIndex;
-  };
-  export type TypedDataValue = {
-    value: DataValue;
-    schema: DataSchema;
-  };
   export type AgentInitializationParameters = {
     idempotencyKey: string;
-    constructorParameters: TypedDataValue;
+    constructorParameters: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
@@ -253,7 +387,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentMethodInvocationParameters = {
     idempotencyKey: string;
     methodName: string;
-    functionInput: TypedDataValue;
+    functionInput: TypedSchemaValue;
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[][];
@@ -265,12 +399,12 @@ declare module 'golem:api/oplog@1.5.0' {
     targetRevision: ComponentRevision;
   };
   export type AgentInvocationOutputParameters = {
-    output: TypedDataValue;
+    output: TypedSchemaValue;
   };
   export type FallibleResultParameters = {
     error?: string;
   };
-  export type UpdateDescription = 
+  export type UpdateDescription =
   /** Automatic update by replaying the oplog on the new version */
   {
     tag: 'auto-update'
@@ -297,10 +431,6 @@ declare module 'golem:api/oplog@1.5.0' {
     details?: string;
   };
   export type GrowMemoryParameters = {
-    timestamp: Datetime;
-    delta: bigint;
-  };
-  export type FilesystemStorageUsageUpdateParameters = {
     timestamp: Datetime;
     delta: bigint;
   };
@@ -357,10 +487,6 @@ declare module 'golem:api/oplog@1.5.0' {
     key: string;
     value: AttributeValue;
   };
-  export type ChangePersistenceLevelParameters = {
-    timestamp: Datetime;
-    persistenceLevel: PersistenceLevel;
-  };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
     transactionId: string;
@@ -376,7 +502,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type LoadSnapshotParameters = {
     snapshot: SnapshotData;
   };
-  export type AgentInvocation = 
+  export type AgentInvocation =
   {
     tag: 'agent-initialization'
     val: AgentInitializationParameters
@@ -407,7 +533,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type SaveSnapshotResultParameters = {
     snapshot: SnapshotData;
   };
-  export type AgentInvocationResult = 
+  export type AgentInvocationResult =
   {
     tag: 'agent-initialization'
     val: AgentInvocationOutputParameters
@@ -434,6 +560,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentInvocationFinishedParameters = {
     timestamp: Datetime;
     result: AgentInvocationResult;
+    methodName?: string;
     consumedFuel: bigint;
     componentRevision: bigint;
   };
@@ -463,7 +590,7 @@ declare module 'golem:api/oplog@1.5.0' {
   /**
    * Opaque oplog payload, which can either be serialized inline or stored externally
    */
-  export type OplogPayload = 
+  export type OplogPayload =
   {
     tag: 'inline'
     val: Uint8Array
@@ -476,10 +603,24 @@ declare module 'golem:api/oplog@1.5.0' {
     environmentId: EnvironmentId;
     resourceName: string;
   };
+  export type EphemeralSleepTooLong = {
+    requestedNanos: bigint;
+    maxNanos: bigint;
+  };
+  export type EphemeralFuelExhausted = {
+    overdraftLimit: bigint;
+  };
+  export type EphemeralCannotSuspend = {
+    reason: string;
+  };
+  export type ReadOnlyViolation = {
+    method: string;
+    hostFunction: string;
+  };
   /**
    * Describes the error that occurred in the agent
    */
-  export type WorkerError = 
+  export type WorkerError =
   {
     tag: 'unknown'
     val: string
@@ -523,14 +664,24 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'exceeded-rpc-call-limit'
   } |
   {
-    tag: 'node-out-of-filesystem-storage'
-  } |
-  {
-    tag: 'agent-exceeded-filesystem-storage-limit'
-  } |
-  {
     tag: 'agent-terminated-by-quota'
     val: AgentTerminatedByQuotaError
+  } |
+  {
+    tag: 'ephemeral-sleep-too-long'
+    val: EphemeralSleepTooLong
+  } |
+  {
+    tag: 'ephemeral-fuel-exhausted'
+    val: EphemeralFuelExhausted
+  } |
+  {
+    tag: 'ephemeral-cannot-suspend'
+    val: EphemeralCannotSuspend
+  } |
+  {
+    tag: 'read-only-violation'
+    val: ReadOnlyViolation
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
@@ -548,12 +699,50 @@ declare module 'golem:api/oplog@1.5.0' {
     originalPhantomId?: Uuid;
     instanceId: Uuid;
   };
-  export type RawHostCallParameters = {
+  export type RawStartParameters = {
     timestamp: Datetime;
+    parentStartIndex?: OplogIndex;
     functionName: string;
-    request: OplogPayload;
-    response: OplogPayload;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
+    request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
+  };
+  export type RawEndParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    response?: OplogPayload;
+    forcedCommit: boolean;
+  };
+  export type RawCancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: OplogPayload;
+  };
+  export type RawCompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  export type RawCompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  /**
+   * Parameters for a host-stream-frame oplog entry, with the frame payload in raw
+   * (possibly externally stored) form.
+   */
+  export type RawHostStreamFrameParameters = {
+    timestamp: Datetime;
+    parentStartIndex: OplogIndex;
+    kind: HostStreamKind;
+    payload: OplogPayload;
+  };
+  /**
+   * A raw durable-stream producer record, stored inline or in external payload storage.
+   */
+  export type RawDurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: OplogPayload;
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
@@ -566,6 +755,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawAgentInvocationFinishedParameters = {
     timestamp: Datetime;
     result: OplogPayload;
+    methodName?: string;
     consumedFuel: bigint;
     componentRevision: bigint;
   };
@@ -593,7 +783,7 @@ declare module 'golem:api/oplog@1.5.0' {
   /**
    * Raw update description used in oplog entries
    */
-  export type RawUpdateDescription = 
+  export type RawUpdateDescription =
   /** Automatic update by replaying the oplog on the new version */
   {
     tag: 'automatic'
@@ -654,16 +844,29 @@ declare module 'golem:api/oplog@1.5.0' {
     sendingUpTo: OplogIndex;
     lastBatchStart: OplogIndex;
   };
-  export type OplogEntry = 
+  export type OplogEntry =
   /** The initial agent oplog entry */
   {
     tag: 'create'
     val: RawCreateParameters
   } |
-  /** The agent invoked a host function */
+  /** Marks the start of a durable host call (or scope such as a batched-write). */
   {
-    tag: 'host-call'
-    val: RawHostCallParameters
+    tag: 'start'
+    val: RawStartParameters
+  } |
+  /** Marks the successful completion of a durable host call (or scope) started by a matching `Start`. */
+  {
+    tag: 'end'
+    val: RawEndParameters
+  } |
+  /**
+   * Marks that a durable host call started by a matching `Start` was cancelled
+   * (e.g. dropped from a `select!`) before producing a final response.
+   */
+  {
+    tag: 'cancelled'
+    val: RawCancelledParameters
   } |
   /** The agent has been invoked */
   {
@@ -733,20 +936,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'end-atomic-region'
     val: EndAtomicRegionParameters
   } |
-  /**
-   * Begins a remote write operation. Only used when idempotence mode is off. In this case each
-   * remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-   * unfinished remote writes cannot be recovered.
-   */
-  {
-    tag: 'begin-remote-write'
-    val: Timestamp
-  } |
-  /** Marks the end of a remote write operation. Only used when idempotence mode is off. */
-  {
-    tag: 'end-remote-write'
-    val: EndRemoteWriteParameters
-  } |
   /** An invocation request arrived while the agent was busy */
   {
     tag: 'pending-agent-invocation'
@@ -771,11 +960,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'grow-memory'
     val: GrowMemoryParameters
-  } |
-  /** Updated filesystem usage by a signed delta */
-  {
-    tag: 'filesystem-storage-usage-update'
-    val: FilesystemStorageUsageUpdateParameters
   } |
   /** Created a resource instance */
   {
@@ -832,11 +1016,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'set-span-attribute'
     val: SetSpanAttributeParameters
   } |
-  /** Change the current persistence level */
-  {
-    tag: 'change-persistence-level'
-    val: ChangePersistenceLevelParameters
-  } |
   /** Begins a transaction operation */
   {
     tag: 'begin-remote-transaction'
@@ -881,17 +1060,105 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'remove-retry-policy'
     val: RemoveRetryPolicyParameters
+  } |
+  /** Durable queue entry for pending permission-card work */
+  {
+    tag: 'card-event-queued'
+    val: CardEventQueuedParameters
+  } |
+  /** Records successful installation of a permission card into the agent wallet */
+  {
+    tag: 'card-installed'
+    val: RawCardInstalledParameters
+  } |
+  /** Records failed installation of a permission card into the agent wallet */
+  {
+    tag: 'card-install-failed'
+    val: CardInstallFailedParameters
+  } |
+  /** Records that a permission card used by the agent has been revoked */
+  {
+    tag: 'card-revoked'
+    val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
+  } |
+  /**
+   * A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+   * attached to the durable host call identified by its start entry's index
+   */
+  {
+    tag: 'host-stream-frame'
+    val: RawHostStreamFrameParameters
+  } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: RawDurableStreamRecordParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was persisted, but its response was never delivered to the agent (the agent dropped
+   * the completion future after the `end` was recorded)
+   */
+  {
+    tag: 'completion-discarded'
+    val: RawCompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: RawCompletionDeliveredParameters
   };
-  export type PublicOplogEntry = 
+  export type PublicOplogEntry =
   /** The initial agent oplog entry */
   {
     tag: 'create'
     val: CreateParameters
   } |
-  /** The agent invoked a host function */
+  /** Marks the start of a durable host call (or scope such as a batched-write). */
   {
-    tag: 'host-call'
-    val: HostCallParameters
+    tag: 'start'
+    val: StartParameters
+  } |
+  /** Marks the successful completion of a durable host call (or scope) started by a matching `Start`. */
+  {
+    tag: 'end'
+    val: EndParameters
+  } |
+  /**
+   * Marks that a durable host call started by a matching `Start` was cancelled
+   * (e.g. dropped from a `select!`) before producing a final response.
+   */
+  {
+    tag: 'cancelled'
+    val: CancelledParameters
   } |
   /** The agent has been invoked */
   {
@@ -961,20 +1228,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'end-atomic-region'
     val: EndAtomicRegionParameters
   } |
-  /**
-   * Begins a remote write operation. Only used when idempotence mode is off. In this case each
-   * remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-   * unfinished remote writes cannot be recovered.
-   */
-  {
-    tag: 'begin-remote-write'
-    val: Timestamp
-  } |
-  /** Marks the end of a remote write operation. Only used when idempotence mode is off. */
-  {
-    tag: 'end-remote-write'
-    val: EndRemoteWriteParameters
-  } |
   /** An invocation request arrived while the agent was busy */
   {
     tag: 'pending-agent-invocation'
@@ -999,11 +1252,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'grow-memory'
     val: GrowMemoryParameters
-  } |
-  /** Updated filesystem usage by a signed delta */
-  {
-    tag: 'filesystem-storage-usage-update'
-    val: FilesystemStorageUsageUpdateParameters
   } |
   /** Created a resource instance */
   {
@@ -1060,11 +1308,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'set-span-attribute'
     val: SetSpanAttributeParameters
   } |
-  /** Change the current persistence level */
-  {
-    tag: 'change-persistence-level'
-    val: ChangePersistenceLevelParameters
-  } |
   /** Begins a transaction operation */
   {
     tag: 'begin-remote-transaction'
@@ -1109,6 +1352,89 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'remove-retry-policy'
     val: RemoveRetryPolicyParameters
+  } |
+  /** Durable queue entry for pending permission-card work */
+  {
+    tag: 'card-event-queued'
+    val: CardEventQueuedParameters
+  } |
+  /** Records successful installation of a permission card into the agent wallet */
+  {
+    tag: 'card-installed'
+    val: CardInstalledParameters
+  } |
+  /** Records failed installation of a permission card into the agent wallet */
+  {
+    tag: 'card-install-failed'
+    val: CardInstallFailedParameters
+  } |
+  /** Records that a permission card used by the agent has been revoked */
+  {
+    tag: 'card-revoked'
+    val: CardRevokedParameters
+  } |
+  /** Records that a permission card used by the agent has expired */
+  {
+    tag: 'card-expired'
+    val: CardExpiredParameters
+  } |
+  /**
+   * A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+   * attached to the durable host call identified by its start entry's index
+   */
+  {
+    tag: 'host-stream-frame'
+    val: HostStreamFrameParameters
+  } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: DurableStreamRecordParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was persisted, but its response was never delivered to the agent (the agent dropped
+   * the completion future after the `end` was recorded)
+   */
+  {
+    tag: 'completion-discarded'
+    val: CompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: CompletionDeliveredParameters
+  };
+  export type OplogReadError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'internal-error'
+    val: string
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

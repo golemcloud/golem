@@ -1,7 +1,7 @@
 /**
  * Canonical Effect Schema codecs for Golem's structured identifiers.
  *
- * These schemas mirror the existing `golem:core/types@1.5.0` and
+ * These schemas mirror the existing `golem:core/types@2.0.0` and
  * `golem:api/host@1.5.0` WIT records. They can be reused as agent method
  * parameters, method results, constructor parameters, and snapshot fields
  * without copying the nested record shapes into application code.
@@ -12,7 +12,7 @@ import { Schema } from "effect"
 import { Uint64 } from "./WitTypes.js"
 
 /**
- * Schema for `golem:core/types@1.5.0`.Uuid.
+ * Schema for `golem:core/types@2.0.0`.Uuid.
  *
  * @since 1.5.1
  * @category codecs
@@ -23,7 +23,7 @@ export const Uuid = Schema.Struct({
 })
 
 /**
- * Schema for `golem:core/types@1.5.0`.ComponentId.
+ * Schema for `golem:core/types@2.0.0`.ComponentId.
  *
  * @since 1.5.1
  * @category codecs
@@ -33,7 +33,7 @@ export const ComponentId = Schema.Struct({
 })
 
 /**
- * Schema for `golem:core/types@1.5.0`.AgentId.
+ * Schema for `golem:core/types@2.0.0`.AgentId.
  *
  * @since 1.5.1
  * @category codecs
@@ -44,7 +44,7 @@ export const AgentId = Schema.Struct({
 })
 
 /**
- * Schema for `golem:core/types@1.5.0`.AccountId.
+ * Schema for `golem:core/types@2.0.0`.AccountId.
  *
  * @since 1.5.1
  * @category codecs
@@ -64,7 +64,7 @@ export const EnvironmentId = Schema.Struct({
 })
 
 /**
- * Schema for `golem:core/types@1.5.0`.PromiseId.
+ * Schema for `golem:core/types@2.0.0`.PromiseId.
  *
  * @since 1.5.1
  * @category codecs

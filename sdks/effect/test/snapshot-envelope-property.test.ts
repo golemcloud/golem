@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 import * as fc from "effect/testing/FastCheck"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 import {
   decodeEnvelope,
   encodeBinaryEnvelope,

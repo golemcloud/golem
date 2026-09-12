@@ -1,90 +1,46 @@
-/**
- * Effect-idiomatic façade over `golem:agent/host@1.5.0.get-config-value`
- * plus the `WasmRpc` constructor's `agent-config` argument. Wire-compatible
- * with the official `golem-ts-sdk` `Config<T>` / `Secret<T>`, `golem-rust`
- * `#[derive(ConfigSchema)]`, Scala's `ConfigLoader.createLazyConfig`, and
- * MoonBit's `#derive.config`.
- *
- * @since 1.5.0
- */
-
 import { Context, Effect, Redacted, Schema, SchemaAST } from "effect"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
-import type * as CoreTypes from "golem:core/types@1.5.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 import { ConfigClient } from "./host/ConfigClient.js"
-import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
+import { SecretsClient } from "./host/SecretsClient.js"
+import { t, type SchemaGraph } from "./internal/schema-model/model.js"
+import { schemaGraphToWit } from "./internal/schema-model/wit.js"
+import { compile, UnsupportedSchemaError, type CompiledWitCodec } from "./WitCodec.js"
 
-type WitValue = CoreTypes.WitValue
-
-/**
- * A typed config-fetching failure surfaced through the {@link ConfigError}
- * Effect channel. Mirrors the rest of effect-golem's "errors as Effect
- * typed failures" convention (avoid throwing in Effect bodies).
- *
- * @since 1.5.0
- * @category errors
- */
 export class ConfigError {
   readonly _tag = "ConfigError"
   constructor(
     readonly path: ReadonlyArray<string>,
     readonly reason:
       | { _tag: "HostTrap"; cause: unknown }
-      | { _tag: "DecodeFailure"; cause: Schema.SchemaError }
-      | { _tag: "WireMismatch"; got: string; expected: string }
+      | { _tag: "DecodeFailure"; cause: unknown }
       | { _tag: "Unsupported"; reason: string },
   ) {}
 }
 
-/**
- * Allowed shapes for a single named entry in a config schema record:
- * - a `Schema.Top` (becomes a "local" leaf, accessed as
- *   `Effect<T, ConfigError>`),
- * - `Schema.Redacted(inner)` (becomes a "secret" leaf, accessed as
- *   `{ get: Effect<Redacted<T>, ConfigError> }`),
- * - or a literal `Schema.Struct(...)` (recursed into, prefixing the
- *   path with the field's name).
- *
- * @since 1.5.0
- * @category models
- */
 export type ConfigField = Schema.Top
-
-/**
- * Record of named config fields, supplied to {@link defineConfig}.
- *
- * @since 1.5.0
- * @category models
- */
 export type ConfigFields = Readonly<Record<string, ConfigField>>
-
-/**
- * Recursively map a {@link ConfigFields} record to its decoded
- * "config shape". See {@link ConfigError} for the failure channel.
- *
- * @since 1.5.0
- * @category models
- */
-export type ConfigShape<F extends ConfigFields> = {
-  readonly [K in keyof F]: F[K] extends Schema.Redacted<infer Inner>
-    ? { readonly get: Effect.Effect<Redacted.Redacted<Inner["Type"]>, ConfigError> }
-    : F[K] extends Schema.Struct<infer SF>
-      ? SF extends ConfigFields
-        ? ConfigShape<SF>
-        : never
-      : Effect.Effect<F[K]["Type"], ConfigError>
+type OptionalValue<A, Optional extends boolean> = Optional extends true ? A | undefined : A
+type ConfigShapeField<S extends Schema.Top, Optional extends boolean = false> =
+  S extends Schema.optional<infer Inner>
+    ? Inner extends Schema.Top
+      ? ConfigShapeField<Inner, true>
+      : never
+    : S extends Schema.Redacted<infer Inner>
+      ? {
+          readonly get: Effect.Effect<
+            Redacted.Redacted<OptionalValue<Inner["Type"], Optional>>,
+            ConfigError
+          >
+        }
+      : S extends Schema.Struct<infer SF>
+        ? SF extends ConfigFields
+          ? ConfigShape<SF, Optional>
+          : Effect.Effect<OptionalValue<S["Type"], Optional>, ConfigError>
+        : Effect.Effect<OptionalValue<S["Type"], Optional>, ConfigError>
+export type ConfigShape<F extends ConfigFields, Optional extends boolean = false> = {
+  readonly [K in keyof F]: ConfigShapeField<F[K], Optional>
 }
-
-/**
- * Recursive `Partial<>` over a {@link ConfigFields} record with all
- * `Schema.Redacted(...)` leaves stripped. Used by {@link AgentClient}
- * `GetOptions.overrides` so callers cannot accidentally provide a
- * secret leaf via RPC overrides at compile time (a runtime guard
- * enforces the same invariant).
- *
- * @since 1.5.0
- * @category models
- */
 export type NonSecretOverride<F extends ConfigFields> = {
   readonly [K in keyof F as F[K] extends Schema.Redacted<any>
     ? never
@@ -92,310 +48,203 @@ export type NonSecretOverride<F extends ConfigFields> = {
     ? SF extends ConfigFields
       ? NonSecretOverride<SF>
       : never
-    : F[K] extends Schema.Top
-      ? F[K]["Type"]
-      : never
+    : F[K]["Type"]
 }
 
-/** A single compiled leaf inside a config schema. */
-interface ConfigLeaf {
+export interface ConfigLeaf {
   readonly source: AgentCommon.AgentConfigSource
   readonly path: ReadonlyArray<string>
-  readonly witCodec: WitCodec<Schema.Top>
+  readonly codec: CompiledWitCodec<Schema.Top>
+  readonly declarationGraph: SchemaGraph
+  readonly required: boolean
 }
 
-/**
- * Compiled bundle held alongside the {@link defineConfig}-class metadata.
- *
- * @since 1.5.0
- * @category models
- */
 export interface CompiledConfig {
-  readonly declarations: ReadonlyArray<AgentCommon.AgentConfigDeclaration>
+  /** Graph roots to merge with constructor and method graphs, in declaration order. */
+  readonly graphs: ReadonlyArray<SchemaGraph>
   readonly leaves: ReadonlyArray<ConfigLeaf>
-  /** Lookup by `path.join("/")` for runtime override encoding/validation. */
   readonly leavesByPath: ReadonlyMap<string, ConfigLeaf>
-  /**
-   * Set of `path.join("/")` strings naming every nested `Schema.Struct`
-   * branch. Used by the runtime to materialise empty branches in the
-   * config shape and to validate `overrides` paths that descend through
-   * intermediate objects.
-   */
   readonly branches: ReadonlySet<string>
-  /**
-   * Build a fresh per-invocation config shape. The shape's leaves close
-   * over the {@link ConfigClient} service available at the time
-   * `buildShape` is run, so the returned shape's `Effect`s require no
-   * further service plumbing — call sites should run `buildShape`
-   * inside a context where `ConfigClient` is provided (the dispatcher
-   * runtime layer satisfies this).
-   */
-  readonly buildShape: () => Effect.Effect<unknown, never, ConfigClient>
+  /** Build declarations after graph merging by supplying indices in `graphs` order. */
+  readonly declarations: (
+    valueTypeIndices: ReadonlyArray<number>,
+  ) => ReadonlyArray<AgentCommon.AgentConfigDeclaration>
+  readonly buildShape: () => Effect.Effect<unknown, never, ConfigClient | SecretsClient>
 }
 
-/** Detect `Schema.Redacted(inner)` by walking down to the underlying AST. */
-const declarationConstructorTag = (a: SchemaAST.AST): string | undefined => {
-  if (a._tag !== "Declaration") return undefined
-  const tc = (a.annotations as { typeConstructor?: { _tag?: string } } | undefined)?.typeConstructor
-  return tc?._tag
+const redactedInner = (schema: Schema.Top): Schema.Top | undefined => {
+  const ast = schema.ast
+  if (ast._tag !== "Declaration") return undefined
+  const tag = (ast.annotations as { typeConstructor?: { _tag?: string } } | undefined)
+    ?.typeConstructor?._tag
+  return tag === "effect/Redacted" && ast.typeParameters[0] !== undefined
+    ? (Schema.make(ast.typeParameters[0]) as Schema.Top)
+    : undefined
 }
 
-const isRedactedSchema = (s: Schema.Top): s is Schema.Redacted<Schema.Top> =>
-  declarationConstructorTag(s.ast) === "effect/Redacted"
-
-const isPlainStructSchema = (s: Schema.Top): s is Schema.Struct<ConfigFields> => {
-  const a = s.ast
-  if (!SchemaAST.isObjects(a)) return false
-  if (a.indexSignatures.length !== 0) return false
-  // All property names must be strings (configs cannot be keyed by symbols).
-  return a.propertySignatures.every((ps) => typeof ps.name === "string")
+const objectAst = (
+  ast: SchemaAST.AST,
+): { ast: SchemaAST.Objects; optional: boolean } | undefined => {
+  if (SchemaAST.isObjects(ast) && ast.indexSignatures.length === 0) return { ast, optional: false }
+  if (ast._tag === "Union" && ast.context?.isOptional === true) {
+    const object = ast.types.find(SchemaAST.isObjects)
+    if (object !== undefined && object.indexSignatures.length === 0)
+      return { ast: object, optional: true }
+  }
+  return undefined
 }
 
-/**
- * Walk the user-supplied config record. Produces a flat list of leaves
- * (each with its WIT type, decoder, and path) plus the matching
- * AgentConfigDeclaration array used during agent registration.
- *
- * @since 1.5.0
- * @category metadata
- */
 export const compileConfig = (
   fields: ConfigFields,
   contextLabel: string,
 ): Effect.Effect<CompiledConfig, UnsupportedSchemaError> =>
   Effect.gen(function* () {
-    const leaves: Array<ConfigLeaf> = []
+    const leaves: ConfigLeaf[] = []
     const branches = new Set<string>()
-
     const visit = (
       schema: Schema.Top,
-      path: ReadonlyArray<string>,
+      path: string[],
+      underOptional: boolean,
+      required: boolean,
     ): Effect.Effect<void, UnsupportedSchemaError> =>
       Effect.gen(function* () {
-        // Secret leaf: Schema.Redacted(inner). The host stores the raw
-        // inner value; the wrapper is purely a guest-side hygiene
-        // concern. Use the inner schema for the WitType + decoder.
-        if (isRedactedSchema(schema)) {
-          // The Declaration AST stores its type parameters under
-          // `typeParameters` — `Schema.Redacted` puts the inner schema
-          // there. (The user-facing `.value` accessor on the schema
-          // object is not a guaranteed runtime path on every Effect
-          // version, so we walk the AST directly.)
-          const innerAst = (schema.ast as SchemaAST.Declaration).typeParameters[0]
-          if (innerAst === undefined) {
-            return yield* Effect.fail(
-              new UnsupportedSchemaError(
-                `${contextLabel}: ${path.join(".") || "<root>"}: Schema.Redacted without inner schema`,
-              ),
+        const inner = redactedInner(schema)
+        if (inner !== undefined) {
+          const valueSchema = underOptional ? Schema.UndefinedOr(inner) : inner
+          const codec = (yield* compile(valueSchema)) as CompiledWitCodec<Schema.Top>
+          const declarationGraph = { defs: codec.graph.defs, root: t.secret(codec.graph.root) }
+          leaves.push({ source: "secret", path, codec, declarationGraph, required: true })
+          return
+        }
+        const object = objectAst(schema.ast)
+        if (object !== undefined) {
+          branches.add(path.join("/"))
+          for (const property of object.ast.propertySignatures) {
+            if (typeof property.name !== "string") {
+              return yield* Effect.fail(
+                new UnsupportedSchemaError(`${contextLabel}: config object keys must be strings`),
+              )
+            }
+            const optional = property.type.context?.isOptional === true
+            yield* visit(
+              Schema.make(property.type),
+              [...path, property.name],
+              underOptional || object.optional,
+              !optional,
             )
           }
-          const inner = Schema.make<Schema.Top>(innerAst as Schema.Top["ast"])
-          const witCodec = (yield* toWitCodec(inner)) as WitCodec<Schema.Top>
-          leaves.push({ source: "secret", path, witCodec })
           return
         }
-
-        // Recurse into nested Structs: each property becomes its own
-        // leaf path prefixed by the parent field name. Record the
-        // branch so empty structs still appear in the materialised
-        // shape and `encodeOverrides` can validate descent.
-        if (isPlainStructSchema(schema)) {
-          if (path.length > 0) branches.add(path.join("/"))
-          const obj = schema.ast as SchemaAST.Objects
-          for (const ps of obj.propertySignatures) {
-            const name = ps.name as string
-            const childSchema = Schema.make(ps.type) as Schema.Top
-            yield* visit(childSchema, [...path, name])
-          }
-          return
+        let codec = (yield* compile(schema)) as CompiledWitCodec<Schema.Top>
+        if (underOptional && codec.graph.root.body.tag !== "option") {
+          const optionalSchema = Schema.UndefinedOr(schema)
+          codec = (yield* compile(optionalSchema)) as unknown as CompiledWitCodec<Schema.Top>
         }
-
-        // Local leaf: any other Schema.Top reachable via toWitCodec.
-        const witCodec = (yield* toWitCodec(schema)) as WitCodec<Schema.Top>
-        leaves.push({ source: "local", path, witCodec })
+        leaves.push({
+          source: "local",
+          path,
+          codec,
+          declarationGraph: codec.graph,
+          required,
+        })
       })
-
-    for (const [name, field] of Object.entries(fields)) {
-      yield* visit(field, [name])
-    }
-
-    // Defence-in-depth: under JS object semantics each property name is
-    // unique, so the schema walker cannot produce two leaves with the
-    // identical path — but a future refactor (e.g. flattening across
-    // multiple roots, or accepting a list-shaped fields argument) could
-    // accidentally violate that. Fail loudly at registration time
-    // rather than silently dropping a leaf in the `leavesByPath` map
-    // built below.
-    const seenPaths = new Set<string>()
-    for (const leaf of leaves) {
-      const key = leaf.path.join("/")
-      if (seenPaths.has(key)) {
-        return yield* Effect.fail(
-          new UnsupportedSchemaError(
-            `${contextLabel}: duplicate config path '${leaf.path.join(".")}'`,
-          ),
-        )
-      }
-      seenPaths.add(key)
-    }
-
-    const declarations: Array<AgentCommon.AgentConfigDeclaration> = leaves.map((leaf) => ({
-      source: leaf.source,
-      path: [...leaf.path],
-      valueType: leaf.witCodec.witType,
-    }))
-    const leavesByPath = new Map<string, ConfigLeaf>(
-      leaves.map((leaf) => [leaf.path.join("/"), leaf] as const),
-    )
-
-    /**
-     * Walk down `path` inside `root`, materialising plain object nodes
-     * as needed. Returns the deepest object so a caller can attach a
-     * leaf value at the final segment.
-     */
-    const ensureBranch = (
-      root: Record<string, unknown>,
-      path: ReadonlyArray<string>,
-    ): Record<string, unknown> => {
-      let cursor: Record<string, unknown> = root
+    for (const [name, schema] of Object.entries(fields)) yield* visit(schema, [name], false, true)
+    const leavesByPath = new Map(leaves.map((leaf) => [leaf.path.join("/"), leaf]))
+    const ensure = (root: Record<string, unknown>, path: ReadonlyArray<string>) => {
+      let cursor = root
       for (const segment of path) {
-        const next = cursor[segment]
-        if (next === undefined || typeof next !== "object" || next === null) {
-          const created: Record<string, unknown> = {}
-          cursor[segment] = created
-          cursor = created
-        } else {
-          cursor = next as Record<string, unknown>
-        }
+        cursor = (cursor[segment] ??= {}) as Record<string, unknown>
       }
       return cursor
     }
-
-    const buildShape: () => Effect.Effect<unknown, never, ConfigClient> = () =>
-      Effect.gen(function* () {
-        // Capture the active `ConfigClient` once per invocation so the
-        // per-leaf `fetch` Effects below close over a concrete impl
-        // (yielding R = never on every leaf, matching the user-facing
-        // {@link ConfigShape} type which advertises no host services).
-        const cfg = yield* ConfigClient
-
-        const root: Record<string, unknown> = {}
-
-        // Materialise empty struct branches first so a `database:
-        // Schema.Struct({})` field still appears as `cfg.database = {}`
-        // in the shape, even when no leaves live underneath it. Sort
-        // shortest-first so parents are created before children.
-        for (const branch of [...branches].sort(
-          (a, b) => a.split("/").length - b.split("/").length,
-        )) {
-          ensureBranch(root, branch.split("/"))
-        }
-
-        for (const leaf of leaves) {
-          const fetch: Effect.Effect<unknown, ConfigError> = Effect.gen(function* () {
-            const wv = yield* Effect.try({
-              try: () => cfg.getConfigValue(leaf.path, leaf.witCodec.witType),
-              catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
+    return {
+      graphs: leaves.map((leaf) => leaf.declarationGraph),
+      leaves,
+      leavesByPath,
+      branches,
+      declarations: (indices) => {
+        if (indices.length !== leaves.length)
+          throw new Error("config declaration index count mismatch")
+        return leaves.map((leaf, i) => ({
+          source: leaf.source,
+          path: [...leaf.path],
+          valueType: indices[i]!,
+        }))
+      },
+      buildShape: () =>
+        Effect.gen(function* () {
+          const config = yield* ConfigClient
+          const secrets = leaves.some((leaf) => leaf.source === "secret")
+            ? yield* SecretsClient
+            : undefined
+          const root: Record<string, unknown> = {}
+          for (const branch of branches) ensure(root, branch.split("/"))
+          for (const leaf of leaves) {
+            const read = Effect.gen(function* () {
+              const tree = yield* Effect.try({
+                try: () =>
+                  config.getConfigValue(leaf.path, schemaGraphToWit(leaf.declarationGraph)),
+                catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
+              })
+              if (leaf.source === "secret") {
+                const value = yield* Effect.mapError(
+                  leaf.codec.decode(tree),
+                  (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
+                )
+                return Redacted.make(value)
+              }
+              return yield* Effect.mapError(
+                leaf.codec.decode(tree),
+                (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
+              )
             })
-            const decoded = yield* Effect.mapError(
-              Schema.decodeEffect(
-                leaf.witCodec.codec as Schema.Codec<unknown, WitValue, never, never>,
-              )(wv) as Effect.Effect<unknown, Schema.SchemaError>,
-              (cause) =>
-                new ConfigError(leaf.path, {
-                  _tag: "DecodeFailure",
-                  cause,
-                }),
-            )
-            return decoded
-          })
-
-          const value =
-            leaf.source === "secret"
-              ? {
-                  get: Effect.map(fetch, (raw) => Redacted.make(raw, undefined)) as Effect.Effect<
-                    Redacted.Redacted<unknown>,
-                    ConfigError
-                  >,
-                }
-              : // Per-invocation memo: Effect.cached returns
-                // Effect<Effect<…>>; running it eagerly here yields the
-                // memoized inner effect bound to this shape. Two reads
-                // inside one invocation share a single host call; a
-                // fresh shape is built for each dispatch entry, so
-                // subsequent invocations see fresh values.
-                yield* Effect.cached(fetch)
-
-          // Place the value at `leaf.path` inside the recursive `root`.
-          const parent = ensureBranch(root, leaf.path.slice(0, -1))
-          parent[leaf.path[leaf.path.length - 1]!] = value
-        }
-
-        return root
-      })
-
-    return { declarations, leaves, leavesByPath, branches, buildShape }
+            const value =
+              leaf.source === "secret"
+                ? {
+                    get: Effect.gen(function* () {
+                      const tree = yield* Effect.try({
+                        try: () =>
+                          config.getConfigValue(leaf.path, schemaGraphToWit(leaf.declarationGraph)),
+                        catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
+                      })
+                      const sv = leaf.codec.codec // keep inner codec separate from capability graph
+                      const rawTree = tree as CoreTypes.SchemaValueTree
+                      const node = rawTree.valueNodes[rawTree.root]
+                      const raw = node?.tag === "secret-value" ? node.val : undefined
+                      if (raw === undefined) {
+                        return yield* Effect.fail(
+                          new ConfigError(leaf.path, {
+                            _tag: "Unsupported",
+                            reason: "expected secret handle",
+                          }),
+                        )
+                      }
+                      void sv
+                      const revealed = yield* Effect.try({
+                        try: () => secrets!.reveal(raw, leaf.codec.schemaGraph),
+                        catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
+                      })
+                      const decoded = yield* Effect.mapError(
+                        leaf.codec.decode(revealed),
+                        (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
+                      )
+                      return Redacted.make(decoded)
+                    }),
+                  }
+                : yield* Effect.cached(read)
+            ensure(root, leaf.path.slice(0, -1))[leaf.path.at(-1)!] = value
+          }
+          return root
+        }),
+    }
   })
 
-/**
- * Static metadata attached to a `defineConfig`-class so
- * {@link AgentMetadata} (and the runtime dispatcher) can discover the
- * compiled bundle, build per-invocation shapes, and type the
- * `overrides` channel of {@link AgentClient.GetOptions}.
- *
- * @since 1.5.0
- * @category models
- */
 export interface ConfigStatics<F extends ConfigFields> {
   readonly fields: F
-  /**
-   * Lazy single-shot compile cell. The first call materialises the
-   * compiled bundle (declarations + buildShape) and caches it; later
-   * calls reuse the same bundle.
-   */
   readonly __compile: () => Effect.Effect<CompiledConfig, UnsupportedSchemaError>
-  /**
-   * Phantom marker used by `defineAgent` to anchor inference of the
-   * agent's `CfgTag` generic. Carries the {@link ConfigShape} so that
-   * `yield* MyConfig` plays nicely with `Effect.provideService(MyConfig,
-   * shape)` (both reduce/refer to the same R-slot identity).
-   */
   readonly __cfgTag: ConfigShape<F>
-  /**
-   * Phantom marker used by `clientFor` to recover the original fields
-   * record (so it can derive `NonSecretOverride<F>` for `GetOptions.overrides`).
-   */
   readonly __fields: F
 }
-
-/**
- * Marker class type returned by {@link defineConfig}.
- *
- * **Details**
- *
- * Concrete users extend the returned class — `CounterConfig` is then
- * simultaneously a `Context.Service` tag (yieldable to its
- * {@link ConfigShape}) AND a constructor carrying the static `fields`
- * / `__compile` metadata.
- *
- * The Self parameter of the underlying `Context.Service` is left as
- * `any` so that user subclasses (the typical extension pattern shown
- * below) remain assignable; the runtime tag identity is the unique
- * `KeyClass` minted by `Context.Service<...>(name)` per call.
- *
- * **Example**
- *
- * ```ts
- * import { defineConfig, Schema } from "@golemcloud/effect-golem"
- *
- * class CounterConfig extends defineConfig("Counter.Config", {
- *   greeting: Schema.String,
- * }) {}
- * ```
- *
- * @since 1.5.0
- * @category models
- */
 export type ConfigClass<F extends ConfigFields> = Context.ServiceClass<
   ConfigShape<F>,
   string,
@@ -403,106 +252,44 @@ export type ConfigClass<F extends ConfigFields> = Context.ServiceClass<
 > &
   ConfigStatics<F>
 
-/**
- * Build a `Context.Service` class whose payload is the recursively
- * mapped {@link ConfigShape} of the supplied fields.
- *
- * **Details**
- *
- * The returned class also carries (as static members) the original
- * `fields` record and a memoized `__compile` accessor so
- * {@link defineAgent} / {@link clientFor} can produce the matching
- * AgentConfigDeclarations and runtime shapes without re-walking the
- * schema.
- *
- * @since 1.5.0
- * @category constructors
- */
 export const defineConfig = <const F extends ConfigFields>(
   name: string,
   fields: F,
 ): ConfigClass<F> => {
-  // Self = ConfigShape<F> so that `yield* MyConfig` adds exactly
-  // `ConfigShape<F>` to the effect's R slot, which matches the
-  // `CfgTag = ConfigShape<F>` inferred by `defineAgent`. The runtime
-  // tag identity is still the unique `KeyClass` minted below.
   class Base extends Context.Service<ConfigShape<F>, ConfigShape<F>>()(name) {
-    static readonly fields: F = fields
-    /**
-     * Phantom static — never read at runtime; exists only so
-     * `defineAgent` can infer its `CfgTag` generic from
-     * `def.config.__cfgTag`.
-     */
+    static readonly fields = fields
     static readonly __cfgTag: ConfigShape<F> = undefined as never
-    /**
-     * Phantom static — never read at runtime; exists only so
-     * `clientFor` can recover the fields record (and from it the
-     * `NonSecretOverride<F>` type) by inferring it from `def.config.__fields`.
-     */
-    static readonly __fields: F = fields
-
+    static readonly __fields = fields
     private static cached: CompiledConfig | null = null
-
-    static __compile(): Effect.Effect<CompiledConfig, UnsupportedSchemaError> {
-      return Effect.suspend(() => {
-        if (Base.cached !== null) return Effect.succeed(Base.cached)
-        return Effect.tap(compileConfig(fields, name), (cc) => {
-          Base.cached = cc
-          return Effect.void
-        })
-      })
+    static __compile() {
+      return Effect.suspend(() =>
+        Base.cached === null
+          ? Effect.tap(compileConfig(fields, name), (value) =>
+              Effect.sync(() => (Base.cached = value)),
+            )
+          : Effect.succeed(Base.cached),
+      )
     }
   }
   return Base as unknown as ConfigClass<F>
 }
 
-/**
- * Encode a non-secret override record into the `TypedAgentConfigValue[]`
- * shape consumed by the WasmRpc constructor.
- *
- * **Details**
- *
- * Walks the override object alongside the compiled leaf table so that:
- * - any leaf marked as `secret` is rejected with a clear error (defense
- *   in depth on top of the type-level {@link NonSecretOverride} guard);
- * - missing keys are skipped (overrides are always partial);
- * - extra keys are surfaced as an {@link UnsupportedSchemaError}.
- *
- * Returns the encoded array; failure paths surface as
- * {@link UnsupportedSchemaError} or {@link ConfigError}.
- *
- * @since 1.5.0
- * @category codecs
- */
 export const encodeOverrides = (
   compiled: CompiledConfig,
   overrides: Record<string, unknown>,
-): Effect.Effect<Array<AgentCommon.TypedAgentConfigValue>, ConfigError | Schema.SchemaError> =>
+): Effect.Effect<AgentCommon.TypedAgentConfigValue[], ConfigError | Schema.SchemaError> =>
   Effect.gen(function* () {
-    const out: Array<AgentCommon.TypedAgentConfigValue> = []
-
+    const out: AgentCommon.TypedAgentConfigValue[] = []
     const visit = (
       value: unknown,
-      path: Array<string>,
-    ): Effect.Effect<void, ConfigError | Schema.SchemaError> =>
+      path: string[],
+    ): Effect.Effect<void, ConfigError | Schema.SchemaError, unknown> =>
       Effect.gen(function* () {
         const key = path.join("/")
         const leaf = compiled.leavesByPath.get(key)
-
         if (leaf === undefined) {
-          // Only descend if `path` actually names a recorded struct
-          // branch in the compiled config — otherwise an arbitrary
-          // `{ unknownKey: {} }` would silently no-op. Empty objects
-          // at unknown paths are treated as errors too.
-          if (
-            compiled.branches.has(key) &&
-            typeof value === "object" &&
-            value !== null &&
-            !Array.isArray(value)
-          ) {
-            for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-              yield* visit(v, [...path, k])
-            }
+          if (compiled.branches.has(key) && typeof value === "object" && value !== null) {
+            for (const [name, child] of Object.entries(value)) yield* visit(child, [...path, name])
             return
           }
           return yield* Effect.fail(
@@ -512,7 +299,6 @@ export const encodeOverrides = (
             }),
           )
         }
-
         if (leaf.source === "secret") {
           return yield* Effect.fail(
             new ConfigError(path, {
@@ -521,19 +307,17 @@ export const encodeOverrides = (
             }),
           )
         }
-
-        const wv = yield* Schema.encodeEffect(
-          leaf.witCodec.codec as Schema.Codec<unknown, WitValue, never, never>,
-        )(value) as Effect.Effect<WitValue, Schema.SchemaError>
         out.push({
-          path: [...leaf.path],
-          value: { value: wv, typ: leaf.witCodec.witType },
+          path: [...path],
+          value: {
+            graph: leaf.codec.schemaGraph,
+            value: yield* leaf.codec.encode(value) as Effect.Effect<
+              CoreTypes.SchemaValueTree,
+              Schema.SchemaError
+            >,
+          },
         })
       })
-
-    for (const [name, value] of Object.entries(overrides)) {
-      yield* visit(value, [name])
-    }
-
+    for (const [name, value] of Object.entries(overrides)) yield* visit(value, [name])
     return out
-  })
+  }) as Effect.Effect<AgentCommon.TypedAgentConfigValue[], ConfigError | Schema.SchemaError>

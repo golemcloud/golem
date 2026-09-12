@@ -17,39 +17,41 @@ export class MySqlCounterConfig extends defineConfig("MySqlCounter.Config", {
   mysqlConnectionAddress: Schema.Redacted(Schema.String),
 }) {}
 
-export const MySqlCounter = defineAgent({
+const MySqlCounterSpec = defineAgent({
   name: "MySqlCounter",
   description: "A named integer counter backed by MySQL",
   mode: "durable",
   config: MySqlCounterConfig,
-  constructorParams: { name: Schema.String },
-  snapshot: Snapshot.define({
+  id: { name: Schema.String },
+  snapshotting: Snapshot.define({
     schema: Schema.Struct({}),
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     value: method({
-      params: {},
+      input: {},
       success: Schema.Number,
     }),
     add: method({
-      params: { by: Schema.Number },
+      input: { by: Schema.Number },
       success: Schema.Number,
     }),
     transferAdd: method({
-      params: { from: Schema.String, by: Schema.Number },
+      input: { from: Schema.String, by: Schema.Number },
       success: Schema.Number,
     }),
     failingAdd: method({
-      params: { by: Schema.Number },
+      input: { by: Schema.Number },
       success: Schema.String,
     }),
     streamAll: method({
-      params: {},
+      input: {},
       success: Schema.Array(Schema.Struct({ id: Schema.String, count: Schema.Number })),
     }),
   },
-}).implement(({ name }, snap) =>
+})
+
+const MySqlCounterFactory: Parameters<typeof MySqlCounterSpec.implement>[0] = ({ name }, snap) =>
   Effect.gen(function* () {
     yield* snap.init({})
     const cfg = yield* MySqlCounterConfig
@@ -105,5 +107,8 @@ export const MySqlCounter = defineAgent({
           ),
         ),
     }
-  }),
+  })
+
+export const MySqlCounter = MySqlCounterSpec.implement(MySqlCounterFactory, (_context, ...args) =>
+  MySqlCounterFactory(...args),
 )

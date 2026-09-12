@@ -1,5 +1,5 @@
-# Integration-test application that builds two TypeScript agent
-# components on top of the locally-built `effect-golem` library.
+# Integration-test application that builds TypeScript agent, tool, and
+# middleware components on top of the locally-built `effect-golem` library.
 #
 # Inspired by golemcloud/golem cli/golem-cli/templates/ts/common/golem.yaml
 # and common-on-demand/golem.yaml, with the build pipeline adapted to:
@@ -9,9 +9,14 @@
 #     in the parent `effect-golem` repo and exposed via the `effect-golem`
 #     npm dependency under node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm.
 
-manifestVersion: 1.5.0
+manifestVersion: 1.6.0
 
 app: effect-golem-integration-test
+
+localServer:
+  routerPort: 9882
+  customRequestPort: 9008
+  mcpPort: 9009
 
 environments:
   local:
@@ -81,11 +86,87 @@ componentTemplates:
             into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+  effect-golem-tool-middleware:
+    presets:
+      debug:
+        build:
+          - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          - command: npx --no rollup -- -c "{{ appRootDir }}/rollup.config.component.mjs"
+            dir: "{{ componentDir }}"
+            env:
+              GOLEM_APP_ROOT: "{{ appRootDir }}"
+              GOLEM_TEMP: "{{ golemTempDir }}"
+              GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/tool_middleware_guest.wasm"
+            module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+            into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      release:
+        build:
+          - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          - command: npx --no rollup -- -c "{{ appRootDir }}/rollup.config.component.mjs"
+            dir: "{{ componentDir }}"
+            env:
+              GOLEM_APP_ROOT: "{{ appRootDir }}"
+              GOLEM_TEMP: "{{ golemTempDir }}"
+              GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/tool_middleware_guest.wasm"
+            module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+            into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+            into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+  effect-golem-agent-tool-middleware:
+    presets:
+      debug:
+        build:
+          - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          - command: npx --no rollup -- -c "{{ appRootDir }}/rollup.config.component.mjs"
+            dir: "{{ componentDir }}"
+            env:
+              GOLEM_APP_ROOT: "{{ appRootDir }}"
+              GOLEM_TEMP: "{{ golemTempDir }}"
+              GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_tool_middleware_guest.wasm"
+            module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+            into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      release:
+        build:
+          - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          - command: npx --no rollup -- -c "{{ appRootDir }}/rollup.config.component.mjs"
+            dir: "{{ componentDir }}"
+            env:
+              GOLEM_APP_ROOT: "{{ appRootDir }}"
+              GOLEM_TEMP: "{{ golemTempDir }}"
+              GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_tool_middleware_guest.wasm"
+            module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+            into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+            into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
 
 components:
   effect-golem:agents:
     dir: components/agents
     templates: effect-golem-ts
+  effect-golem:tool-provider:
+    dir: components/tool-provider
+    templates: effect-golem-ts
+  effect-golem:tool-caller:
+    dir: components/tool-caller
+    templates: effect-golem-agent-tool-middleware
+    dependencies:
+      tools:
+        - effect-golem:tool-provider/effect-streaming
+
+tools:
+  effect-streaming: {}
 
 # Per-agent default config values for the local source. The secret
 # `connectionAddress` field is provisioned via `secretDefaults` below
@@ -116,6 +197,9 @@ agents:
     config: {}
   BlobAgent:
     config: {}
+  EffectToolCaller:
+    tools:
+      effect-streaming: {}
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use
@@ -148,11 +232,11 @@ secretDefaults:
 # HTTP API deployment — maps the Counter agent (which declares
 # `Http.mount(...)` + per-method `Http.get/post(...)` in
 # `components/agents/src/counter-agent.ts`) onto a local domain so the
-# routes are reachable via `http://effect-golem.localhost:9006/...`.
+# routes are reachable via `http://effect-golem.localhost:9008/...`.
 httpApi:
   deployments:
     local:
-      - domain: effect-golem.localhost:9006
+      - domain: effect-golem.localhost:9008
         agents:
           Counter: {}
           WebhookAgent: {}

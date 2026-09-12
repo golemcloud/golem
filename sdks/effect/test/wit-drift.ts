@@ -24,12 +24,13 @@
 
 import * as Datetime from "../src/Datetime.js"
 import * as Ids from "../src/Ids.js"
-import * as Quota from "../src/Quota.js"
-import * as Unstructured from "../src/Unstructured.js"
-import type * as ApiHost from "golem:api/host@1.5.0"
-import type * as CoreTypes from "golem:core/types@1.5.0"
-import type * as QuotaHost from "golem:quota/types@1.5.0"
-import type * as WallClock from "wasi:clocks/wall-clock@0.2.3"
+import * as AgentRuntime from "../src/index.js"
+import * as MiddlewareRuntime from "../src/Middleware.js"
+import type * as CoreTypes from "golem:core/types@2.0.0"
+
+void (AgentRuntime satisfies typeof import("agent-guest"))
+void (AgentRuntime satisfies typeof import("agent-tool-middleware-guest"))
+void (MiddlewareRuntime satisfies typeof import("tool-middleware-guest"))
 
 /**
  * Structural mutual-assignability check, recursively normalising
@@ -70,7 +71,7 @@ export type _Drift_IdSchemaCodecs = AssertAllTrue<{
   "Ids.ComponentId": StructEqual<typeof Ids.ComponentId.Type, CoreTypes.ComponentId>
   "Ids.AgentId": StructEqual<typeof Ids.AgentId.Type, CoreTypes.AgentId>
   "Ids.AccountId": StructEqual<typeof Ids.AccountId.Type, CoreTypes.AccountId>
-  "Ids.EnvironmentId": StructEqual<typeof Ids.EnvironmentId.Type, ApiHost.EnvironmentId>
+  "Ids.EnvironmentId": StructEqual<typeof Ids.EnvironmentId.Type, CoreTypes.EnvironmentId>
   "Ids.PromiseId": StructEqual<typeof Ids.PromiseId.Type, CoreTypes.PromiseId>
 }>
 
@@ -78,44 +79,5 @@ export type _Drift_IdSchemaCodecs = AssertAllTrue<{
  * Canonical datetime schema matching the WASI wall-clock record.
  */
 export type _Drift_DatetimeSchemaCodec = AssertAllTrue<{
-  "Datetime.Datetime": StructEqual<typeof Datetime.Datetime.Type, WallClock.Datetime>
-}>
-
-/**
- * Schema codecs in `src/quota.ts` that mirror WIT records bit-for-bit
- * for the RPC wire format (`Schema.Struct({...})` shape == WIT record
- * shape). Any field rename / type change / addition on the WIT side
- * trips the corresponding pin.
- */
-export type _Drift_QuotaSchemaCodecs = AssertAllTrue<{
-  // src/quota.ts:Uuid mirrors golem:core/types@1.5.0.Uuid.
-  "Quota.Uuid": StructEqual<typeof Quota.Uuid.Type, CoreTypes.Uuid>
-  // src/quota.ts:EnvironmentId mirrors golem:api/host@1.5.0.EnvironmentId
-  // (re-exported from QuotaHost).
-  "Quota.EnvironmentId": StructEqual<typeof Quota.EnvironmentId.Type, QuotaHost.EnvironmentId>
-  // Quota.Datetime remains an exact alias of the canonical datetime schema.
-  "Quota.Datetime": StructEqual<typeof Quota.Datetime.Type, QuotaHost.Datetime>
-  // src/quota.ts:QuotaTokenRecord mirrors golem:quota/types@1.5.0.QuotaTokenRecord.
-  "Quota.QuotaTokenRecord": StructEqual<
-    typeof Quota.QuotaTokenRecord.Type,
-    QuotaHost.QuotaTokenRecord
-  >
-}>
-
-/**
- * Schema codecs in `src/unstructured.ts` that mirror the
- * `golem:core/types@1.5.0` text / binary descriptors used by
- * `Unstructured*` element specs. The `_tag`-discriminated unions
- * (`TextReference` / `BinaryReference`) are intentionally not pinned
- * here — the SDK's discriminator is `_tag` while WIT's is `tag`, and
- * the wit-codec performs the rename at the wire boundary.
- */
-export type _Drift_UnstructuredSchemaCodecs = AssertAllTrue<{
-  "Unstructured.TextType": StructEqual<typeof Unstructured.TextType.Type, CoreTypes.TextType>
-  "Unstructured.BinaryType": StructEqual<typeof Unstructured.BinaryType.Type, CoreTypes.BinaryType>
-  "Unstructured.TextSource": StructEqual<typeof Unstructured.TextSource.Type, CoreTypes.TextSource>
-  "Unstructured.BinarySource": StructEqual<
-    typeof Unstructured.BinarySource.Type,
-    CoreTypes.BinarySource
-  >
+  "Datetime.Datetime": StructEqual<typeof Datetime.Datetime.Type, CoreTypes.Datetime>
 }>

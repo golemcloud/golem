@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
+import { vi } from "vitest"
 import { Effect, Fiber, Redacted, Ref, Schema } from "effect"
 import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
@@ -6,28 +7,51 @@ import { guest } from "../src/internal/guest.js"
 import { Principal, type PrincipalValue } from "../src/Principal.js"
 import { toWitCodec } from "../src/WitCodec.js"
 import { defineConfig } from "../src/Config.js"
+import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
+import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
 import {
   __resetGetConfigValueImpl as __resetGetConfigValueForTest,
   __setGetConfigValueImpl as __setGetConfigValueForTest,
 } from "./mocks/golem-agent-host.js"
+
+const secretHost = vi.hoisted(() => ({
+  reveal: (_handle: unknown, _expected: unknown): unknown => {
+    throw new Error("secret reveal not mocked")
+  },
+}))
+
+vi.mock("golem:secrets/reveal@0.1.0", () => ({
+  reveal: (secret: unknown, expected: unknown) => secretHost.reveal(secret, expected),
+  id: () => ({}),
+  metadata: () => ({}),
+}))
 
 const Person = Schema.Struct({
   name: Schema.String,
   age: Schema.Number,
 })
 
+const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
+const read = <A>(value: NonNullable<Awaited<ReturnType<typeof guest.invoke>>>): A => {
+  const decoded = schemaValueFromWit(value)
+  if (decoded.tag !== "string" && decoded.tag !== "f64") {
+    throw new Error(`Expected a scalar value, got ${decoded.tag}`)
+  }
+  return decoded.value as A
+}
+
 const Greeter = defineAgent({
   name: "Greeter",
   description: "An agent that greets people",
-  constructorParams: {},
+  id: {},
   methods: {
     greet: method({
-      params: { person: Person, greeting: Schema.String },
+      input: { person: Person, greeting: Schema.String },
       success: Schema.String,
       description: "Greet the given person with the given greeting",
       promptHint: "Use to produce a friendly salutation for a Person.",
     }),
-    ping: method({ params: {}, success: Schema.Void }),
+    ping: method({ input: {}, success: Schema.Void }),
   },
 }).implement(() =>
   Effect.succeed({
@@ -40,10 +64,10 @@ const Greeter = defineAgent({
  *  side-effect during initialization. */
 const Counter = defineAgent({
   name: "Counter",
-  constructorParams: { initial: Schema.Number },
+  id: { initial: Schema.Number },
   methods: {
-    getValue: method({ params: {}, success: Schema.Number }),
-    add: method({ params: { by: Schema.Number }, success: Schema.Void }),
+    getValue: method({ input: {}, success: Schema.Number }),
+    add: method({ input: { by: Schema.Number }, success: Schema.Void }),
   },
 }).implement(({ initial }) =>
   Effect.gen(function* () {
@@ -76,11 +100,11 @@ const principalTag = (p: PrincipalValue): string => (p.tag === "oidc" ? `oidc:${
  */
 const PrincipalAgent = defineAgent({
   name: "PrincipalAgent",
-  constructorParams: {},
+  id: {},
   methods: {
-    owner: method({ params: {}, success: Schema.String }),
-    caller: method({ params: {}, success: Schema.String }),
-    callerForked: method({ params: {}, success: Schema.String }),
+    owner: method({ input: {}, success: Schema.String }),
+    caller: method({ input: {}, success: Schema.String }),
+    callerForked: method({ input: {}, success: Schema.String }),
   },
 }).implement(() =>
   Effect.gen(function* () {
@@ -114,8 +138,8 @@ const PrincipalAgent = defineAgent({
  * constructor and a method handler. The mocked host responds via the
  * `__setGetConfigValueForTest` shim; the test verifies that:
  *
- * - regular fields are memoized for the duration of one invocation,
- * - secret fields hit the host every read,
+ * - regular fields are read through the current invocation's config service,
+ * - secret fields are revealed on every read,
  * - mock changes between invocations are observed (no per-instance
  *   stickiness).
  */
@@ -127,11 +151,11 @@ class TestConfig extends defineConfig("ConfigAgent.Cfg", {
 const ConfigAgent = defineAgent({
   name: "ConfigAgent",
   config: TestConfig,
-  constructorParams: {},
+  id: {},
   methods: {
-    initialGreeting: method({ params: {}, success: Schema.String }),
-    currentGreeting: method({ params: {}, success: Schema.String }),
-    keyTail: method({ params: {}, success: Schema.String }),
+    initialGreeting: method({ input: {}, success: Schema.String }),
+    currentGreeting: method({ input: {}, success: Schema.String }),
+    keyTail: method({ input: {}, success: Schema.String }),
   },
 }).implement(() =>
   Effect.gen(function* () {
@@ -144,8 +168,8 @@ const ConfigAgent = defineAgent({
       currentGreeting: () =>
         Effect.gen(function* () {
           const c = yield* TestConfig
-          // Reading the same field twice inside one invocation must
-          // hit the host only once (memoization within one shape).
+          // Reading the same field twice inside one invocation must hit the
+          // host only once (memoization within one shape).
           const a = yield* c.greeting
           const b = yield* c.greeting
           return `${a}/${b}`
@@ -153,9 +177,7 @@ const ConfigAgent = defineAgent({
       keyTail: () =>
         Effect.gen(function* () {
           const c = yield* TestConfig
-          const r = yield* c.apiKey.get
-          const raw = Redacted.value(r)
-          return raw.slice(-4)
+          return Redacted.value(yield* c.apiKey.get).slice(-4)
         }),
     }
   }),
@@ -175,7 +197,7 @@ describe("agent-guest exports", () => {
 
   it.effect("discoverAgentTypes returns the registered agents", () =>
     Effect.gen(function* () {
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       expect(types.map((t) => t.typeName).sort()).toEqual([
         "ConfigAgent",
         "Counter",
@@ -189,7 +211,7 @@ describe("agent-guest exports", () => {
 
   it.effect("propagates method-level description and promptHint to AgentMethod", () =>
     Effect.gen(function* () {
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const greeter = types.find((t) => t.typeName === "Greeter")!
       const greet = greeter.methods.find((m) => m.name === "greet")!
       expect(greet.description).toBe("Greet the given person with the given greeting")
@@ -203,7 +225,7 @@ describe("agent-guest exports", () => {
 
   it.effect("registers config declarations on the AgentType", () =>
     Effect.gen(function* () {
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const cfgAgent = types.find((t) => t.typeName === "ConfigAgent")!
       const paths = cfgAgent.config.map((d) => ({ source: d.source, path: d.path }))
       expect(paths).toEqual([
@@ -215,11 +237,9 @@ describe("agent-guest exports", () => {
 
   it.effect("initialize + invoke + getDefinition round-trip a greet call", () =>
     Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        guest.initialize("Greeter", { tag: "tuple", val: [] }, anonymousPrincipal),
-      )
+      yield* Effect.promise(() => guest.initialize("Greeter", wire(), anonymousPrincipal))
 
-      const def = yield* Effect.promise(() => guest.getDefinition())
+      const def = yield* Effect.sync(() => guest.getDefinition())
       expect(def.typeName).toBe("Greeter")
 
       const personCodec = yield* toWitCodec(Person)
@@ -228,36 +248,18 @@ describe("agent-guest exports", () => {
       const greetingWv = yield* Schema.encodeEffect(stringCodec.codec)("Hello")
 
       const out = yield* Effect.promise(() =>
-        guest.invoke(
-          "greet",
-          {
-            tag: "tuple",
-            val: [
-              { tag: "component-model", val: personWv },
-              { tag: "component-model", val: greetingWv },
-            ],
-          },
-          anonymousPrincipal,
-        ),
+        guest.invoke("greet", wire(personWv, greetingWv), anonymousPrincipal),
       )
-
-      if (out.tag !== "tuple" || out.val.length !== 1) throw new Error()
-      const elem = out.val[0]!
-      if (elem.tag !== "component-model") throw new Error()
-      const decoded = yield* Schema.decodeEffect(stringCodec.codec)(elem.val)
+      const decoded = read<string>(out!)
       expect(decoded).toBe("Hello, Ada (36)!")
     }),
   )
 
   it.effect("invoke returns an empty tuple for unit-returning methods", () =>
     Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        guest.initialize("Greeter", { tag: "tuple", val: [] }, anonymousPrincipal),
-      )
-      const out = yield* Effect.promise(() =>
-        guest.invoke("ping", { tag: "tuple", val: [] }, anonymousPrincipal),
-      )
-      expect(out).toEqual({ tag: "tuple", val: [] })
+      yield* Effect.promise(() => guest.initialize("Greeter", wire(), anonymousPrincipal))
+      const out = yield* Effect.promise(() => guest.invoke("ping", wire(), anonymousPrincipal))
+      expect(out).toBeUndefined()
     }),
   )
 
@@ -267,38 +269,23 @@ describe("agent-guest exports", () => {
 
       // initialize Counter with initial = 10
       const initialWv = yield* Schema.encodeEffect(numberCodec.codec)(10)
-      yield* Effect.promise(() =>
-        guest.initialize(
-          "Counter",
-          { tag: "tuple", val: [{ tag: "component-model", val: initialWv }] },
-          anonymousPrincipal,
-        ),
-      )
+      yield* Effect.promise(() => guest.initialize("Counter", wire(initialWv), anonymousPrincipal))
 
       // add 5 twice
       const fiveWv = yield* Schema.encodeEffect(numberCodec.codec)(5)
       for (let i = 0; i < 2; i++) {
-        yield* Effect.promise(() =>
-          guest.invoke(
-            "add",
-            { tag: "tuple", val: [{ tag: "component-model", val: fiveWv }] },
-            anonymousPrincipal,
-          ),
-        )
+        yield* Effect.promise(() => guest.invoke("add", wire(fiveWv), anonymousPrincipal))
       }
 
-      const out = yield* Effect.promise(() =>
-        guest.invoke("getValue", { tag: "tuple", val: [] }, anonymousPrincipal),
-      )
-      if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
-      const value = yield* Schema.decodeEffect(numberCodec.codec)(out.val[0].val)
+      const out = yield* Effect.promise(() => guest.invoke("getValue", wire(), anonymousPrincipal))
+      const value = read<number>(out!)
       expect(value).toBe(20)
     }),
   )
 
   it.effect("registers the Counter agent type with the expected DataSchemas", () =>
     Effect.gen(function* () {
-      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const counter = types.find((t) => t.typeName === "Counter")!
 
       expect(counter).toMatchObject({
@@ -310,51 +297,41 @@ describe("agent-guest exports", () => {
         config: [],
       })
 
-      // Constructor: tuple<("initial", f64)>
-      expect(counter.constructor.inputSchema.tag).toBe("tuple")
-      if (counter.constructor.inputSchema.tag !== "tuple") throw new Error()
+      expect(counter.constructor.inputSchema.tag).toBe("parameters")
+      if (counter.constructor.inputSchema.tag !== "parameters") throw new Error()
       expect(counter.constructor.inputSchema.val.length).toBe(1)
-      const [ctorName, ctorElement] = counter.constructor.inputSchema.val[0]!
-      expect(ctorName).toBe("initial")
-      expect(ctorElement.tag).toBe("component-model")
-      if (ctorElement.tag !== "component-model") throw new Error()
-      expect(ctorElement.val.nodes[0]!.type.tag).toBe("prim-f64-type")
+      const ctorField = counter.constructor.inputSchema.val[0]!
+      expect(ctorField.name).toBe("initial")
+      expect(counter.schema.typeNodes[ctorField.schema]!.body.tag).toBe("f64-type")
 
       // Methods: getValue() -> f64; add(by: f64) -> ()
       expect(counter.methods.map((m) => m.name).sort()).toEqual(["add", "getValue"])
 
       const getValue = counter.methods.find((m) => m.name === "getValue")!
-      if (getValue.inputSchema.tag !== "tuple") throw new Error()
+      if (getValue.inputSchema.tag !== "parameters") throw new Error()
       expect(getValue.inputSchema.val).toEqual([])
-      if (getValue.outputSchema.tag !== "tuple") throw new Error()
-      expect(getValue.outputSchema.val.length).toBe(1)
-      const getValueOut = getValue.outputSchema.val[0]![1]
-      if (getValueOut.tag !== "component-model") throw new Error()
-      expect(getValueOut.val.nodes[0]!.type.tag).toBe("prim-f64-type")
+      if (getValue.outputSchema.tag !== "single") throw new Error()
+      expect(counter.schema.typeNodes[getValue.outputSchema.val]!.body.tag).toBe("f64-type")
 
       const add = counter.methods.find((m) => m.name === "add")!
-      if (add.inputSchema.tag !== "tuple") throw new Error()
-      expect(add.inputSchema.val.map(([k]) => k)).toEqual(["by"])
-      const byElem = add.inputSchema.val[0]![1]
-      if (byElem.tag !== "component-model") throw new Error()
-      expect(byElem.val.nodes[0]!.type.tag).toBe("prim-f64-type")
-      if (add.outputSchema.tag !== "tuple") throw new Error()
-      // Unit return → empty output tuple.
-      expect(add.outputSchema.val).toEqual([])
+      if (add.inputSchema.tag !== "parameters") throw new Error()
+      expect(add.inputSchema.val.map((field) => field.name)).toEqual(["by"])
+      expect(counter.schema.typeNodes[add.inputSchema.val[0]!.schema]!.body.tag).toBe("f64-type")
+      expect(add.outputSchema).toEqual({ tag: "unit" })
     }),
   )
 
   it("invoke fails before initialize", async () => {
-    await expect(
-      guest.invoke("greet", { tag: "tuple", val: [] }, anonymousPrincipal),
-    ).rejects.toThrow(/not initialized/)
+    await expect(guest.invoke("greet", wire(), anonymousPrincipal)).rejects.toThrow(
+      /not initialized/,
+    )
   })
 
   it("initialize twice fails", async () => {
-    await guest.initialize("Greeter", { tag: "tuple", val: [] }, anonymousPrincipal)
-    await expect(
-      guest.initialize("Greeter", { tag: "tuple", val: [] }, anonymousPrincipal),
-    ).rejects.toThrow(/already initialized/)
+    await guest.initialize("Greeter", wire(), anonymousPrincipal)
+    await expect(guest.initialize("Greeter", wire(), anonymousPrincipal)).rejects.toThrow(
+      /already initialized/,
+    )
   })
 
   it("defining two agents with the same name surfaces from discoverAgentTypes", async () => {
@@ -366,8 +343,8 @@ describe("agent-guest exports", () => {
     // diagnostic instead of as a WASM instantiation crash).
     defineAgent({
       name: "Greeter",
-      constructorParams: {},
-      methods: { ping: method({ params: {}, success: Schema.Void }) },
+      id: {},
+      methods: { ping: method({ input: {}, success: Schema.Void }) },
     }).implement(() => Effect.succeed({ ping: () => Effect.void }))
     let caught: unknown
     try {
@@ -385,79 +362,57 @@ describe("agent-guest exports", () => {
 
   it.effect("Principal service resolves to the initialize-time principal in impl", () =>
     Effect.gen(function* () {
-      const stringCodec = yield* toWitCodec(Schema.String)
       yield* Effect.promise(() =>
-        guest.initialize("PrincipalAgent", { tag: "tuple", val: [] }, oidcPrincipal("alice")),
+        guest.initialize("PrincipalAgent", wire(), oidcPrincipal("alice")),
       )
       const out = yield* Effect.promise(() =>
         guest.invoke(
           "owner",
-          { tag: "tuple", val: [] },
+          wire(),
           // The 'caller' principal here is irrelevant for `owner`, which
           // captured the initialize-time principal in its closure.
           anonymousPrincipal,
         ),
       )
-      if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") {
-        throw new Error()
-      }
-      const decoded = yield* Schema.decodeEffect(stringCodec.codec)(out.val[0].val)
+      const decoded = read<string>(out!)
       expect(decoded).toBe("oidc:alice")
     }),
   )
 
   it.effect("Principal service resolves to the per-call principal in method handlers", () =>
     Effect.gen(function* () {
-      const stringCodec = yield* toWitCodec(Schema.String)
       yield* Effect.promise(() =>
-        guest.initialize("PrincipalAgent", { tag: "tuple", val: [] }, oidcPrincipal("alice")),
+        guest.initialize("PrincipalAgent", wire(), oidcPrincipal("alice")),
       )
 
       // First call as Bob: should see Bob, not Alice.
-      const out1 = yield* Effect.promise(() =>
-        guest.invoke("caller", { tag: "tuple", val: [] }, oidcPrincipal("bob")),
-      )
-      if (out1.tag !== "tuple" || out1.val[0]?.tag !== "component-model") {
-        throw new Error()
-      }
-      const decoded1 = yield* Schema.decodeEffect(stringCodec.codec)(out1.val[0].val)
+      const out1 = yield* Effect.promise(() => guest.invoke("caller", wire(), oidcPrincipal("bob")))
+      const decoded1 = read<string>(out1!)
       expect(decoded1).toBe("oidc:bob")
 
       // Second call as anonymous, on the SAME initialized agent: per-call
       // principal must update, owner closure must not.
-      const out2 = yield* Effect.promise(() =>
-        guest.invoke("caller", { tag: "tuple", val: [] }, anonymousPrincipal),
-      )
-      if (out2.tag !== "tuple" || out2.val[0]?.tag !== "component-model") {
-        throw new Error()
-      }
-      const decoded2 = yield* Schema.decodeEffect(stringCodec.codec)(out2.val[0].val)
+      const out2 = yield* Effect.promise(() => guest.invoke("caller", wire(), anonymousPrincipal))
+      const decoded2 = read<string>(out2!)
       expect(decoded2).toBe("anonymous")
 
       const ownerOut = yield* Effect.promise(() =>
-        guest.invoke("owner", { tag: "tuple", val: [] }, anonymousPrincipal),
+        guest.invoke("owner", wire(), anonymousPrincipal),
       )
-      if (ownerOut.tag !== "tuple" || ownerOut.val[0]?.tag !== "component-model") {
-        throw new Error()
-      }
-      const ownerDecoded = yield* Schema.decodeEffect(stringCodec.codec)(ownerOut.val[0].val)
+      const ownerDecoded = read<string>(ownerOut!)
       expect(ownerDecoded).toBe("oidc:alice")
     }),
   )
 
   it.effect("Principal service propagates to child fibers forked inside a handler", () =>
     Effect.gen(function* () {
-      const stringCodec = yield* toWitCodec(Schema.String)
       yield* Effect.promise(() =>
-        guest.initialize("PrincipalAgent", { tag: "tuple", val: [] }, oidcPrincipal("alice")),
+        guest.initialize("PrincipalAgent", wire(), oidcPrincipal("alice")),
       )
       const out = yield* Effect.promise(() =>
-        guest.invoke("callerForked", { tag: "tuple", val: [] }, oidcPrincipal("carol")),
+        guest.invoke("callerForked", wire(), oidcPrincipal("carol")),
       )
-      if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") {
-        throw new Error()
-      }
-      const decoded = yield* Schema.decodeEffect(stringCodec.codec)(out.val[0].val)
+      const decoded = read<string>(out!)
       expect(decoded).toBe("oidc:carol")
     }),
   )
@@ -478,17 +433,22 @@ describe("agent-guest exports", () => {
 
         let greeting = "hello"
         let apiKey = "sk-abcd1234"
+        let revealCount = 0
         const callLog: Array<string> = []
         __setGetConfigValueForTest((path: Array<string>) => {
           callLog.push(path.join("/"))
-          if (path.join("/") === "greeting") return wv(greeting) as never
-          if (path.join("/") === "apiKey") return wv(apiKey) as never
+          if (path.join("/") === "greeting") return schemaValueToWit(wv(greeting) as SchemaValue)
+          if (path.join("/") === "apiKey") {
+            return { root: 0, valueNodes: [{ tag: "secret-value", val: {} }] } as never
+          }
           throw new Error(`unknown config path: ${path.join("/")}`)
         })
+        secretHost.reveal = () => {
+          revealCount++
+          return schemaValueToWit(wv(apiKey) as SchemaValue)
+        }
 
-        yield* Effect.promise(() =>
-          guest.initialize("ConfigAgent", { tag: "tuple", val: [] }, anonymousPrincipal),
-        )
+        yield* Effect.promise(() => guest.initialize("ConfigAgent", wire(), anonymousPrincipal))
 
         // initialize ran impl which captured greeting at init-time = "hello".
         // The mock was queried once for "greeting".
@@ -497,12 +457,9 @@ describe("agent-guest exports", () => {
         // First invoke: greeting still "hello", read twice → 1 host call.
         callLog.length = 0
         const out1 = yield* Effect.promise(() =>
-          guest.invoke("currentGreeting", { tag: "tuple", val: [] }, anonymousPrincipal),
+          guest.invoke("currentGreeting", wire(), anonymousPrincipal),
         )
-        if (out1.tag !== "tuple" || out1.val[0]?.tag !== "component-model") {
-          throw new Error()
-        }
-        const decoded1 = yield* Schema.decodeEffect(stringCodec.codec)(out1.val[0].val)
+        const decoded1 = read<string>(out1!)
         expect(decoded1).toBe("hello/hello")
         expect(callLog.filter((p) => p === "greeting").length).toBe(1)
 
@@ -511,36 +468,26 @@ describe("agent-guest exports", () => {
         callLog.length = 0
         greeting = "hola"
         const out2 = yield* Effect.promise(() =>
-          guest.invoke("currentGreeting", { tag: "tuple", val: [] }, anonymousPrincipal),
+          guest.invoke("currentGreeting", wire(), anonymousPrincipal),
         )
-        if (out2.tag !== "tuple" || out2.val[0]?.tag !== "component-model") {
-          throw new Error()
-        }
-        const decoded2 = yield* Schema.decodeEffect(stringCodec.codec)(out2.val[0].val)
+        const decoded2 = read<string>(out2!)
         expect(decoded2).toBe("hola/hola")
 
         // initialGreeting captured at init time: still "hello", not "hola".
         const out3 = yield* Effect.promise(() =>
-          guest.invoke("initialGreeting", { tag: "tuple", val: [] }, anonymousPrincipal),
+          guest.invoke("initialGreeting", wire(), anonymousPrincipal),
         )
-        if (out3.tag !== "tuple" || out3.val[0]?.tag !== "component-model") {
-          throw new Error()
-        }
-        const decoded3 = yield* Schema.decodeEffect(stringCodec.codec)(out3.val[0].val)
+        const decoded3 = read<string>(out3!)
         expect(decoded3).toBe("hello")
 
-        // Secret read (.get) goes to the host every call — single read → 1 hit.
-        callLog.length = 0
+        // Secret reads resolve the current capability value and are never cached.
         apiKey = "sk-newer-key-xyz789"
         const out4 = yield* Effect.promise(() =>
-          guest.invoke("keyTail", { tag: "tuple", val: [] }, anonymousPrincipal),
+          guest.invoke("keyTail", wire(), anonymousPrincipal),
         )
-        if (out4.tag !== "tuple" || out4.val[0]?.tag !== "component-model") {
-          throw new Error()
-        }
-        const decoded4 = yield* Schema.decodeEffect(stringCodec.codec)(out4.val[0].val)
-        expect(decoded4).toBe("z789")
-        expect(callLog.filter((p) => p === "apiKey").length).toBe(1)
+        expect(read<string>(out4!)).toBe("z789")
+        expect(callLog.filter((p) => p === "apiKey")).toHaveLength(1)
+        expect(revealCount).toBe(1)
       }),
   )
 })

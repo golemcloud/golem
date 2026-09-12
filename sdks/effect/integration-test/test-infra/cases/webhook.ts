@@ -25,8 +25,8 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   // Allocate the URL. The host-built URL has shape
   //   https://<domain>/<webhooksPrefix>/<webhookSuffix>/<base64url(AgentWebhookId)>
   // — for the integration deployment that's
-  //   http://effect-golem.localhost:9006/webhooks/inbox/<…>
-  // The CLI also prints a "Selected app: ... (http://localhost:9881/)"
+  //   http://effect-golem.localhost:9008/webhooks/inbox/<…>
+  // The CLI also prints a "Selected app: ... (http://localhost:9882/)"
   // header, so we narrow the URL match to the webhook prefix +
   // suffix path.
   const primed = yield* liftCliError(cli.invoke(r, "prime"))

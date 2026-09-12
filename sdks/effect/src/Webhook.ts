@@ -1,5 +1,5 @@
 /**
- * Webhook integration on top of `golem:agent/host@1.5.0.create-webhook`.
+ * Webhook integration on top of `golem:agent/host@2.0.0.create-webhook`.
  *
  * The agent calls {@link create} to allocate a host promise and
  * mint a public POST URL bound to it (paired allocation, not a
@@ -177,12 +177,12 @@ export class WebhookDecodeError {
 /**
  * A live webhook handle. Carries the public POST URL, the underlying
  * promise id (so it can be persisted or sent across an RPC boundary),
- * and the `await` / `poll` Effects.
+ * and its `await` Effect.
  *
  * Effect-equivalent of the `WebhookHandler` returned by the official
  * SDKs' `createWebhook()` / `create_webhook()` factories — except
- * `await` and `poll` are Effects rather than `PromiseLike` /
- * `IntoFuture` shims, so durability, oplog replay, and Effect-style
+ * `await` is an Effect rather than a `PromiseLike` / `IntoFuture`
+ * shim, so durability, oplog replay, and Effect-style
  * interruption all work for free.
  *
  * @since 1.5.0
@@ -195,8 +195,6 @@ export interface WebhookHandle {
   readonly promiseId: PromiseId
   /** Suspend until the URL is POSTed to. Resolves to the body. */
   readonly await: Effect.Effect<WebhookPayload, AgentsHostError>
-  /** Non-blocking poll — `undefined` until the URL has been POSTed to. */
-  readonly poll: Effect.Effect<WebhookPayload | undefined, AgentsHostError>
 }
 
 // ---------------------------------------------------------------------------
@@ -244,15 +242,11 @@ export const create: Effect.Effect<
     catch: (e) => new WebhookHostError(e),
   })
   // Pre-bind the PromiseClient resolved here so the returned
-  // `await`/`poll` Effects don't propagate `PromiseClient` into the
+  // `await` Effect doesn't propagate `PromiseClient` into the
   // user-visible `WebhookHandle` shape.
   const await_ = Promises.await(promiseId).pipe(
     Effect.map((bytes) => new WebhookPayload(bytes)),
     Effect.provideService(PromiseClient, pc),
   )
-  const poll_ = Promises.poll(promiseId).pipe(
-    Effect.map((bytes) => (bytes === undefined ? undefined : new WebhookPayload(bytes))),
-    Effect.provideService(PromiseClient, pc),
-  )
-  return { url, promiseId, await: await_, poll: poll_ }
+  return { url, promiseId, await: await_ }
 })

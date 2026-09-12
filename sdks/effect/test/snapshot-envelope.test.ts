@@ -84,16 +84,14 @@ describe("snapshot-envelope binary v2 format", () => {
     expect(principalLen).toBe(expected)
   })
 
-  it("decodes a legacy v1 binary envelope using the fallback principal", () => {
-    // v1 layout: byte 0 = 1, then raw user bytes.
+  it("rejects the removed v1 binary envelope", () => {
     const userBytes = new Uint8Array([7, 8, 9])
     const payload = new Uint8Array(1 + userBytes.length)
     payload[0] = 1
     payload.set(userBytes, 1)
-    const decoded = decodeEnvelope({ payload, mimeType: "application/octet-stream" }, oidcAlice)
-    if (decoded.kind !== "binary") throw new Error()
-    expect(decoded.principal).toEqual(oidcAlice)
-    expect(Array.from(decoded.userPayload)).toEqual([7, 8, 9])
+    expect(() =>
+      decodeEnvelope({ payload, mimeType: "application/octet-stream" }, oidcAlice),
+    ).toThrow(SnapshotEnvelopeError)
   })
 
   it("rejects truncated v2 headers", () => {

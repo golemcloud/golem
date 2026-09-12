@@ -1,6 +1,6 @@
 /**
  * Canonical schema and lossless conversions for
- * `wasi:clocks/wall-clock@0.2.3`.Datetime.
+ * `wasi:clocks/types@0.3.0`.Datetime.
  *
  * JavaScript `Date`, Effect `DateTime`, and numeric epoch timestamps have
  * millisecond precision. Converting a WIT datetime to one of those forms
@@ -26,7 +26,7 @@ const Nanoseconds = Uint32.check(
 ).annotate({ [witTypeAnnotationKey]: "u32" })
 
 /**
- * Schema for `wasi:clocks/wall-clock@0.2.3`.Datetime.
+ * Schema for `wasi:clocks/types@0.3.0`.Datetime.
  *
  * The seconds field is an unsigned 64-bit integer and nanoseconds must be in
  * the range 0 through 999,999,999, matching the WIT clock contract.
@@ -40,7 +40,7 @@ export const Datetime = Schema.Struct({
 })
 
 /**
- * A validated `wasi:clocks/wall-clock@0.2.3`.Datetime value.
+ * A validated `wasi:clocks/types@0.3.0`.Datetime value.
  *
  * @since 1.5.1
  * @category models

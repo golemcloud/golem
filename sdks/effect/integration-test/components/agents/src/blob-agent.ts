@@ -11,50 +11,50 @@ export const BlobAgent = defineAgent({
   name: "BlobAgent",
   description: "Probe agent for wasi:blobstore container + object I/O",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {
     write: method({
-      params: { key: Schema.String, value: Schema.String },
+      input: { key: Schema.String, value: Schema.String },
       success: Schema.Void,
     }),
     read: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.String,
     }),
     has: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.Boolean,
     }),
     size: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.BigInt,
     }),
     list: method({
-      params: {},
+      input: {},
       success: Schema.Array(Schema.String),
     }),
     deleteOne: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.Void,
     }),
     clear: method({
-      params: {},
+      input: {},
       success: Schema.Void,
     }),
     putPhoto: method({
-      params: { key: Schema.String, filename: Schema.String, takenAtMillis: Schema.Number },
+      input: { key: Schema.String, filename: Schema.String, takenAtMillis: Schema.Number },
       success: Schema.Void,
     }),
     getPhoto: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Photo,
     }),
     writeBig: method({
-      params: { key: Schema.String, len: Schema.Number },
+      input: { key: Schema.String, len: Schema.Number },
       success: Schema.Void,
     }),
     readSize: method({
-      params: { key: Schema.String },
+      input: { key: Schema.String },
       success: Schema.Number,
     }),
   },

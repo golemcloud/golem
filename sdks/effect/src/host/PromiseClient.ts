@@ -6,8 +6,8 @@
  * - `getPromise` — open a `GetPromiseResult` handle for a promise id.
  * - `completePromise` — complete a promise with a payload.
  *
- * Used by `src/agents.ts` (`Promises.create` / `poll` / `await` /
- * `complete`) and by `src/webhook.ts` (which composes
+ * Used by `src/Agents.ts` (`Promises.create` / `await` /
+ * `complete`) and by `src/Webhook.ts` (which composes
  * `createPromise` with `golem:agent/host.createWebhook`).
  *
  * @internal — not re-exported from `src/index.ts`.

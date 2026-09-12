@@ -3,7 +3,6 @@ import { Effect, Schema } from "effect"
 import { defineAgent } from "../src/Agent.js"
 import * as Ids from "../src/Ids.js"
 import { method } from "../src/Method.js"
-import * as Quota from "../src/Quota.js"
 import * as Snapshot from "../src/Snapshot.js"
 import { toWitCodec } from "../src/WitCodec.js"
 
@@ -50,18 +49,18 @@ describe("Ids", () => {
       const spec = defineAgent({
         name: "CanonicalIdSchemas",
         mode: "durable",
-        constructorParams: { componentId: Ids.ComponentId },
-        snapshot: Snapshot.define({ schema: state, policy: Snapshot.policy.default }),
+        id: { componentId: Ids.ComponentId },
+        snapshotting: Snapshot.define({ schema: state, policy: Snapshot.policy.default }),
         methods: {
           roundTrip: method({
-            params: { promiseId: Ids.PromiseId },
+            input: { promiseId: Ids.PromiseId },
             success: Ids.PromiseId,
           }),
         },
       })
 
-      expect(spec.constructorParams.componentId).toBe(Ids.ComponentId)
-      expect(spec.methods.roundTrip.params.promiseId).toBe(Ids.PromiseId)
+      expect(spec.id.componentId).toBe(Ids.ComponentId)
+      expect(spec.methods.roundTrip.input.promiseId).toBe(Ids.PromiseId)
       expect(spec.methods.roundTrip.success).toBe(Ids.PromiseId)
 
       const snapshotValue = { uuid, componentId, agentId, accountId, environmentId, promiseId }
@@ -70,8 +69,8 @@ describe("Ids", () => {
     }),
   )
 
-  it("preserves the existing Quota identifier schema aliases", () => {
-    expect(Quota.Uuid).toBe(Ids.Uuid)
-    expect(Quota.EnvironmentId).toBe(Ids.EnvironmentId)
+  it("exports canonical identifier schemas from the owning module", () => {
+    expect(Ids.Uuid.fields.highBits).toBeDefined()
+    expect(Ids.EnvironmentId.fields.uuid).toBe(Ids.Uuid)
   })
 })

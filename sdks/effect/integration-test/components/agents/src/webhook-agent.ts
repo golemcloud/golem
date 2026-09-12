@@ -44,7 +44,7 @@ export const WebhookAgent = defineAgent({
   name: "WebhookAgent",
   description: "Exercises Webhook.create + Webhook.<handle>.await round-trips.",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   http: Http.mount("/webhook-agents/{name}", {
     cors: ["*"],
     webhookSuffix: "/inbox",
@@ -52,7 +52,7 @@ export const WebhookAgent = defineAgent({
   methods: {
     /** Mint a webhook URL and stash the handle for `waitForEvent`. */
     prime: method({
-      params: {},
+      input: {},
       success: Schema.Struct({ url: Schema.String }),
       error: WebhookAgentError,
       description: "Allocate a host promise + signed webhook URL.",
@@ -60,7 +60,7 @@ export const WebhookAgent = defineAgent({
     }),
     /** Suspend on the previously primed webhook; resume when POSTed to. */
     waitForEvent: method({
-      params: {},
+      input: {},
       success: Schema.Struct({ url: Schema.String, body: Schema.String }),
       error: WebhookAgentError,
       description: "Suspend until the primed webhook is POSTed to; return the body.",
@@ -68,7 +68,7 @@ export const WebhookAgent = defineAgent({
     }),
     /** Diagnostic: returns whether a webhook is currently primed. */
     isPrimed: method({
-      params: {},
+      input: {},
       success: Schema.Boolean,
       http: [Http.get("/is-primed")],
     }),

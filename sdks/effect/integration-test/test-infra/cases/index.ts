@@ -21,6 +21,8 @@ import { case_ as mysqlCounter } from "./mysql-counter.ts"
 import { case_ as igniteCounter } from "./ignite-counter.ts"
 import { case_ as inventorySaga } from "./inventory-saga.ts"
 import { case_ as lookup } from "./lookup.ts"
+import { case_ as p3 } from "./p3.ts"
+import { case_ as toolMiddleware } from "./tool-middleware.ts"
 
 export const allCases: ReadonlyArray<TestCase> = [
   counter,
@@ -33,6 +35,8 @@ export const allCases: ReadonlyArray<TestCase> = [
   webhook,
   websocket,
   lookup,
+  p3,
+  toolMiddleware,
   sqliteCounter,
   pgCounter,
   mysqlCounter,

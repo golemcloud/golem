@@ -18,9 +18,9 @@ const roundtrip = (s: Schema.Top, v: unknown) =>
   Effect.gen(function* () {
     const wc = yield* toWitCodec(s as any)
     const codec = wc.codec as Schema.Codec<any, any, never, never>
-    const wv = yield* Schema.encodeEffect(codec)(v)
-    const back = yield* Schema.decodeEffect(codec)(wv)
-    return { wc, wv, back }
+    const sv = yield* Schema.encodeEffect(codec)(v)
+    const back = yield* Schema.decodeEffect(codec)(sv)
+    return { wc, sv, back }
   })
 
 describe("typed-array schemas → list<primN>", () => {
@@ -35,80 +35,80 @@ describe("typed-array schemas → list<primN>", () => {
     {
       name: "Uint8ArraySchema",
       schema: Uint8ArraySchema,
-      elemType: "prim-u8-type",
-      elemValue: "prim-u8",
+      elemType: "u8",
+      elemValue: "u8",
       value: new Uint8Array([1, 2, 3]),
       ctor: Uint8Array,
     },
     {
       name: "Int8ArraySchema",
       schema: Int8ArraySchema,
-      elemType: "prim-s8-type",
-      elemValue: "prim-s8",
+      elemType: "s8",
+      elemValue: "s8",
       value: new Int8Array([-1, 0, 1]),
       ctor: Int8Array,
     },
     {
       name: "Uint16ArraySchema",
       schema: Uint16ArraySchema,
-      elemType: "prim-u16-type",
-      elemValue: "prim-u16",
+      elemType: "u16",
+      elemValue: "u16",
       value: new Uint16Array([0, 1000, 65535]),
       ctor: Uint16Array,
     },
     {
       name: "Int16ArraySchema",
       schema: Int16ArraySchema,
-      elemType: "prim-s16-type",
-      elemValue: "prim-s16",
+      elemType: "s16",
+      elemValue: "s16",
       value: new Int16Array([-32000, 0, 32000]),
       ctor: Int16Array,
     },
     {
       name: "Uint32ArraySchema",
       schema: Uint32ArraySchema,
-      elemType: "prim-u32-type",
-      elemValue: "prim-u32",
+      elemType: "u32",
+      elemValue: "u32",
       value: new Uint32Array([0, 4_000_000_000]),
       ctor: Uint32Array,
     },
     {
       name: "Int32ArraySchema",
       schema: Int32ArraySchema,
-      elemType: "prim-s32-type",
-      elemValue: "prim-s32",
+      elemType: "s32",
+      elemValue: "s32",
       value: new Int32Array([-2_000_000_000, 2_000_000_000]),
       ctor: Int32Array,
     },
     {
       name: "Float32ArraySchema",
       schema: Float32ArraySchema,
-      elemType: "prim-f32-type",
-      elemValue: "prim-float32",
+      elemType: "f32",
+      elemValue: "f32",
       value: new Float32Array([1.5, -1.5]),
       ctor: Float32Array,
     },
     {
       name: "Float64ArraySchema",
       schema: Float64ArraySchema,
-      elemType: "prim-f64-type",
-      elemValue: "prim-float64",
+      elemType: "f64",
+      elemValue: "f64",
       value: new Float64Array([Math.PI, -Math.PI]),
       ctor: Float64Array,
     },
     {
       name: "BigInt64ArraySchema",
       schema: BigInt64ArraySchema,
-      elemType: "prim-s64-type",
-      elemValue: "prim-s64",
+      elemType: "s64",
+      elemValue: "s64",
       value: new BigInt64Array([-9_000_000_000_000n, 9_000_000_000_000n]),
       ctor: BigInt64Array,
     },
     {
       name: "BigUint64ArraySchema",
       schema: BigUint64ArraySchema,
-      elemType: "prim-u64-type",
-      elemValue: "prim-u64",
+      elemType: "u64",
+      elemValue: "u64",
       value: new BigUint64Array([0n, 9_000_000_000_000n]),
       ctor: BigUint64Array,
     },
@@ -119,9 +119,9 @@ describe("typed-array schemas → list<primN>", () => {
       Effect.gen(function* () {
         const r = yield* roundtrip(c.schema, c.value)
         // Top-level WIT type: list<primN>.
-        expect(r.wc.witType.nodes[0]?.type.tag).toBe("list-type")
-        const inner = r.wc.witType.nodes[(r.wc.witType.nodes[0]?.type as any).val]
-        expect(inner?.type.tag).toBe(c.elemType)
+        expect(r.wc.graph.root.body.tag).toBe("list")
+        const inner = (r.wc.graph.root.body as any).element
+        expect(inner?.body.tag).toBe(c.elemType)
         // Decoded back into the right TypedArray subclass.
         expect(r.back).toBeInstanceOf(c.ctor)
         expect(Array.from(r.back as Iterable<unknown>)).toEqual(

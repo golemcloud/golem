@@ -7,25 +7,25 @@ const roundtrip = (s: Schema.Top, v: unknown) =>
   Effect.gen(function* () {
     const wc = yield* toWitCodec(s as any)
     const codec = wc.codec as Schema.Codec<any, any, never, never>
-    const wv = yield* Schema.encodeEffect(codec)(v)
-    const back = yield* Schema.decodeEffect(codec)(wv)
-    return { wc, wv, back }
+    const sv = yield* Schema.encodeEffect(codec)(v)
+    const back = yield* Schema.decodeEffect(codec)(sv)
+    return { wc, sv, back }
   })
 
-describe("Char → WIT prim-char", () => {
-  it.effect("emits prim-char-type and round-trips a single character", () =>
+describe("Char → schema char", () => {
+  it.effect("emits a char node and round-trips a single character", () =>
     Effect.gen(function* () {
       const r = yield* roundtrip(Char, "x")
-      expect(r.wc.witType.nodes[0]?.type.tag).toBe("prim-char-type")
-      expect(r.wv.nodes[0]?.tag).toBe("prim-char")
+      expect(r.wc.graph.root.body.tag).toBe("char")
+      expect((r.sv as any).tag).toBe("char")
       expect(r.back).toBe("x")
     }),
   )
 
-  it.effect("Schema.String stays prim-string-type", () =>
+  it.effect("Schema.String stays a string node", () =>
     Effect.gen(function* () {
       const wc = yield* toWitCodec(Schema.String)
-      expect(wc.witType.nodes[0]?.type.tag).toBe("prim-string-type")
+      expect(wc.graph.root.body.tag).toBe("string")
     }),
   )
 
@@ -43,10 +43,10 @@ describe("Char → WIT prim-char", () => {
       const S = Schema.Struct({ initial: Char, name: Schema.String })
       const r = yield* roundtrip(S, { initial: "A", name: "Ada" })
       expect(r.back).toEqual({ initial: "A", name: "Ada" })
-      const recordNode = r.wc.witType.nodes[0]?.type as any
-      expect(recordNode.tag).toBe("record-type")
-      const initialIdx = recordNode.val.find((p: [string, number]) => p[0] === "initial")[1]
-      expect(r.wc.witType.nodes[initialIdx]?.type.tag).toBe("prim-char-type")
+      const recordBody = r.wc.graph.root.body as any
+      expect(recordBody.tag).toBe("record")
+      const initialField = recordBody.fields.find((f: any) => f.name === "initial")
+      expect(initialField.body.body.tag).toBe("char")
     }),
   )
 })

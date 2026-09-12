@@ -2,7 +2,6 @@
  * Effect-idiomatic façade over the execution-mode controls on
  * `golem:api/host@1.5.0`:
  *
- * - persistence level (get / set / scoped)
  * - idempotence mode (get / set / scoped)
  * - atomic regions via `mark-begin-operation` / `mark-end-operation`
  * - explicit `oplog-commit` (replication barrier)
@@ -14,7 +13,6 @@
  * import { Durability } from "@golemcloud/effect-golem"
  *
  * yield* Durability.atomically(doWork)
- * yield* Durability.withPersistenceLevel(Durability.PersistenceLevel.persistNothing, doWork)
  * yield* Durability.oplogCommit(2)
  * ```
  *
@@ -81,17 +79,6 @@ export const formatCauseForTrap = <E>(cause: Cause.Cause<E>): string => {
  */
 export type { OplogIndex, Uuid } from "golem:api/host@1.5.0"
 
-/**
- * Re-exported from `golem:api/host@1.5.0` as a type alias so the
- * value-level {@link PersistenceLevel} const namespace can keep the
- * un-suffixed name.
- *
- * @since 1.5.0
- * @category models
- */
-export type PersistenceLevelValue = ApiHost.PersistenceLevel
-
-type RawPersistenceLevel = ApiHost.PersistenceLevel
 type RawOplogIndex = ApiHost.OplogIndex
 
 // ---------------------------------------------------------------------------
@@ -137,75 +124,8 @@ export class DurabilityValidationError {
 }
 
 // ---------------------------------------------------------------------------
-// Persistence level constructors (pure data)
-// ---------------------------------------------------------------------------
-
-/**
- * Pure-data constructors for the WIT `persistence-level` variant.
- *
- * @since 1.5.0
- * @category constructors
- */
-export const PersistenceLevel = {
-  /** Persist nothing (treat the body as ephemeral, no replay/restore guarantees). */
-  persistNothing: { tag: "persist-nothing" } as const,
-  /** Persist remote side effects only (the default before "smart"). */
-  persistRemoteSideEffects: { tag: "persist-remote-side-effects" } as const,
-  /** Smart auto-detection (host default; recommended for most agents). */
-  smart: { tag: "smart" } as const,
-} as const
-
-/**
- * Local WIT-drift exhaustiveness witness for {@link PersistenceLevel}:
- * every tag in `golem:api/host@1.5.0.persistence-level` must have a
- * corresponding constructor here. If `golem-types/*.d.ts` is regenerated
- * with a new variant, this `satisfies` clause fails to compile and points
- * directly at the wrapper that needs updating.
- */
-void ({
-  "persist-nothing": PersistenceLevel.persistNothing,
-  "persist-remote-side-effects": PersistenceLevel.persistRemoteSideEffects,
-  smart: PersistenceLevel.smart,
-} satisfies Record<RawPersistenceLevel["tag"], unknown>)
-
-// ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
-
-/**
- * Read the current persistence level.
- *
- * @since 1.5.0
- * @category host bindings
- */
-export const getPersistenceLevel: Effect.Effect<
-  RawPersistenceLevel,
-  DurabilityHostError,
-  DurabilityModeClient
-> = Effect.gen(function* () {
-  const client = yield* DurabilityModeClient
-  return yield* Effect.try({
-    try: () => client.getOplogPersistenceLevel(),
-    catch: (e) => new DurabilityHostError(e),
-  })
-})
-
-/**
- * Write the persistence level. Persists to the oplog.
- *
- * @since 1.5.0
- * @category host bindings
- */
-export const setPersistenceLevel = (
-  level: RawPersistenceLevel,
-): Effect.Effect<void, DurabilityHostError, DurabilityModeClient> =>
-  Effect.gen(function* () {
-    const client = yield* DurabilityModeClient
-    return yield* Effect.try({
-      try: () => client.setOplogPersistenceLevel(level),
-      catch: (e) => new DurabilityHostError(e),
-    })
-  })
 
 /**
  * Read the current idempotence mode. `true` = at-least-once; `false` = at-most-once.
@@ -329,38 +249,6 @@ export const generateIdempotencyKey: Effect.Effect<
 // ---------------------------------------------------------------------------
 // Scoped activation
 // ---------------------------------------------------------------------------
-
-/**
- * Acquire-release pair that sets the persistence level on entry and
- * restores the previous value on scope close (success, failure or
- * interruption).
- *
- * @since 1.5.0
- * @category combinators
- */
-export const usePersistenceLevelScoped = (
-  level: RawPersistenceLevel,
-): Effect.Effect<void, DurabilityHostError, Scope.Scope | DurabilityModeClient> =>
-  Effect.gen(function* () {
-    const previous = yield* getPersistenceLevel
-    yield* Effect.acquireRelease(setPersistenceLevel(level), () =>
-      setPersistenceLevel(previous).pipe(Effect.ignore),
-    )
-  })
-
-/**
- * Run `effect` with `level` temporarily installed as the persistence
- * level. Restores the previous level on success, error and
- * interruption.
- *
- * @since 1.5.0
- * @category combinators
- */
-export const withPersistenceLevel = <A, E, R>(
-  level: RawPersistenceLevel,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope> | DurabilityModeClient> =>
-  Effect.scoped(usePersistenceLevelScoped(level).pipe(Effect.andThen(effect)))
 
 /**
  * Acquire-release pair that sets the idempotence mode on entry and

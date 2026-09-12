@@ -1,5 +1,5 @@
 import { Effect, Pipeable, Schema, SchemaAST } from "effect"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { withPipe } from "./internal/pipeable.js"
 import type {
   EndpointBound,

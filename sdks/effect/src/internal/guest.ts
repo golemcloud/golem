@@ -2,8 +2,9 @@
  * @internal
  * @since 1.5.0
  */
-import type * as AgentCommon from "golem:agent/common@1.5.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 import {
   dispatchDiscoverAgentTypes,
   dispatchGetDefinition,
@@ -14,7 +15,7 @@ import {
 } from "./agent.js"
 
 /**
- * Shape of the `golem:agent/guest@1.5.0` interface that the base WASM
+ * Shape of the `golem:agent/agent-guest@2.0.0` interface that the base WASM
  * exposes via the `agent-guest` module. Inlined here (instead of
  * imported via `import type * as bindings from "agent-guest"`) so the
  * compiled `.d.ts` stays self-contained and consumers of the published
@@ -23,16 +24,16 @@ import {
 interface GuestExports {
   initialize: (
     agentType: string,
-    input: AgentCommon.DataValue,
+    input: CoreTypes.SchemaValueTree,
     principal: AgentCommon.Principal,
   ) => Promise<void>
   invoke: (
     methodName: string,
-    input: AgentCommon.DataValue,
+    input: CoreTypes.SchemaValueTree,
     principal: AgentCommon.Principal,
-  ) => Promise<AgentCommon.DataValue>
-  getDefinition: () => Promise<AgentCommon.AgentType>
-  discoverAgentTypes: () => Promise<AgentCommon.AgentType[]>
+  ) => Promise<CoreTypes.SchemaValueTree | undefined>
+  getDefinition: () => AgentCommon.AgentType
+  discoverAgentTypes: () => AgentCommon.AgentType[]
 }
 
 interface SaveSnapshotExports {

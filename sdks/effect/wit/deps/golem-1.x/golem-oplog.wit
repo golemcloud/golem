@@ -2,11 +2,11 @@ package golem:api@1.5.0;
 
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
-    use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema, wit-value};
+    use wasi:clocks/system-clock@0.3.0.{instant as datetime};
+    use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
-    use wasi:clocks/monotonic-clock@0.2.3.{duration};
+    use host.{component-revision, oplog-index, environment-id, uuid, agent-id, snapshot};
+    use wasi:clocks/types@0.3.0.{duration};
 
     /// Whether an agent is durable (persistent oplog) or ephemeral.
     /// This mirrors the agent-mode enum in golem:agent/common@1.5.0; it is duplicated here to avoid
@@ -77,9 +77,10 @@ interface oplog {
         /// a HTTP request where reading the response involves multiple host function calls)
         ///
         /// On the first invocation of the batch, the parameter should be `None` - this triggers
-        /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
-        /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
-        /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+        /// writing a scope `Start` entry in the oplog. Followup invocations should contain this
+        /// entry's index as the parameter so their host-call `Start` entries can point back to the
+        /// scope. In batched remote writes it is the caller's responsibility to manually write the
+        /// matching scope `End` entry (using `end_function`) when the operation is completed.
         write-remote-batched(option<oplog-index>),
         write-remote-transaction(option<oplog-index>)
     }
@@ -94,12 +95,12 @@ interface oplog {
 
     record raw-local-agent-config-entry {
         path: list<string>,
-        value: wit-value
+        value: schema-value-tree
     }
 
     record local-agent-config-entry {
         path: list<string>,
-        value: value-and-type
+        value: typed-schema-value
     }
 
     record create-parameters {
@@ -119,12 +120,58 @@ interface oplog {
         instance-id: uuid
     }
 
-    record host-call-parameters {
+    /// Parameters of an enriched durable host-call `start` entry.
+    ///
+    /// The recorded `request` payload of every durable host call — including
+    /// durable P3 async calls such as HTTP send/consume-body, sockets, keyvalue,
+    /// and blobstore operations — surfaces as a generic `typed-schema-value`
+    /// tree, identified by `function-name`; there are no per-interface named WIT
+    /// variants for the payload shapes.
+    record start-parameters {
         timestamp: datetime,
+        parent-start-index: option<oplog-index>,
         function-name: string,
-        request: value-and-type,
-        response: value-and-type,
+        invocation-id: option<uuid>,
+        observational-owner: option<oplog-index>,
+        request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
+    }
+
+    /// Parameters of an enriched durable host-call `end` entry. Like the
+    /// `start` `request`, the recorded `response` payload surfaces as a generic
+    /// `typed-schema-value` tree (no per-interface named WIT variants).
+    record end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<typed-schema-value>,
+        forced-commit: bool,
+    }
+
+    /// Parameters of an enriched durable host-call `cancelled` entry. Like the
+    /// `start` `request`, the optional recorded `partial` result surfaces as a
+    /// generic `typed-schema-value` tree (no per-interface named WIT variants).
+    record cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<typed-schema-value>,
+    }
+
+    /// Parameters of a `completion-discarded` entry: the durable host call started at
+    /// `start-index` completed successfully (its `end` entry was persisted) but the response
+    /// was never delivered to the agent, because the agent dropped the call's completion
+    /// future after the `end` was already recorded.
+    record completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    /// Parameters of a `completion-delivered` entry: the successful result of the durable host
+    /// call started at `start-index` was handed to the agent at this point in the recorded
+    /// execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+    /// agent until this marker and prevents later oplog entries from advancing until that handoff.
+    record completion-delivered-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
     }
 
     record local-span-data {
@@ -154,6 +201,7 @@ interface oplog {
     record agent-invocation-finished-parameters {
         timestamp: datetime,
         %result: agent-invocation-result,
+        method-name: option<string>,
         consumed-fuel: s64,
         component-revision: u64,
     }
@@ -189,24 +237,98 @@ interface oplog {
         name: string,
     }
 
+    record queued-card-event-install {
+        card-id: card-id,
+    }
+
+    record queued-card-event-revoke {
+        card-id: card-id,
+    }
+
+    variant queued-card-event {
+        install(queued-card-event-install),
+        revoke(queued-card-event-revoke),
+    }
+
+    /// Parameters for a card-event-queued oplog entry.
+    record card-event-queued-parameters {
+        timestamp: datetime,
+        event: queued-card-event,
+    }
+
+    /// Parameters for a card-installed oplog entry.
+    record card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card-id: card-id,
+    }
+
+    /// Raw parameters for a card-installed oplog entry.
+    record raw-card-installed-parameters {
+        timestamp: datetime,
+        queued-event-index: option<oplog-index>,
+        card: list<u8>,
+    }
+
+    enum card-install-failure {
+        card-revoked,
+        not-found,
+        recipient-mismatch,
+        not-permitted,
+    }
+
+    /// Parameters for a card-install-failed oplog entry.
+    record card-install-failed-parameters {
+        timestamp: datetime,
+        queued-event-index: oplog-index,
+        card-id: card-id,
+        reason: card-install-failure,
+    }
+
+    /// Parameters for a card-revoked oplog entry.
+    record card-revoked-parameters {
+        timestamp: datetime,
+        queued-event-index: oplog-index,
+        card-id: card-id,
+    }
+
+    /// Parameters for a card-expired oplog entry.
+    record card-expired-parameters {
+        timestamp: datetime,
+        card-id: card-id,
+    }
+
+    /// Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
+    /// The kind determines how the entry's payload is interpreted.
+    enum host-stream-kind {
+        /// A frame of the outgoing request body of a P3 HTTP client send.
+        p3-http-request-body,
+    }
+
+    /// Parameters for a host-stream-frame oplog entry: a durably recorded frame of a
+    /// host-owned stream (e.g. the outgoing request body of a P3 HTTP client send),
+    /// attached to the durable host call identified by its start entry's index.
+    record host-stream-frame-parameters {
+        timestamp: datetime,
+        parent-start-index: oplog-index,
+        kind: host-stream-kind,
+        payload: typed-schema-value,
+    }
+
+    /// A public durable-stream producer record rendered as a typed schema value.
+    record durable-stream-record-parameters {
+        timestamp: datetime,
+        %record: typed-schema-value,
+    }
+
     record end-atomic-region-parameters {
         timestamp: datetime,
         begin-index: oplog-index
     }
 
-    record end-remote-write-parameters {
-        timestamp: datetime,
-        begin-index: oplog-index
-    }
-
-    record typed-data-value {
-        value: data-value,
-        schema: data-schema,
-    }
-
     record agent-initialization-parameters {
         idempotency-key: string,
-        constructor-parameters: typed-data-value,
+        constructor-parameters: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
@@ -215,7 +337,7 @@ interface oplog {
     record agent-method-invocation-parameters {
         idempotency-key: string,
         method-name: string,
-        function-input: typed-data-value,
+        function-input: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<list<span-data>>,
@@ -252,7 +374,7 @@ interface oplog {
     }
 
     record agent-invocation-output-parameters {
-        output: typed-data-value,
+        output: typed-schema-value,
     }
 
     record fallible-result-parameters {
@@ -297,11 +419,6 @@ interface oplog {
     record grow-memory-parameters {
         timestamp: datetime,
         delta: u64
-    }
-
-    record filesystem-storage-usage-update-parameters {
-        timestamp: datetime,
-        delta: s64
     }
 
     type agent-resource-id = u64;
@@ -378,11 +495,6 @@ interface oplog {
         value: attribute-value
     }
 
-    record change-persistence-level-parameters {
-        timestamp: datetime,
-        persistence-level: persistence-level
-    }
-
     record begin-remote-transaction-parameters {
         timestamp: datetime,
         transaction-id: string
@@ -445,6 +557,11 @@ interface oplog {
         reason: string
     }
 
+    record read-only-violation {
+        method: string,
+        host-function: string
+    }
+
     /// Describes the error that occurred in the agent
     variant worker-error {
         unknown(string),
@@ -459,12 +576,11 @@ interface oplog {
         exceeded-table-limit,
         exceeded-http-call-limit,
         exceeded-rpc-call-limit,
-        node-out-of-filesystem-storage,
-        agent-exceeded-filesystem-storage-limit,
         agent-terminated-by-quota(agent-terminated-by-quota-error),
         ephemeral-sleep-too-long(ephemeral-sleep-too-long),
         ephemeral-fuel-exhausted(ephemeral-fuel-exhausted),
-        ephemeral-cannot-suspend(ephemeral-cannot-suspend)
+        ephemeral-cannot-suspend(ephemeral-cannot-suspend),
+        read-only-violation(read-only-violation)
     }
 
     record raw-create-parameters {
@@ -484,12 +600,52 @@ interface oplog {
         instance-id: uuid
     }
 
-    record raw-host-call-parameters {
+    record raw-start-parameters {
         timestamp: datetime,
+        parent-start-index: option<oplog-index>,
         function-name: string,
-        request: oplog-payload,
-        response: oplog-payload,
+        invocation-id: option<uuid>,
+        observational-owner: option<oplog-index>,
+        request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
+    }
+
+    record raw-end-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        response: option<oplog-payload>,
+        forced-commit: bool,
+    }
+
+    record raw-cancelled-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+        partial: option<oplog-payload>,
+    }
+
+    record raw-completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    record raw-completion-delivered-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    /// Parameters for a host-stream-frame oplog entry, with the frame payload in raw
+    /// (possibly externally stored) form.
+    record raw-host-stream-frame-parameters {
+        timestamp: datetime,
+        parent-start-index: oplog-index,
+        kind: host-stream-kind,
+        payload: oplog-payload,
+    }
+
+    /// A raw durable-stream producer record, stored inline or in external payload storage.
+    record raw-durable-stream-record-parameters {
+        timestamp: datetime,
+        %record: oplog-payload,
     }
 
     record raw-agent-invocation-started-parameters {
@@ -504,6 +660,7 @@ interface oplog {
     record raw-agent-invocation-finished-parameters {
         timestamp: datetime,
         %result: oplog-payload,
+        method-name: option<string>,
         consumed-fuel: s64,
         component-revision: u64,
     }
@@ -603,8 +760,13 @@ interface oplog {
     variant oplog-entry {
         /// The initial agent oplog entry
         create(raw-create-parameters),
-        /// The agent invoked a host function
-        host-call(raw-host-call-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(raw-start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(raw-end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(raw-cancelled-parameters),
         /// The agent has been invoked
         agent-invocation-started(raw-agent-invocation-started-parameters),
         /// The agent has completed an invocation
@@ -633,12 +795,6 @@ interface oplog {
         /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
         /// compaction.
         end-atomic-region(end-atomic-region-parameters),
-        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-        /// unfinished remote writes cannot be recovered.
-        begin-remote-write(timestamp),
-        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-        end-remote-write(end-remote-write-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(raw-pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts
@@ -649,8 +805,6 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
-        /// Updated filesystem usage by a signed delta
-        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(raw-create-resource-parameters),
         /// Dropped a resource instance
@@ -673,8 +827,6 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
-        /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(raw-begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed
@@ -692,14 +844,49 @@ interface oplog {
         /// Sets or overwrites a named retry policy
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
-        remove-retry-policy(remove-retry-policy-parameters)
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(raw-card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters),
+        /// Records that a permission card used by the agent has expired
+        card-expired(card-expired-parameters),
+        /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+        /// attached to the durable host call identified by its start entry's index
+        host-stream-frame(raw-host-stream-frame-parameters),
+        /// Registers a durable stream before exposing its handle
+        stream-registered(raw-durable-stream-record-parameters),
+        /// Records committed durable stream values or a packed-u8 batch
+        stream-items(raw-durable-stream-record-parameters),
+        /// Records a durable stream end terminal
+        stream-end(raw-durable-stream-record-parameters),
+        /// Records a durable stream cancellation terminal
+        stream-cancel(raw-durable-stream-record-parameters),
+        /// Records durable Stream Session state and consumer-journal facts
+        stream-session(raw-durable-stream-record-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was persisted, but its response was never delivered to the agent (the agent dropped
+        /// the completion future after the `end` was recorded)
+        completion-discarded(raw-completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(raw-completion-delivered-parameters)
     }
 
     variant public-oplog-entry {
         /// The initial agent oplog entry
         create(create-parameters),
-        /// The agent invoked a host function
-        host-call(host-call-parameters),
+        /// Marks the start of a durable host call (or scope such as a batched-write).
+        start(start-parameters),
+        /// Marks the successful completion of a durable host call (or scope) started by a matching `Start`.
+        end(end-parameters),
+        /// Marks that a durable host call started by a matching `Start` was cancelled
+        /// (e.g. dropped from a `select!`) before producing a final response.
+        cancelled(cancelled-parameters),
         /// The agent has been invoked
         agent-invocation-started(agent-invocation-started-parameters),
         /// The agent has completed an invocation
@@ -728,12 +915,6 @@ interface oplog {
         /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
         /// compaction.
         end-atomic-region(end-atomic-region-parameters),
-        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
-        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
-        /// unfinished remote writes cannot be recovered.
-        begin-remote-write(timestamp),
-        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
-        end-remote-write(end-remote-write-parameters),
         /// An invocation request arrived while the agent was busy
         pending-agent-invocation(pending-agent-invocation-parameters),
         /// An update request arrived and will be applied as soon the agent restarts
@@ -744,8 +925,6 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
-        /// Updated filesystem usage by a signed delta
-        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(create-resource-parameters),
         /// Dropped a resource instance
@@ -768,8 +947,6 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
-        /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed
@@ -787,20 +964,55 @@ interface oplog {
         /// Sets or overwrites a named retry policy
         set-retry-policy(set-retry-policy-parameters),
         /// Removes a named retry policy by name
-        remove-retry-policy(remove-retry-policy-parameters)
+        remove-retry-policy(remove-retry-policy-parameters),
+        /// Durable queue entry for pending permission-card work
+        card-event-queued(card-event-queued-parameters),
+        /// Records successful installation of a permission card into the agent wallet
+        card-installed(card-installed-parameters),
+        /// Records failed installation of a permission card into the agent wallet
+        card-install-failed(card-install-failed-parameters),
+        /// Records that a permission card used by the agent has been revoked
+        card-revoked(card-revoked-parameters),
+        /// Records that a permission card used by the agent has expired
+        card-expired(card-expired-parameters),
+        /// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
+        /// attached to the durable host call identified by its start entry's index
+        host-stream-frame(host-stream-frame-parameters),
+        /// Registers a durable stream before exposing its handle
+        stream-registered(durable-stream-record-parameters),
+        /// Records committed durable stream values or a packed-u8 batch
+        stream-items(durable-stream-record-parameters),
+        /// Records a durable stream end terminal
+        stream-end(durable-stream-record-parameters),
+        /// Records a durable stream cancellation terminal
+        stream-cancel(durable-stream-record-parameters),
+        /// Records durable Stream Session state and consumer-journal facts
+        stream-session(durable-stream-record-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was persisted, but its response was never delivered to the agent (the agent dropped
+        /// the completion future after the `end` was recorded)
+        completion-discarded(completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(completion-delivered-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads
     /// and augmenting entries with component metadata.
     enrich-oplog-entries: func(environment-id: environment-id, agent-id: agent-id, entries: list<tuple<oplog-index, oplog-entry>>, component-revision: component-revision) -> result<list<public-oplog-entry>, string>;
 
+    variant oplog-read-error {
+        permission-denied,
+        internal-error(string),
+    }
+
     resource get-oplog {
         constructor(agent-id: agent-id, start: oplog-index);
-        get-next: func() -> option<list<public-oplog-entry>>;
+        get-next: func() -> result<option<list<public-oplog-entry>>, oplog-read-error>;
     }
 
     resource search-oplog {
         constructor(agent-id: agent-id, text: string);
-        get-next: func() -> option<list<tuple<oplog-index, public-oplog-entry>>>;
+        get-next: func() -> result<option<list<tuple<oplog-index, public-oplog-entry>>>, oplog-read-error>;
     }
 }

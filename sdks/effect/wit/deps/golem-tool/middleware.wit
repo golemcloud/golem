@@ -1,0 +1,42 @@
+package golem:tool@0.1.0;
+
+/// Interface exported by components that provide tool middleware.
+interface tool-middleware-guest {
+  use common.{invocation-result, tool, tool-error, tool-middleware, underlying-tool};
+  use golem:agent/common@2.0.0.{principal};
+  use golem:core/types@2.0.0.{typed-schema-value};
+
+  /// Enumerate every middleware definition exported by this component.
+  discover-tool-middlewares: func() -> result<list<tool-middleware>, tool-error>;
+
+  /// Look up one middleware definition by canonical name.
+  get-tool-middleware: func(name: string) -> result<tool-middleware, tool-error>;
+
+  /// Invoke one middleware layer around its runtime-bound next inner layer.
+  invoke-tool-middleware: async func(
+    middleware-name: string,
+    tool-name:       string,
+    tool-metadata:   tool,
+    command-path:    list<string>,
+    input:           typed-schema-value,
+    stdin:           option<stream<u8>>,
+    principal:       principal,
+    wrapped:         underlying-tool,
+  ) -> result<invocation-result, tool-error>;
+}
+
+/// Pure middleware components cannot re-enter ambient tool dispatch. They can
+/// reach only the next inner layer through the runtime-owned resource.
+world tool-middleware {
+  import golem:api/host@1.5.0;
+  import golem:agent/host@2.0.0;
+  import common;
+  export tool-middleware-guest;
+}
+
+/// Components may opt into exporting ordinary agents and tools together with
+/// middleware. The included tool world retains its ambient tool-host import.
+world tool-and-tool-middleware-guest {
+  include tool-guest;
+  export tool-middleware-guest;
+}

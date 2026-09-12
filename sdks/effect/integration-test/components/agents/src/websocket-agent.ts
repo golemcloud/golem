@@ -68,18 +68,18 @@ export const WebSocketAgent = defineAgent({
   description:
     "Exercises Websocket.connect + Socket.runString round-trips against a public echo server.",
   mode: "durable",
-  constructorParams: { name: Schema.String },
+  id: { name: Schema.String },
   methods: {
     /** Send a single text frame and return the first echo reply. */
     echo: method({
-      params: { message: Schema.String },
+      input: { message: Schema.String },
       success: EchoResult,
       description:
         "Send one text frame to the echo server and return the reply (or a tagged error).",
     }),
     /** Send several frames, return all replies in order. */
     echoMany: method({
-      params: { messages: Schema.Array(Schema.String) },
+      input: { messages: Schema.Array(Schema.String) },
       success: EchoManyResult,
       description:
         "Send N text frames to the echo server and return the N replies (or a tagged error).",

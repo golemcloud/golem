@@ -29,12 +29,12 @@ import * as Blobstore from "../src/Blobstore.js"
 import * as Durability from "../src/Durability.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { BlobstoreClient } from "../src/host/BlobstoreClient.js"
-import { DurabilityClient } from "../src/host/DurabilityClient.js"
 import { KeyValueClient } from "../src/host/KeyValueClient.js"
 import { OplogClient } from "../src/host/OplogClient.js"
 import { PromiseClient } from "../src/host/PromiseClient.js"
 import { QuotaClient } from "../src/host/QuotaClient.js"
 import { RetryClient } from "../src/host/RetryClient.js"
+import { RpcClient } from "../src/host/RpcClient.js"
 import * as KeyValue from "../src/KeyValue.js"
 import * as Oplog from "../src/Oplog.js"
 import { method } from "../src/Method.js"
@@ -42,6 +42,26 @@ import * as Quota from "../src/Quota.js"
 import * as Retry from "../src/Retry.js"
 import { SelfAgentId } from "../src/SelfAgentId.js"
 import * as Webhook from "../src/Webhook.js"
+
+const ClientProbe = defineAgent({
+  name: "_ClientProbe",
+  id: {},
+  methods: { ping: method({ input: {}, success: Schema.Void }) },
+})
+
+{
+  const _get: Effect.Effect<
+    ReturnType<typeof ClientProbe.client.get> extends Effect.Effect<infer A, any, any> ? A : never,
+    | import("../src/Client.js").RemoteCallError
+    | import("../src/WitCodec.js").UnsupportedSchemaError
+    | import("../src/Config.js").ConfigError,
+    RpcClient | import("effect").Scope.Scope
+  > = ClientProbe.client.get({})
+  void _get
+
+  // @ts-expect-error raw config values bypass declaration validation and are not public input
+  ClientProbe.client.get({}, { agentConfig: [] })
+}
 
 /**
  * Compile-time helper. Forces TypeScript to verify that two types are
@@ -136,12 +156,6 @@ type AssertEqual<X, Y> =
 // Durability
 // ---------------------------------------------------------------------------
 {
-  const _isLive: Effect.Effect<boolean, Durability.DurabilityHostError, DurabilityClient> =
-    Durability.isLive
-  void _isLive
-}
-
-{
   // checkpoint adds AgentHostClient | OplogClient | SelfAgentId | DurabilityModeClient
   // (DurabilityModeClient appears via Durability.atomically; AgentHostClient via revertAgent)
   const probe = Effect.succeed(42)
@@ -166,9 +180,9 @@ type AssertEqual<X, Y> =
 {
   defineAgent({
     name: "_LeakProbe",
-    constructorParams: { name: Schema.String },
+    id: { name: Schema.String },
     methods: {
-      probe: method({ params: {}, success: Schema.Number }),
+      probe: method({ input: {}, success: Schema.Number }),
     },
   }).implement(() =>
     Effect.succeed({

@@ -3,7 +3,7 @@ declare module 'golem:rdbms/types@1.5.0' {
     highBits: bigint;
     lowBits: bigint;
   };
-  export type IpAddress = 
+  export type IpAddress =
   {
     tag: 'ipv4'
     val: [number, number, number, number]

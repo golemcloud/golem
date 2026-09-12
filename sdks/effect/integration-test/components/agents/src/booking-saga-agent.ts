@@ -50,18 +50,18 @@ type BookFailedPartially = {
 }
 type BookResult = BookOk | BookFailedCompletely | BookFailedPartially
 
-export const BookingSaga = defineAgent({
+const BookingSagaSpec = defineAgent({
   name: "BookingSaga",
   description: "Three-step booking saga that exercises Saga.fallibleTransaction end-to-end",
   mode: "durable",
-  constructorParams: { name: Schema.String },
-  snapshot: Snapshot.define({
+  id: { name: Schema.String },
+  snapshotting: Snapshot.define({
     schema: Schema.Struct({}),
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
     book: method({
-      params: {
+      input: {
         shouldFailAt: Schema.NullOr(StepSchema),
         compFailsAt: Schema.NullOr(Schema.Literal("hotel")),
       },
@@ -70,12 +70,14 @@ export const BookingSaga = defineAgent({
         "Runs the booking saga. Optional shouldFailAt forces a typed failure at the named step.",
     }),
     trace: method({
-      params: {},
+      input: {},
       success: Schema.Array(Schema.String),
       description: "Returns the trace recorded by the most recent book() call.",
     }),
   },
-}).implement((_params, snap) =>
+})
+
+const BookingSagaFactory: Parameters<typeof BookingSagaSpec.implement>[0] = (_params, snap) =>
   Effect.gen(function* () {
     yield* snap.init({})
     const traceRef = yield* Ref.make<Array<string>>([])
@@ -175,5 +177,8 @@ export const BookingSaga = defineAgent({
         }).pipe(Effect.withSpan("BookingSaga.book")),
       trace: () => Ref.get(traceRef).pipe(Effect.map((xs) => [...xs] as ReadonlyArray<string>)),
     }
-  }),
+  })
+
+export const BookingSaga = BookingSagaSpec.implement(BookingSagaFactory, (_context, ...args) =>
+  BookingSagaFactory(...args),
 )

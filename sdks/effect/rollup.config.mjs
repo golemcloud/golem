@@ -14,43 +14,33 @@ import { defineConfig } from "rollup"
  * so that effect-golem and user components share a single Effect
  * runtime instance, avoiding identity issues caused by duplicate copies.
  */
-const external = [
-  "agent-guest",
-  "golem:agent/common@1.5.0",
-  "golem:agent/host@1.5.0",
-  "golem:api/host@1.5.0",
-  "golem:api/oplog@1.5.0",
-  "golem:api/retry@1.5.0",
-  "golem:core/types@1.5.0",
-  "golem:durability/durability@1.5.0",
-  "golem:quota/types@1.5.0",
-  "wasi:cli/environment@0.2.3",
-  "wasi:clocks/monotonic-clock@0.2.3",
-  "wasi:clocks/wall-clock@0.2.3",
-  "wasi:logging/logging",
-  "golem:api/context@1.5.0",
-  "node:sqlite",
-  "effect",
-  "@golemcloud/effect-golem",
-  "@golemcloud/effect-golem/sqlite",
-  "@golemcloud/effect-golem/postgres",
-  "@golemcloud/effect-golem/mysql",
-  "@golemcloud/effect-golem/ignite2",
-  "golem:rdbms/postgres@1.5.0",
-  "golem:rdbms/mysql@1.5.0",
-  "golem:rdbms/ignite2@1.5.0",
-  "golem:rdbms/types@1.5.0",
-  "golem:websocket/client@1.5.0",
-  "wasi:io/poll@0.2.3",
-  "wasi:io/streams@0.2.3",
-  "wasi:keyvalue/types@0.1.0",
-  "wasi:keyvalue/eventual@0.1.0",
-  "wasi:keyvalue/eventual-batch@0.1.0",
-  "wasi:keyvalue/wasi-keyvalue-error@0.1.0",
-  "wasi:blobstore/blobstore",
-  "wasi:blobstore/container",
-  "wasi:blobstore/types",
-]
+const external = (id) =>
+  id === "agent-guest" ||
+  id === "tool-middleware-guest" ||
+  id === "agent-tool-middleware-guest" ||
+  id === "node:sqlite" ||
+  id === "effect" ||
+  id === "@golemcloud/effect-golem" ||
+  id.startsWith("@golemcloud/effect-golem/") ||
+  id.startsWith("golem:") ||
+  id.startsWith("wasi:")
+
+function assertMiddlewareHostNeutral() {
+  return {
+    name: "assert-middleware-host-neutral",
+    generateBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        if (output.type !== "chunk") continue
+        const forbidden = [...output.imports, ...output.dynamicImports].filter(
+          (id) => id === "golem:tool/host@0.1.0" || id === "node:sqlite",
+        )
+        if (forbidden.length > 0) {
+          this.error(`Middleware bundle reached agent-only hosts:\n${forbidden.join("\n")}`)
+        }
+      }
+    },
+  }
+}
 
 export default defineConfig([
   {
@@ -84,6 +74,34 @@ export default defineConfig([
     ],
   },
 
+  {
+    input: "src/Middleware.ts",
+    output: {
+      file: "dist/middleware.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["src/**/*", "golem-types/**/*"],
+        tsconfigOverride: {
+          compilerOptions: {
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      assertMiddlewareHostNeutral(),
+      terser(),
+    ],
+  },
+
   // Standalone bundle of the `effect` runtime. Embedded as its own JS
   // module inside the base WASM so that effect-golem and user code share
   // one runtime instance.
@@ -108,7 +126,7 @@ export default defineConfig([
       format: "esm",
       sourcemap: true,
     },
-    external: [...external, "@golemcloud/effect-golem"],
+    external,
     plugins: [
       resolve({ extensions: [".js", ".ts", ".mjs"] }),
       commonjs(),
@@ -138,7 +156,7 @@ export default defineConfig([
       format: "esm",
       sourcemap: true,
     },
-    external: [...external, "@golemcloud/effect-golem"],
+    external,
     plugins: [
       resolve({ extensions: [".js", ".ts", ".mjs"] }),
       commonjs(),
@@ -166,7 +184,7 @@ export default defineConfig([
       format: "esm",
       sourcemap: true,
     },
-    external: [...external, "@golemcloud/effect-golem"],
+    external,
     plugins: [
       resolve({ extensions: [".js", ".ts", ".mjs"] }),
       commonjs(),
@@ -196,7 +214,7 @@ export default defineConfig([
       format: "esm",
       sourcemap: true,
     },
-    external: [...external, "@golemcloud/effect-golem"],
+    external,
     plugins: [
       resolve({ extensions: [".js", ".ts", ".mjs"] }),
       commonjs(),

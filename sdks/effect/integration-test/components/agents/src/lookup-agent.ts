@@ -34,17 +34,17 @@ export const Lookup = defineAgent({
   name: "Lookup",
   description: "Demo agent with typed-error methods (Schema.Result wire envelope)",
   mode: "durable",
-  constructorParams: { realm: Schema.String },
+  id: { realm: Schema.String },
   methods: {
     /** Returns 7 on success; fails with NotFoundError when id === "missing". */
     fetch: method({
-      params: { id: Schema.String },
+      input: { id: Schema.String },
       success: Schema.Number,
       error: NotFoundError,
     }),
     /** Void on success; fails with NotFoundError when fail is true. */
     cmd: method({
-      params: { fail: Schema.Boolean },
+      input: { fail: Schema.Boolean },
       success: Schema.Void,
       error: NotFoundError,
     }),
@@ -78,7 +78,7 @@ export const LookupCaller = defineAgent({
   name: "LookupCaller",
   description: "Drives Lookup over RPC; reports what the typed-E channel delivered",
   mode: "durable",
-  constructorParams: { realm: Schema.String },
+  id: { realm: Schema.String },
   methods: {
     /**
      * RPC-call `Lookup.fetch({ id })`. Returns:
@@ -89,12 +89,12 @@ export const LookupCaller = defineAgent({
      *   - `transport:<json>` for any non-typed RemoteCallError
      */
     fetchAndReport: method({
-      params: { id: Schema.String },
+      input: { id: Schema.String },
       success: Schema.String,
     }),
     /** Same but for the Schema.Void success / typed-error variant. */
     cmdAndReport: method({
-      params: { fail: Schema.Boolean },
+      input: { fail: Schema.Boolean },
       success: Schema.String,
     }),
   },
@@ -103,18 +103,18 @@ export const LookupCaller = defineAgent({
     fetchAndReport: ({ id }) =>
       Effect.gen(function* () {
         const lookup = yield* Lookup.client.get({ realm })
-        return yield* lookup.fetch({ id }).pipe(
-          Effect.map((n) => `ok:${n}`),
-          Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
-        )
-      }),
+        return yield* lookup.fetch({ id }).pipe(Effect.map((n) => `ok:${n}`))
+      }).pipe(
+        Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
+        Effect.scoped,
+      ),
     cmdAndReport: ({ fail }) =>
       Effect.gen(function* () {
         const lookup = yield* Lookup.client.get({ realm })
-        return yield* lookup.cmd({ fail }).pipe(
-          Effect.map(() => "ok:void"),
-          Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
-        )
-      }),
+        return yield* lookup.cmd({ fail }).pipe(Effect.map(() => "ok:void"))
+      }).pipe(
+        Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
+        Effect.scoped,
+      ),
   }),
 )

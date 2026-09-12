@@ -2,11 +2,10 @@
  * @since 1.5.0
  */
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Ref, Schema, Scope } from "effect"
-import type * as AgentCommon from "golem:agent/common@1.5.0"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
-import type * as CoreTypes from "golem:core/types@1.5.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
-import { ElementValueKindError } from "../Element.js"
 import { AgentHostClient } from "../host/AgentHostClient.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
@@ -23,14 +22,14 @@ import { isMultimodal } from "../Multimodal.js"
 import {
   compileMethodSpec,
   compileParamBindings,
-  invokeDataValue,
+  invokeSchemaValue,
+  type CompiledInputCodec,
   type Handler,
   type MethodCodec,
   type MethodInput,
   type MethodParams,
   type MethodSpec,
   type MethodSuccess,
-  type ParamBinding,
 } from "./method.js"
 import { Principal } from "../Principal.js"
 import { SelfAgentId } from "../SelfAgentId.js"
@@ -48,6 +47,7 @@ import {
   type CompiledSnapshot,
   type SnapshotBinding,
   type SnapshotDef,
+  type SnapshotRestorationContext,
 } from "../Snapshot.js"
 import {
   decodeEnvelope,
@@ -58,11 +58,14 @@ import {
   UnsupportedSnapshotFormatError,
 } from "./snapshotEnvelope.js"
 import { isElementSpec } from "../Unstructured.js"
-import { type UnsupportedSchemaError, type WitCodec } from "../WitCodec.js"
+import { type UnsupportedSchemaError } from "../WitCodec.js"
 import { clientFor, type AgentClient } from "../Client.js"
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../Config.js"
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
+import { mergeGraphDefs } from "./schema-model/builder.js"
+import type { SchemaGraph } from "./schema-model/model.js"
+import { GraphEncoder } from "./schema-model/wit.js"
 
 /**
  * Combined Logger + Tracer layer applied automatically to every piece
@@ -180,11 +183,6 @@ type AgentHttpRequirement<
     ? { readonly http: MountDefCovering<C, MV, WV> & WebhookVarsValid<C, WV> }
     : unknown
 
-interface ParamCodec {
-  readonly name: string
-  readonly codec: WitCodec<Schema.Top>
-}
-
 /**
  * Per-instance handlers derived from a record of method specs. Each
  * handler takes its decoded input record and returns an Effect of the
@@ -275,6 +273,37 @@ export type AgentImpl<
 >
 
 /**
+ * Factory used only when restoring a snapshotted agent. Unlike {@link AgentImpl},
+ * it is never called during normal initialization and receives the complete
+ * identity/config context recovered by the snapshot lifecycle.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export type AgentRestore<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  F extends ConfigFields,
+  S extends SnapshotDef,
+> = (
+  context: SnapshotRestorationContext<MethodInput<C>, CfgTagOf<F>>,
+  ...args: ImplArgs<C, S, CfgTagOf<F>>
+) => Effect.Effect<
+  Handlers<Methods, CfgTagOf<F>>,
+  unknown,
+  Scope.Scope | Principal | HostServices | CfgTagOf<F>
+>
+
+type ImplementArgs<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  F extends ConfigFields,
+  S extends SnapshotDef,
+> = [S] extends [never]
+  ? readonly [initialize: AgentImpl<C, Methods, F, S>]
+  : readonly [initialize: AgentImpl<C, Methods, F, S>, restore: AgentRestore<C, Methods, F, S>]
+
+/**
  * Metadata describing an agent's *type*: the constructor and method
  * signatures, plus any optional host capabilities (HTTP mount, config
  * service, snapshot policy, execution mode). This is the input to
@@ -299,8 +328,9 @@ export interface AgentMetadata<
   /** Optional `prompt-hint`, surfaced as `agent-constructor.prompt-hint`. */
   readonly promptHint?: string
   readonly mode?: M // defaults to "durable"
-  readonly constructorParams: C
+  readonly id: C
   readonly methods: Methods
+  readonly dependencies?: ReadonlyArray<AgentCommon.AgentDependency>
   /**
    * Optional HTTP mount declaration. When present, this agent is exposed
    * via the Golem host's HTTP server under the declared path prefix.
@@ -333,7 +363,7 @@ export interface AgentMetadata<
    * second {@link SnapshotBinding} argument, and the agent type's
    * `snapshotting` metadata reflects the configured policy.
    */
-  readonly snapshot?: S
+  readonly snapshotting?: S
 }
 
 /**
@@ -376,7 +406,9 @@ export type AgentSpec<
    * (stashed in {@link pendingRegistrationErrors}, re-emitted from
    * {@link dispatchDiscoverAgentTypes}).
    */
-  readonly implement: (impl: AgentImpl<C, Methods, F, S>) => ImplementedAgent<C, Methods, M, F, S>
+  readonly implement: (
+    ...args: ImplementArgs<C, Methods, F, S>
+  ) => ImplementedAgent<C, Methods, M, F, S>
 }
 
 /**
@@ -468,7 +500,7 @@ export type ImplementedAgent<
  * `DuplicateAgentNameError`, or any other typed failure / defect)
  * are NOT thrown synchronously. Instead the failure is captured in
  * {@link pendingRegistrationErrors} and re-emitted as a typed
- * `golem:agent/common@1.5.0.agent-error` (`invalid-type` variant)
+ * `golem:agent/common@2.0.0.agent-error` (`invalid-type` variant)
  * thrown from the WIT-exported
  * {@link dispatchDiscoverAgentTypes} host call. This lets the
  * Golem CLI's metadata-extraction step surface misconfigurations
@@ -501,11 +533,11 @@ export const defineAgent = <
   // the caller's perspective. This closes the mutation window between
   // spec construction (which `clientFor` reads from) and
   // `.implement(...)` (which `registerAgent` re-reads from later).
-  const canonicalConstructorParams = Object.freeze({ ...metadata.constructorParams }) as C
+  const canonicalId = Object.freeze({ ...metadata.id }) as C
   const canonicalMethods = Object.freeze({ ...metadata.methods }) as Methods
   const canonical = Object.freeze({
     ...metadata,
-    constructorParams: canonicalConstructorParams,
+    id: canonicalId,
     methods: canonicalMethods,
   }) as AgentMetadata<C, Methods, M, F, S, MV, WV>
 
@@ -525,7 +557,10 @@ export const defineAgent = <
   // {@link DuplicateAgentNameError} so a flaky retry loop cannot leak
   // additional registrations or accumulate stacked errors.
   let consumed = false
-  const implement = (impl: AgentImpl<C, Methods, F, S>): ImplementedAgent<C, Methods, M, F, S> => {
+  const implement = (
+    ...args: ImplementArgs<C, Methods, F, S>
+  ): ImplementedAgent<C, Methods, M, F, S> => {
+    const [impl, restore] = args
     if (consumed) {
       pendingRegistrationErrors.push({
         agentName: canonical.name,
@@ -538,7 +573,7 @@ export const defineAgent = <
       // for `registerAgent`'s strictly-typed input.
       const metadataForRegistration = canonical as AgentMetadata<C, Methods, M, F, S, MV, WV> &
         AgentHttpRequirement<C, Methods, MV, WV>
-      const exit = Effect.runSyncExit(registerAgent(metadataForRegistration, impl))
+      const exit = Effect.runSyncExit(registerAgent(metadataForRegistration, impl, restore))
       if (Exit.isFailure(exit)) {
         pendingRegistrationErrors.push({ agentName: canonical.name, cause: exit.cause })
       }
@@ -582,9 +617,13 @@ interface CompiledAgent {
    * {@link dispatchLoadSnapshot} with the decoded constructor input.
    */
   readonly impl: AgentImpl<MethodParams, Record<string, AnyMethodSpec>, never, SnapshotDef>
-  readonly constructorBindings: ReadonlyArray<ParamBinding>
-  /** Filtered view of {@link constructorBindings}: only component-model wire bindings. */
-  readonly constructorCodecs: ReadonlyArray<ParamCodec>
+  readonly restore: AgentRestore<
+    MethodParams,
+    Record<string, AnyMethodSpec>,
+    never,
+    SnapshotDef
+  > | null
+  readonly constructorCodec: CompiledInputCodec
   readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
   readonly agentType: AgentCommon.AgentType
   /** Compiled config bundle when `metadata.config` is set; `null` otherwise. */
@@ -664,6 +703,7 @@ export const registerAgent = <
 >(
   metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
   impl: AgentImpl<C, Methods, F, S>,
+  restore?: AgentRestore<C, Methods, F, S>,
 ): Effect.Effect<
   void,
   UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError
@@ -673,18 +713,10 @@ export const registerAgent = <
       return yield* Effect.fail(new DuplicateAgentNameError(metadata.name))
     }
 
-    const constructorBindings = (yield* compileParamBindings(
+    const constructorCodec = yield* compileParamBindings(
       `${metadata.name} constructor`,
-      metadata.constructorParams,
-    )) as Array<ParamBinding>
-
-    const constructorWire = constructorBindings.filter(
-      (b): b is Extract<ParamBinding, { kind: "wire" }> => b.kind === "wire",
+      metadata.id,
     )
-    // Backwards-compatible component-model only view.
-    const constructorCodecs: Array<ParamCodec> = constructorWire
-      .filter((b): b is typeof b & { witCodec: WitCodec<Schema.Top> } => b.witCodec !== null)
-      .map((b) => ({ name: b.name, codec: b.witCodec }))
 
     const methodCodecs = new Map<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>()
     const methodHttpInputs: Array<MethodHttpInput> = []
@@ -697,30 +729,44 @@ export const registerAgent = <
       methodCodecs.set(methodName, mc)
       methodHttpInputs.push({
         name: methodName,
-        params: spec.params,
+        params: spec.input,
         endpoints: spec.http ?? [],
-        nonStringBindableParams: collectNonStringBindableParams(spec.params),
-        stringBindableParams: collectStringBindableParams(spec.params),
-        queryOrHeaderBindableParams: collectQueryOrHeaderBindableParams(spec.params),
+        nonStringBindableParams: collectNonStringBindableParams(spec.input),
+        stringBindableParams: collectStringBindableParams(spec.input),
+        queryOrHeaderBindableParams: collectQueryOrHeaderBindableParams(spec.input),
       })
-    }
-
-    const constructorSchema: AgentCommon.DataSchema = {
-      tag: "tuple",
-      val: constructorWire.map((b) => [b.name, b.element.elementSchema]),
     }
 
     // Validate + compile HTTP routes (mount + per-method endpoints).
     const compiledHttp = yield* validateAgentHttp({
       agentName: metadata.name,
       mount: metadata.http,
-      constructorParamNames: Object.keys(metadata.constructorParams),
-      nonStringBindableConstructorParams: collectNonStringBindableParams(
-        metadata.constructorParams,
-      ),
-      stringBindableConstructorParams: collectStringBindableParams(metadata.constructorParams),
+      constructorParamNames: Object.keys(metadata.id),
+      nonStringBindableConstructorParams: collectNonStringBindableParams(metadata.id),
+      stringBindableConstructorParams: collectStringBindableParams(metadata.id),
       methods: methodHttpInputs,
     })
+
+    let compiledConfig: CompiledConfig | null = null
+    if (metadata.config !== undefined) compiledConfig = yield* metadata.config.__compile()
+    const graphs: SchemaGraph[] = [
+      constructorCodec.graph,
+      ...Array.from(methodCodecs.values(), (codec) => codec.graph),
+      ...(compiledConfig?.graphs ?? []),
+    ]
+    const encoder = new GraphEncoder(mergeGraphDefs(graphs))
+    const inputSchema = <P extends MethodParams>(
+      codec: CompiledInputCodec<P>,
+    ): AgentCommon.InputSchema => {
+      const fields = codec.graph.root.body.tag === "record" ? codec.graph.root.body.fields : []
+      return {
+        ...codec.inputSchema,
+        val: codec.inputSchema.val.map((field, index) => ({
+          ...field,
+          schema: encoder.encodeType(fields[index]!.body),
+        })),
+      }
+    }
 
     // Now build the AgentMethod records, attaching the compiled
     // httpEndpoint list per method.
@@ -733,23 +779,24 @@ export const registerAgent = <
         description: spec.description ?? "",
         httpEndpoint: [...eps],
         promptHint: spec.promptHint,
-        inputSchema: mc.inputSchema,
-        outputSchema: mc.outputSchema,
+        inputSchema: inputSchema(mc.inputCodec),
+        outputSchema:
+          mc.outputCodec === undefined
+            ? { tag: "unit" }
+            : { tag: "single", val: encoder.encodeType(mc.outputCodec.graph.root) },
+        readOnly: mc.readOnly,
       })
     }
 
-    let compiledConfig: CompiledConfig | null = null
-    let configDeclarations: Array<AgentCommon.AgentConfigDeclaration> = []
-    if (metadata.config !== undefined) {
-      const cc = yield* metadata.config.__compile()
-      compiledConfig = cc
-      configDeclarations = [...cc.declarations]
-    }
+    const configDeclarations =
+      compiledConfig?.declarations(
+        compiledConfig.graphs.map((graph) => encoder.encodeType(graph.root)),
+      ) ?? []
 
     let compiledSnapshot: CompiledSnapshot | null = null
     let snapshotting: AgentCommon.Snapshotting = { tag: "disabled" }
-    if (metadata.snapshot !== undefined) {
-      const cs = yield* compileSnapshot(metadata.name, metadata.snapshot)
+    if (metadata.snapshotting !== undefined) {
+      const cs = yield* compileSnapshot(metadata.name, metadata.snapshotting)
       compiledSnapshot = cs
       snapshotting = { tag: "enabled", val: cs.witConfig }
     }
@@ -758,17 +805,19 @@ export const registerAgent = <
       typeName: metadata.name,
       description: metadata.description ?? "",
       sourceLanguage: "typescript",
+      schema: encoder.finish(),
       constructor: {
+        name: undefined,
         description: "",
         promptHint: metadata.promptHint,
-        inputSchema: constructorSchema,
+        inputSchema: inputSchema(constructorCodec),
       },
       methods: agentMethods,
-      dependencies: [],
+      dependencies: [...(metadata.dependencies ?? [])],
       mode: metadata.mode ?? "durable",
       httpMount: compiledHttp.mount,
       snapshotting,
-      config: configDeclarations,
+      config: [...configDeclarations],
     }
 
     registry.set(metadata.name, {
@@ -786,8 +835,16 @@ export const registerAgent = <
         never,
         SnapshotDef
       >,
-      constructorBindings,
-      constructorCodecs,
+      restore:
+        restore === undefined
+          ? null
+          : (restore as unknown as AgentRestore<
+              MethodParams,
+              Record<string, AnyMethodSpec>,
+              never,
+              SnapshotDef
+            >),
+      constructorCodec: constructorCodec as CompiledInputCodec,
       methodCodecs,
       agentType,
       compiledConfig,
@@ -876,36 +933,16 @@ export const __resetAgents = async (): Promise<void> => {
  *  decoded parameter values, in the same way both `initialize` and
  *  `load` need to. */
 const decodeConstructorInput = async (
-  agentTypeName: string,
   compiled: CompiledAgent,
-  input: CoreTypes.DataValue,
+  input: CoreTypes.SchemaValueTree,
 ): Promise<Record<string, unknown>> => {
-  if (input.tag !== "tuple") {
-    throw new Error(`${agentTypeName} constructor: expected tuple DataValue, got ${input.tag}`)
-  }
-  const wireBindings = compiled.constructorBindings.filter(
-    (b): b is Extract<ParamBinding, { kind: "wire" }> => b.kind === "wire",
+  return await Effect.runPromise(
+    compiled.constructorCodec.decode(input) as Effect.Effect<
+      Record<string, unknown>,
+      unknown,
+      never
+    >,
   )
-  if (input.val.length !== wireBindings.length) {
-    throw new Error(
-      `${agentTypeName} constructor: expected ${wireBindings.length} argument(s), got ${input.val.length}`,
-    )
-  }
-  const constructorInput: Record<string, unknown> = {}
-  for (let i = 0; i < wireBindings.length; i++) {
-    const b = wireBindings[i]!
-    const ev = input.val[i]!
-    constructorInput[b.name] = await Effect.runPromise(
-      Effect.mapError(b.element.decode(ev), (err) =>
-        err instanceof ElementValueKindError
-          ? new Error(
-              `${agentTypeName} constructor: argument ${i} (${b.name}) is ${err.actual}, expected ${err.expected}`,
-            )
-          : err,
-      ) as Effect.Effect<unknown, unknown, never>,
-    )
-  }
-  return constructorInput
 }
 
 /**
@@ -920,11 +957,16 @@ const initAgentInstance = async (
   compiled: CompiledAgent,
   constructorInput: Record<string, unknown>,
   principal: AgentCommon.Principal,
+  restoration?: {
+    readonly phantomId: CoreTypes.Uuid | undefined
+    readonly parsedAgentId: string
+  },
 ): Promise<{
   scope: Scope.Closeable
   handlers: Record<string, Handler<AnyMethodSpec>>
   bindingHandle: BindingHandle | null
   selfAgentId: CoreTypes.AgentId
+  configShape: unknown
 }> => {
   const bindingHandle: BindingHandle | null =
     compiled.compiledSnapshot !== null
@@ -953,11 +995,35 @@ const initAgentInstance = async (
 
   const scope = await Effect.runPromise(Scope.make())
   let handlers: Record<string, Handler<AnyMethodSpec>>
+  let configShape: unknown = undefined
   try {
+    if (compiled.compiledConfig !== null) {
+      configShape = await runUserPromise(compiled.compiledConfig.buildShape())
+    }
     const implArgs: Array<unknown> = [constructorInput]
     if (bindingHandle !== null) implArgs.push(bindingHandle.binding)
+    const factory = restoration === undefined ? compiled.impl : compiled.restore
+    if (factory === null) {
+      throw new Error(
+        `agent '${agentTypeName}' declares snapshotting but its implementation has no restoration factory`,
+      )
+    }
+    const factoryArgs =
+      restoration === undefined
+        ? implArgs
+        : [
+            {
+              id: constructorInput,
+              principal,
+              phantomId: restoration.phantomId,
+              agentId: selfAgentId,
+              parsedAgentId: restoration.parsedAgentId,
+              config: configShape,
+            } satisfies SnapshotRestorationContext,
+            ...implArgs,
+          ]
     let program = (
-      (compiled.impl as (...a: ReadonlyArray<unknown>) => unknown)(...implArgs) as Effect.Effect<
+      (factory as (...a: ReadonlyArray<unknown>) => unknown)(...factoryArgs) as Effect.Effect<
         Record<string, Handler<AnyMethodSpec>>,
         unknown,
         Scope.Scope | Principal | SelfAgentId
@@ -967,13 +1033,12 @@ const initAgentInstance = async (
       Effect.provideService(SelfAgentId, selfAgentId),
     )
     if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
-      const shape = await runUserPromise(compiled.compiledConfig.buildShape())
       program = (program as Effect.Effect<unknown, unknown, never>).pipe(
         // The config class is a Context.Service tag (Self/Identifier
         // resolved via the user's `defineConfig`-class declaration). We
         // erase the static generics here because the dispatcher works
         // generically over every registered agent.
-        Effect.provideService(compiled.metadata.config as never, shape as never),
+        Effect.provideService(compiled.metadata.config as never, configShape as never),
       ) as typeof program
     }
     // Use `Scope.provide` (NOT `Scope.use`) — the latter auto-closes
@@ -991,7 +1056,7 @@ const initAgentInstance = async (
     throw e
   }
 
-  return { scope, handlers, bindingHandle, selfAgentId }
+  return { scope, handlers, bindingHandle, selfAgentId, configShape }
 }
 
 /**
@@ -1002,7 +1067,7 @@ const initAgentInstance = async (
  */
 export const dispatchInitialize = async (
   agentTypeName: string,
-  input: CoreTypes.DataValue,
+  input: CoreTypes.SchemaValueTree,
   principal: AgentCommon.Principal,
 ): Promise<void> => {
   const compiled = registry.get(agentTypeName)
@@ -1015,7 +1080,7 @@ export const dispatchInitialize = async (
     throw new Error(`agent already initialized in this container: ${activeAgent.name}`)
   }
 
-  const constructorInput = await decodeConstructorInput(agentTypeName, compiled, input)
+  const constructorInput = await decodeConstructorInput(compiled, input)
   const { scope, handlers, bindingHandle, selfAgentId } = await initAgentInstance(
     agentTypeName,
     compiled,
@@ -1044,9 +1109,9 @@ export const dispatchInitialize = async (
  */
 export const dispatchInvoke = async (
   methodName: string,
-  input: CoreTypes.DataValue,
+  input: CoreTypes.SchemaValueTree,
   principal: AgentCommon.Principal,
-): Promise<CoreTypes.DataValue> => {
+): Promise<CoreTypes.SchemaValueTree | undefined> => {
   if (activeAgent === null) {
     throw new Error(`agent is not initialized; cannot invoke ${methodName}`)
   }
@@ -1069,14 +1134,16 @@ export const dispatchInvoke = async (
   // `activeAgent`). The optional config service is rebuilt fresh per
   // invocation: regular fields are memoized for the duration of THIS
   // call only; secret fields are never cached.
-  let program: Effect.Effect<CoreTypes.DataValue, unknown, never> = invokeDataValue(
-    mc,
+  let program = invokeSchemaValue(
+    mc.inputCodec,
+    mc.outputCodec,
+    { errorWrapped: mc.errorWrapped, successVoid: mc.successVoid },
     handler,
     input,
   ).pipe(
     Effect.provideService(Principal, principal),
     Effect.provideService(SelfAgentId, activeAgent.selfAgentId),
-  ) as Effect.Effect<CoreTypes.DataValue, unknown, never>
+  ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
     const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     program = program.pipe(
@@ -1092,7 +1159,7 @@ export const dispatchInvoke = async (
  * @since 1.5.0
  * @category runtime hooks
  */
-export const dispatchDiscoverAgentTypes = async (): Promise<Array<AgentCommon.AgentType>> => {
+export const dispatchDiscoverAgentTypes = (): Array<AgentCommon.AgentType> => {
   if (pendingRegistrationErrors.length > 0) {
     throw makeRegistrationAgentError(pendingRegistrationErrors)
   }
@@ -1102,7 +1169,7 @@ export const dispatchDiscoverAgentTypes = async (): Promise<Array<AgentCommon.Ag
 /**
  * Render the stashed `defineAgent` registration failures as the
  * `invalid-type` variant of the WIT
- * `golem:agent/common@1.5.0.agent-error` ADT — that's the closest
+ * `golem:agent/common@2.0.0.agent-error` ADT — that's the closest
  * variant to "this component's declared agent types could not be
  * built". The `val` string concatenates one section per failing agent
  * (the agent name, plus `Cause.pretty` of its underlying Effect
@@ -1130,7 +1197,7 @@ const makeRegistrationAgentError = (
  * @since 1.5.0
  * @category runtime hooks
  */
-export const dispatchGetDefinition = async (): Promise<AgentCommon.AgentType> => {
+export const dispatchGetDefinition = (): AgentCommon.AgentType => {
   if (activeAgent === null) {
     throw new Error("agent is not initialized; cannot get definition")
   }
@@ -1292,7 +1359,7 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     throw new Error("load-snapshot: GOLEM_AGENT_ID is not set in the process environment")
   }
   const agentIdString = agentIdEntry[1]
-  const [agentTypeName, ctorDataValue] = parseAgentId(agentIdString)
+  const [agentTypeName, typedConstructor, phantomId] = parseAgentId(agentIdString)
 
   const compiled = registry.get(agentTypeName)
   if (!compiled) {
@@ -1320,16 +1387,13 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   const principal = decoded.principal
 
   // 3. Run the constructor with the recovered params + principal.
-  const constructorInput = await decodeConstructorInput(
-    agentTypeName,
-    compiled,
-    ctorDataValue as CoreTypes.DataValue,
-  )
-  const { scope, handlers, bindingHandle, selfAgentId } = await initAgentInstance(
+  const constructorInput = await decodeConstructorInput(compiled, typedConstructor.value)
+  const { scope, handlers, bindingHandle, selfAgentId, configShape } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
     principal,
+    { phantomId, parsedAgentId: agentIdString },
   )
 
   const bound = bindingHandle!.read()
@@ -1392,6 +1456,10 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
         for (const part of decoded.databases) {
           const handle = bound.databases.get(part.name)!
           sqliteExt.restoreDatabaseSync(handle, part.bytes)
+          // Restoring invalidates SQLite's connection-local schema cache. Warm
+          // it while load-snapshot is unrecorded so replay sees the same host
+          // call sequence as the live connection did after the snapshot.
+          handle.prepare("SELECT count(*) FROM sqlite_master").get()
         }
         const decodedState = await Effect.runPromise(
           Schema.decodeUnknownEffect(bound.schema)(decoded.state) as Effect.Effect<
@@ -1407,8 +1475,16 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
           `agent '${agentTypeName}' expects a binary envelope but received ${snapshot.mimeType}`,
         )
       }
+      const restorationContext: SnapshotRestorationContext = {
+        id: constructorInput,
+        principal,
+        phantomId,
+        agentId: selfAgentId,
+        parsedAgentId: agentIdString,
+        config: configShape,
+      }
       let loadProgram: Effect.Effect<void, unknown, never> = bound.handlers
-        .load(decoded.userPayload)
+        .load(decoded.userPayload, restorationContext)
         .pipe(Effect.provideService(Principal, principal)) as Effect.Effect<void, unknown, never>
       // Mirror the save path + `dispatchInvoke`: when the agent declares
       // a config service, make it available to the user's custom load
