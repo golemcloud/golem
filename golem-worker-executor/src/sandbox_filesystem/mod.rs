@@ -208,7 +208,6 @@ enum NativeOperation {
     Read(usize),
     Write(usize),
     DirectoryEnumeration,
-    SeedFile,
     FileUpdate,
     RecursiveCleanup,
     Flush,
@@ -222,7 +221,6 @@ impl NativeOperation {
             Self::Metadata | Self::Open | Self::Namespace => true,
             Self::Read(bytes) | Self::Write(bytes) => bytes <= MAX_SHORT_TRANSFER_BYTES,
             Self::DirectoryEnumeration
-            | Self::SeedFile
             | Self::FileUpdate
             | Self::RecursiveCleanup
             | Self::Flush
@@ -1184,40 +1182,6 @@ fn copy_file_blocking(
     }
 }
 
-fn copy_file_at_blocking(
-    copy_mode: FileCopyMode,
-    quota_authority: QuotaAuthority,
-    materialization_root: &Path,
-    source: &Path,
-    destination_directory: &cap_std::fs::Dir,
-    destination: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    match copy_mode {
-        FileCopyMode::Buffered => {
-            unmanaged::copy_file_at(destination_directory, source, destination, read_only)
-        }
-        FileCopyMode::Reflink => {
-            let QuotaAuthority::Project { project_id, .. } = quota_authority else {
-                unreachable!("reflink copy requires project quota authority")
-            };
-            #[cfg(target_os = "linux")]
-            {
-                xfs::reflink_file_at(
-                    materialization_root,
-                    project_id,
-                    destination_directory,
-                    source,
-                    destination,
-                    read_only,
-                )
-            }
-            #[cfg(not(target_os = "linux"))]
-            unreachable!("managed XFS is unavailable on this platform");
-        }
-    }
-}
-
 impl Drop for SandboxFilesystem {
     fn drop(&mut self) {
         if let Err(error) = self.delete_and_verify_blocking() {
@@ -1592,6 +1556,33 @@ impl<'a> CapabilityTempFile<'a> {
         self.name = None;
         Ok(())
     }
+
+    /// Gives the file the name `destination`, in place of what is at that name. A directory at
+    /// that name goes away first, together with all that is in it.
+    fn persist_replacing(mut self, destination: &Path) -> std::io::Result<()> {
+        let name = self
+            .name
+            .as_ref()
+            .expect("capability temporary file name missing");
+        remove_directory_in_the_way(self.directory.as_dir(), destination)?;
+        self.directory
+            .as_dir()
+            .rename(name, self.directory.as_dir(), destination)?;
+        self.name = None;
+        Ok(())
+    }
+}
+
+/// Removes the directory at `path` in `directory`, together with all that is in it.
+///
+/// Another kind of object at the path, or no object, stays as it is. A symlink is not followed.
+fn remove_directory_in_the_way(directory: &cap_std::fs::Dir, path: &Path) -> std::io::Result<()> {
+    match directory.symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => directory.remove_dir_all(path),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 impl Drop for CapabilityTempFile<'_> {
@@ -1790,7 +1781,6 @@ mod tests {
             NativeOperation::Read(MAX_SHORT_TRANSFER_BYTES + 1),
             NativeOperation::Write(MAX_SHORT_TRANSFER_BYTES + 1),
             NativeOperation::DirectoryEnumeration,
-            NativeOperation::SeedFile,
             NativeOperation::FileUpdate,
             NativeOperation::RecursiveCleanup,
             NativeOperation::Flush,

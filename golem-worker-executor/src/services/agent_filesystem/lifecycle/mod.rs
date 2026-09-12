@@ -16,14 +16,14 @@ use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecover
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
-    FilesystemLimits, FilesystemStorageError, InstalledLimits, SandboxAccessMode,
+    FilesystemLimits, FilesystemStorageError, InstalledLimits, OnExisting, SandboxAccessMode,
     SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile, SandboxFileDisposition,
     SandboxFilePermissions, SandboxFileUpdate, SandboxFilesystem, SandboxFilesystemAdapter,
     SandboxFilesystemName, SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
     SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectKind, SandboxOpenOptions,
     SandboxOpened, SandboxPath, SandboxReadRange, SandboxResolvedNamespaceTarget,
     SandboxSymlinkTarget, SandboxTargetIdentity, SandboxTimeChange, SandboxTimeChanges,
-    SandboxWriteAttempt, SandboxWritePlacement,
+    SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry,
 };
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::file_loader::{FileLoader, InitialFileSource};
@@ -579,11 +579,16 @@ async fn complete_initial_materialization<Adapter: SandboxFilesystemAdapter>(
             let mut budget = RetryBudget::new(2);
             loop {
                 let error = match sandbox
-                    .seed_file(
-                        source.path().as_path(),
-                        SandboxPath::at_root(target.clone()),
-                        sandbox_file_permissions(read_only),
-                    )
+                    .seed(Box::new([SeedEntry {
+                        source: source.path().clone(),
+                        target: SandboxPath::at_root(target.clone()),
+                        access: if read_only {
+                            SeedAccess::ReadOnly
+                        } else {
+                            SeedAccess::ReadWrite
+                        },
+                        existing: OnExisting::Fail,
+                    }]))
                     .await
                 {
                     Ok(()) => break Ok(()),

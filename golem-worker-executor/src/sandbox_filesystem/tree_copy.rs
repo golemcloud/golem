@@ -266,104 +266,369 @@ fn set_captured_directory_attributes(destination: &Path, entry: &TreeEntry) -> s
     Ok(())
 }
 
-/// Copies the host tree under `source` into `destination` through the capability.
+/// What a seed entry needs to make objects in one sandbox.
+#[derive(Clone, Copy)]
+pub(super) struct SeedContext<'a> {
+    pub(super) mode: FileCopyMode,
+    pub(super) quota_authority: QuotaAuthority,
+    pub(super) materialization_root: &'a Path,
+    pub(super) access: SeedAccess,
+    pub(super) existing: OnExisting,
+}
+
+/// Puts the host object at `source` into the sandbox at `destination` under `base`.
 ///
-/// Directories and symlinks are made again. Permissions and modification times are copied. Each
-/// regular file goes through the same copy as a seeded file, so it takes the project of
-/// `destination`. An existing target path is an `AlreadyExists` error.
-pub(super) fn seed(
+/// The source is read without following a symlink. A regular file becomes one file, a symlink
+/// becomes a symlink, and a directory brings all that is under it. An object of another kind
+/// gives an `InvalidData` error. Missing parent directories of `destination` are made through
+/// the capability. A parent that is not a directory gives a `PermissionDenied` error.
+pub(super) fn seed_entry(
+    context: SeedContext<'_>,
+    base: &cap_std::fs::Dir,
     source: &Path,
-    destination: &cap_std::fs::Dir,
-    copy_mode: FileCopyMode,
-    quota_authority: QuotaAuthority,
-    materialization_root: &Path,
+    destination: &Path,
 ) -> std::io::Result<()> {
-    let source_directory =
-        cap_std::fs::Dir::open_ambient_dir(source, cap_std::ambient_authority())?;
-    let entries = list_tree(&source_directory, &TreeExclusions::default())?;
-    entries.iter().try_for_each(|entry| {
-        seed_entry(
-            source,
+    let (Some(source_parent), Some(source_name)) = (source.parent(), source.file_name()) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "seed source has no parent directory",
+        ));
+    };
+    let source_parent =
+        cap_std::fs::Dir::open_ambient_dir(source_parent, cap_std::ambient_authority())?;
+    let entry = tree_entry(&source_parent, source_name, PathBuf::from(source_name))?;
+    match &entry.kind {
+        TreeEntryKind::File => seed_file(context, &source_parent, &entry, base, destination),
+        TreeEntryKind::Symlink(link_target) => seed_symlink(
+            base,
             destination,
-            entry,
-            copy_mode,
-            quota_authority,
-            materialization_root,
-        )
-    })?;
-    entries
+            link_target,
+            entry.modified,
+            context.existing,
+        ),
+        TreeEntryKind::Directory => seed_directory(
+            context,
+            &source_parent.open_dir_nofollow(source_name)?,
+            &entry,
+            base,
+            destination,
+        ),
+    }
+}
+
+/// Copies the regular file `source`, listed under `source_directory`, to `destination` under
+/// `directory`.
+///
+/// The copy is written under a temporary name next to its target. Before it takes its name, it
+/// gets the permissions of the source with the write permission that the access of `context`
+/// sets, and the modification time of the source.
+fn seed_file(
+    context: SeedContext<'_>,
+    source_directory: &cap_std::fs::Dir,
+    source: &TreeEntry,
+    directory: &cap_std::fs::Dir,
+    destination: &Path,
+) -> std::io::Result<()> {
+    let (parent, name) = create_capability_copy_parent(directory, destination)?;
+    if context.existing == OnExisting::Keep && is_present(parent.as_dir(), &name)? {
+        return Ok(());
+    }
+    let source_file = open_file_nofollow(source_directory, &source.relative)?;
+    let mut temporary = CapabilityTempFile::new(parent)?;
+    let temporary_file = temporary.as_file().try_clone()?.into_std();
+    match context.mode {
+        FileCopyMode::Buffered => {
+            std::io::copy(&mut &source_file, temporary.as_file_mut())?;
+        }
+        FileCopyMode::Reflink => {
+            reflink_into_project(context.quota_authority, &temporary_file, &source_file)?
+        }
+    }
+    temporary_file.sync_all()?;
+    temporary_file.set_permissions(seeded_permissions(
+        host_permissions(&source.permissions, &temporary_file)?,
+        context.access,
+    ))?;
+    if let Some(modified) = source.modified {
+        temporary_file.set_modified(modified)?;
+    }
+    match context.existing {
+        OnExisting::Fail => temporary.persist_noclobber(&name)?,
+        OnExisting::Replace => temporary.persist_replacing(&name)?,
+        OnExisting::Keep => match temporary.persist_noclobber(&name) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            result => result?,
+        },
+    }
+    sync_after_reflink(context)
+}
+
+/// Makes a symlink to `link_target` at `destination` under `directory`, with the modification
+/// time `modified`.
+///
+/// A symlink that takes the place of a target is made under a temporary name first.
+fn seed_symlink(
+    directory: &cap_std::fs::Dir,
+    destination: &Path,
+    link_target: &Path,
+    modified: Option<SystemTime>,
+    existing: OnExisting,
+) -> std::io::Result<()> {
+    let (parent, name) = create_capability_copy_parent(directory, destination)?;
+    let parent = parent.as_dir();
+    match existing {
+        OnExisting::Fail => make_symlink(parent, link_target, &name, modified),
+        OnExisting::Keep => match make_symlink(parent, link_target, &name, modified) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            result => result,
+        },
+        OnExisting::Replace => {
+            let temporary = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
+            make_symlink(parent, link_target, &temporary, modified)
+                .and_then(|()| remove_directory_in_the_way(parent, &name))
+                .and_then(|()| parent.rename(&temporary, parent, &name))
+                .inspect_err(|_| {
+                    let _ = parent.remove_file(&temporary);
+                })
+        }
+    }
+}
+
+/// Makes a symlink to `link_target` at `link` in `directory`, with the modification time
+/// `modified`.
+fn make_symlink(
+    directory: &cap_std::fs::Dir,
+    link_target: &Path,
+    link: &Path,
+    modified: Option<SystemTime>,
+) -> std::io::Result<()> {
+    create_capability_symlink(directory, link_target, link)?;
+    modified.map_or(Ok(()), |modified| {
+        directory.set_symlink_times(link, None, Some(capability_time(modified)))
+    })
+}
+
+/// Puts what is under the host directory `source` into the directory at `destination` under
+/// `base`.
+///
+/// An empty `destination` names `base`. [`seed_directory_at`] makes the target directory, or
+/// decides what happens to the object that is already there. A target directory that the seed
+/// makes gets the permissions and the modification time of `source` after all that is under it
+/// is made.
+fn seed_directory(
+    context: SeedContext<'_>,
+    source: &cap_std::fs::Dir,
+    source_entry: &TreeEntry,
+    base: &cap_std::fs::Dir,
+    destination: &Path,
+) -> std::io::Result<()> {
+    if destination.as_os_str().is_empty() {
+        return seed_directory_contents(context, source, base);
+    }
+    let (parent, name) = create_capability_copy_parent(base, destination)?;
+    let seeded = seed_directory_at(parent.as_dir(), &name, context.existing)?;
+    if seeded == SeededDirectory::Kept {
+        return Ok(());
+    }
+    seed_directory_contents(context, source, &parent.as_dir().open_dir_nofollow(&name)?)?;
+    if seeded == SeededDirectory::Made {
+        set_seeded_directory_attributes(parent.as_dir(), &name, source_entry)
+    } else {
+        Ok(())
+    }
+}
+
+/// Makes what is under the host directory `source` again under `target`, parents first.
+///
+/// A directory that the walk makes gets the permissions and the modification time of its source
+/// after all that is under it is made.
+fn seed_directory_contents(
+    context: SeedContext<'_>,
+    source: &cap_std::fs::Dir,
+    target: &cap_std::fs::Dir,
+) -> std::io::Result<()> {
+    let entries = list_tree(source, &TreeExclusions::default())?;
+    let walk = entries
+        .iter()
+        .try_fold(SeedWalk::default(), |walk, entry| {
+            walk.seed(context, source, target, entry)
+        })?;
+    walk.made
         .iter()
         .rev()
-        .filter(|entry| entry.kind == TreeEntryKind::Directory)
-        .try_for_each(|entry| set_seeded_directory_attributes(destination, entry))
+        .try_for_each(|entry| set_seeded_directory_attributes(target, &entry.relative, entry))
 }
 
-/// Makes one listed entry again in `destination` through the capability.
-///
-/// For a directory entry, this function makes an empty directory. A regular file goes through the
-/// same copy as a seeded file and gets the permissions and the modification time of the entry. A
-/// symlink is made with the same target and gets the modification time of the entry.
-fn seed_entry(
-    source: &Path,
-    destination: &cap_std::fs::Dir,
-    entry: &TreeEntry,
-    copy_mode: FileCopyMode,
-    quota_authority: QuotaAuthority,
-    materialization_root: &Path,
-) -> std::io::Result<()> {
-    match &entry.kind {
-        TreeEntryKind::Directory => destination.create_dir(&entry.relative),
-        TreeEntryKind::File => {
-            copy_file_at_blocking(
-                copy_mode,
-                quota_authority,
-                materialization_root,
-                &source.join(&entry.relative),
-                destination,
+/// The state of a walk that seeds the entries of one tree listing.
+#[derive(Default)]
+struct SeedWalk<'a> {
+    /// A target path that stays as it is, together with all that is under it.
+    kept: Option<&'a Path>,
+    /// The directories that the walk made, parents first.
+    made: Vec<&'a TreeEntry>,
+}
+
+impl<'a> SeedWalk<'a> {
+    /// Seeds one listed entry under `target` and gives the walk back.
+    fn seed(
+        mut self,
+        context: SeedContext<'_>,
+        source: &cap_std::fs::Dir,
+        target: &cap_std::fs::Dir,
+        entry: &'a TreeEntry,
+    ) -> std::io::Result<Self> {
+        if self
+            .kept
+            .is_some_and(|kept| entry.relative.starts_with(kept))
+        {
+            return Ok(self);
+        }
+        match &entry.kind {
+            TreeEntryKind::Directory => {
+                match seed_directory_at(target, &entry.relative, context.existing)? {
+                    SeededDirectory::Made => self.made.push(entry),
+                    SeededDirectory::Merged => {}
+                    SeededDirectory::Kept => self.kept = Some(&entry.relative),
+                }
+            }
+            TreeEntryKind::File => seed_file(context, source, entry, target, &entry.relative)?,
+            TreeEntryKind::Symlink(link_target) => seed_symlink(
+                target,
                 &entry.relative,
-                false,
-            )?;
-            destination.set_permissions(&entry.relative, entry.permissions.clone())?;
-            if let Some(modified) = entry.modified {
-                cap_fs_ext::DirExt::set_times(
-                    destination,
-                    &entry.relative,
-                    None,
-                    Some(capability_time(modified)),
-                )?;
-            }
-            Ok(())
+                link_target,
+                entry.modified,
+                context.existing,
+            )?,
         }
-        TreeEntryKind::Symlink(link_target) => {
-            create_capability_symlink(destination, link_target, &entry.relative)?;
-            if let Some(modified) = entry.modified {
-                destination.set_symlink_times(
-                    &entry.relative,
-                    None,
-                    Some(capability_time(modified)),
-                )?;
-            }
-            Ok(())
-        }
+        Ok(self)
     }
 }
 
-/// Gives a directory in `destination` the permissions and the modification time of its listed
-/// entry.
+/// What happened at the target path of a directory in a seed source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeededDirectory {
+    /// The seed made the directory.
+    Made,
+    /// A directory was already there, and the contents of the source go into it.
+    Merged,
+    /// Another kind of object was already there, and it stays, together with all that is under
+    /// the path in the source.
+    Kept,
+}
+
+/// Makes the directory at `path` in `directory` for a directory in a seed source.
+///
+/// A directory that is already there merges under every rule. Another kind of object at the path
+/// follows `existing`: `Fail` gives an `AlreadyExists` error, `Keep` leaves the object, and
+/// `Replace` removes the object and makes the directory.
+fn seed_directory_at(
+    directory: &cap_std::fs::Dir,
+    path: &Path,
+    existing: OnExisting,
+) -> std::io::Result<SeededDirectory> {
+    match directory.create_dir(path) {
+        Ok(()) => Ok(SeededDirectory::Made),
+        Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
+        Err(error) => match (directory.symlink_metadata(path)?.is_dir(), existing) {
+            (true, _) => Ok(SeededDirectory::Merged),
+            (false, OnExisting::Fail) => Err(error),
+            (false, OnExisting::Keep) => Ok(SeededDirectory::Kept),
+            (false, OnExisting::Replace) => {
+                directory.remove_file(path)?;
+                directory.create_dir(path)?;
+                Ok(SeededDirectory::Made)
+            }
+        },
+    }
+}
+
+/// Gives the directory at `path` in `directory` the permissions and the modification time of its
+/// listed source entry.
 fn set_seeded_directory_attributes(
-    destination: &cap_std::fs::Dir,
-    entry: &TreeEntry,
+    directory: &cap_std::fs::Dir,
+    path: &Path,
+    source: &TreeEntry,
 ) -> std::io::Result<()> {
-    destination.set_permissions(&entry.relative, entry.permissions.clone())?;
-    if let Some(modified) = entry.modified {
-        cap_fs_ext::DirExt::set_times(
-            destination,
-            &entry.relative,
-            None,
-            Some(capability_time(modified)),
-        )?;
+    directory.set_permissions(path, source.permissions.clone())?;
+    if let Some(modified) = source.modified {
+        cap_fs_ext::DirExt::set_times(directory, path, None, Some(capability_time(modified)))?;
     }
     Ok(())
+}
+
+/// Tells whether a path is there in `directory`, without following a symlink.
+fn is_present(directory: &cap_std::fs::Dir, path: &Path) -> std::io::Result<bool> {
+    match directory.symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Opens a file in `directory` for reading, without following a symlink.
+fn open_file_nofollow(directory: &cap_std::fs::Dir, path: &Path) -> std::io::Result<File> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    Ok(directory.open_with(path, &options)?.into_std())
+}
+
+/// Gives `permissions` the write permission that `access` sets.
+fn seeded_permissions(
+    mut permissions: std::fs::Permissions,
+    access: SeedAccess,
+) -> std::fs::Permissions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = permissions.mode();
+        match access {
+            SeedAccess::FromSource => {}
+            SeedAccess::ReadOnly => permissions.set_mode(mode & !0o222),
+            SeedAccess::ReadWrite => permissions.set_mode(mode | 0o200),
+        }
+    }
+    #[cfg(not(unix))]
+    match access {
+        SeedAccess::FromSource => {}
+        SeedAccess::ReadOnly => permissions.set_readonly(true),
+        SeedAccess::ReadWrite => permissions.set_readonly(false),
+    }
+    permissions
+}
+
+/// Makes `target` share the extents of `source` in the project of the sandbox.
+fn reflink_into_project(
+    quota_authority: QuotaAuthority,
+    target: &File,
+    source: &File,
+) -> std::io::Result<()> {
+    let QuotaAuthority::Project { project_id, .. } = quota_authority else {
+        unreachable!("reflink copy requires project quota authority")
+    };
+    #[cfg(target_os = "linux")]
+    {
+        xfs::reflink_into_project(project_id, target, source)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (project_id, target, source);
+        unreachable!("managed XFS is unavailable on this platform")
+    }
+}
+
+/// Writes the pending changes of a managed volume to stable storage after a reflink.
+fn sync_after_reflink(context: SeedContext<'_>) -> std::io::Result<()> {
+    match context.mode {
+        FileCopyMode::Buffered => Ok(()),
+        FileCopyMode::Reflink => {
+            #[cfg(target_os = "linux")]
+            {
+                xfs::sync_volume(context.materialization_root)
+            }
+            #[cfg(not(target_os = "linux"))]
+            unreachable!("managed XFS is unavailable on this platform")
+        }
+    }
 }
 
 fn transfer_file(copy_mode: FileCopyMode, source: &File, target: &File) -> std::io::Result<()> {
@@ -498,6 +763,16 @@ mod tests {
 
     fn open(path: &Path) -> cap_std::fs::Dir {
         cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).unwrap()
+    }
+
+    fn buffered_seed(root: &Path, existing: OnExisting) -> SeedContext<'_> {
+        SeedContext {
+            mode: FileCopyMode::Buffered,
+            quota_authority: QuotaAuthority::Unsupported,
+            materialization_root: root,
+            access: SeedAccess::FromSource,
+            existing,
+        }
     }
 
     fn fixture_tree(root: &Path) {
@@ -733,12 +1008,11 @@ mod tests {
         fixture_tree(source.path());
         let destination = tempfile::tempdir().unwrap();
 
-        seed(
-            source.path(),
+        seed_entry(
+            buffered_seed(destination.path(), OnExisting::Fail),
             &open(destination.path()),
-            FileCopyMode::Buffered,
-            QuotaAuthority::Unsupported,
-            destination.path(),
+            source.path(),
+            Path::new(""),
         )
         .unwrap();
 
@@ -784,12 +1058,11 @@ mod tests {
         std::fs::create_dir(destination.path().join("data")).unwrap();
         std::fs::write(destination.path().join("data/file"), b"old").unwrap();
 
-        let error = seed(
-            source.path(),
+        let error = seed_entry(
+            buffered_seed(destination.path(), OnExisting::Fail),
             &open(destination.path()),
-            FileCopyMode::Buffered,
-            QuotaAuthority::Unsupported,
-            destination.path(),
+            source.path(),
+            Path::new(""),
         )
         .unwrap_err();
 

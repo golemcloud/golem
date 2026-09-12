@@ -204,19 +204,3 @@ pub(super) fn copy_file(
         .map_err(|error| error.error)?;
     Ok(())
 }
-
-pub(super) fn copy_file_at(
-    destination_directory: &cap_std::fs::Dir,
-    source: &Path,
-    destination: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let (parent, destination) = create_capability_copy_parent(destination_directory, destination)?;
-    let mut temporary = CapabilityTempFile::new(parent)?;
-    let mut source = File::open(source)?;
-    std::io::copy(&mut source, temporary.as_file_mut())?;
-    temporary.as_file().sync_all()?;
-    let temporary_file = temporary.as_file().try_clone()?.into_std();
-    set_file_permissions(&temporary_file, read_only)?;
-    temporary.persist_noclobber(&destination)
-}
