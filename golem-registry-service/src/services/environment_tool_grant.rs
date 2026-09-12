@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use super::release_grant_lifecycle::{
+    ExistingGrantDecision, GrantMutationDecision, delete_grant_decision, existing_grant_decision,
+    reconciliation_deletion_decision, release_is_admissible, restore_grant_decision,
+};
 use super::tool_release::{ToolReleaseError, ToolReleaseService};
 use crate::repo::environment_tool_grant::{
     EnvironmentToolGrantRepo, EnvironmentToolGrantRepoError,
@@ -152,7 +156,7 @@ impl EnvironmentToolGrantService {
 
         let release_id = ToolReleaseId(release.release.tool_release_id);
         let follow_coordinates = matches!(creation.release, ToolReleaseReference::ByCoordinates(_));
-        if !release.release.immutable && environment.version_check {
+        if !release_is_admissible(environment.version_check, release.release.immutable) {
             return Err(EnvironmentToolGrantError::ReferencedToolReleaseNotFound);
         }
         match self
@@ -174,30 +178,33 @@ impl EnvironmentToolGrantService {
                     .get_by_environment_and_release(environment_id.0, release_id.0, true)
                     .await?
                     .ok_or(EnvironmentToolGrantError::GrantAlreadyExists)?;
-                if existing.grant_deleted_at.is_none() {
-                    if existing.protected
-                        || (automatic && !existing.automatic)
-                        || (existing.automatic == automatic
-                            && existing.follow_coordinates == follow_coordinates)
-                    {
+                match existing_grant_decision(
+                    existing.grant_deleted_at.is_some(),
+                    existing.protected,
+                    existing.automatic,
+                    existing.follow_coordinates,
+                    automatic,
+                    follow_coordinates,
+                ) {
+                    ExistingGrantDecision::ReturnExisting => {
                         existing.try_into().map_err(Into::into)
-                    } else {
-                        self.environment_tool_grant_repo
-                            .set_management(
-                                existing.environment_tool_grant_id,
-                                environment_id.0,
-                                release_id.0,
-                                auth.actor_account_id().0,
-                                automatic,
-                                follow_coordinates,
-                            )
-                            .await?
-                            .ok_or(EnvironmentToolGrantError::GrantAlreadyExists)?
-                            .try_into()
-                            .map_err(Into::into)
                     }
-                } else {
-                    self.environment_tool_grant_repo
+                    ExistingGrantDecision::SetManagement => self
+                        .environment_tool_grant_repo
+                        .set_management(
+                            existing.environment_tool_grant_id,
+                            environment_id.0,
+                            release_id.0,
+                            auth.actor_account_id().0,
+                            automatic,
+                            follow_coordinates,
+                        )
+                        .await?
+                        .ok_or(EnvironmentToolGrantError::GrantAlreadyExists)?
+                        .try_into()
+                        .map_err(Into::into),
+                    ExistingGrantDecision::Restore => self
+                        .environment_tool_grant_repo
                         .restore(
                             existing.environment_tool_grant_id,
                             environment_id.0,
@@ -209,7 +216,7 @@ impl EnvironmentToolGrantService {
                         .await?
                         .ok_or(EnvironmentToolGrantError::ReferencedToolReleaseNotFound)?
                         .try_into()
-                        .map_err(Into::into)
+                        .map_err(Into::into),
                 }
             }
             Err(other) => Err(other.into()),
@@ -266,13 +273,23 @@ impl EnvironmentToolGrantService {
             let (record, grant_environment) = self
                 .authorize(grant_id, false, EnvironmentToolGrantVerb::Delete, auth)
                 .await?;
-            if grant_environment.id != environment.id || !record.automatic {
-                return Err(EnvironmentToolGrantError::EnvironmentToolGrantNotFound(
-                    grant_id,
-                ));
-            }
-            if record.protected {
-                return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
+            match reconciliation_deletion_decision(
+                grant_environment.id == environment.id,
+                record.automatic,
+                record.protected,
+            ) {
+                GrantMutationDecision::NotReconciliable => {
+                    return Err(EnvironmentToolGrantError::EnvironmentToolGrantNotFound(
+                        grant_id,
+                    ));
+                }
+                GrantMutationDecision::Protected => {
+                    return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
+                }
+                GrantMutationDecision::Allow => {}
+                GrantMutationDecision::AdministratorManaged | GrantMutationDecision::NotDeleted => {
+                    unreachable!()
+                }
             }
         }
         Ok(())
@@ -326,13 +343,19 @@ impl EnvironmentToolGrantService {
         let (record, _) = self
             .authorize(grant_id, false, EnvironmentToolGrantVerb::Delete, auth)
             .await?;
-        if record.protected {
-            return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
-        }
-        if automatic && !record.automatic {
-            return Err(EnvironmentToolGrantError::AdministratorManagedToolGrant(
-                grant_id,
-            ));
+        match delete_grant_decision(record.protected, record.automatic, automatic) {
+            GrantMutationDecision::Protected => {
+                return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
+            }
+            GrantMutationDecision::AdministratorManaged => {
+                return Err(EnvironmentToolGrantError::AdministratorManagedToolGrant(
+                    grant_id,
+                ));
+            }
+            GrantMutationDecision::Allow => {}
+            GrantMutationDecision::NotDeleted | GrantMutationDecision::NotReconciliable => {
+                unreachable!()
+            }
         }
         if !self
             .environment_tool_grant_repo
@@ -354,11 +377,16 @@ impl EnvironmentToolGrantService {
         let (record, _) = self
             .authorize(grant_id, true, EnvironmentToolGrantVerb::Restore, auth)
             .await?;
-        if record.protected {
-            return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
-        }
-        if record.grant_deleted_at.is_none() {
-            return Err(EnvironmentToolGrantError::GrantNotDeleted(grant_id));
+        match restore_grant_decision(record.protected, record.grant_deleted_at.is_some()) {
+            GrantMutationDecision::Protected => {
+                return Err(EnvironmentToolGrantError::ProtectedToolGrant(grant_id));
+            }
+            GrantMutationDecision::NotDeleted => {
+                return Err(EnvironmentToolGrantError::GrantNotDeleted(grant_id));
+            }
+            GrantMutationDecision::Allow => {}
+            GrantMutationDecision::AdministratorManaged
+            | GrantMutationDecision::NotReconciliable => unreachable!(),
         }
         self.environment_tool_grant_repo
             .restore(

@@ -387,6 +387,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
+            output_contract: golem_common::model::entity::ToolOutputContract {
+                result: None,
+                errors: Vec::new(),
+            },
         })),
         tool_input.clone(),
     );

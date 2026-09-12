@@ -17,6 +17,7 @@ message KnownExports {
   optional string load_snapshot_interface = 3;
   optional string oplog_processor_interface = 4;
   optional string tool_guest_interface = 5;
+  optional string tool_middleware_guest_interface = 6;
 }
 
 message ComponentMetadata {
@@ -29,6 +30,12 @@ message ComponentMetadata {
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
   map<string, ToolDeploymentMetadata> tools = 11;
   map<string, AgentMethodStreams> agent_method_streams = 12;
+  map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 13;
+}
+
+message ToolMiddlewareDeploymentMetadata {
+  golem.tool.ToolMiddleware definition = 1;
+  ToolProvisionConfig provision = 2;
 }
 
 message AgentMethodStreams {
@@ -60,6 +67,33 @@ message ToolBindingInput {
   optional string account = 3;
   SecretKeyScope secret_keys_readable = 4;
   SecretKeyScope secret_keys_revealable = 5;
+  optional ToolMiddlewareInstallations middleware = 6;
+  optional ToolMiddlewareMergeMode middleware_merge_mode = 7;
+  ToolFilesystemAccess filesystem_access = 8;
+}
+
+message ToolMiddlewareInstallations {
+  repeated ToolMiddlewareInstallation values = 1;
+}
+
+message ToolMiddlewareInstallation {
+  string name = 1;
+  optional string version = 2;
+  string parameters_json = 3;
+  optional string account = 4;
+  ToolFilesystemAccess filesystem_access = 5;
+}
+
+enum ToolFilesystemAccess {
+  TOOL_FILESYSTEM_ACCESS_UNSET = 0;
+  TOOL_FILESYSTEM_ACCESS_ALLOWED = 1;
+  TOOL_FILESYSTEM_ACCESS_DENIED = 2;
+}
+
+enum ToolMiddlewareMergeMode {
+  TOOL_MIDDLEWARE_MERGE_MODE_PREPEND = 0;
+  TOOL_MIDDLEWARE_MERGE_MODE_APPEND = 1;
+  TOOL_MIDDLEWARE_MERGE_MODE_REPLACE = 2;
 }
 
 message SecretKeyScope {

@@ -2226,7 +2226,21 @@ pub enum SerializableToolError {
     InvalidInput(String),
     ConstraintViolation(String),
     InvalidResult(String),
-    CustomError(Box<TypedSchemaValue>),
+    CustomError(Box<SerializableCustomToolError>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableCustomToolError {
+    pub name: String,
+    pub payload: TypedSchemaValue,
 }
 
 #[derive(

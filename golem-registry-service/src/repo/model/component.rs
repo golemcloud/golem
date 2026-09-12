@@ -308,6 +308,55 @@ impl ComponentRevisionRecord {
             wasm_hash: self.binary_hash.into(),
             agent_type_provision_configs,
             tool_deployment_configs,
+            tool_middleware_deployment_configs: self
+                .metadata
+                .value()
+                .tool_middlewares()
+                .iter()
+                .map(|(name, metadata)| {
+                    (
+                        name.to_string(),
+                        diff::ToolMiddlewareDeploymentConfig {
+                            definition: metadata.definition.clone(),
+                            config: metadata.provision.config.clone(),
+                            env: metadata.provision.env.clone(),
+                            files_by_path: metadata
+                                .provision
+                                .files
+                                .iter()
+                                .map(|file| {
+                                    (
+                                        file.path.to_abs_string(),
+                                        diff::AgentFile {
+                                            hash: file.content_hash.0,
+                                            permissions: file.permissions,
+                                        }
+                                        .into(),
+                                    )
+                                })
+                                .collect(),
+                            plugins_by_grant_id: metadata
+                                .provision
+                                .plugins
+                                .iter()
+                                .map(|plugin| {
+                                    (
+                                        plugin.environment_plugin_grant_id.0,
+                                        diff::PluginInstallation {
+                                            priority: plugin.priority.0,
+                                            name: plugin.plugin_name.clone(),
+                                            version: plugin.plugin_version.clone(),
+                                            grant_id: plugin.environment_plugin_grant_id.0,
+                                            parameters: plugin.parameters.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        }
+                        .into(),
+                    )
+                })
+                .collect(),
         })
     }
 

@@ -489,7 +489,7 @@ fn[T : @schema.IntoSchema + @schema.FromSchema, E] __golem_middleware_decode_can
     @toolCommon.ToolError::InvalidResult(message) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
     @toolCommon.ToolError::CustomError(value) => {
-      @model.drop_wit_capabilities(value.value)
+      @model.drop_wit_capabilities(value.payload.value)
       Err(
         @toolMiddleware.ToolInvokeError::InvalidResult(
           "canonical field decoding returned a custom tool error",
@@ -542,8 +542,9 @@ pub async fn MessagesUnderlying::send(
   let __golem_result = match
     self.underlying.invoke_with(__golem_command_path, __golem_input, None, fn(
       _,
+      _,
     ) {
-      Err("underlying returned a custom error for an infallible command")
+      None
     }) {
     Ok(__golem_result) => __golem_result
     Err(__golem_error) => return Err(__golem_error)
@@ -592,8 +593,9 @@ pub async fn StorageUnderlying::fetch(
   let __golem_result = match
     self.underlying.invoke_with(__golem_command_path, __golem_input, None, fn(
       _,
+      _,
     ) {
-      Err("underlying returned a custom error for an infallible command")
+      None
     }) {
     Ok(__golem_result) => __golem_result
     Err(__golem_error) => return Err(__golem_error)
@@ -739,6 +741,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
   @toolMiddleware.register_tool_middleware(
     {
       name: "audit",
+      version: "0.0.0",
       aliases: [],
       doc: {
         summary: "Observes metadata for every tool shape and forwards its carriers unchanged.",
@@ -752,6 +755,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
   @toolMiddleware.register_tool_middleware(
     {
       name: "message-policy",
+      version: "0.0.0",
       aliases: [],
       doc: {
         summary: "Forwards ordinary messages and rejects blocked messages without invoking the next layer.",
@@ -760,7 +764,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
       },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_Messages().to_tool(),
-        expected: __golem_middleware_tool_def_Messages().to_tool(),
+        expected: Some(__golem_middleware_tool_def_Messages().to_tool()),
       }),
     },
     __golem_monomorphic_tool_middleware_invoke_MessagePolicy,
@@ -768,6 +772,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
   @toolMiddleware.register_tool_middleware(
     {
       name: "file-adapter",
+      version: "0.0.0",
       aliases: [],
       doc: {
         summary: "Adapts the public file shape to a differently shaped storage tool.",
@@ -776,7 +781,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
       },
       scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({
         presented: __golem_middleware_tool_def_PublicFiles().to_tool(),
-        expected: __golem_middleware_tool_def_Storage().to_tool(),
+        expected: Some(__golem_middleware_tool_def_Storage().to_tool()),
       }),
     },
     __golem_monomorphic_tool_middleware_invoke_FileAdapter,

@@ -20,7 +20,7 @@ import golem.host.ToolWireInterop
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
 import golem.tool.{Doc, ToolMiddlewareDescriptor, ToolMiddlewareScope}
-import golem.tool.wire.{WitTool, WitToolError}
+import golem.tool.wire.{WitCustomToolError, WitTool, WitToolError}
 import zio.test._
 
 import scala.scalajs.js
@@ -201,7 +201,7 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
         WitToolError.InvalidInput("bad input"),
         WitToolError.ConstraintViolation("mutex violated"),
         WitToolError.InvalidResult("wrong type"),
-        WitToolError.CustomError(typed("boom"))
+        WitToolError.CustomError(WitCustomToolError("failure", typed("boom")))
       )
       val roundtripped = errors.map(e => ToolWireInterop.toolErrorFromJs(ToolWireInterop.toolErrorToJs(e)))
       assertTrue(roundtripped == errors)
@@ -231,7 +231,7 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
         WitToolError.InvalidInput("x"),
         WitToolError.ConstraintViolation("x"),
         WitToolError.InvalidResult("x"),
-        WitToolError.CustomError(typed("x"))
+        WitToolError.CustomError(WitCustomToolError("failure", typed("x")))
       ).map(e => dyn(ToolWireInterop.toolErrorToJs(e)).tag.asInstanceOf[String])
       assertTrue(
         tags == List(

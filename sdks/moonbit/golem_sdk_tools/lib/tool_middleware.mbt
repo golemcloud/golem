@@ -44,6 +44,7 @@ pub(all) enum ToolMiddlewareScopeInfo {
 pub(all) struct ToolMiddlewareInfo {
   source_name : String
   name : String
+  version : String
   aliases : Array[String]
   description : String
   scope : ToolMiddlewareScopeInfo
@@ -53,6 +54,7 @@ pub(all) struct ToolMiddlewareInfo {
 priv struct MonomorphicMiddlewareDecl {
   source_name : String
   name : String
+  version : String
   aliases : Array[String]
   description : String
   presented : String
@@ -117,8 +119,9 @@ fn parse_middleware_metadata(
   annotation : String,
   owner : String,
   monomorphic : Bool,
-) -> (String, Array[String], String?, String?) raise ToolMiddlewareParseError {
+) -> (String, String, Array[String], String?, String?) raise ToolMiddlewareParseError {
   let mut name : String? = None
+  let mut version : String? = None
   let aliases : Array[String] = []
   let mut presented : String? = None
   let mut expected : String? = None
@@ -131,6 +134,12 @@ fn parse_middleware_metadata(
           middleware_fail("Duplicate middleware name on " + owner)
         }
       Some((Some("tool_alias" | "alias"), value)) => aliases.push(value)
+      Some((Some("version"), value)) =>
+        if version is None {
+          version = Some(value)
+        } else {
+          middleware_fail("Duplicate middleware version on " + owner)
+        }
       Some((Some("presented"), value)) if monomorphic =>
         if presented is None {
           presented = Some(value)
@@ -164,7 +173,7 @@ fn parse_middleware_metadata(
     }
     seen[alias_name] = ()
   }
-  (name, aliases, presented, expected)
+  (name, version.unwrap_or("0.0.0"), aliases, presented, expected)
 }
 
 ///|
@@ -960,7 +969,7 @@ pub fn parse_tool_middlewares(
                     "' must be empty",
                   )
               }
-              let (name, aliases, presented, expected) = parse_middleware_metadata(
+              let (name, version, aliases, presented, expected) = parse_middleware_metadata(
                 middleware_props(attr, "tool_middleware").unwrap(),
                 "tool_middleware",
                 "middleware " + decl.tycon,
@@ -977,6 +986,7 @@ pub fn parse_tool_middlewares(
               monomorphic.push({
                 source_name: decl.tycon,
                 name,
+                version,
                 aliases,
                 description: tool_doc(decl.doc),
                 presented,
@@ -1010,7 +1020,7 @@ pub fn parse_tool_middlewares(
                   "#derive.universal_tool_middleware must annotate an async free function",
                 )
               }
-              let (name, aliases, presented, expected) = parse_middleware_metadata(
+              let (name, version, aliases, presented, expected) = parse_middleware_metadata(
                 middleware_props(attr, "universal_tool_middleware").unwrap(),
                 "universal_tool_middleware",
                 "function " + fun_decl.name.name,
@@ -1022,6 +1032,7 @@ pub fn parse_tool_middlewares(
               result.push({
                 source_name: fun_decl.name.name,
                 name,
+                version,
                 aliases,
                 description: tool_doc(fun_decl.doc),
                 scope: Universal({ handler_name: fun_decl.name.name, }),
@@ -1052,6 +1063,7 @@ pub fn parse_tool_middlewares(
     result.push({
       source_name: middleware.source_name,
       name: middleware.name,
+      version: middleware.version,
       aliases: middleware.aliases,
       description: middleware.description,
       scope: Monomorphic({ presented, expected, handlers, underlying_methods, }),

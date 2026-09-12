@@ -26,11 +26,18 @@ import {
 
 export interface ToolClientOptions {
   readonly transport?: ToolClientTransport;
+  /** Stable leaf registration name when the definition describes an adapted presented surface. */
+  readonly lookupName?: string;
 }
 
 export type ToolCallErrorCause<Errors> =
   | { readonly tag: 'rpc'; readonly error: RpcError }
-  | { readonly tag: 'tool'; readonly error: Errors };
+  | { readonly tag: 'tool'; readonly error: Errors }
+  | {
+      readonly tag: 'unknown-error';
+      readonly name: string;
+      readonly payload: Parameters<typeof decodeDeclaredToolError>[1]['payload'];
+    };
 
 /** A stable rejected-promise error for remote tool calls. */
 export class ToolCallError<Errors = never> extends Error {
@@ -49,7 +56,8 @@ export function client<Definition extends AnyToolDefinition>(
   options: ToolClientOptions = {},
 ): ToolClient<Definition> {
   const tool = getExtendedToolDefinition(definition);
-  const transport = options.transport ?? createToolClientTransport(tool.toolName);
+  const transport =
+    options.transport ?? createToolClientTransport(options.lookupName ?? tool.toolName);
   return createToolClient(definition, transport, mapToolClientFailure);
 }
 
@@ -73,7 +81,9 @@ function mapToolRpcError(
 
   try {
     const declaredError = decodeDeclaredToolError(body, error.val.val, callName);
-    return new ToolCallError({ tag: 'tool', error: declaredError });
+    return declaredError.tag === 'unknown-error'
+      ? new ToolCallError(declaredError)
+      : new ToolCallError({ tag: 'tool', error: declaredError });
   } catch (decodeError) {
     if (decodeError instanceof ToolCallError) return decodeError;
     return protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
@@ -93,6 +103,9 @@ function formatToolCallError(cause: ToolCallErrorCause<unknown>): string {
     return typeof name === 'string'
       ? `Remote tool returned declared error "${name}"`
       : 'Remote tool returned a declared error';
+  }
+  if (cause.tag === 'unknown-error') {
+    return `Remote tool returned unknown declared error "${cause.name}"`;
   }
   return cause.error.tag === 'remote-tool-error'
     ? `Remote tool call failed: ${cause.error.val.tag}`

@@ -29,6 +29,7 @@ use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::agent_secret::schema_contains_host_managed_capability;
 use crate::services::deployment::route_compilation::validate_path_segments;
 use crate::services::environment_tool_grant::ResolvedGrantedToolRelease;
+use crate::services::environment_tool_middleware_grant::ResolvedGrantedToolMiddlewareRelease;
 use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType, RegisteredAgentTypeImplementer,
@@ -46,6 +47,13 @@ use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, RemoteToolDeployment, TOOL_METADATA_WIT_VERSION,
     ToolBindingInput, ToolDeploymentMetadata, ToolName, ToolSource,
+};
+use golem_common::model::tool_middleware::{
+    RegisteredToolMiddleware, RemoteToolMiddlewareDeployment, TOOL_MIDDLEWARE_METADATA_WIT_VERSION,
+    ToolMiddlewareName, ToolMiddlewareSource,
+};
+use golem_common::model::tool_middleware_release::{
+    ToolMiddlewareReleaseSource, tool_middleware_metadata_digest,
 };
 use golem_common::model::tool_release::ToolReleaseId;
 use golem_common::schema::agent::reachable_defs;
@@ -96,6 +104,166 @@ pub struct DeploymentContext {
 }
 
 impl DeploymentContext {
+    pub fn collect_tool_middleware_registrations(
+        &self,
+        deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        remote: &[(
+            RemoteToolMiddlewareDeployment,
+            Option<ResolvedGrantedToolMiddlewareRelease>,
+        )],
+        errors: &mut Vec<DeployValidationError>,
+    ) -> Vec<RegisteredToolMiddleware> {
+        let mut registrations = BTreeMap::<ToolMiddlewareName, RegisteredToolMiddleware>::new();
+        for component in self.components.values() {
+            let export_valid = component
+                .metadata
+                .known_exports()
+                .tool_middleware_guest_interface
+                .as_deref()
+                == Some("golem:tool/tool-middleware-guest@0.1.0");
+            for (name, metadata) in component.metadata.tool_middlewares() {
+                let valid = export_valid
+                    && metadata.definition.name == name.as_str()
+                    && golem_common::schema::tool::validation::validate_tool_middleware(
+                        &metadata.definition,
+                    )
+                    .is_ok();
+                if !valid {
+                    errors.push(DeployValidationError::ToolMiddleware {
+                        middleware_name: Some(name.clone()),
+                        agent_type_name: None,
+                        tool_name: None,
+                        message:
+                            "invalid descriptor, name, or missing tool-middleware guest export"
+                                .to_string(),
+                    });
+                    continue;
+                }
+                let registration = RegisteredToolMiddleware {
+                    deployment_revision,
+                    release_id: None,
+                    definition: metadata.definition.clone(),
+                    provision: metadata.provision.clone(),
+                    source: ToolMiddlewareSource::Component {
+                        component_id: component.id,
+                        component_revision: component.revision,
+                        component_name: component.component_name.clone(),
+                    },
+                    owner_account_id: component.account_id,
+                    owner_account_email: component.account_email.clone(),
+                    metadata_version: TOOL_MIDDLEWARE_METADATA_WIT_VERSION.to_string(),
+                    metadata_digest: tool_middleware_metadata_digest(
+                        TOOL_MIDDLEWARE_METADATA_WIT_VERSION,
+                        &metadata.definition,
+                    )
+                    .unwrap_or_default(),
+                };
+                if registrations.insert(name.clone(), registration).is_some() {
+                    errors.push(DeployValidationError::ToolMiddleware {
+                        middleware_name: Some(name.clone()),
+                        agent_type_name: None,
+                        tool_name: None,
+                        message: "multiple local or remote implementations".to_string(),
+                    });
+                }
+            }
+        }
+        for (deployment, resolved) in remote {
+            let Some(resolved) = resolved else {
+                errors.push(DeployValidationError::ToolMiddleware {
+                    middleware_name: Some(deployment.name.clone()),
+                    agent_type_name: None,
+                    tool_name: None,
+                    message: "remote release is unavailable in this environment".to_string(),
+                });
+                continue;
+            };
+            let release = &resolved.release;
+            let valid = release.name == deployment.name
+                && release.definition.name == deployment.name.as_str()
+                && release.version == release.definition.version
+                && tool_middleware_metadata_digest(&release.metadata_version, &release.definition)
+                    .is_ok_and(|digest| digest == release.metadata_digest);
+            if !valid {
+                errors.push(DeployValidationError::ToolMiddleware {
+                    middleware_name: Some(deployment.name.clone()),
+                    agent_type_name: None,
+                    tool_name: None,
+                    message: "remote release identity, version, or digest is invalid".to_string(),
+                });
+                continue;
+            }
+            let ToolMiddlewareReleaseSource::Component {
+                component_id,
+                component_revision,
+                component_name,
+            } = &release.source;
+            let registration = RegisteredToolMiddleware {
+                deployment_revision,
+                release_id: Some(release.id),
+                definition: release.definition.clone(),
+                provision: deployment.provision.clone(),
+                source: ToolMiddlewareSource::Component {
+                    component_id: *component_id,
+                    component_revision: *component_revision,
+                    component_name: component_name.clone(),
+                },
+                owner_account_id: release.owner_account_id,
+                owner_account_email: resolved.owner.email.clone(),
+                metadata_version: release.metadata_version.clone(),
+                metadata_digest: release.metadata_digest,
+            };
+            if registrations
+                .insert(deployment.name.clone(), registration)
+                .is_some()
+            {
+                errors.push(DeployValidationError::ToolMiddleware {
+                    middleware_name: Some(deployment.name.clone()),
+                    agent_type_name: None,
+                    tool_name: None,
+                    message: "multiple local or remote implementations".to_string(),
+                });
+            }
+        }
+        registrations.into_values().collect()
+    }
+
+    pub fn tool_middleware_binding_inputs(
+        &self,
+        remote_tools: &[RemoteToolDeployment],
+    ) -> (
+        BTreeMap<ToolName, ToolBindingInput>,
+        BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+    ) {
+        let mut environment = BTreeMap::new();
+        let mut agents = BTreeMap::new();
+        for component in self.components.values() {
+            for (name, metadata) in component.metadata.tools() {
+                if let Some(binding) = &metadata.environment_binding {
+                    environment.insert(name.clone(), binding.clone());
+                }
+                for (agent, binding) in &metadata.agent_bindings {
+                    agents
+                        .entry(agent.clone())
+                        .or_insert_with(BTreeMap::new)
+                        .insert(name.clone(), binding.clone());
+                }
+            }
+        }
+        for remote in remote_tools {
+            if let Some(binding) = &remote.environment_binding {
+                environment.insert(remote.name.clone(), binding.clone());
+            }
+            for (agent, binding) in &remote.agent_bindings {
+                agents
+                    .entry(agent.clone())
+                    .or_insert_with(BTreeMap::new)
+                    .insert(remote.name.clone(), binding.clone());
+            }
+        }
+        (environment, agents)
+    }
+
     pub fn new(
         environment: Environment,
         components: Vec<Component>,
@@ -133,8 +301,20 @@ impl DeploymentContext {
         &self,
         compiled_tools: &CompiledTools,
         published_tools: &[ToolName],
+        registered_tool_middlewares: &[RegisteredToolMiddleware],
+        published_tool_middlewares: &[ToolMiddlewareName],
+        universal_tool_middlewares: &[golem_common::model::tool_middleware::ToolMiddlewareInstallation],
+        tool_compatibility_mode: golem_common::schema::tool::compatibility::ToolCompatibilityMode,
+        environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     ) -> Result<diff::Hash, diff::DiffError> {
         let published_tools = published_tools.iter().map(ToString::to_string).collect();
+        let published_tool_middlewares = published_tool_middlewares
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let (environment_tool_middleware_bindings, agent_tool_middleware_bindings) =
+            diff::tool_middleware_binding_inputs(environment_tool_bindings, agent_tool_bindings);
         let diffable = diff::Deployment {
             components: self
                 .components
@@ -157,6 +337,15 @@ impl DeploymentContext {
                 &published_tools,
             )?,
             published_tools,
+            remote_tool_middleware_deployments: diff::remote_tool_middleware_deployments(
+                registered_tool_middlewares.to_vec(),
+                &published_tool_middlewares,
+            )?,
+            published_tool_middlewares,
+            universal_tool_middlewares: universal_tool_middlewares.to_vec(),
+            tool_compatibility_mode,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
         };
         diffable.hash()
     }
@@ -981,6 +1170,14 @@ fn validate_tool_binding<'a>(
     errors: &mut Vec<DeployValidationError>,
 ) -> Option<&'a ToolBindingInput> {
     let mut valid = true;
+    if agent_type.is_none() && binding.middleware_merge_mode.is_some() {
+        valid = false;
+        errors.push(
+            DeployValidationError::ToolBindingEnvironmentMiddlewareMergeMode {
+                tool_name: tool_name.clone(),
+            },
+        );
+    }
     if let Some(version) = &binding.version
         && version != tool_version
     {
@@ -1826,6 +2023,7 @@ mod tests {
             account: Some(AccountEmail::new("other@example.com")),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            ..ToolBindingInput::default()
         };
         let component = test_tool_component(
             "tools",
@@ -1900,6 +2098,7 @@ mod tests {
             account: Some(AccountEmail::new("other@example.com")),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            ..ToolBindingInput::default()
         };
         let component = test_tool_component(
             "tools",
@@ -2005,6 +2204,7 @@ mod tests {
             account: Some(AccountEmail::new("other@example.com")),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            ..ToolBindingInput::default()
         };
         let metadata = ToolDeploymentMetadata {
             definition: test_tool(tool_name.as_str()),
@@ -2070,6 +2270,7 @@ mod tests {
             account: Some(AccountEmail::new("other@example.com")),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            ..ToolBindingInput::default()
         };
         let component = test_tool_component(
             "tools",
@@ -2139,6 +2340,7 @@ mod tests {
                 readable_path.clone(),
                 dropped_path,
             ])),
+            ..ToolBindingInput::default()
         };
         let agent = ToolBindingInput {
             version: None,
@@ -2149,6 +2351,7 @@ mod tests {
             account: None,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            ..ToolBindingInput::default()
         };
         let component = test_tool_component("tools", BTreeMap::new());
         let source = ToolSource::Component {

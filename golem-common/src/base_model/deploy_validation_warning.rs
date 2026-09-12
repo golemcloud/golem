@@ -22,6 +22,7 @@
 use super::agent::{AgentTypeName, HttpMethod};
 use super::component::ComponentId;
 use super::tool::ToolName;
+use super::tool_middleware::ToolMiddlewareName;
 use crate::{declare_structs, declare_unions};
 use std::fmt;
 
@@ -40,7 +41,10 @@ declare_unions! {
 
         /// Revealable secret keys requested by a tool binding were outside
         /// its effective readable scope and were removed during compilation.
-        ToolRevealableSecretKeysDropped(ToolRevealableSecretKeysDropped)
+        ToolRevealableSecretKeysDropped(ToolRevealableSecretKeysDropped),
+
+        /// A non-fatal tool middleware compilation diagnostic.
+        ToolMiddleware(ToolMiddlewareWarning)
     }
 }
 
@@ -63,6 +67,13 @@ declare_structs! {
     pub struct ToolRevealableSecretKeysDropped {
         pub agent_type: AgentTypeName,
         pub tool_name: ToolName,
+    }
+
+    pub struct ToolMiddlewareWarning {
+        pub middleware_name: Option<ToolMiddlewareName>,
+        pub agent_type: Option<AgentTypeName>,
+        pub tool_name: Option<ToolName>,
+        pub message: String,
     }
 }
 
@@ -89,6 +100,22 @@ impl fmt::Display for DeployValidationWarning {
                 "Tool `{tool_name}` binding for agent `{agent_type}` requested revealable secret keys outside its effective readable scope; those keys were dropped.",
                 tool_name = w.tool_name,
                 agent_type = w.agent_type,
+            ),
+            DeployValidationWarning::ToolMiddleware(w) => write!(
+                f,
+                "Tool middleware{middleware}{agent_tool}: {message}",
+                middleware = w
+                    .middleware_name
+                    .as_ref()
+                    .map(|name| format!(" {name}"))
+                    .unwrap_or_default(),
+                agent_tool = w
+                    .agent_type
+                    .as_ref()
+                    .zip(w.tool_name.as_ref())
+                    .map(|(agent, tool)| format!(" for agent {agent} and tool {tool}"))
+                    .unwrap_or_default(),
+                message = w.message,
             ),
         }
     }

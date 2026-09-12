@@ -19,6 +19,8 @@ use crate::repo::model::environment_tool_grant::{
 use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
 };
+use crate::repo::release_grant_lifecycle::{self as lifecycle, GrantKind};
+use crate::repo::tool_release::ToolReleaseKind;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -535,6 +537,10 @@ const GRANT_DETAILS_SELECT: &str = r#"
         ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
 "#;
 
+impl GrantKind for ToolReleaseKind {
+    const GRANT_ID: &'static str = "environment_tool_grant_id";
+}
+
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
@@ -672,20 +678,11 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         let result = self
             .with_rw("delete")
             .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    UPDATE environment_tool_grants
-                    SET state_changed_at = $2, state_changed_by = $3,
-                        deleted_at = $2, deleted_by = $3
-                    WHERE environment_tool_grant_id = $1
-                        AND deleted_at IS NULL
-                        AND NOT protected
-                        AND (NOT $4 OR automatic)
-                    RETURNING environment_tool_grant_id
-                "#})
-                .bind(grant_id)
-                .bind(SqlDateTime::now())
-                .bind(actor)
-                .bind(automatic_only),
+                sqlx::query(&lifecycle::delete_grant::<ToolReleaseKind>())
+                    .bind(grant_id)
+                    .bind(SqlDateTime::now())
+                    .bind(actor)
+                    .bind(automatic_only),
             )
             .await?;
         Ok(result.is_some())
@@ -719,17 +716,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
                     }
                     let updated = tx
                         .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE environment_tool_grants
-                                SET automatic = $4, follow_coordinates = $5,
-                                    state_changed_at = $6, state_changed_by = $7
-                                WHERE environment_tool_grant_id = $1
-                                    AND environment_id = $2
-                                    AND tool_release_id = $3
-                                    AND deleted_at IS NULL
-                                    AND NOT protected
-                                    AND (NOT $4 OR automatic)
-                            "#})
+                            sqlx::query(&lifecycle::set_grant_management::<ToolReleaseKind>())
                             .bind(grant_id)
                             .bind(environment_id)
                             .bind(release_id)
@@ -797,18 +784,7 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
                     }
                     let updated = tx
                         .execute(
-                            sqlx::query(indoc! { r#"
-                                UPDATE environment_tool_grants
-                                SET state_changed_at = $4, state_changed_by = $5,
-                                    automatic = $6,
-                                    follow_coordinates = COALESCE($7, follow_coordinates),
-                                    deleted_at = NULL, deleted_by = NULL
-                                WHERE environment_tool_grant_id = $1
-                                    AND environment_id = $2
-                                    AND tool_release_id = $3
-                                    AND deleted_at IS NOT NULL
-                                    AND NOT protected
-                            "#})
+                            sqlx::query(&lifecycle::restore_grant::<ToolReleaseKind>(false))
                             .bind(grant_id)
                             .bind(environment_id)
                             .bind(release_id)
@@ -858,21 +834,12 @@ impl EnvironmentToolGrantRepo for DbEnvironmentToolGrantRepo<PostgresPool> {
         let updated = self
             .with_rw("restore_protected")
             .execute(
-                sqlx::query(indoc! { r#"
-                    UPDATE environment_tool_grants
-                    SET state_changed_at = $4, state_changed_by = $5,
-                        deleted_at = NULL, deleted_by = NULL
-                    WHERE environment_tool_grant_id = $1
-                        AND environment_id = $2
-                        AND tool_release_id = $3
-                        AND deleted_at IS NOT NULL
-                        AND protected
-                "#})
-                .bind(grant_id)
-                .bind(environment_id)
-                .bind(release_id)
-                .bind(now)
-                .bind(actor),
+                sqlx::query(&lifecycle::restore_grant::<ToolReleaseKind>(true))
+                    .bind(grant_id)
+                    .bind(environment_id)
+                    .bind(release_id)
+                    .bind(now)
+                    .bind(actor),
             )
             .await?;
         if updated.rows_affected() != 1 {

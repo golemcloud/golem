@@ -56,7 +56,7 @@
 
 use super::{
     CommandBody, CommandIndex, CommandNode, Constraint, Globals, OptionShape, OptionSpec,
-    Positional, Ref, Tool,
+    Positional, Ref, Tool, ToolMiddleware, ToolMiddlewareScope,
 };
 use crate::schema::graph::{RefResolutionError, SchemaGraph};
 use crate::schema::metadata::TypeId;
@@ -83,6 +83,8 @@ pub fn is_valid_identifier(s: &str) -> bool {
 /// A single producer-side construction-invariant violation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolValidationError {
+    /// A tool version must contain at least one non-whitespace character.
+    EmptyVersion,
     /// The command tree has no nodes (it must contain at least the root).
     EmptyCommandTree,
     /// A `command-index` references a node outside the command tree.
@@ -145,6 +147,7 @@ pub enum ToolValidationError {
 impl Display for ToolValidationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            ToolValidationError::EmptyVersion => write!(f, "the tool version is empty"),
             ToolValidationError::EmptyCommandTree => {
                 write!(f, "the command tree is empty")
             }
@@ -255,11 +258,94 @@ impl std::error::Error for ToolValidationError {}
 /// Validate a [`Tool`] against the producer-side construction invariants.
 pub fn validate_tool(tool: &Tool) -> Result<(), Vec<ToolValidationError>> {
     let mut ctx = Validator::new(tool);
+    if tool.version.trim().is_empty() {
+        ctx.errors.push(ToolValidationError::EmptyVersion);
+    }
     ctx.run();
     if ctx.errors.is_empty() {
         Ok(())
     } else {
         Err(ctx.errors)
+    }
+}
+
+/// A producer-side construction-invariant violation in tool middleware metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolMiddlewareValidationError {
+    EmptyVersion,
+    InvalidIdentifier { kind: &'static str, value: String },
+    DuplicateIdentity { value: String },
+    InvalidPresentedTool(Vec<ToolValidationError>),
+    InvalidExpectedTool(Vec<ToolValidationError>),
+}
+
+impl Display for ToolMiddlewareValidationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyVersion => write!(f, "the tool middleware version is empty"),
+            Self::InvalidIdentifier { kind, value } => write!(f, "invalid {kind}: {value:?}"),
+            Self::DuplicateIdentity { value } => {
+                write!(f, "duplicate tool middleware name or alias: {value:?}")
+            }
+            Self::InvalidPresentedTool(errors) => {
+                write!(f, "invalid presented tool descriptor: {errors:?}")
+            }
+            Self::InvalidExpectedTool(errors) => {
+                write!(f, "invalid expected tool descriptor: {errors:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ToolMiddlewareValidationError {}
+
+/// Validate middleware identity metadata and every embedded tool descriptor.
+pub fn validate_tool_middleware(
+    middleware: &ToolMiddleware,
+) -> Result<(), Vec<ToolMiddlewareValidationError>> {
+    let mut errors = Vec::new();
+    if middleware.version.trim().is_empty() {
+        errors.push(ToolMiddlewareValidationError::EmptyVersion);
+    }
+    let mut identities = HashSet::new();
+    for (kind, identity) in std::iter::once(("tool middleware name", &middleware.name)).chain(
+        middleware
+            .aliases
+            .iter()
+            .map(|alias| ("tool middleware alias", alias)),
+    ) {
+        if !is_valid_identifier(identity) {
+            errors.push(ToolMiddlewareValidationError::InvalidIdentifier {
+                kind,
+                value: identity.clone(),
+            });
+        }
+        if !identities.insert(identity) {
+            errors.push(ToolMiddlewareValidationError::DuplicateIdentity {
+                value: identity.clone(),
+            });
+        }
+    }
+
+    if let ToolMiddlewareScope::Monomorphic(scope) = &middleware.scope {
+        if let Err(tool_errors) = validate_tool(&scope.presented) {
+            errors.push(ToolMiddlewareValidationError::InvalidPresentedTool(
+                tool_errors,
+            ));
+        }
+        if let Some(expected) = &scope.expected
+            && let Err(tool_errors) = validate_tool(expected)
+        {
+            errors.push(ToolMiddlewareValidationError::InvalidExpectedTool(
+                tool_errors,
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
     }
 }
 
@@ -1350,3 +1436,6 @@ fn collect_refs(constraint: &Constraint) -> Vec<&Ref> {
         Constraint::Forbids(forbids) => forbids.lhs.iter().chain(forbids.rhs.iter()).collect(),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -60,6 +60,7 @@ pub using @toolCore {
   encode_invocation_input,
   encode_result_value,
   encode_error_payload,
+  decode_named_tool_error,
   invocation_result_empty,
   invocation_result_value,
   invocation_result_stdout,

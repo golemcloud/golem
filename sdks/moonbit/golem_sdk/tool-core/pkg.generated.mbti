@@ -23,6 +23,8 @@ pub fn decode_invocation_input(@types.TypedSchemaValue, Int, String) -> Array[@s
 
 pub fn decode_invocation_result(@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult) -> Result[InvocationResult, String]
 
+pub fn[E : ToolErrorSchema] decode_named_tool_error(String, @schema_model.TypedSchemaValue) -> Result[E, String]?
+
 pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
 pub fn decode_typed_value(@types.TypedSchemaValue, String) -> Result[@schema_model.TypedSchemaValue, String]
@@ -330,6 +332,6 @@ pub using @golemcloud/golem_sdk/interface/golem/agent/common {type Principal}
 // Traits
 pub(open) trait ToolErrorSchema {
   fn error_cases() -> Result[Array[ErrorCaseDef], ToolBuildError]
-  fn to_error_payload_value(Self) -> Result[@schema_model.TypedSchemaValue, String]
-  fn from_error_payload_value(@schema_model.TypedSchemaValue) -> Result[Self, String]
+  fn to_error_payload_value(Self) -> Result[(String, @schema_model.TypedSchemaValue), String]
+  fn from_error_payload_value(String, @schema_model.TypedSchemaValue) -> Result[Self, String]
 }

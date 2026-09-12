@@ -345,8 +345,13 @@ pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
     pub agent_types: Vec<AgentTypeSchema>,
     pub tools: Vec<Tool>,
+    pub tool_middlewares: Vec<golem_common::schema::tool::ToolMiddleware>,
     pub agent_type_configs: BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,
     pub tool_deployment_configs: BTreeMap<ToolName, ToolManifestDeploymentConfig>,
+    pub tool_middleware_provision_configs: BTreeMap<
+        golem_common::model::tool_middleware::ToolMiddlewareName,
+        ToolManifestProvisionConfig,
+    >,
 }
 
 #[derive(Debug)]
@@ -360,6 +365,16 @@ pub struct ResolvedManifestComponentsAndTools {
 pub struct RemoteToolDeploymentPlan {
     pub deployments: BTreeMap<ToolName, tool::RemoteToolDeployment>,
     pub diffable_deployments: BTreeMap<String, diff::HashOf<diff::RemoteToolDeployment>>,
+    pub pending_initial_files: Vec<PendingRemoteInitialFile>,
+}
+
+#[derive(Debug, Default)]
+pub struct RemoteToolMiddlewareDeploymentPlan {
+    pub deployments: BTreeMap<
+        golem_common::model::tool_middleware::ToolMiddlewareName,
+        golem_common::model::tool_middleware::RemoteToolMiddlewareDeployment,
+    >,
+    pub diffable_deployments: BTreeMap<String, diff::HashOf<diff::RemoteToolMiddlewareDeployment>>,
     pub pending_initial_files: Vec<PendingRemoteInitialFile>,
 }
 

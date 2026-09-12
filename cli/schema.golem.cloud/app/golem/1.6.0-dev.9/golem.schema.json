@@ -44,7 +44,13 @@
     },
     "tools": {
       "type": "object",
-      "description": "Canonical tool declarations by logical tool name. A declaration may select a local implementing component or an exact published release; all consumers refer to the logical name.",
+      "description": "Canonical tool declarations by logical tool name. A declaration may select a local implementing component or an exact published release; all consumers refer to the logical name. The name 'middleware' is reserved for tool middleware declarations and cannot be used as a tool name.",
+      "properties": {
+        "middleware": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/toolMiddlewareDeclaration" }
+        }
+      },
       "propertyNames": {
         "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
       },
@@ -132,6 +138,15 @@
           "type": "object",
           "maxProperties": 0
         }
+      }
+    },
+    "toolMiddlewareReleases": {
+      "type": "object",
+      "description": "Local tool middlewares to publish as immutable grantable releases by environment name.",
+      "additionalProperties": {
+        "type": "object",
+        "propertyNames": { "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+        "additionalProperties": { "type": "object", "maxProperties": 0 }
       }
     }
   },
@@ -921,8 +936,46 @@
         },
         "secretKeysRevealable": {
           "$ref": "#/definitions/secretKeyScope"
+        },
+        "filesystemAccess": {
+          "$ref": "#/definitions/toolFilesystemAccess"
+        },
+        "middleware": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/toolMiddlewareInstallation" }
+        },
+        "middlewareMergeMode": {
+          "$ref": "#/definitions/toolMiddlewareMergeMode"
         }
       }
+    },
+    "environmentToolBinding": {
+      "allOf": [
+        { "$ref": "#/definitions/toolBinding" },
+        {
+          "not": { "required": ["middlewareMergeMode"] }
+        }
+      ]
+    },
+    "toolMiddlewareInstallation": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+            "version": { "type": "string" }, "parameters": {}, "account": { "type": "string" },
+            "filesystemAccess": { "$ref": "#/definitions/toolFilesystemAccess" }
+          }
+        }
+      ]
+    },
+    "toolMiddlewareMergeMode": { "enum": ["prepend", "append", "replace"] },
+    "toolFilesystemAccess": { "enum": ["unset", "allowed", "denied"] },
+    "environmentTools": {
+      "type": "object",
+      "properties": { "middleware": { "type": "array", "items": { "$ref": "#/definitions/toolMiddlewareInstallation" } } },
+      "additionalProperties": { "$ref": "#/definitions/environmentToolBinding" }
     },
     "secretKeyMergeMode": {
       "type": "string",
@@ -1148,6 +1201,9 @@
         "version": {
           "$ref": "#/definitions/appVersionSourceOverride",
           "description": "Per-environment override, layered over the application-wide version source."
+        },
+        "tools": {
+          "$ref": "#/definitions/environmentTools"
         }
       }
     },
@@ -1254,6 +1310,9 @@
       "properties": {
         "compatibilityCheck": {
           "type": "boolean"
+        },
+        "compatibilityMode": {
+          "enum": ["strict-equality", "structural-subtype", "nominal"]
         },
         "versionCheck": {
           "type": "boolean"
@@ -1653,6 +1712,26 @@
         "name",
         "version"
       ]
+    },
+    "toolMiddlewareDeclaration": {
+      "description": "Canonical declaration and provision properties for a tool middleware.",
+      "type": "object", "additionalProperties": false,
+      "not": { "required": ["component", "release"] },
+      "properties": {
+        "component": { "type": "string" },
+        "release": { "$ref": "#/definitions/toolMiddlewareRegistrySubject" },
+        "templates": { "$ref": "#/definitions/lenientTokenList" },
+        "config": {}, "envMergeMode": { "$ref": "#/definitions/mapMergeMode" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "pluginsMergeMode": { "$ref": "#/definitions/vecMergeMode" },
+        "plugins": { "type": "array", "items": { "$ref": "#/definitions/pluginInstallation" } },
+        "filesMergeMode": { "$ref": "#/definitions/vecMergeMode" },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/initialComponentFile" } },
+        "presets": { "type": "object", "additionalProperties": { "$ref": "#/definitions/toolPreset" } }
+      }
+    },
+    "toolMiddlewareRegistrySubject": {
+      "$ref": "#/definitions/registrySubject"
     },
     "bridgeSdks": {
       "description": "Bridge SDK generator configuration",

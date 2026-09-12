@@ -378,7 +378,7 @@ supported_targets = "+wasm"
                 .collect::<Vec<_>>(),
         );
         let error_decoder = if body.errors.is_empty() {
-            "fn(_) { Err(\"remote custom tool error is not declared by this client\") }".to_string()
+            "fn(_, _) { None }".to_string()
         } else {
             error_decoder_name(
                 self.error_names
@@ -489,48 +489,70 @@ supported_targets = "+wasm"
 
             writer.line("///|");
             writer.line(format!(
-                "fn {}(value : @model.TypedSchemaValue) -> Result[{error_name}, String] {{",
+                "fn {}(name : String, value : @model.TypedSchemaValue) -> Result[{error_name}, String]? {{",
                 error_decoder_name(error_name)
             ));
             writer.indent();
+            writer.line("match name {");
+            writer.indent();
+            let mut grouped = BTreeMap::<&str, Vec<_>>::new();
             for (case, variant) in body.errors.iter().zip(&variants) {
-                let (typ, decode) = match &case.payload {
-                    Some(payload) => (
-                        self.inner.type_reference_with_multimodal(payload)?,
-                        guest_codec_source(
-                            self.inner
-                                .decode_expr_with_multimodal("value.value", payload)?,
+                grouped
+                    .entry(case.name.as_str())
+                    .or_default()
+                    .push((case, variant));
+            }
+            for (name, cases) in grouped {
+                writer.line(format!("{} => {{", moonbit_string_literal(name)));
+                writer.indent();
+                for (case, variant) in cases {
+                    let (typ, decode) = match &case.payload {
+                        Some(payload) => (
+                            self.inner.type_reference_with_multimodal(payload)?,
+                            guest_codec_source(
+                                self.inner
+                                    .decode_expr_with_multimodal("value.value", payload)?,
+                            ),
                         ),
-                    ),
-                    None => (
-                        "Unit".to_string(),
-                        guest_codec_source(self.inner.decode_expr(
-                            "value.value",
-                            &golem_common::schema::SchemaType::tuple(vec![]),
-                            0,
-                        )?),
-                    ),
-                };
-                writer.line(format!("let decoded : {typ}? = try {{"));
-                writer.indent();
-                writer.line(format!("Some({decode})"));
-                writer.dedent();
-                writer.line("} catch{");
-                writer.indent();
-                writer.line("_ => None");
-                writer.dedent();
-                writer.line("}");
-                writer.line("if decoded is Some(payload) {");
-                writer.indent();
-                if case.payload.is_some() {
-                    writer.line(format!("return Ok({error_name}::{variant}(payload))"));
-                } else {
-                    writer.line(format!("return Ok({error_name}::{variant})"));
+                        None => (
+                            "Unit".to_string(),
+                            guest_codec_source(self.inner.decode_expr(
+                                "value.value",
+                                &golem_common::schema::SchemaType::tuple(vec![]),
+                                0,
+                            )?),
+                        ),
+                    };
+                    writer.line(format!("let decoded : {typ}? = try {{"));
+                    writer.indent();
+                    writer.line(format!("Some({decode})"));
+                    writer.dedent();
+                    writer.line("} catch{");
+                    writer.indent();
+                    writer.line("_ => None");
+                    writer.dedent();
+                    writer.line("}");
+                    writer.line(if case.payload.is_some() {
+                        "if decoded is Some(payload) {"
+                    } else {
+                        "if decoded is Some(_) {"
+                    });
+                    writer.indent();
+                    if case.payload.is_some() {
+                        writer.line(format!("return Some(Ok({error_name}::{variant}(payload)))"));
+                    } else {
+                        writer.line(format!("return Some(Ok({error_name}::{variant}))"));
+                    }
+                    writer.dedent();
+                    writer.line("}");
                 }
+                writer.line("Some(Err(\"remote tool error payload is malformed for case `\" + name + \"`\"))");
                 writer.dedent();
                 writer.line("}");
             }
-            writer.line("Err(\"remote tool error payload did not match any declared error case\")");
+            writer.line("_ => None");
+            writer.dedent();
+            writer.line("}");
             writer.dedent();
             writer.line("}");
             writer.blank();

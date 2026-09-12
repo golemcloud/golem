@@ -25,7 +25,14 @@ use crate::model::tool::{
     CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
     ToolName, ToolProvisionConfig, ToolSource,
 };
+use crate::model::tool_middleware::{
+    RegisteredToolMiddleware, ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
+};
+use crate::model::tool_middleware_release::{
+    ToolMiddlewareReleaseId, ToolMiddlewareReleaseMetadata, tool_middleware_source_digest,
+};
 use crate::model::tool_release::ToolReleaseId;
+use crate::schema::tool::compatibility::ToolCompatibilityMode;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,12 +49,14 @@ pub fn effective_tool_binding(
     environment: Option<&ToolBindingInput>,
     agent: Option<&ToolBindingInput>,
 ) -> Option<(EffectiveToolBinding, bool)> {
-    let (parameters, readable, requested_revealable) = match (environment, agent) {
+    let (parameters, readable, requested_revealable, filesystem_access) = match (environment, agent)
+    {
         (None, None) => return None,
         (Some(binding), None) | (None, Some(binding)) => (
             binding.parameters.clone(),
             binding.secret_keys_readable.clone(),
             binding.secret_keys_revealable.clone(),
+            binding.filesystem_access,
         ),
         (Some(environment), Some(agent)) => {
             let mut parameters = environment
@@ -72,6 +81,15 @@ pub fn effective_tool_binding(
                 environment
                     .secret_keys_revealable
                     .intersection(&agent.secret_keys_revealable),
+                match (environment.filesystem_access, agent.filesystem_access) {
+                    (ToolFilesystemAccess::Denied, _) | (_, ToolFilesystemAccess::Denied) => {
+                        ToolFilesystemAccess::Denied
+                    }
+                    (ToolFilesystemAccess::Allowed, _) | (_, ToolFilesystemAccess::Allowed) => {
+                        ToolFilesystemAccess::Allowed
+                    }
+                    _ => ToolFilesystemAccess::Unset,
+                },
             )
         }
     };
@@ -82,7 +100,7 @@ pub fn effective_tool_binding(
             parameters,
             secret_keys_readable: readable,
             secret_keys_revealable: revealable,
-            filesystem_access: ToolFilesystemAccess::Unset,
+            filesystem_access,
         },
         revealable_scope_narrowed,
     ))
@@ -190,6 +208,141 @@ pub fn remote_tool_deployments(
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteToolMiddlewareDeployment {
+    pub release_id: ToolMiddlewareReleaseId,
+    pub version: String,
+    pub source_digest: Hash,
+    pub owner_account_id: AccountId,
+    pub owner_account_email: AccountEmail,
+    pub metadata_version: String,
+    pub metadata_digest: Hash,
+    pub provision: ToolProvisionConfig,
+}
+
+impl RemoteToolMiddlewareDeployment {
+    pub fn from_metadata(
+        metadata: &ToolMiddlewareReleaseMetadata,
+        owner_account_id: AccountId,
+        owner_account_email: AccountEmail,
+        provision: ToolProvisionConfig,
+    ) -> Self {
+        Self {
+            release_id: metadata.id,
+            version: metadata.version.clone(),
+            source_digest: metadata.source_digest,
+            owner_account_id,
+            owner_account_email,
+            metadata_version: metadata.metadata_version.clone(),
+            metadata_digest: metadata.metadata_digest,
+            provision,
+        }
+    }
+}
+
+impl Hashable for RemoteToolMiddlewareDeployment {
+    fn hash(&self) -> Result<Hash, DiffError> {
+        hash_from_serialized_value(self)
+    }
+}
+
+impl Diffable for RemoteToolMiddlewareDeployment {
+    type DiffResult = RemoteToolMiddlewareDeployment;
+
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok((new != current).then(|| new.clone()))
+    }
+}
+
+pub fn remote_tool_middleware_deployments(
+    registered_middlewares: impl IntoIterator<Item = RegisteredToolMiddleware>,
+    published_middlewares: &BTreeSet<String>,
+) -> Result<BTreeMap<String, HashOf<RemoteToolMiddlewareDeployment>>, DiffError> {
+    registered_middlewares
+        .into_iter()
+        .filter_map(|middleware| {
+            let name = middleware.definition.name.clone();
+            if published_middlewares.contains(&name) {
+                return middleware.release_id.is_none().then(|| {
+                    Err(DiffError::RemoteToolIdentityInvariantViolation {
+                        reason: format!("published tool middleware {name} has no release id"),
+                    })
+                });
+            }
+            let release_id = middleware.release_id?;
+            Some(Ok((
+                name,
+                RemoteToolMiddlewareDeployment {
+                    release_id,
+                    version: middleware.definition.version.clone(),
+                    source_digest: tool_middleware_source_digest(&middleware.source),
+                    owner_account_id: middleware.owner_account_id,
+                    owner_account_email: middleware.owner_account_email,
+                    metadata_version: middleware.metadata_version,
+                    metadata_digest: middleware.metadata_digest,
+                    provision: middleware.provision,
+                }
+                .into(),
+            )))
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolMiddlewareBindingInput {
+    pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
+    pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
+}
+
+impl From<&ToolBindingInput> for ToolMiddlewareBindingInput {
+    fn from(value: &ToolBindingInput) -> Self {
+        Self {
+            middleware: value.middleware.clone(),
+            middleware_merge_mode: value.middleware_merge_mode,
+        }
+    }
+}
+
+impl Diffable for ToolMiddlewareBindingInput {
+    type DiffResult = ToolMiddlewareBindingInput;
+
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok((new != current).then(|| new.clone()))
+    }
+}
+
+pub fn has_tool_middleware_binding_input(binding: &ToolBindingInput) -> bool {
+    binding.middleware.is_some() || binding.middleware_merge_mode.is_some()
+}
+
+pub fn tool_middleware_binding_inputs(
+    environment: &BTreeMap<ToolName, ToolBindingInput>,
+    agents: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+) -> (
+    BTreeMap<String, ToolMiddlewareBindingInput>,
+    BTreeMap<String, BTreeMap<String, ToolMiddlewareBindingInput>>,
+) {
+    let environment = environment
+        .iter()
+        .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
+        .map(|(name, binding)| (name.to_string(), binding.into()))
+        .collect();
+    let agents = agents
+        .iter()
+        .filter_map(|(agent, bindings)| {
+            let bindings = bindings
+                .iter()
+                .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
+                .map(|(name, binding)| (name.to_string(), binding.into()))
+                .collect::<BTreeMap<_, _>>();
+            (!bindings.is_empty()).then(|| (agent.0.clone(), bindings))
+        })
+        .collect();
+    (environment, agents)
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Deployment {
@@ -207,6 +360,20 @@ pub struct Deployment {
     pub remote_tools: BTreeMap<String, HashOf<RemoteToolDeployment>>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub published_tools: BTreeSet<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(serialize_with = "serialize_with_mode")]
+    pub remote_tool_middleware_deployments:
+        BTreeMap<String, HashOf<RemoteToolMiddlewareDeployment>>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub published_tool_middlewares: BTreeSet<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+    pub tool_compatibility_mode: ToolCompatibilityMode,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub environment_tool_middleware_bindings: BTreeMap<String, ToolMiddlewareBindingInput>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_tool_middleware_bindings:
+        BTreeMap<String, BTreeMap<String, ToolMiddlewareBindingInput>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,6 +389,15 @@ pub struct DeploymentDiff {
     pub remote_tools: BTreeMapDiff<String, HashOf<RemoteToolDeployment>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub published_tools: BTreeSetDiff<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub remote_tool_middleware_deployments:
+        BTreeMapDiff<String, HashOf<RemoteToolMiddlewareDeployment>>,
+    pub published_tool_middlewares: BTreeSetDiff<String>,
+    pub universal_tool_middlewares_changed: bool,
+    pub tool_compatibility_mode_changed: bool,
+    pub environment_tool_middleware_bindings: BTreeMapDiff<String, ToolMiddlewareBindingInput>,
+    pub agent_tool_middleware_bindings:
+        BTreeMapDiff<String, BTreeMap<String, ToolMiddlewareBindingInput>>,
 }
 
 impl Diffable for Deployment {
@@ -239,6 +415,22 @@ impl Diffable for Deployment {
         let published_tools = new
             .published_tools
             .diff_with_current(&current.published_tools)?;
+        let remote_tool_middleware_deployments = new
+            .remote_tool_middleware_deployments
+            .diff_with_current(&current.remote_tool_middleware_deployments)?;
+        let published_tool_middlewares = new
+            .published_tool_middlewares
+            .diff_with_current(&current.published_tool_middlewares)?;
+        let environment_tool_middleware_bindings = new
+            .environment_tool_middleware_bindings
+            .diff_with_current(&current.environment_tool_middleware_bindings)?;
+        let agent_tool_middleware_bindings = new
+            .agent_tool_middleware_bindings
+            .diff_with_current(&current.agent_tool_middleware_bindings)?;
+        let universal_tool_middlewares_changed =
+            new.universal_tool_middlewares != current.universal_tool_middlewares;
+        let tool_compatibility_mode_changed =
+            new.tool_compatibility_mode != current.tool_compatibility_mode;
 
         Ok(
             if components.is_some()
@@ -246,6 +438,12 @@ impl Diffable for Deployment {
                 || mcp_deployments.is_some()
                 || remote_tools.is_some()
                 || published_tools.is_some()
+                || remote_tool_middleware_deployments.is_some()
+                || published_tool_middlewares.is_some()
+                || universal_tool_middlewares_changed
+                || tool_compatibility_mode_changed
+                || environment_tool_middleware_bindings.is_some()
+                || agent_tool_middleware_bindings.is_some()
             {
                 Some(DeploymentDiff {
                     components: components.unwrap_or_default(),
@@ -253,6 +451,15 @@ impl Diffable for Deployment {
                     mcp_deployments: mcp_deployments.unwrap_or_default(),
                     remote_tools: remote_tools.unwrap_or_default(),
                     published_tools: published_tools.unwrap_or_default(),
+                    remote_tool_middleware_deployments: remote_tool_middleware_deployments
+                        .unwrap_or_default(),
+                    published_tool_middlewares: published_tool_middlewares.unwrap_or_default(),
+                    universal_tool_middlewares_changed,
+                    tool_compatibility_mode_changed,
+                    environment_tool_middleware_bindings: environment_tool_middleware_bindings
+                        .unwrap_or_default(),
+                    agent_tool_middleware_bindings: agent_tool_middleware_bindings
+                        .unwrap_or_default(),
                 })
             } else {
                 None
@@ -265,13 +472,17 @@ impl Hashable for Deployment {
     fn hash(&self) -> Result<Hash, DiffError> {
         let mut deployment = self.clone();
         deployment.published_tools.clear();
+        deployment.published_tool_middlewares.clear();
         hash_from_serialized_value(&deployment)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Deployment, EffectiveToolBinding, RemoteToolDeployment, remote_tool_deployments};
+    use super::{
+        Deployment, EffectiveToolBinding, RemoteToolDeployment, remote_tool_deployments,
+        remote_tool_middleware_deployments,
+    };
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
     use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
@@ -279,12 +490,18 @@ mod tests {
     use crate::model::diff::{Hash, Hashable};
     use crate::model::json::NormalizedJsonValue;
     use crate::model::tool::{
-        HostToolId, RegisteredTool, SecretKeyScope, ToolFilesystemAccess, ToolProvisionConfig,
-        ToolSource,
+        HostToolId, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
+        ToolName, ToolProvisionConfig, ToolSource,
     };
+    use crate::model::tool_middleware::{
+        RegisteredToolMiddleware, ToolMiddlewareMergeMode, ToolMiddlewareSource,
+    };
+    use crate::model::tool_middleware_release::ToolMiddlewareReleaseId;
     use crate::model::tool_release::ToolReleaseId;
     use crate::schema::SchemaGraph;
-    use crate::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use crate::schema::tool::{
+        CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+    };
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
 
@@ -318,6 +535,168 @@ mod tests {
         }
         .hash()
         .unwrap()
+    }
+
+    fn registered_middleware(
+        deployment_revision: DeploymentRevision,
+        release_id: ToolMiddlewareReleaseId,
+    ) -> RegisteredToolMiddleware {
+        RegisteredToolMiddleware {
+            deployment_revision,
+            release_id: Some(release_id),
+            definition: ToolMiddleware {
+                name: "audit".to_string(),
+                version: "1.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Doc::default(),
+                scope: ToolMiddlewareScope::Universal,
+            },
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId(uuid::Uuid::from_u128(1)),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: ComponentName("middleware".to_string()),
+            },
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("owner@example.com"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Hash::new(blake3::hash(b"metadata")),
+        }
+    }
+
+    #[test]
+    fn middleware_registration_hash_ignores_deployment_revision_and_local_publication_id() {
+        let release_a = ToolMiddlewareReleaseId::new();
+        let release_b = ToolMiddlewareReleaseId::new();
+        let first = registered_middleware(DeploymentRevision::INITIAL, release_a);
+        let mut later = first.clone();
+        later.deployment_revision = DeploymentRevision::try_from(42_u64).unwrap();
+        let remote_a = remote_tool_middleware_deployments([first], &BTreeSet::new()).unwrap();
+        let remote_b = remote_tool_middleware_deployments([later], &BTreeSet::new()).unwrap();
+        assert_eq!(
+            remote_a["audit"].hash().unwrap(),
+            remote_b["audit"].hash().unwrap()
+        );
+
+        let published = BTreeSet::from(["audit".to_string()]);
+        let local_a = remote_tool_middleware_deployments(
+            [registered_middleware(
+                DeploymentRevision::INITIAL,
+                release_a,
+            )],
+            &published,
+        )
+        .unwrap();
+        let local_b = remote_tool_middleware_deployments(
+            [registered_middleware(
+                DeploymentRevision::INITIAL,
+                release_b,
+            )],
+            &published,
+        )
+        .unwrap();
+        assert!(local_a.is_empty());
+        assert!(local_b.is_empty());
+    }
+
+    #[test]
+    fn remote_middleware_metadata_changes_hash() {
+        let release = ToolMiddlewareReleaseId::new();
+        let first = registered_middleware(DeploymentRevision::INITIAL, release);
+        let mut changed = first.clone();
+        changed.metadata_digest = Hash::new(blake3::hash(b"changed metadata"));
+        let first = remote_tool_middleware_deployments([first], &BTreeSet::new()).unwrap();
+        let changed = remote_tool_middleware_deployments([changed], &BTreeSet::new()).unwrap();
+        assert_ne!(
+            first["audit"].hash().unwrap(),
+            changed["audit"].hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn middleware_snapshot_changes_deployment_hash() {
+        let base = Deployment::default().hash().unwrap();
+        let with_middleware = Deployment {
+            universal_tool_middlewares: vec![
+                crate::model::tool_middleware::ToolMiddlewareInstallation {
+                    name: "audit".try_into().unwrap(),
+                    version: Some("1.0.0".to_string()),
+                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                    account: None,
+                    filesystem_access: ToolFilesystemAccess::Denied,
+                },
+            ],
+            ..Deployment::default()
+        }
+        .hash()
+        .unwrap();
+
+        assert_ne!(base, with_middleware);
+    }
+
+    #[test]
+    fn middleware_binding_projection_hash_retains_mode_only_and_ignores_empty_bindings() {
+        let agent = AgentTypeName("Agent".to_string());
+        let tool = ToolName::try_from("grep").unwrap();
+        let empty_tool = ToolName::try_from("empty").unwrap();
+        let environment = BTreeMap::from([(empty_tool.clone(), ToolBindingInput::default())]);
+        let agents = BTreeMap::from([(
+            agent,
+            BTreeMap::from([
+                (
+                    tool,
+                    ToolBindingInput {
+                        middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+                        ..Default::default()
+                    },
+                ),
+                (empty_tool, ToolBindingInput::default()),
+            ]),
+        )]);
+
+        let (environment_bindings, agent_bindings) =
+            super::tool_middleware_binding_inputs(&environment, &agents);
+        assert!(environment_bindings.is_empty());
+        assert_eq!(agent_bindings["Agent"].len(), 1);
+        assert_eq!(
+            agent_bindings["Agent"]["grep"].middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Append)
+        );
+
+        let projected = Deployment {
+            environment_tool_middleware_bindings: environment_bindings,
+            agent_tool_middleware_bindings: agent_bindings,
+            ..Deployment::default()
+        };
+        assert_ne!(
+            projected.hash().unwrap(),
+            Deployment::default().hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn middleware_filesystem_policy_changes_deployment_hash() {
+        let installation =
+            |filesystem_access| crate::model::tool_middleware::ToolMiddlewareInstallation {
+                name: "audit".try_into().unwrap(),
+                version: None,
+                parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                account: None,
+                filesystem_access,
+            };
+        let hash = |filesystem_access| {
+            Deployment {
+                universal_tool_middlewares: vec![installation(filesystem_access)],
+                ..Deployment::default()
+            }
+            .hash()
+            .unwrap()
+        };
+
+        assert_ne!(
+            hash(ToolFilesystemAccess::Allowed),
+            hash(ToolFilesystemAccess::Denied)
+        );
     }
 
     fn registered_tool(

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentDeployProperties, RemoteToolDeploymentPlan};
+use crate::model::component::{
+    ComponentDeployProperties, RemoteToolDeploymentPlan, RemoteToolMiddlewareDeploymentPlan,
+};
 use crate::model::deploy::{
     DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode, EnvironmentSetupPlan,
     ToolPublicationPlan,
@@ -41,6 +43,7 @@ use tracing::debug;
 pub struct DeployableManifest {
     pub components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub remote_tools: RemoteToolDeploymentPlan,
+    pub remote_tool_middlewares: RemoteToolMiddlewareDeploymentPlan,
     pub http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
     #[allow(dead_code)]
     pub mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
@@ -115,6 +118,12 @@ impl DeployDiff {
             || !self.diff.mcp_deployments.is_empty()
             || !self.diff.remote_tools.is_empty()
             || !self.diff.published_tools.is_empty()
+            || !self.diff.remote_tool_middleware_deployments.is_empty()
+            || !self.diff.published_tool_middlewares.is_empty()
+            || self.diff.universal_tool_middlewares_changed
+            || self.diff.tool_compatibility_mode_changed
+            || !self.diff.environment_tool_middleware_bindings.is_empty()
+            || !self.diff.agent_tool_middleware_bindings.is_empty()
     }
 
     pub fn has_environment_setup_entries_to_apply(&self) -> bool {
@@ -151,6 +160,12 @@ impl DeployDiff {
             mcp_deployments: BTreeMap::new(),
             remote_tools: BTreeMap::new(),
             published_tools: BTreeMap::new(),
+            remote_tool_middleware_deployments: BTreeMap::new(),
+            published_tool_middlewares: BTreeMap::new(),
+            universal_tool_middlewares_changed: false,
+            tool_compatibility_mode_changed: false,
+            environment_tool_middleware_bindings: BTreeMap::new(),
+            agent_tool_middleware_bindings: BTreeMap::new(),
         }
     }
 

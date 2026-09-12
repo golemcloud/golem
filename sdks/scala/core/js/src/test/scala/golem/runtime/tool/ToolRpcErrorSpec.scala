@@ -30,7 +30,7 @@ import golem.tool.{
   ToolInvokeError,
   ToolRpcFailure
 }
-import golem.tool.wire.WitToolError
+import golem.tool.wire.{WitCustomToolError, WitToolError}
 import zio.test._
 import zio.ZIO
 
@@ -68,12 +68,12 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
     test("decodes remote-tool-error preserving the custom-error payload") {
       val original = payload("bad flag")
       val jsError  = ToolWireInterop.toolErrorToJs(
-        WitToolError.CustomError(SchemaWire.typedSchemaValueToWit(original))
+        WitToolError.CustomError(WitCustomToolError("failure", SchemaWire.typedSchemaValueToWit(original)))
       )
       val decoded = ToolHostApi.decodeRpcFailure(variant("remote-tool-error", jsError))
       decoded match {
-        case ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(roundTripped)) =>
-          assertTrue(roundTripped == original)
+        case ToolRpcFailure.RemoteToolError(ToolInvokeError.UnknownToolError(name, roundTripped)) =>
+          assertTrue(name == "failure", roundTripped == original)
         case other =>
           assertNever(s"expected remote tool custom error, got: $other")
       }

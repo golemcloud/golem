@@ -298,7 +298,7 @@ impl TypeScriptToolBridgeGenerator {
                 "{indent}throw {{ tag: 'rpc', error }} satisfies base.ToolRuntimeError<never>;\n"
             ));
         } else {
-            out.push_str(&format!("{indent}try {{ throw base.splitToolRpcError(error, decode{error_type}); }} catch (decodeError) {{ if ((decodeError as any)?.tag === 'rpc' || (decodeError as any)?.tag === 'tool') throw decodeError; throw protocol('failed to decode declared tool error', decodeError); }}\n"));
+            out.push_str(&format!("{indent}try {{ throw base.splitToolRpcError(error, (name, payload) => {{ const declared = decode{error_type}(name, payload); if (declared === undefined) throw {{ tag: 'rpc', error }}; return declared; }}); }} catch (decodeError) {{ if ((decodeError as any)?.tag === 'rpc' || (decodeError as any)?.tag === 'tool') throw decodeError; throw protocol('failed to decode declared tool error', decodeError); }}\n"));
         }
     }
 
@@ -351,7 +351,7 @@ impl TypeScriptToolBridgeGenerator {
                 .collect::<anyhow::Result<Vec<_>>>()?;
             out.push_str(&format!("export type {name} = {};\n", arms.join(" | ")));
             out.push_str(&format!(
-                "function decode{name}(typed: base.TypedSchemaValue): {name} {{\n"
+                "function decode{name}(name: string, typed: base.TypedSchemaValue): {name} | undefined {{\n"
             ));
             for (case, variant) in body.errors.iter().zip(&variants) {
                 let payload = case
@@ -366,10 +366,11 @@ impl TypeScriptToolBridgeGenerator {
                     format!("{{ tag: {} }}", q(variant)?)
                 };
                 out.push_str(&format!(
-                    "  {{ const expectedGraph = {graph}; if (base.typedSchemaValueConforms(expectedGraph, typed)) return {result}; }}\n"
+                    "  if (name === {}) {{ const expectedGraph = {graph}; if (!base.typedSchemaValueConforms(expectedGraph, typed)) throw new Error('remote tool error payload did not conform to the declared error case'); return {result}; }}\n",
+                    q(&case.name)?
                 ));
             }
-            out.push_str("  throw new Error('remote tool error payload did not match any declared error case');\n}\n\n");
+            out.push_str("  return undefined;\n}\n\n");
         }
         Ok(())
     }

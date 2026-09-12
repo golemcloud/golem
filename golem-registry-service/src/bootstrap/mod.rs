@@ -32,6 +32,9 @@ use crate::repo::environment_plugin_grant::{
     DbEnvironmentPluginGrantRepo, EnvironmentPluginGrantRepo,
 };
 use crate::repo::environment_tool_grant::{DbEnvironmentToolGrantRepo, EnvironmentToolGrantRepo};
+use crate::repo::environment_tool_middleware_grant::{
+    DbEnvironmentToolMiddlewareGrantRepo, EnvironmentToolMiddlewareGrantRepo,
+};
 use crate::repo::http_api_deployment::{DbHttpApiDeploymentRepo, HttpApiDeploymentRepo};
 use crate::repo::mcp_deployment::{DbMcpDeploymentRepo, McpDeploymentRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
@@ -45,6 +48,9 @@ use crate::repo::resource_definition::{DbResourceDefinitionRepo, ResourceDefinit
 use crate::repo::retry_policy::{DbRetryPolicyRepo, RetryPolicyRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
+use crate::repo::tool_middleware_release::{
+    DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepo,
+};
 use crate::repo::tool_release::{DbToolReleaseRepo, ToolReleaseRepo};
 use crate::services::account::AccountService;
 use crate::services::account_resource_override::AccountResourceOverrideService;
@@ -65,6 +71,7 @@ use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::environment_tool_grant::EnvironmentToolGrantService;
+use crate::services::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
 use crate::services::permission_share::PermissionShareService;
@@ -78,6 +85,7 @@ use crate::services::resource_definition::ResourceDefinitionService;
 use crate::services::retry_policy::RetryPolicyService;
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
+use crate::services::tool_middleware_release::ToolMiddlewareReleaseService;
 use crate::services::tool_release::ToolReleaseService;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
@@ -117,6 +125,7 @@ pub struct Services {
     pub domain_registration_service: Arc<DomainRegistrationService>,
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+    pub environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
     pub environment_service: Arc<EnvironmentService>,
     pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
@@ -131,6 +140,7 @@ pub struct Services {
     pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
     pub tool_release_service: Arc<ToolReleaseService>,
+    pub tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
 }
 
 struct Repos {
@@ -146,6 +156,7 @@ struct Repos {
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
     environment_tool_grant_repo: Arc<dyn EnvironmentToolGrantRepo>,
+    environment_tool_middleware_grant_repo: Arc<dyn EnvironmentToolMiddlewareGrantRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
@@ -160,6 +171,7 @@ struct Repos {
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     token_repo: Arc<dyn TokenRepo>,
     tool_release_repo: Arc<dyn ToolReleaseRepo>,
+    tool_middleware_release_repo: Arc<dyn ToolMiddlewareReleaseRepo>,
 }
 
 impl Services {
@@ -330,6 +342,17 @@ impl Services {
             tool_release_service.clone(),
         ));
 
+        let tool_middleware_release_service = Arc::new(ToolMiddlewareReleaseService::new(
+            repos.tool_middleware_release_repo.clone(),
+            account_service.clone(),
+        ));
+        let environment_tool_middleware_grant_service =
+            Arc::new(EnvironmentToolMiddlewareGrantService::new(
+                repos.environment_tool_middleware_grant_repo.clone(),
+                environment_service.clone(),
+                tool_middleware_release_service.clone(),
+            ));
+
         let component_write_service = Arc::new(ComponentWriteService::new(
             repos.component_repo.clone(),
             component_object_store,
@@ -417,6 +440,8 @@ impl Services {
             retry_policy_service.clone(),
             environment_tool_grant_service.clone(),
             tool_release_service.clone(),
+            environment_tool_middleware_grant_service.clone(),
+            tool_middleware_release_service.clone(),
         ));
 
         let deployed_routes_service =
@@ -486,6 +511,7 @@ impl Services {
             domain_registration_service,
             environment_plugin_grant_service,
             environment_tool_grant_service,
+            environment_tool_middleware_grant_service,
             environment_service,
             environment_state_service,
             http_api_deployment_service,
@@ -498,6 +524,7 @@ impl Services {
             security_scheme_service,
             token_service,
             tool_release_service,
+            tool_middleware_release_service,
         })
     }
 }
@@ -541,6 +568,11 @@ async fn make_repos(
             let environment_tool_grant_repo =
                 Arc::new(DbEnvironmentToolGrantRepo::logged(db_pool.clone()));
             let tool_release_repo = Arc::new(DbToolReleaseRepo::logged(db_pool.clone()));
+            let tool_middleware_release_repo =
+                Arc::new(DbToolMiddlewareReleaseRepo::logged(db_pool.clone()));
+            let environment_tool_middleware_grant_repo = Arc::new(
+                DbEnvironmentToolMiddlewareGrantRepo::logged(db_pool.clone()),
+            );
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
             let domain_registration_repo =
                 Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
@@ -566,6 +598,7 @@ async fn make_repos(
                 domain_registration_repo,
                 environment_plugin_grant_repo,
                 environment_tool_grant_repo,
+                environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
@@ -580,6 +613,7 @@ async fn make_repos(
                 security_scheme_repo,
                 token_repo,
                 tool_release_repo,
+                tool_middleware_release_repo,
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -611,6 +645,11 @@ async fn make_repos(
             let environment_tool_grant_repo =
                 Arc::new(DbEnvironmentToolGrantRepo::logged(db_pool.clone()));
             let tool_release_repo = Arc::new(DbToolReleaseRepo::logged(db_pool.clone()));
+            let tool_middleware_release_repo =
+                Arc::new(DbToolMiddlewareReleaseRepo::logged(db_pool.clone()));
+            let environment_tool_middleware_grant_repo = Arc::new(
+                DbEnvironmentToolMiddlewareGrantRepo::logged(db_pool.clone()),
+            );
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
             let domain_registration_repo =
                 Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
@@ -636,6 +675,7 @@ async fn make_repos(
                 domain_registration_repo,
                 environment_plugin_grant_repo,
                 environment_tool_grant_repo,
+                environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
@@ -650,6 +690,7 @@ async fn make_repos(
                 security_scheme_repo,
                 token_repo,
                 tool_release_repo,
+                tool_middleware_release_repo,
             })
         }
     }

@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app_raw::{ManifestSecretKeyScope, ToolBinding};
+use crate::model::app_raw::{ManifestSecretKeyScope, ToolBinding, ToolMiddlewareInstallation};
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::map::MapMergeMode;
+use golem_common::model::tool::ToolFilesystemAccess;
+use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use indexmap::IndexMap;
 use serde::Serialize;
 
@@ -27,6 +29,10 @@ pub struct ToolBindingState {
     pub account: Option<String>,
     pub secret_keys_readable: Vec<ManifestSecretKeyScope>,
     pub secret_keys_revealable: Vec<ManifestSecretKeyScope>,
+    pub filesystem_access: ToolFilesystemAccess,
+    /// `None` means no layer authored this field; `Some([])` is an explicit empty chain.
+    pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
+    pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
 }
 
 impl ToolBindingState {
@@ -57,12 +63,49 @@ impl ToolBindingState {
         if let Some(scope) = binding.secret_keys_revealable {
             self.secret_keys_revealable.push(scope);
         }
+        if let Some(filesystem_access) = binding.filesystem_access {
+            self.filesystem_access = filesystem_access;
+        }
+
+        if binding.middleware_merge_mode.is_some() {
+            self.middleware_merge_mode = binding.middleware_merge_mode;
+        }
+        if let Some(middleware) = binding.middleware {
+            match binding.middleware_merge_mode.unwrap_or_default() {
+                ToolMiddlewareMergeMode::Prepend => {
+                    let mut merged = middleware;
+                    merged.extend(self.middleware.take().unwrap_or_default());
+                    self.middleware = Some(merged);
+                }
+                ToolMiddlewareMergeMode::Append => {
+                    self.middleware
+                        .get_or_insert_with(Vec::new)
+                        .extend(middleware);
+                }
+                ToolMiddlewareMergeMode::Replace => self.middleware = Some(middleware),
+            }
+        }
     }
 
     pub(crate) fn from_binding(binding: ToolBinding) -> Self {
         let mut result = Self::default();
         result.apply(binding);
         result
+    }
+
+    pub fn middleware_installations(
+        &self,
+    ) -> Result<Option<Vec<golem_common::model::tool_middleware::ToolMiddlewareInstallation>>, String>
+    {
+        self.middleware
+            .clone()
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(ToolMiddlewareInstallation::into_common)
+                    .collect()
+            })
+            .transpose()
     }
 }
 
@@ -184,6 +227,8 @@ mod tests {
     use crate::model::cascade::property::Property;
     use crate::model::cascade::property::map::MapMergeMode;
     use crate::model::cascade::property::test_support::TestLayer;
+    use golem_common::model::tool::ToolFilesystemAccess;
+    use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
     use indexmap::IndexMap;
     use serde_json::json;
     use test_r::test;
@@ -322,5 +367,94 @@ mod tests {
         );
 
         assert!(property.value().is_empty());
+    }
+
+    fn middleware(name: &str) -> crate::model::app_raw::ToolMiddlewareInstallation {
+        crate::model::app_raw::ToolMiddlewareInstallation::Structured(
+            crate::model::app_raw::ToolMiddlewareInstallationStruct {
+                name: ToolMiddlewareName::try_from(name).unwrap(),
+                version: None,
+                parameters: golem_common::model::json::NormalizedJsonValue::new(json!({})),
+                account: None,
+                filesystem_access: Default::default(),
+            },
+        )
+    }
+
+    #[test]
+    fn middleware_merge_matrix_preserves_order_repeats_and_explicit_empty() {
+        let cases = [
+            (
+                ToolMiddlewareMergeMode::Prepend,
+                vec!["agent", "env", "env"],
+            ),
+            (ToolMiddlewareMergeMode::Append, vec!["env", "env", "agent"]),
+            (ToolMiddlewareMergeMode::Replace, vec!["agent"]),
+        ];
+        for (mode, expected) in cases {
+            let mut state = super::ToolBindingState::default();
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware("env"), middleware("env")]),
+                ..Default::default()
+            });
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware("agent")]),
+                middleware_merge_mode: Some(mode),
+                ..Default::default()
+            });
+            assert_eq!(
+                state
+                    .middleware
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|item| match item {
+                        crate::model::app_raw::ToolMiddlewareInstallation::Structured(item) =>
+                            item.name.as_str(),
+                        crate::model::app_raw::ToolMiddlewareInstallation::Shortcut(_) =>
+                            unreachable!(),
+                    })
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(state.middleware_merge_mode, Some(mode));
+        }
+
+        let mut state = super::ToolBindingState::default();
+        state.apply(ToolBinding {
+            middleware: Some(vec![middleware("env")]),
+            ..Default::default()
+        });
+        state.apply(ToolBinding {
+            middleware: Some(vec![]),
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+            ..Default::default()
+        });
+        assert_eq!(state.middleware, Some(vec![]));
+        assert_eq!(
+            state.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+
+        let mut omitted = super::ToolBindingState::default();
+        omitted.apply(ToolBinding::default());
+        assert_eq!(omitted.middleware, None);
+        assert_eq!(omitted.middleware_merge_mode, None);
+    }
+
+    #[test]
+    fn filesystem_access_uses_the_last_explicit_layer_value() {
+        let mut state = super::ToolBindingState::default();
+        state.apply(ToolBinding {
+            filesystem_access: Some(ToolFilesystemAccess::Allowed),
+            ..Default::default()
+        });
+        state.apply(ToolBinding::default());
+        assert_eq!(state.filesystem_access, ToolFilesystemAccess::Allowed);
+        state.apply(ToolBinding {
+            filesystem_access: Some(ToolFilesystemAccess::Denied),
+            ..Default::default()
+        });
+        assert_eq!(state.filesystem_access, ToolFilesystemAccess::Denied);
     }
 }

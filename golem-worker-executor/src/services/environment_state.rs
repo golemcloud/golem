@@ -28,6 +28,7 @@ use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess,
     ToolName, ToolProvisionConfig, ToolSource,
 };
+use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -171,14 +172,15 @@ impl From<WorkerExecutorError> for ToolDiscoveryError {
 }
 
 pub struct ToolDiscoverySnapshot {
-    registered_tools: BTreeMap<ToolName, Arc<DiscoveredTool>>,
-    agent_tool_bindings: BTreeMap<AgentTypeName, BTreeSet<ToolName>>,
+    agent_tools: BTreeMap<AgentTypeName, BTreeMap<ToolName, Arc<DiscoveredTool>>>,
+    dangling_bindings: BTreeMap<AgentTypeName, BTreeSet<ToolName>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolActivationSnapshot {
     registered_tool: RegisteredTool,
     binding: CompiledToolBinding,
+    middleware_chain: Option<CompiledToolMiddlewareChain>,
     filesystem: FilesystemCapability,
 }
 
@@ -213,6 +215,17 @@ impl ToolActivationSnapshot {
 
     pub fn filesystem(&self) -> FilesystemCapability {
         self.filesystem
+    }
+
+    pub fn middleware_chain(&self) -> Option<&CompiledToolMiddlewareChain> {
+        self.middleware_chain.as_ref()
+    }
+
+    pub fn effective_definition(&self) -> &golem_common::schema::tool::Tool {
+        self.middleware_chain
+            .as_ref()
+            .map(|chain| &chain.effective_definition)
+            .unwrap_or(&self.registered_tool.definition)
     }
 
     pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, ToolDiscoveryError> {
@@ -270,6 +283,10 @@ pub fn get_tool_activation_from_deployment(
     let Some(binding) = binding else {
         return Ok(ToolActivationOutcome::NotBound);
     };
+    let middleware_chain = deployment
+        .tool_middleware_chains
+        .get(agent_type)
+        .and_then(|chains| chains.get(tool_name));
 
     let consistent = registered_tool.deployment_revision == deployment.deployment_revision
         && registered_tool
@@ -299,6 +316,29 @@ pub fn get_tool_activation_from_deployment(
         });
     }
 
+    if let Some(chain) = middleware_chain {
+        let chain_consistent = chain.deployment_revision == deployment.deployment_revision
+            && chain.agent_type_name == *agent_type
+            && chain.tool_name == *tool_name
+            && chain.occurrences.iter().all(|occurrence| {
+                occurrence.middleware.deployment_revision == deployment.deployment_revision
+                    && golem_common::model::tool_middleware::ToolMiddlewareName::try_from(
+                        occurrence.middleware.definition.name.as_str(),
+                    )
+                    .ok()
+                    .and_then(|name| deployment.registered_tool_middlewares.get(&name))
+                        == Some(&occurrence.middleware)
+            });
+        if !chain_consistent {
+            return Err(ToolDiscoveryError::InconsistentSnapshot {
+                details: format!(
+                    "middleware chain for agent type '{}' and tool '{}' does not describe one deployment activation",
+                    agent_type.0, tool_name
+                ),
+            });
+        }
+    }
+
     let filesystem = match (
         binding.filesystem_access,
         registered_tool.provision.files.is_empty(),
@@ -324,6 +364,7 @@ pub fn get_tool_activation_from_deployment(
             filesystem,
             registered_tool: registered_tool.clone(),
             binding: binding.clone(),
+            middleware_chain: middleware_chain.cloned(),
         },
     )))
 }
@@ -333,18 +374,46 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
         let ToolDeploymentState {
             registered_tools,
             agent_tool_bindings,
+            tool_middleware_chains,
             ..
         } = value;
 
+        let dangling_bindings = agent_tool_bindings
+            .iter()
+            .filter_map(|(agent_type, bindings)| {
+                let missing = bindings
+                    .keys()
+                    .filter(|name| !registered_tools.contains_key(*name))
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                (!missing.is_empty()).then(|| (agent_type.clone(), missing))
+            })
+            .collect();
+        let agent_tools = agent_tool_bindings
+            .into_iter()
+            .map(|(agent_type, bindings)| {
+                let tools = bindings
+                    .into_keys()
+                    .filter_map(|name| {
+                        registered_tools.get(&name).map(|registered| {
+                            let mut discovered: DiscoveredTool = registered.clone().into();
+                            discovered.lookup_name = name.to_string();
+                            if let Some(chain) = tool_middleware_chains
+                                .get(&agent_type)
+                                .and_then(|chains| chains.get(&name))
+                            {
+                                discovered.definition = chain.effective_definition.clone();
+                            }
+                            (name, Arc::new(discovered))
+                        })
+                    })
+                    .collect();
+                (agent_type, tools)
+            })
+            .collect();
         Self {
-            registered_tools: registered_tools
-                .into_iter()
-                .map(|(name, tool)| (name, Arc::new(tool.into())))
-                .collect(),
-            agent_tool_bindings: agent_tool_bindings
-                .into_iter()
-                .map(|(agent_type, bindings)| (agent_type, bindings.into_keys().collect()))
-                .collect(),
+            agent_tools,
+            dangling_bindings,
         }
     }
 }
@@ -356,20 +425,15 @@ pub fn get_accessible_tools_from_snapshot(
     let Some(snapshot) = snapshot else {
         return Ok(Vec::new());
     };
-    let Some(bindings) = snapshot.agent_tool_bindings.get(agent_type) else {
+    if let Some(missing) = snapshot.dangling_bindings.get(agent_type)
+        && let Some(tool_name) = missing.first()
+    {
+        return Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name));
+    }
+    let Some(tools) = snapshot.agent_tools.get(agent_type) else {
         return Ok(Vec::new());
     };
-
-    bindings
-        .iter()
-        .map(|tool_name| {
-            snapshot
-                .registered_tools
-                .get(tool_name)
-                .cloned()
-                .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
-        })
-        .collect()
+    Ok(tools.values().cloned().collect())
 }
 
 pub fn get_accessible_tool_from_snapshot(
@@ -380,19 +444,18 @@ pub fn get_accessible_tool_from_snapshot(
     let Some(snapshot) = snapshot else {
         return Ok(None);
     };
-    let Some(bindings) = snapshot.agent_tool_bindings.get(agent_type) else {
-        return Ok(None);
-    };
-    if !bindings.contains(tool_name) {
-        return Ok(None);
+    if snapshot
+        .dangling_bindings
+        .get(agent_type)
+        .is_some_and(|missing| missing.contains(tool_name))
+    {
+        return Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name));
     }
-
-    snapshot
-        .registered_tools
-        .get(tool_name)
-        .cloned()
-        .map(Some)
-        .ok_or_else(|| ToolDiscoveryError::dangling_binding(agent_type, tool_name))
+    Ok(snapshot
+        .agent_tools
+        .get(agent_type)
+        .and_then(|tools| tools.get(tool_name))
+        .cloned())
 }
 
 #[async_trait]
@@ -674,6 +737,7 @@ mod tests {
         CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState,
         ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
     };
+    use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use std::collections::BTreeMap;
@@ -767,6 +831,8 @@ mod tests {
                         BTreeMap::from([(beta_name.clone(), binding(&agent_b, &beta_name, &beta))]),
                     ),
                 ]),
+                registered_tool_middlewares: BTreeMap::new(),
+                tool_middleware_chains: BTreeMap::new(),
             },
             agent_a,
             agent_b,
@@ -807,6 +873,8 @@ mod tests {
             vec!["alpha", "beta"]
         );
         assert_eq!(agent_a_tools[0].implemented_by, expected_alpha_component);
+        assert_eq!(agent_a_tools[0].lookup_name, "alpha");
+        assert_eq!(agent_a_tools[1].lookup_name, "beta");
         assert_eq!(
             agent_b_tools
                 .iter()
@@ -814,6 +882,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["beta"]
         );
+        assert_eq!(agent_b_tools[0].lookup_name, "beta");
         let beta_for_agent_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
             .unwrap()
             .unwrap();
@@ -821,7 +890,58 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(Arc::ptr_eq(&agent_a_tools[1], &beta_for_agent_a));
-        assert!(Arc::ptr_eq(&beta_for_agent_a, &beta_for_agent_b));
+        assert_eq!(beta_for_agent_a.as_ref(), beta_for_agent_b.as_ref());
+    }
+
+    #[test]
+    fn discovery_projects_effective_definition_per_agent_binding() {
+        let (mut deployment, agent_a, agent_b) = deployment_state();
+        let beta = ToolName::try_from("beta").unwrap();
+        let mut presented_a = deployment.registered_tools[&beta].definition.clone();
+        presented_a.commands.nodes[0].name = "adapter-a".to_string();
+        let mut presented_b = presented_a.clone();
+        presented_b.commands.nodes[0].name = "adapter-b".to_string();
+        deployment.tool_middleware_chains = BTreeMap::from([
+            (
+                agent_a.clone(),
+                BTreeMap::from([(
+                    beta.clone(),
+                    CompiledToolMiddlewareChain {
+                        deployment_revision: deployment.deployment_revision,
+                        agent_type_name: agent_a.clone(),
+                        tool_name: beta.clone(),
+                        effective_definition: presented_a,
+                        occurrences: Vec::new(),
+                    },
+                )]),
+            ),
+            (
+                agent_b.clone(),
+                BTreeMap::from([(
+                    beta.clone(),
+                    CompiledToolMiddlewareChain {
+                        deployment_revision: deployment.deployment_revision,
+                        agent_type_name: agent_b.clone(),
+                        tool_name: beta.clone(),
+                        effective_definition: presented_b,
+                        occurrences: Vec::new(),
+                    },
+                )]),
+            ),
+        ]);
+
+        let snapshot = ToolDiscoverySnapshot::from(deployment);
+        let for_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
+            .unwrap()
+            .unwrap();
+        let for_b = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &beta)
+            .unwrap()
+            .unwrap();
+        assert_eq!(for_a.lookup_name, "beta");
+        assert_eq!(for_b.lookup_name, "beta");
+        assert_eq!(for_a.definition.name(), Some("adapter-a"));
+        assert_eq!(for_b.definition.name(), Some("adapter-b"));
+        assert_eq!(for_a.implemented_by, for_b.implemented_by);
     }
 
     #[test]

@@ -23,9 +23,14 @@ use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
     ToolProvisionConfig, ToolSource,
 };
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    ToolMiddlewareName, ToolMiddlewareSource,
+};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{
-    CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
+    CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool, ToolMiddleware,
+    ToolMiddlewareScope,
 };
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -155,6 +160,8 @@ pub(crate) fn deployment_state(
         deployment_revision,
         registered_tools,
         agent_tool_bindings: BTreeMap::from([(agent_type.clone(), bindings)]),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
     }
 }
 
@@ -174,6 +181,65 @@ fn set_agent_bindings(
     deployment
         .agent_tool_bindings
         .insert(agent_type.clone(), bindings);
+}
+
+fn add_unimplemented_middleware(
+    deployment: &mut ToolDeploymentState,
+    agent_type: &AgentTypeName,
+    tool_name: &ToolName,
+    component_revision: ComponentRevision,
+) {
+    let middleware_name = ToolMiddlewareName::try_from("test-middleware").unwrap();
+    let registered = RegisteredToolMiddleware {
+        deployment_revision: deployment.deployment_revision,
+        release_id: None,
+        definition: ToolMiddleware {
+            name: middleware_name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Universal,
+        },
+        provision: ToolProvisionConfig::default(),
+        source: ToolMiddlewareSource::Component {
+            component_id: ComponentId::new(),
+            component_revision,
+            component_name: ComponentName("test-middleware-component".to_string()),
+        },
+        owner_account_id: AccountId::new(),
+        owner_account_email: AccountEmail::new("middleware@example.com"),
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
+    };
+    let effective_definition = deployment.registered_tools[tool_name].definition.clone();
+    let occurrence = CompiledToolMiddlewareOccurrence {
+        middleware: registered.clone(),
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        provision: ToolProvisionConfig::default(),
+        secret_keys_readable: SecretKeyScope::All,
+        secret_keys_revealable: SecretKeyScope::All,
+        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
+        expected_definition: None,
+        presented_definition: None,
+        next_effective_definition: effective_definition.clone(),
+        compatibility: None,
+    };
+    deployment
+        .registered_tool_middlewares
+        .insert(middleware_name, registered);
+    deployment.tool_middleware_chains.insert(
+        agent_type.clone(),
+        BTreeMap::from([(
+            tool_name.clone(),
+            CompiledToolMiddlewareChain {
+                deployment_revision: deployment.deployment_revision,
+                agent_type_name: agent_type.clone(),
+                tool_name: tool_name.clone(),
+                effective_definition,
+                occurrences: vec![occurrence],
+            },
+        )]),
+    );
 }
 
 fn summary(name: &str, component_id: ComponentId) -> ToolSummary {
@@ -596,6 +662,73 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
             ),
         ]
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let service = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(service.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_type = AgentTypeName("GolemHostApi".to_string());
+    let tool_name = ToolName::try_from("middleware-search").unwrap();
+    let mut deployment = deployment_state(
+        &agent_type,
+        1,
+        component.revision,
+        &[(tool_name.as_str(), component.id, true)],
+    );
+    add_unimplemented_middleware(&mut deployment, &agent_type, &tool_name, component.revision);
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("GolemHostApi", "middleware-fail-closed");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "tool_rpc_invoke_and_await_result",
+            data_value!(tool_name.as_str(), Vec::<String>::new(), String::new()),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+
+    assert!(
+        result.as_ref().is_err_and(|error| {
+            error.contains("RemoteInternalError")
+                && error.contains("tool middleware invocation is not implemented by the executor")
+                && !error.contains("InvalidToolName")
+        }),
+        "a nonempty middleware chain must fail closed before base tool dispatch: {result:?}"
+    );
+    assert_eq!(service.tool_activation_calls(), 1);
 
     Ok(())
 }

@@ -56,6 +56,33 @@ impl DeploymentPlan {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            remote_tool_middleware_deployments: self
+                .remote_tool_middlewares
+                .iter()
+                .map(|e| (e.name.to_string(), diff::HashOf::from_hash(e.hash)))
+                .collect(),
+            published_tool_middlewares: self
+                .published_tool_middlewares
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            universal_tool_middlewares: self.universal_tool_middlewares.clone(),
+            tool_compatibility_mode: self.tool_compatibility_mode,
+            environment_tool_middleware_bindings: self
+                .environment_tool_middleware_bindings
+                .iter()
+                .map(|(n, b)| (n.to_string(), b.into()))
+                .collect(),
+            agent_tool_middleware_bindings: self
+                .agent_tool_middleware_bindings
+                .iter()
+                .map(|(a, bs)| {
+                    (
+                        a.0.clone(),
+                        bs.iter().map(|(n, b)| (n.to_string(), b.into())).collect(),
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -87,6 +114,33 @@ impl DeploymentSummary {
                 .published_tools
                 .iter()
                 .map(ToString::to_string)
+                .collect(),
+            remote_tool_middleware_deployments: self
+                .remote_tool_middlewares
+                .iter()
+                .map(|e| (e.name.to_string(), diff::HashOf::from_hash(e.hash)))
+                .collect(),
+            published_tool_middlewares: self
+                .published_tool_middlewares
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            universal_tool_middlewares: self.universal_tool_middlewares.clone(),
+            tool_compatibility_mode: self.tool_compatibility_mode,
+            environment_tool_middleware_bindings: self
+                .environment_tool_middleware_bindings
+                .iter()
+                .map(|(n, b)| (n.to_string(), b.into()))
+                .collect(),
+            agent_tool_middleware_bindings: self
+                .agent_tool_middleware_bindings
+                .iter()
+                .map(|(a, bs)| {
+                    (
+                        a.0.clone(),
+                        bs.iter().map(|(n, b)| (n.to_string(), b.into())).collect(),
+                    )
+                })
                 .collect(),
         }
     }

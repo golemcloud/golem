@@ -47,16 +47,19 @@ pub fn universal_tool_middleware_impl(
 
 struct MonomorphicArgs {
     name: LitStr,
+    version: LitStr,
     constructor: Path,
 }
 
 struct UniversalArgs {
     name: LitStr,
+    version: LitStr,
 }
 
 fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
     let values = parse_name_values(attrs)?;
     let mut name = None;
+    let mut version = None;
     let mut constructor = None;
     for value in values {
         let Some(key) = value.path.get_ident() else {
@@ -67,6 +70,7 @@ fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
         };
         match key.to_string().as_str() {
             "name" => set_once(&mut name, parse_string(value.value, "name")?, key)?,
+            "version" => set_once(&mut version, parse_string(value.value, "version")?, key)?,
             "constructor" => {
                 let Expr::Path(path) = value.value else {
                     return Err(Error::new_spanned(
@@ -86,7 +90,7 @@ fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
                 return Err(Error::new_spanned(
                     key,
                     format!(
-                        "unknown #[tool_middleware] key `{other}`; expected `name` or `constructor`"
+                        "unknown #[tool_middleware] key `{other}`; expected `name`, `version`, or `constructor`"
                     ),
                 ));
             }
@@ -105,12 +109,18 @@ fn parse_monomorphic_args(attrs: TokenStream2) -> syn::Result<MonomorphicArgs> {
             "#[tool_middleware] is missing `constructor`",
         )
     })?;
-    Ok(MonomorphicArgs { name, constructor })
+    let version = version.unwrap_or_else(|| LitStr::new("0.0.0", name.span()));
+    Ok(MonomorphicArgs {
+        name,
+        version,
+        constructor,
+    })
 }
 
 fn parse_universal_args(attrs: TokenStream2) -> syn::Result<UniversalArgs> {
     let values = parse_name_values(attrs)?;
     let mut name = None;
+    let mut version = None;
     for value in values {
         let Some(key) = value.path.get_ident() else {
             return Err(Error::new_spanned(
@@ -120,11 +130,12 @@ fn parse_universal_args(attrs: TokenStream2) -> syn::Result<UniversalArgs> {
         };
         match key.to_string().as_str() {
             "name" => set_once(&mut name, parse_string(value.value, "name")?, key)?,
+            "version" => set_once(&mut version, parse_string(value.value, "version")?, key)?,
             other => {
                 return Err(Error::new_spanned(
                     key,
                     format!(
-                        "unknown #[universal_tool_middleware] key `{other}`; expected only `name`"
+                        "unknown #[universal_tool_middleware] key `{other}`; expected `name` or `version`"
                     ),
                 ));
             }
@@ -137,7 +148,8 @@ fn parse_universal_args(attrs: TokenStream2) -> syn::Result<UniversalArgs> {
         )
     })?;
     validate_middleware_name(&name)?;
-    Ok(UniversalArgs { name })
+    let version = version.unwrap_or_else(|| LitStr::new("0.0.0", name.span()));
+    Ok(UniversalArgs { name, version })
 }
 
 fn parse_name_values(attrs: TokenStream2) -> syn::Result<Punctuated<MetaNameValue, Token![,]>> {
@@ -208,6 +220,7 @@ fn expand_tool_middleware(
     let self_ty = &item_impl.self_ty;
     let constructor = &args.constructor;
     let name = &args.name;
+    let version = &args.version;
     let doc = parse_doc(&item_impl.attrs);
     let summary = doc.summary;
     let description = doc.description;
@@ -292,6 +305,7 @@ fn expand_tool_middleware(
         fn #descriptor_ident() -> #golem_rust::tool::ToolMiddleware {
             #golem_rust::tool::ToolMiddleware {
                 name: #name.to_string(),
+                version: #version.to_string(),
                 aliases: ::std::vec::Vec::new(),
                 doc: #golem_rust::schema::tool::Doc {
                     summary: #summary.to_string(),
@@ -299,12 +313,12 @@ fn expand_tool_middleware(
                     examples: ::std::vec::Vec::new(),
                 },
                 scope: #golem_rust::tool::ToolMiddlewareScope::Monomorphic(
-                    #golem_rust::tool::MonomorphicToolMiddlewareScope {
+                    ::std::boxed::Box::new(#golem_rust::tool::MonomorphicToolMiddlewareScope {
                         presented: <#self_ty as #trait_path>::__golem_presented_tool_descriptor(),
                         expected: ::std::option::Option::Some(
                             <#self_ty as #trait_path>::__golem_expected_tool_descriptor()
                         ),
-                    }
+                    })
                 ),
             }
         }
@@ -442,6 +456,7 @@ fn expand_universal_tool_middleware(
     validate_universal_function(&item_fn)?;
     let function_ident = &item_fn.sig.ident;
     let name = &args.name;
+    let version = &args.version;
     let doc = parse_doc(&item_fn.attrs);
     let summary = doc.summary;
     let description = doc.description;
@@ -464,6 +479,7 @@ fn expand_universal_tool_middleware(
         fn #descriptor_ident() -> #golem_rust::tool::ToolMiddleware {
             #golem_rust::tool::ToolMiddleware {
                 name: #name.to_string(),
+                version: #version.to_string(),
                 aliases: ::std::vec::Vec::new(),
                 doc: #golem_rust::schema::tool::Doc {
                     summary: #summary.to_string(),
@@ -578,13 +594,13 @@ fn validate_universal_function(item_fn: &ItemFn) -> syn::Result<()> {
     let ReturnType::Type(_, output) = &signature.output else {
         return Err(Error::new_spanned(
             &signature.output,
-            "universal tool middleware functions must return `Result<InvocationResult, ToolInvokeError<TypedSchemaValue>>`",
+            "universal tool middleware functions must return `Result<InvocationResult, ToolInvokeError<RawCustomToolError>>`",
         ));
     };
     if !result_type_is_exact(output) {
         return Err(Error::new_spanned(
             output,
-            "universal tool middleware functions must return `Result<InvocationResult, ToolInvokeError<TypedSchemaValue>>`",
+            "universal tool middleware functions must return `Result<InvocationResult, ToolInvokeError<RawCustomToolError>>`",
         ));
     }
     Ok(())
@@ -641,7 +657,7 @@ fn result_type_is_exact(ty: &Type) -> bool {
     };
     type_is_ident(result, "InvocationResult")
         && type_is_container(error, "ToolInvokeError", |inner| {
-            type_is_ident(inner, "TypedSchemaValue")
+            type_is_ident(inner, "RawCustomToolError")
         })
 }
 
@@ -797,7 +813,7 @@ mod tests {
                     underlying: golem_rust::tool::UnderlyingTool,
                 ) -> Result<
                     golem_rust::tool::InvocationResult,
-                    golem_rust::tool::ToolInvokeError<golem_rust::TypedSchemaValue>,
+                    golem_rust::tool::ToolInvokeError<golem_rust::tool::RawCustomToolError>,
                 > {
                     underlying.invoke(command_path, input, stdin).await
                 }
@@ -928,7 +944,7 @@ mod tests {
                 stdin: Option<InputStream>,
                 principal: Principal,
                 underlying: UnderlyingTool,
-            ) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+            ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
                 unimplemented!()
             }
         }

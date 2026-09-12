@@ -30,7 +30,8 @@ use crate::bindings::golem::tool::host::{
     self, ToolRpc as HostToolRpc, ToolStdin as HostToolStdin, ToolStdout as HostToolStdout,
 };
 use crate::golem_agentic::golem::tool::host as agentic_host_api;
-use crate::schema::{FromSchema, FromSchemaError};
+use crate::schema::{FromSchema, FromSchemaError, IntoSchema};
+use crate::tool::RawCustomToolError;
 
 /// RPC-level failures reported while invoking a remote tool.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,10 +62,12 @@ impl Display for RpcError {
 impl Error for RpcError {}
 
 /// Failure returned by a typed tool client.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ToolError<E> {
     Rpc(RpcError),
     Tool(E),
+    UnknownCustomError(RawCustomToolError),
 }
 
 /// Generated marker for a tool trait method that is invokable as a command body.
@@ -93,6 +96,9 @@ impl<E: Display> Display for ToolError<E> {
         match self {
             ToolError::Rpc(error) => error.fmt(f),
             ToolError::Tool(error) => error.fmt(f),
+            ToolError::UnknownCustomError(error) => {
+                write!(f, "unknown custom tool error `{}`", error.name)
+            }
         }
     }
 }
@@ -102,6 +108,7 @@ impl<E: Error + 'static> Error for ToolError<E> {
         match self {
             ToolError::Rpc(error) => Some(error),
             ToolError::Tool(error) => Some(error),
+            ToolError::UnknownCustomError(_) => None,
         }
     }
 }
@@ -114,7 +121,7 @@ pub struct InvocationResult {
 
 /// Decodes a structured invocation result and pairs it with its independently
 /// acquired stdout stream.
-pub fn decode_result_with_stdout<T: FromSchema, E>(
+pub fn decode_result_with_stdout<T: FromSchema + IntoSchema, E>(
     result: InvocationResult,
     stdout: InputStream,
 ) -> Result<(T, InputStream), ToolError<E>> {
@@ -123,7 +130,9 @@ pub fn decode_result_with_stdout<T: FromSchema, E>(
 }
 
 /// Decodes an invocation result declared to carry a value.
-pub fn decode_result_value<T: FromSchema, E>(result: InvocationResult) -> Result<T, ToolError<E>> {
+pub fn decode_result_value<T: FromSchema + IntoSchema, E>(
+    result: InvocationResult,
+) -> Result<T, ToolError<E>> {
     decode_expected_value(result.result)
 }
 
@@ -142,10 +151,17 @@ pub fn decode_result_empty<E>(result: InvocationResult) -> Result<(), ToolError<
     expect_no_value(result.result)
 }
 
-fn decode_expected_value<T: FromSchema, E>(
+fn decode_expected_value<T: FromSchema + IntoSchema, E>(
     value: Option<TypedSchemaValue>,
 ) -> Result<T, ToolError<E>> {
     let value = expect_value(value)?;
+    let expected = crate::schema::try_into_schema_graph::<T>()
+        .map_err(|error| protocol_error(error.to_string()))?;
+    if value.graph() != &expected {
+        return Err(protocol_error(
+            "tool result schema does not match the expected result schema".to_string(),
+        ));
+    }
     T::from_value(value.value()).map_err(|error| protocol_error(error.to_string()))
 }
 
@@ -279,7 +295,7 @@ pub async fn invoke_and_await<E, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
-    decode_error: impl Fn(TypedSchemaValue) -> Result<E, String>,
+    decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
     invoke_and_await_with_error_decoder(rpc, command_path, input, stdin, stdout, decode_error).await
 }
@@ -309,7 +325,7 @@ async fn invoke_and_await_with_error_decoder<E, R: ToolRpcClient>(
     input: &TypedSchemaValue,
     stdin: Option<R::Stdin>,
     stdout: Option<R::Stdout>,
-    decode_error: impl Fn(TypedSchemaValue) -> Result<E, String>,
+    decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 ) -> Result<InvocationResult, ToolError<E>> {
     let input = crate::encode_typed_schema_value(input)
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
@@ -359,7 +375,7 @@ impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
 
 fn map_rpc_error<E>(
     error: WitRpcError,
-    decode_error: &(impl Fn(TypedSchemaValue) -> Result<E, String> + ?Sized),
+    decode_error: &(impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + ?Sized),
 ) -> ToolError<E> {
     match error {
         WitRpcError::ProtocolError(message) => ToolError::Rpc(RpcError::Protocol(message)),
@@ -607,7 +623,7 @@ pub struct ToolInvocation<T, E> {
     future: Rc<agentic_host_api::FutureInvokeResult>,
     result: Rc<InvocationResultDriver>,
     decode: Rc<dyn Fn(InvocationResult) -> Result<T, ToolError<E>>>,
-    decode_error: Rc<dyn Fn(TypedSchemaValue) -> Result<E, String>>,
+    decode_error: Rc<dyn Fn(String, TypedSchemaValue) -> Result<Option<E>, String>>,
 }
 
 impl<T, E> ToolInvocation<T, E> {
@@ -621,10 +637,20 @@ impl<T, E> ToolInvocation<T, E> {
             match result.wait().await {
                 Ok(result) => decode(result),
                 Err(ToolError::Rpc(error)) => Err(ToolError::Rpc(error)),
-                Err(ToolError::Tool(error)) => match decode_error(error) {
-                    Ok(error) => Err(ToolError::Tool(error)),
+                Err(ToolError::Tool(error)) => match decode_error(String::new(), error) {
+                    Ok(Some(error)) => Err(ToolError::Tool(error)),
+                    Ok(None) => Err(protocol_error(
+                        "custom tool error is missing its name".to_string(),
+                    )),
                     Err(message) => Err(protocol_error(message)),
                 },
+                Err(ToolError::UnknownCustomError(error)) => {
+                    match decode_error(error.name.clone(), error.payload.clone()) {
+                        Ok(Some(error)) => Err(ToolError::Tool(error)),
+                        Ok(None) => Err(ToolError::UnknownCustomError(error)),
+                        Err(message) => Err(protocol_error(message)),
+                    }
+                }
             }
         }
     }
@@ -679,7 +705,7 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
     input: &TypedSchemaValue,
     stdin: Option<InputStream>,
     decode: impl Fn(InvocationResult) -> Result<T, ToolError<E>> + 'static,
-    decode_error: impl Fn(TypedSchemaValue) -> Result<E, String> + 'static,
+    decode_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + 'static,
 ) -> Result<ToolInvocation<T, E>, ToolError<E>> {
     let input = crate::encode_typed_schema_value(input)
         .map_err(|error| protocol_error(format!("failed to encode tool input: {error}")))?;
@@ -692,7 +718,9 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
         move || {
             Box::pin(async move {
                 let result = future.get().await.map_err(|error| {
-                    map_rpc_error(error.into(), &|value| Ok::<TypedSchemaValue, String>(value))
+                    map_rpc_error(error.into(), &|_, _| {
+                        Ok::<Option<TypedSchemaValue>, String>(None)
+                    })
                 })?;
                 decode_wire_invocation_result(result)
             })
@@ -712,12 +740,17 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
 
 fn map_remote_tool_error<E>(
     error: host::ToolError,
-    decode_error: &(impl Fn(TypedSchemaValue) -> Result<E, String> + ?Sized),
+    decode_error: &(impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + ?Sized),
 ) -> ToolError<E> {
     match error {
-        host::ToolError::CustomError(value) => match decode_custom_tool_error_value(&value) {
-            Ok(value) => match decode_error(value) {
-                Ok(error) => ToolError::Tool(error),
+        host::ToolError::CustomError(error) => match decode_custom_tool_error_value(&error.payload)
+        {
+            Ok(value) => match decode_error(error.name.clone(), value.clone()) {
+                Ok(Some(error)) => ToolError::Tool(error),
+                Ok(None) => ToolError::UnknownCustomError(RawCustomToolError {
+                    name: error.name,
+                    payload: value,
+                }),
                 Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
             },
             Err(message) => ToolError::Rpc(RpcError::Protocol(message)),
@@ -729,8 +762,13 @@ fn map_remote_tool_error<E>(
     }
 }
 
-fn decode_custom_tool_error<E: FromSchema>(value: TypedSchemaValue) -> Result<E, String> {
-    E::from_value(value.value()).map_err(format_from_schema_error)
+fn decode_custom_tool_error<E: FromSchema>(
+    _name: String,
+    value: TypedSchemaValue,
+) -> Result<Option<E>, String> {
+    E::from_value(value.value())
+        .map(Some)
+        .map_err(format_from_schema_error)
 }
 
 fn decode_custom_tool_error_value(
@@ -793,16 +831,66 @@ mod tests {
         let payload = "bad flag".to_string().into_typed_schema_value().unwrap();
         let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
 
-        let decoded = map_remote_tool_error(host::ToolError::CustomError(wire_payload), &|value| {
-            String::from_value(value.value())
-                .map(CliError::Usage)
-                .map_err(format_from_schema_error)
-        });
+        let decoded = map_remote_tool_error(
+            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+                name: "usage".to_string(),
+                payload: wire_payload,
+            }),
+            &|name, value| {
+                assert_eq!(name, "usage");
+                String::from_value(value.value())
+                    .map(CliError::Usage)
+                    .map(Some)
+                    .map_err(format_from_schema_error)
+            },
+        );
 
         assert_eq!(
             decoded,
             ToolError::Tool(CliError::Usage("bad flag".to_string()))
         );
+    }
+
+    #[test]
+    fn unknown_custom_tool_error_preserves_name_and_owned_payload() {
+        let payload = "raw".to_string().into_typed_schema_value().unwrap();
+        let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
+        let decoded: ToolError<CliError> = map_remote_tool_error(
+            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+                name: "new-error".to_string(),
+                payload: wire_payload,
+            }),
+            &|_, _| Ok(None),
+        );
+
+        let ToolError::UnknownCustomError(error) = decoded else {
+            panic!("unknown error was not preserved")
+        };
+        assert_eq!(error.name, "new-error");
+        assert_eq!(
+            String::from_value(error.payload.value()).unwrap(),
+            "raw".to_string()
+        );
+    }
+
+    #[test]
+    fn known_custom_tool_error_with_invalid_payload_is_protocol_error() {
+        let payload = 42u32.into_typed_schema_value().unwrap();
+        let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
+        let decoded: ToolError<CliError> = map_remote_tool_error(
+            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+                name: "usage".to_string(),
+                payload: wire_payload,
+            }),
+            &|name, value| {
+                assert_eq!(name, "usage");
+                String::from_value(value.value())
+                    .map(CliError::Usage)
+                    .map(Some)
+                    .map_err(format_from_schema_error)
+            },
+        );
+        assert!(matches!(decoded, ToolError::Rpc(RpcError::Protocol(_))));
     }
 
     #[test]
@@ -932,7 +1020,10 @@ mod tests {
             let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
 
             Err(WitRpcError::RemoteToolError(host::ToolError::CustomError(
-                wire_payload,
+                crate::schema::tool::wit::wire::CustomToolError {
+                    name: "usage".to_string(),
+                    payload: wire_payload,
+                },
             )))
         }
     }
@@ -968,9 +1059,11 @@ mod tests {
     async fn invoke_and_await_decoding_error_decodes_custom_tool_error_payload() {
         let input = ().into_typed_schema_value().unwrap();
 
-        let decode_error = |value: TypedSchemaValue| {
+        let decode_error = |name: String, value: TypedSchemaValue| {
+            assert_eq!(name, "usage");
             String::from_value(value.value())
                 .map(CliError::Usage)
+                .map(Some)
                 .map_err(format_from_schema_error)
         };
 
@@ -978,6 +1071,9 @@ mod tests {
             Err(ToolError::Tool(CliError::Usage(message))) => assert_eq!(message, "bad flag"),
             Err(ToolError::Rpc(error)) => {
                 panic!("expected declared tool error, got RPC error: {error:?}")
+            }
+            Err(ToolError::UnknownCustomError(error)) => {
+                panic!("expected declared tool error, got unknown error: {error:?}")
             }
             Ok(_) => panic!("expected declared tool error, got success"),
         }

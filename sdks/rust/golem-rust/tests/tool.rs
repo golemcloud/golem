@@ -807,7 +807,8 @@ impl EchoMiddleware for Policy {
             r#"
 use golem_rust::{universal_tool_middleware, TypedSchemaValue};
 use golem_rust::tool::{
-    InputStream, InvocationResult, Principal, Tool, ToolInvokeError, UnderlyingTool,
+    InputStream, InvocationResult, Principal, RawCustomToolError, Tool, ToolInvokeError,
+    UnderlyingTool,
 };
 
 #[universal_tool_middleware(name = "audit")]
@@ -819,7 +820,7 @@ async fn audit(
     stdin: Option<InputStream>,
     _principal: Principal,
     mut underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     underlying.invoke(command_path, input, stdin).await
 }
 "#,
@@ -1089,11 +1090,13 @@ impl EchoMiddleware for Policy {
         else {
             panic!("expected custom tool error, got {err:?}");
         };
-        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
-        let decoded = RemoteError::from_error_payload_value(value)
+        let payload =
+            golem_rust::decode_typed_schema_value(&value.payload).expect("custom error decodes");
+        let decoded = RemoteError::from_error_payload_value(value.name, payload)
             .expect("custom error payload decodes to the declared error enum");
         match decoded {
-            RemoteError::Failed(reason) => assert_eq!(reason, "boom"),
+            Some(RemoteError::Failed(reason)) => assert_eq!(reason, "boom"),
+            None => panic!("declared custom error was not recognized"),
         }
     }
 
@@ -1140,7 +1143,9 @@ impl EchoMiddleware for Policy {
         else {
             panic!("expected custom tool error, got {err:?}");
         };
-        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        assert_eq!(value.name, "failed");
+        let value =
+            golem_rust::decode_typed_schema_value(&value.payload).expect("custom error decodes");
         let payload = String::from_value(value.value())
             .expect("custom-error payload must match the declared error-case payload type");
         assert_eq!(payload, "boom");
@@ -1169,7 +1174,7 @@ impl EchoMiddleware for Policy {
     }
 
     #[test]
-    async fn custom_tool_error_duplicate_payload_schemas_decode_as_first_matching_case() {
+    async fn custom_tool_error_duplicate_payload_schemas_decode_by_name() {
         let tool = <AmbiguousErrorRoundTripImpl as AmbiguousErrorRoundTrip>::__tool_descriptor();
         let invoker = get_tool_invoker_by_name("ambiguous-error-round-trip")
             .expect("tool implementation registers an invoker");
@@ -1193,13 +1198,13 @@ impl EchoMiddleware for Policy {
         else {
             panic!("expected custom tool error, got {err:?}");
         };
-        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        let payload =
+            golem_rust::decode_typed_schema_value(&value.payload).expect("custom error decodes");
 
         assert_eq!(
-            AmbiguousRemoteError::from_error_payload_value(value)
+            AmbiguousRemoteError::from_error_payload_value(value.name, payload)
                 .expect("custom error payload decodes"),
-            AmbiguousRemoteError::BadInput("boom".to_string()),
-            "the current custom-error wire shape carries only the payload, so duplicate payload schemas decode to the first matching case",
+            Some(AmbiguousRemoteError::Backend("boom".to_string())),
         );
     }
 
@@ -1247,7 +1252,9 @@ impl EchoMiddleware for Policy {
         else {
             panic!("expected custom tool error, got {err:?}");
         };
-        let value = golem_rust::decode_typed_schema_value(&value).expect("custom error decodes");
+        assert_eq!(value.name, "failed");
+        let value =
+            golem_rust::decode_typed_schema_value(&value.payload).expect("custom error decodes");
         let payload = String::from_value(value.value())
             .expect("custom-error wire value must match the declared error-case payload schema");
         assert_eq!(payload, "declared-payload");

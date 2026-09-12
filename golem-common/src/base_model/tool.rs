@@ -137,6 +137,17 @@ pub struct ToolBindingInput {
     pub account: Option<AccountEmail>,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default), oai(default))]
+    pub filesystem_access: ToolFilesystemAccess,
+    /// `None` means no middleware list was authored; `Some([])` explicitly clears the
+    /// per-tool list when combined with `Replace`.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default), oai(default))]
+    pub middleware: Option<Vec<crate::base_model::tool_middleware::ToolMiddlewareInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "full", desert(default), oai(default))]
+    pub middleware_merge_mode: Option<crate::base_model::tool_middleware::ToolMiddlewareMergeMode>,
 }
 
 impl Default for ToolBindingInput {
@@ -147,6 +158,9 @@ impl Default for ToolBindingInput {
             account: None,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: ToolFilesystemAccess::Unset,
+            middleware: None,
+            middleware_merge_mode: None,
         }
     }
 }
@@ -383,6 +397,14 @@ pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
     pub agent_tool_bindings: BTreeMap<AgentTypeName, BTreeMap<ToolName, CompiledToolBinding>>,
+    pub registered_tool_middlewares: BTreeMap<
+        crate::model::tool_middleware::ToolMiddlewareName,
+        crate::model::tool_middleware::RegisteredToolMiddleware,
+    >,
+    pub tool_middleware_chains: BTreeMap<
+        AgentTypeName,
+        BTreeMap<ToolName, crate::model::tool_middleware::CompiledToolMiddlewareChain>,
+    >,
 }
 
 #[cfg(test)]

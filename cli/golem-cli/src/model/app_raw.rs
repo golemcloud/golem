@@ -25,8 +25,11 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, Co
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::quota::{EnforcementAction, ResourceLimit, ResourceName};
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::ToolFilesystemAccess;
+use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -135,6 +138,8 @@ pub struct Application {
     pub resource_defaults: IndexMap<EnvironmentName, IndexMap<ResourceName, ResourceDefinition>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub tool_releases: IndexMap<EnvironmentName, IndexMap<String, PublishTool>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tool_middleware_releases: IndexMap<EnvironmentName, IndexMap<String, PublishTool>>,
 }
 
 pub type JsonObject = serde_json::Map<String, serde_json::Value>;
@@ -151,6 +156,16 @@ impl ToolDeclarations {
     pub fn into_entries(self) -> impl Iterator<Item = (String, serde_json::Value)> {
         self.0.into_iter()
     }
+
+    pub fn into_tools_and_middleware(
+        mut self,
+    ) -> (
+        IndexMap<String, serde_json::Value>,
+        Option<serde_json::Value>,
+    ) {
+        let middleware = self.0.shift_remove("middleware");
+        (self.0, middleware)
+    }
 }
 
 impl<'de> Deserialize<'de> for ToolDeclarations {
@@ -158,7 +173,29 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
     where
         D: serde::Deserializer<'de>,
     {
-        IndexMap::<String, serde_json::Value>::deserialize(deserializer).map(Self)
+        let declarations = IndexMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        if let Some(serde_json::Value::Object(value)) = declarations.get("middleware")
+            && [
+                "component",
+                "release",
+                "templates",
+                "config",
+                "envMergeMode",
+                "env",
+                "pluginsMergeMode",
+                "plugins",
+                "filesMergeMode",
+                "files",
+                "presets",
+            ]
+            .iter()
+            .any(|field| value.contains_key(*field))
+        {
+            return Err(serde::de::Error::custom(
+                "tool name `middleware` is reserved for tool middleware declarations",
+            ));
+        }
+        Ok(Self(declarations))
     }
 }
 
@@ -291,6 +328,79 @@ pub struct RegistrySubjectById {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolMiddlewareRegistrySubjectById {
+    pub release_id: golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(untagged)]
+pub enum ToolMiddlewareRegistrySubject {
+    ById(ToolMiddlewareRegistrySubjectById),
+    ByCoordinates(RegistrySubjectByCoordinates),
+}
+
+impl<'de> Deserialize<'de> for ToolMiddlewareRegistrySubject {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Subject {
+            ById(ToolMiddlewareRegistrySubjectById),
+            ByCoordinates(RegistrySubjectByCoordinates),
+        }
+        match Subject::deserialize(deserializer)? {
+            Subject::ById(value) => Ok(Self::ById(value)),
+            Subject::ByCoordinates(value) => Ok(Self::ByCoordinates(value)),
+        }
+    }
+}
+
+impl ToolMiddlewareRegistrySubject {
+    pub fn to_release_reference(
+        &self,
+    ) -> Result<golem_common::model::tool_middleware_release::ToolMiddlewareReleaseReference, String>
+    {
+        use golem_common::model::account::AccountEmail;
+        use golem_common::model::tool_middleware_release::{
+            ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById,
+            ToolMiddlewareReleaseReference,
+        };
+        match self {
+            Self::ById(value) => Ok(ToolMiddlewareReleaseReference::ById(
+                ToolMiddlewareReleaseById {
+                    release_id: value.release_id,
+                },
+            )),
+            Self::ByCoordinates(value) => Ok(ToolMiddlewareReleaseReference::ByCoordinates(
+                ToolMiddlewareReleaseByCoordinates {
+                    account: AccountEmail::new(value.account.clone()),
+                    name: ToolMiddlewareName::try_from(value.name.as_str())?,
+                    version: value.version.clone(),
+                },
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolMiddlewareDeclaration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<ComponentName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ToolMiddlewareRegistrySubject>,
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
+    #[serde(flatten)]
+    pub properties: ToolLayerProperties,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, ToolPreset>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegistrySubjectByCoordinates {
     pub account: String,
     pub name: String,
@@ -332,8 +442,8 @@ impl ToolPreset {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
@@ -384,6 +494,72 @@ pub struct ToolBinding {
     pub secret_keys_revealable_merge_mode: Option<SecretKeyMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_keys_revealable: Option<ManifestSecretKeyScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_access: Option<ToolFilesystemAccess>,
+    /// `None` distinguishes omission from an explicitly authored empty chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolMiddlewareInstallation {
+    Shortcut(String),
+    Structured(ToolMiddlewareInstallationStruct),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolMiddlewareInstallationStruct {
+    pub name: ToolMiddlewareName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default = "empty_normalized_json")]
+    pub parameters: NormalizedJsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(default)]
+    pub filesystem_access: ToolFilesystemAccess,
+}
+
+fn empty_normalized_json() -> NormalizedJsonValue {
+    NormalizedJsonValue::new(serde_json::json!({}))
+}
+
+impl ToolMiddlewareInstallation {
+    pub fn into_common(
+        self,
+    ) -> Result<golem_common::model::tool_middleware::ToolMiddlewareInstallation, String> {
+        use golem_common::model::account::AccountEmail;
+        let value = match self {
+            Self::Structured(value) => value,
+            Self::Shortcut(shortcut) => {
+                let (name, version) = shortcut
+                    .rsplit_once('@')
+                    .map_or((shortcut.as_str(), None), |(name, version)| {
+                        (name, Some(version.to_string()))
+                    });
+                ToolMiddlewareInstallationStruct {
+                    name: ToolMiddlewareName::try_from(name)?,
+                    version,
+                    parameters: empty_normalized_json(),
+                    account: None,
+                    filesystem_access: ToolFilesystemAccess::Unset,
+                }
+            }
+        };
+        Ok(
+            golem_common::model::tool_middleware::ToolMiddlewareInstallation {
+                name: value.name,
+                version: value.version,
+                parameters: value.parameters,
+                account: value.account.map(AccountEmail::new),
+                filesystem_access: value.filesystem_access,
+            },
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -948,6 +1124,46 @@ pub struct Environment {
     pub deployment: Option<DeploymentOptions>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub version: Option<AppVersionSourceOverride>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tools: Option<EnvironmentTools>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentTools {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub middleware: Vec<ToolMiddlewareInstallation>,
+    #[serde(flatten)]
+    pub bindings: IndexMap<String, ToolBinding>,
+}
+
+impl<'de> Deserialize<'de> for EnvironmentTools {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = IndexMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        let mut middleware = Vec::new();
+        let mut bindings = IndexMap::new();
+        for (name, value) in value {
+            if name == "middleware" {
+                middleware = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            } else {
+                let binding: ToolBinding =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                if binding.middleware_merge_mode.is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "middlewareMergeMode is only valid on agent tool bindings, not environment tool binding `{name}`"
+                    )));
+                }
+                bindings.insert(name, binding);
+            }
+        }
+        Ok(Self {
+            middleware,
+            bindings,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1005,8 +1221,14 @@ pub struct CliOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeploymentOptions {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub compatibility_check: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub compatibility_mode:
+        Option<golem_common::schema::tool::compatibility::ToolCompatibilityMode>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub version_check: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub security_overrides: Option<bool>,
 }
 
@@ -1014,6 +1236,7 @@ impl DeploymentOptions {
     pub fn new_local() -> Self {
         Self {
             compatibility_check: Some(false),
+            compatibility_mode: None,
             version_check: Some(false),
             security_overrides: Some(true),
         }
@@ -1022,6 +1245,7 @@ impl DeploymentOptions {
     pub fn new_cloud() -> Self {
         Self {
             compatibility_check: None,
+            compatibility_mode: None,
             version_check: None,
             security_overrides: None,
         }
@@ -1030,6 +1254,9 @@ impl DeploymentOptions {
     pub fn with_defaults_from(mut self, other: Self) -> Self {
         if self.compatibility_check.is_none() {
             self.compatibility_check = other.compatibility_check;
+        }
+        if self.compatibility_mode.is_none() {
+            self.compatibility_mode = other.compatibility_mode;
         }
         if self.version_check.is_none() {
             self.version_check = other.version_check;
@@ -1042,6 +1269,12 @@ impl DeploymentOptions {
 
     pub fn compatibility_check(&self) -> bool {
         self.compatibility_check.unwrap_or(true)
+    }
+
+    pub fn compatibility_mode(
+        &self,
+    ) -> golem_common::schema::tool::compatibility::ToolCompatibilityMode {
+        self.compatibility_mode.unwrap_or_default()
     }
 
     pub fn version_check(&self) -> bool {
@@ -1766,6 +1999,9 @@ mod test {
                     secret_keys_readable,
                     secret_keys_revealable_merge_mode,
                     secret_keys_revealable,
+                    filesystem_access: None,
+                    middleware: None,
+                    middleware_merge_mode: None,
                 },
             )
             .boxed()
@@ -2273,6 +2509,7 @@ mod test {
             .prop_map(|(compatibility_check, version_check, security_overrides)| {
                 DeploymentOptions {
                     compatibility_check: Some(compatibility_check),
+                    compatibility_mode: None,
                     version_check: Some(version_check),
                     security_overrides: Some(security_overrides),
                 }
@@ -2366,6 +2603,7 @@ mod test {
                         cli,
                         deployment,
                         version,
+                        tools: None,
                     }
                 },
             )
@@ -2882,6 +3120,7 @@ mod test {
                     retry_policy_defaults,
                     resource_defaults,
                     tool_releases: Default::default(),
+                    tool_middleware_releases: Default::default(),
                 },
             )
             .boxed()
@@ -2980,7 +3219,7 @@ mod test {
 
     #[test]
     fn environment_rejects_tool_bindings_and_publications() {
-        for field in ["tools", "toolsMergeMode", "publishTools"] {
+        for field in ["toolsMergeMode", "publishTools"] {
             let source = format!(
                 "app: test-app\nenvironments:\n  local:\n    server: local\n    {field}: {{}}\n"
             );
@@ -2990,6 +3229,144 @@ mod test {
                 "environment unexpectedly accepted {field}"
             );
         }
+    }
+
+    #[test]
+    fn middleware_manifest_slots_and_distinct_release_ids_parse() {
+        let app = Application::from_yaml_str(indoc::indoc! { r#"
+            app: test-app
+            tools:
+              middleware:
+                audit:
+                  component: app:audit
+            toolMiddlewareReleases:
+              local:
+                audit: {}
+            environments:
+              local:
+                server: local
+                deployment:
+                  compatibilityMode: nominal
+                tools:
+                  middleware:
+                    - audit@1.0.0
+                    - name: audit
+                      version: 1.0.0
+                      filesystemAccess: denied
+            agents:
+              SearchAgent:
+                tools:
+                  search:
+                    middleware: []
+                    middlewareMergeMode: replace
+        "# })
+        .unwrap();
+        let (_, middleware) = app.tools.into_tools_and_middleware();
+        assert!(middleware.is_some());
+        let tools = app.environments["local"].tools.as_ref().unwrap();
+        assert_eq!(tools.middleware.len(), 2);
+        assert_eq!(
+            tools.middleware[1]
+                .clone()
+                .into_common()
+                .unwrap()
+                .filesystem_access,
+            ToolFilesystemAccess::Denied
+        );
+        assert_eq!(
+            app.agents[&AgentTypeName("SearchAgent".to_string())]
+                .tools
+                .as_ref()
+                .unwrap()["search"]
+                .middleware,
+            Some(vec![])
+        );
+        assert_eq!(
+            app.tool_middleware_releases
+                .get(&EnvironmentName("local".to_string()))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            app.environments["local"]
+                .deployment
+                .as_ref()
+                .unwrap()
+                .compatibility_mode(),
+            golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal
+        );
+    }
+
+    #[test]
+    fn compatibility_mode_schema_accepts_every_rust_value() {
+        use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+
+        for mode in [
+            ToolCompatibilityMode::StrictEquality,
+            ToolCompatibilityMode::StructuralSubtype,
+            ToolCompatibilityMode::Nominal,
+        ] {
+            let mode = serde_json::to_value(mode).unwrap();
+            let manifest = serde_json::json!({
+                "environments": {
+                    "local": { "deployment": { "compatibilityMode": mode } }
+                }
+            });
+            assert!(
+                JSON_SCHEMA_VALIDATOR.is_valid(&manifest),
+                "schema rejected Rust compatibility mode {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_middleware_tool_name_has_clear_error() {
+        let error = Application::from_yaml_str(indoc::indoc! { r#"
+            tools:
+              middleware:
+                component: app:tool
+        "# })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("tool name `middleware` is reserved")
+        );
+    }
+
+    #[test]
+    fn environment_middleware_merge_mode_is_rejected_even_when_prepend() {
+        let source = indoc::indoc! { r#"
+            environments:
+              local:
+                tools:
+                  search:
+                    middlewareMergeMode: prepend
+        "# };
+        let error = Application::from_yaml_str(source).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("only valid on agent tool bindings")
+        );
+
+        let json = serde_yaml::from_str::<serde_json::Value>(source).unwrap();
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+    }
+
+    #[test]
+    fn agent_universal_middleware_slot_is_rejected() {
+        assert!(
+            Application::from_yaml_str(indoc::indoc! { r#"
+            app: test-app
+            agents:
+              Worker:
+                tools:
+                  middleware: [audit]
+        "# })
+            .is_err()
+        );
     }
 
     #[test]

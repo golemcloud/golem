@@ -625,7 +625,10 @@ describe('tool runtime client', () => {
             tag: 'remote-tool-error',
             val: {
               tag: 'custom-error',
-              val: wireValue(z.object({ reason: z.string() }), { reason: 'nope' }),
+              val: {
+                name: 'failed',
+                payload: wireValue(z.object({ reason: z.string() }), { reason: 'nope' }),
+              },
             },
           } satisfies RpcError;
         }),
@@ -638,10 +641,13 @@ describe('tool runtime client', () => {
             tag: 'remote-tool-error',
             val: {
               tag: 'custom-error',
-              val: typedSchemaValueToWit({
-                graph: { defs: new Map(), root: t.tuple([]) },
-                value: v.tuple([]),
-              }),
+              val: {
+                name: 'not-found',
+                payload: typedSchemaValueToWit({
+                  graph: { defs: new Map(), root: t.tuple([]) },
+                  value: v.tuple([]),
+                }),
+              },
             },
           } satisfies RpcError;
         }),
@@ -662,7 +668,7 @@ describe('tool runtime client', () => {
     });
   });
 
-  it('decodes same-shaped custom errors as the first declared case', async () => {
+  it('decodes same-shaped custom errors by authoritative name', async () => {
     const withPayload = toolDefinition('with-payload').body((body) =>
       body
         .returns(z.void())
@@ -680,7 +686,10 @@ describe('tool runtime client', () => {
         transport: new FakeTransport(() => {
           throw {
             tag: 'remote-tool-error',
-            val: { tag: 'custom-error', val: wireValue(z.string(), 'failure') },
+            val: {
+              tag: 'custom-error',
+              val: { name: 'second', payload: wireValue(z.string(), 'failure') },
+            },
           } satisfies RpcError;
         }),
       })['with-payload']({}),
@@ -692,10 +701,13 @@ describe('tool runtime client', () => {
             tag: 'remote-tool-error',
             val: {
               tag: 'custom-error',
-              val: typedSchemaValueToWit({
-                graph: { defs: new Map(), root: t.tuple([]) },
-                value: v.tuple([]),
-              }),
+              val: {
+                name: 'second',
+                payload: typedSchemaValueToWit({
+                  graph: { defs: new Map(), root: t.tuple([]) },
+                  value: v.tuple([]),
+                }),
+              },
             },
           } satisfies RpcError;
         }),
@@ -705,14 +717,35 @@ describe('tool runtime client', () => {
     expect(payloadFailure).toMatchObject({
       cause: {
         tag: 'tool',
-        error: { tag: 'err', name: 'first', hasPayload: true, payload: 'failure' },
+        error: { tag: 'err', name: 'second', hasPayload: true, payload: 'failure' },
       },
     });
     expect(payloadlessFailure).toMatchObject({
       cause: {
         tag: 'tool',
-        error: { tag: 'err', name: 'first', hasPayload: false },
+        error: { tag: 'err', name: 'second', hasPayload: false },
       },
+    });
+  });
+
+  it('preserves an unknown named custom error with its raw owned payload', async () => {
+    const definition = toolDefinition('known-only').body((body) =>
+      body.returns(z.void()).error('known', { kind: 'runtime', exitCode: 1 }),
+    );
+    const payload = wireValue(z.string(), 'future details');
+    const failure = await rejectionOf(
+      client(definition, {
+        transport: new FakeTransport(() => {
+          throw {
+            tag: 'remote-tool-error',
+            val: { tag: 'custom-error', val: { name: 'future-error', payload } },
+          } satisfies RpcError;
+        }),
+      })['known-only']({}),
+    );
+
+    expect(failure).toMatchObject({
+      cause: { tag: 'unknown-error', name: 'future-error', payload },
     });
   });
 
@@ -822,6 +855,31 @@ describe('tool runtime client', () => {
     });
   });
 
+  it('rejects output-only record reorder and width before positional decoding', async () => {
+    const definition = toolDefinition('adapted-result').body((body) =>
+      body.returns(z.object({ first: z.string(), second: z.number() })),
+    );
+    for (const result of [
+      wireValue(z.object({ second: z.number(), first: z.string() }), {
+        second: 2,
+        first: 'one',
+      }),
+      wireValue(z.object({ first: z.string() }), { first: 'one' }),
+    ]) {
+      const failure = await rejectionOf(
+        client(definition, {
+          transport: new FakeTransport(() => ({ result })),
+        })['adapted-result']({}),
+      );
+      expect(failure).toMatchObject({
+        cause: {
+          tag: 'rpc',
+          error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
+        },
+      });
+    }
+  });
+
   it('encodes and decodes Zod 3, Zod 4, and ArkType definitions', async () => {
     const zod3Definition = toolDefinition('zod-three').body((body) =>
       body
@@ -900,6 +958,19 @@ describe('tool runtime client', () => {
     expect(ToolRpc).toHaveBeenCalledWith('default');
     expect(asyncInvokeAndAwait).toHaveBeenCalledTimes(2);
     expect(asyncInvokeAndAwait.mock.calls.every(([path]) => deepEqual(path, []))).toBe(true);
+  });
+
+  it('uses an explicit leaf lookup name for an adapted presented client', async () => {
+    const get = vi.fn(async () => ({ result: undefined }));
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({ asyncInvokeAndAwait: vi.fn(() => ({ get, cancel: vi.fn() })) }) as unknown as ToolRpc,
+    );
+    const presented = toolDefinition('presented').body((body) => body.returns(z.void()));
+
+    await client(presented, { lookupName: 'leaf-registration' }).presented({});
+
+    expect(ToolRpc).toHaveBeenCalledWith('leaf-registration');
   });
 
   it('keeps a rejected host result handled until a started invocation result is accessed', async () => {

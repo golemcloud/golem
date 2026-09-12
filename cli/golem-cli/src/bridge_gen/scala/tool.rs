@@ -405,7 +405,7 @@ impl ScalaToolBridgeGenerator {
         if body.stdout.is_some() {
             let error_decoder = if body.errors.is_empty() {
                 format!(
-                    "((_: _root_.golem.schema.TypedSchemaValue) => _root_.scala.Left(\"remote tool returned an undeclared custom error\"): _root_.scala.Either[_root_.scala.Predef.String, {SCALA_NOTHING}])"
+                    "((_: _root_.golem.tool.NamedToolError) => _root_.scala.Left(\"remote tool returned an undeclared custom error\"): _root_.scala.Either[_root_.scala.Predef.String, {SCALA_NOTHING}])"
                 )
             } else {
                 format!("{}.decodeError", self.error_type_ref(command_index, body))
@@ -532,12 +532,19 @@ impl ScalaToolBridgeGenerator {
         variants: &[String],
     ) -> anyhow::Result<()> {
         writer.line(format!(
-            "def decodeError(__value: _root_.golem.schema.TypedSchemaValue): _root_.scala.Either[_root_.scala.Predef.String, {qualified_error_name}] = {{"
+            "def decodeError(__error: _root_.golem.tool.NamedToolError): _root_.scala.Either[_root_.scala.Predef.String, {qualified_error_name}] = {{"
         ));
         writer.indent();
         for (case, variant) in body.errors.iter().zip(variants) {
+            writer.line(format!(
+                "if (__error.name == {}) {{",
+                scala_string_literal(&case.name)
+            ));
+            writer.indent();
             if let Some(payload) = &case.payload {
-                let dec = self.inner.decode_expr("__value.value", payload, 0)?;
+                let dec = self
+                    .inner
+                    .decode_expr("__error.payload.value", payload, 0)?;
                 writer.line("try {");
                 writer.indent();
                 writer.line(format!(
@@ -546,15 +553,17 @@ impl ScalaToolBridgeGenerator {
                 writer.dedent();
                 writer.line("} catch { case _: _root_.scala.Throwable => () }");
             } else {
-                writer.line("__value.value match {");
+                writer.line("__error.payload.value match {");
                 writer.indent();
                 writer.line(format!("case _root_.golem.schema.SchemaValue.TupleValue(values) if values.isEmpty => return _root_.scala.Right({qualified_error_name}.{variant})"));
                 writer.line("case _ => ()");
                 writer.dedent();
                 writer.line("}");
             }
+            writer.dedent();
+            writer.line("}");
         }
-        writer.line("_root_.scala.Left(\"remote tool error payload did not match any declared error case\")");
+        writer.line("_root_.scala.Left(_root_.golem.tool.ToolErrorSupport.unmatchedPayload)");
         writer.dedent();
         writer.line("}");
         Ok(())

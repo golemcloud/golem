@@ -229,9 +229,12 @@ pub struct ExtendedErrorCase {
 pub trait ToolErrorSchema {
     fn error_cases() -> Result<Vec<ExtendedErrorCase>, ToolBuildError>;
 
-    fn to_error_payload_value(&self) -> Result<crate::TypedSchemaValue, String>;
+    fn to_error_payload_value(&self) -> Result<(String, crate::TypedSchemaValue), String>;
 
-    fn from_error_payload_value(value: crate::TypedSchemaValue) -> Result<Self, String>
+    fn from_error_payload_value(
+        name: String,
+        value: crate::TypedSchemaValue,
+    ) -> Result<Option<Self>, String>
     where
         Self: Sized;
 }

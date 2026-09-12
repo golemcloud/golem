@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::command::tool::{
-    ToolGrantCreateArgs, ToolGrantSubcommand, ToolReleaseSubcommand, ToolSubcommand,
+    ToolGrantCreateArgs, ToolGrantSubcommand, ToolMiddlewareGrantCreateArgs,
+    ToolMiddlewareGrantSubcommand, ToolMiddlewareReleaseSubcommand, ToolMiddlewareSubcommand,
+    ToolReleaseSubcommand, ToolSubcommand,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -24,13 +26,23 @@ use crate::model::environment::{
     EnvironmentToolGrantView,
 };
 use crate::model::tool_deployment::{DeployedToolListView, DeployedToolView};
+use crate::model::tool_middleware::*;
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
-use golem_client::api::{EnvironmentClient, EnvironmentToolGrantsClient, ToolReleasesClient};
+use golem_client::api::{
+    EnvironmentClient, EnvironmentToolGrantsClient, EnvironmentToolMiddlewareGrantsClient,
+    ToolMiddlewareReleasesClient, ToolReleasesClient,
+};
 use golem_common::base_model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
 };
 use golem_common::base_model::tool_release::{
     ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseReference,
+};
+use golem_common::model::environment_tool_middleware_grant::{
+    EnvironmentToolMiddlewareGrantCreation, EnvironmentToolMiddlewareGrantDeletion,
+};
+use golem_common::model::tool_middleware_release::{
+    ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
 };
 use std::sync::Arc;
 
@@ -49,7 +61,233 @@ impl ToolCommandHandler {
             ToolSubcommand::Get { tool_name } => self.cmd_get(tool_name).await,
             ToolSubcommand::Release { subcommand } => self.handle_release(subcommand).await,
             ToolSubcommand::Grant { subcommand } => self.handle_grant(subcommand).await,
+            ToolSubcommand::Middleware { subcommand } => self.handle_middleware(subcommand).await,
         }
+    }
+
+    async fn handle_middleware(&self, command: ToolMiddlewareSubcommand) -> anyhow::Result<()> {
+        match command {
+            ToolMiddlewareSubcommand::List => {
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await?;
+                let middlewares = environment
+                    .with_current_deployment_revision_or_default_warn(|revision| async move {
+                        Ok(self
+                            .ctx
+                            .golem_clients()
+                            .await?
+                            .environment
+                            .list_deployment_registered_tool_middlewares(
+                                &environment.environment_id.0,
+                                revision.into(),
+                            )
+                            .await
+                            .map_service_error()?
+                            .values)
+                    })
+                    .await?;
+                self.ctx
+                    .log_handler()
+                    .log_output(DeployedToolMiddlewareListView { middlewares })?;
+            }
+            ToolMiddlewareSubcommand::Get { middleware_name } => {
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await?;
+                let revision = environment.current_deployment_or_err()?.deployment_revision;
+                let middleware = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment
+                    .get_deployment_registered_tool_middleware(
+                        &environment.environment_id.0,
+                        revision.into(),
+                        middleware_name.as_str(),
+                    )
+                    .await
+                    .map_service_error()?;
+                self.ctx
+                    .log_handler()
+                    .log_output(DeployedToolMiddlewareView { middleware })?;
+            }
+            ToolMiddlewareSubcommand::Release { subcommand } => {
+                self.handle_middleware_release(subcommand).await?
+            }
+            ToolMiddlewareSubcommand::Grant { subcommand } => {
+                self.handle_middleware_grant(subcommand).await?
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_middleware_release(
+        &self,
+        command: ToolMiddlewareReleaseSubcommand,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+        let output = match command {
+            ToolMiddlewareReleaseSubcommand::List { account_id } => {
+                let account_id = account_id.unwrap_or(*clients.account_id());
+                let releases = clients
+                    .tool_middleware_releases
+                    .list_account_tool_middleware_releases(&account_id.0)
+                    .await
+                    .map_service_error()?
+                    .values;
+                return self
+                    .ctx
+                    .log_handler()
+                    .log_output(ToolMiddlewareReleaseListView { releases });
+            }
+            ToolMiddlewareReleaseSubcommand::Get { release_id } => clients
+                .tool_middleware_releases
+                .get_tool_middleware_release(&release_id.0)
+                .await
+                .map_service_error()?,
+            ToolMiddlewareReleaseSubcommand::DePublish { release_id } => clients
+                .tool_middleware_releases
+                .de_publish_tool_middleware_release(&release_id.0)
+                .await
+                .map_service_error()?,
+            ToolMiddlewareReleaseSubcommand::Restore { release_id } => clients
+                .tool_middleware_releases
+                .restore_tool_middleware_release(&release_id.0)
+                .await
+                .map_service_error()?,
+        };
+        self.ctx
+            .log_handler()
+            .log_output(ToolMiddlewareReleaseView { release: output })?;
+        Ok(())
+    }
+
+    async fn handle_middleware_grant(
+        &self,
+        command: ToolMiddlewareGrantSubcommand,
+    ) -> anyhow::Result<()> {
+        match command {
+            ToolMiddlewareGrantSubcommand::Create(args) => {
+                self.cmd_middleware_grant_create(args).await?
+            }
+            ToolMiddlewareGrantSubcommand::List => {
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
+                    .await?;
+                let grants = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_middleware_grants
+                    .list_environment_tool_middleware_grants(&environment.environment_id.0)
+                    .await
+                    .map_service_error()?
+                    .values
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
+                self.ctx
+                    .log_handler()
+                    .log_output(EnvironmentToolMiddlewareGrantListView { grants })?;
+            }
+            ToolMiddlewareGrantSubcommand::Get { grant_id } => {
+                let grant = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_middleware_grants
+                    .get_environment_tool_middleware_grant(&grant_id.0)
+                    .await
+                    .map_service_error()?;
+                self.ctx
+                    .log_handler()
+                    .log_output(EnvironmentToolMiddlewareGrantGetView {
+                        grant: grant.into(),
+                    })?;
+            }
+            ToolMiddlewareGrantSubcommand::Delete { grant_id } => {
+                self.ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_middleware_grants
+                    .delete_environment_tool_middleware_grant(
+                        &grant_id.0,
+                        &EnvironmentToolMiddlewareGrantDeletion { automatic: false },
+                    )
+                    .await
+                    .map_service_error()?;
+                self.ctx
+                    .log_handler()
+                    .log_output(EnvironmentToolMiddlewareGrantDeleteView { grant_id })?;
+            }
+            ToolMiddlewareGrantSubcommand::Restore { grant_id } => {
+                let grant = self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment_tool_middleware_grants
+                    .restore_environment_tool_middleware_grant(&grant_id.0)
+                    .await
+                    .map_service_error()?;
+                self.ctx
+                    .log_handler()
+                    .log_output(EnvironmentToolMiddlewareGrantRestoreView {
+                        grant: grant.into(),
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn cmd_middleware_grant_create(
+        &self,
+        args: ToolMiddlewareGrantCreateArgs,
+    ) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+        let release = match (args.release_id, args.account, args.name, args.version) {
+            (Some(release_id), None, None, None) => {
+                ToolMiddlewareReleaseReference::ById(ToolMiddlewareReleaseById { release_id })
+            }
+            (None, Some(account), Some(name), Some(version)) => {
+                ToolMiddlewareReleaseReference::ByCoordinates(ToolMiddlewareReleaseByCoordinates {
+                    account,
+                    name,
+                    version,
+                })
+            }
+            _ => unreachable!("clap validates the tool middleware release reference"),
+        };
+        let grant = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment_tool_middleware_grants
+            .create_environment_tool_middleware_grant(
+                &environment.environment_id.0,
+                &EnvironmentToolMiddlewareGrantCreation {
+                    release,
+                    automatic: false,
+                },
+            )
+            .await
+            .map_service_error()?;
+        self.ctx
+            .log_handler()
+            .log_output(EnvironmentToolMiddlewareGrantCreateView {
+                grant: grant.into(),
+            })?;
+        Ok(())
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {

@@ -526,12 +526,17 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                     golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
                     golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
                 > {
-                    let __value = golem_rust::agentic::ToolErrorSchema::to_error_payload_value(__error)
+                    let (__name, __value) = golem_rust::agentic::ToolErrorSchema::to_error_payload_value(__error)
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
                     let __value = golem_rust::encode_typed_schema_value(&__value)
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
                     ::std::result::Result::Ok(
-                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(__value)
+                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(
+                            golem_rust::schema::tool::wit::wire::CustomToolError {
+                                name: __name,
+                                payload: __value,
+                            }
+                        )
                     )
                 }
 

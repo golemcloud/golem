@@ -40,11 +40,11 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn to_error_payload_v
 ) {
   match self {
     InvalidPattern(reason~) =>
-      Ok(@schema.try_into_typed_schema_value(reason)) catch {
+      Ok(("InvalidPattern", @schema.try_into_typed_schema_value(reason))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     NoMatch =>
-      Ok(@schema.try_into_typed_schema_value(())) catch {
+      Ok(("NoMatch", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -53,23 +53,34 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn to_error_payload_v
 ///|
 ///
 pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn from_error_payload_value(
+  __golem_name,
   __golem_value,
 ) {
-  let __golem_decoded : String? = Some(
-    @schema.from_value_as(__golem_value.value),
-  ) catch {
-    _ => None
+  match __golem_name {
+    "InvalidPattern" => {
+      let __golem_decoded : String? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(InvalidPattern(reason=__golem_payload))
+      }
+      Err("remote tool error payload is malformed for case `InvalidPattern`")
+    }
+    "NoMatch" => {
+      let __golem_decoded : Unit? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(NoMatch)
+      }
+      Err("remote tool error payload is malformed for case `NoMatch`")
+    }
+    _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(InvalidPattern(reason=__golem_payload))
-  }
-  let __golem_decoded : Unit? = Some(@schema.from_value_as(__golem_value.value)) catch {
-    _ => None
-  }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(NoMatch)
-  }
-  Err("remote tool error payload did not match any declared error case")
 }
 
 ///|
@@ -122,15 +133,15 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn to_error_payload
 ) {
   match self {
     NothingStaged =>
-      Ok(@schema.try_into_typed_schema_value(())) catch {
+      Ok(("NothingStaged", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     DirtyMerge =>
-      Ok(@schema.try_into_typed_schema_value(())) catch {
+      Ok(("DirtyMerge", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     BadAuthorFormat(author~) =>
-      Ok(@schema.try_into_typed_schema_value(author)) catch {
+      Ok(("BadAuthorFormat", @schema.try_into_typed_schema_value(author))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -139,29 +150,45 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn to_error_payload
 ///|
 ///
 pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_payload_value(
+  __golem_name,
   __golem_value,
 ) {
-  let __golem_decoded : Unit? = Some(@schema.from_value_as(__golem_value.value)) catch {
-    _ => None
+  match __golem_name {
+    "NothingStaged" => {
+      let __golem_decoded : Unit? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(NothingStaged)
+      }
+      Err("remote tool error payload is malformed for case `NothingStaged`")
+    }
+    "DirtyMerge" => {
+      let __golem_decoded : Unit? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(DirtyMerge)
+      }
+      Err("remote tool error payload is malformed for case `DirtyMerge`")
+    }
+    "BadAuthorFormat" => {
+      let __golem_decoded : String? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(BadAuthorFormat(author=__golem_payload))
+      }
+      Err("remote tool error payload is malformed for case `BadAuthorFormat`")
+    }
+    _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(NothingStaged)
-  }
-  let __golem_decoded : Unit? = Some(@schema.from_value_as(__golem_value.value)) catch {
-    _ => None
-  }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(DirtyMerge)
-  }
-  let __golem_decoded : String? = Some(
-    @schema.from_value_as(__golem_value.value),
-  ) catch {
-    _ => None
-  }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(BadAuthorFormat(author=__golem_payload))
-  }
-  Err("remote tool error payload did not match any declared error case")
 }
 
 ///|
@@ -203,11 +230,11 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn to_error_payload_va
 ) {
   match self {
     BadRevision =>
-      Ok(@schema.try_into_typed_schema_value(())) catch {
+      Ok(("BadRevision", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
     NotARepository =>
-      Ok(@schema.try_into_typed_schema_value(())) catch {
+      Ok(("NotARepository", @schema.try_into_typed_schema_value(()))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -216,21 +243,34 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn to_error_payload_va
 ///|
 ///
 pub impl @tool.ToolErrorSchema for CanonicalLogError with fn from_error_payload_value(
+  __golem_name,
   __golem_value,
 ) {
-  let __golem_decoded : Unit? = Some(@schema.from_value_as(__golem_value.value)) catch {
-    _ => None
+  match __golem_name {
+    "BadRevision" => {
+      let __golem_decoded : Unit? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(BadRevision)
+      }
+      Err("remote tool error payload is malformed for case `BadRevision`")
+    }
+    "NotARepository" => {
+      let __golem_decoded : Unit? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(NotARepository)
+      }
+      Err("remote tool error payload is malformed for case `NotARepository`")
+    }
+    _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(BadRevision)
-  }
-  let __golem_decoded : Unit? = Some(@schema.from_value_as(__golem_value.value)) catch {
-    _ => None
-  }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(NotARepository)
-  }
-  Err("remote tool error payload did not match any declared error case")
 }
 
 ///|
@@ -269,7 +309,7 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn to_error_payload
 ) {
   match self {
     NoSuchRemote(name~) =>
-      Ok(@schema.try_into_typed_schema_value(name)) catch {
+      Ok(("NoSuchRemote", @schema.try_into_typed_schema_value(name))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -278,17 +318,23 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn to_error_payload
 ///|
 ///
 pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn from_error_payload_value(
+  __golem_name,
   __golem_value,
 ) {
-  let __golem_decoded : String? = Some(
-    @schema.from_value_as(__golem_value.value),
-  ) catch {
-    _ => None
+  match __golem_name {
+    "NoSuchRemote" => {
+      let __golem_decoded : String? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(NoSuchRemote(name=__golem_payload))
+      }
+      Err("remote tool error payload is malformed for case `NoSuchRemote`")
+    }
+    _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(NoSuchRemote(name=__golem_payload))
-  }
-  Err("remote tool error payload did not match any declared error case")
 }
 
 ///|
@@ -327,7 +373,7 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn to_error_payload
 ) {
   match self {
     Failed(__golem_payload) =>
-      Ok(@schema.try_into_typed_schema_value(__golem_payload)) catch {
+      Ok(("Failed", @schema.try_into_typed_schema_value(__golem_payload))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -336,17 +382,23 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn to_error_payload
 ///|
 ///
 pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn from_error_payload_value(
+  __golem_name,
   __golem_value,
 ) {
-  let __golem_decoded : String? = Some(
-    @schema.from_value_as(__golem_value.value),
-  ) catch {
-    _ => None
+  match __golem_name {
+    "Failed" => {
+      let __golem_decoded : String? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(Failed(__golem_payload))
+      }
+      Err("remote tool error payload is malformed for case `Failed`")
+    }
+    _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(Failed(__golem_payload))
-  }
-  Err("remote tool error payload did not match any declared error case")
 }
 
 ///|
@@ -385,7 +437,7 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with fn to_error_payload_
 ) {
   match self {
     NoSuchStash(name~) =>
-      Ok(@schema.try_into_typed_schema_value(name)) catch {
+      Ok(("NoSuchStash", @schema.try_into_typed_schema_value(name))) catch {
         __golem_error => Err(__golem_error.to_string())
       }
   }
@@ -394,17 +446,23 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with fn to_error_payload_
 ///|
 ///
 pub impl @tool.ToolErrorSchema for CanonicalStashError with fn from_error_payload_value(
+  __golem_name,
   __golem_value,
 ) {
-  let __golem_decoded : String? = Some(
-    @schema.from_value_as(__golem_value.value),
-  ) catch {
-    _ => None
+  match __golem_name {
+    "NoSuchStash" => {
+      let __golem_decoded : String? = Some(
+        @schema.from_value_as(__golem_value.value),
+      ) catch {
+        _ => None
+      }
+      if __golem_decoded is Some(__golem_payload) {
+        return Ok(NoSuchStash(name=__golem_payload))
+      }
+      Err("remote tool error payload is malformed for case `NoSuchStash`")
+    }
+    _ => Err("unknown remote tool error case `" + __golem_name + "`")
   }
-  if __golem_decoded is Some(__golem_payload) {
-    return Ok(NoSuchStash(name=__golem_payload))
-  }
-  Err("remote tool error payload did not match any declared error case")
 }
 
 ///|
@@ -1197,7 +1255,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
             },
           )
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalGrepError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -1213,7 +1271,12 @@ async fn __golem_tool_invoke_CanonicalGrep(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -1281,7 +1344,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
             },
           )
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalGrepError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -1297,7 +1360,12 @@ async fn __golem_tool_invoke_CanonicalGrep(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -2139,7 +2207,7 @@ async fn __golem_tool_invoke_CanonicalGit(
             },
           )
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalCommitError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -2155,7 +2223,12 @@ async fn __golem_tool_invoke_CanonicalGit(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -2264,7 +2337,8 @@ async fn __golem_tool_invoke_CanonicalGit(
             },
           )
         Err(error) => {
-          let payload = match CanonicalLogError::to_error_payload_value(error) {
+          let (__golem_error_name, payload) = match
+            CanonicalLogError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
@@ -2279,7 +2353,12 @@ async fn __golem_tool_invoke_CanonicalGit(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -2756,7 +2835,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         CanonicalRemote::add(verbose, name, url, track, master, tags, fetch) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalRemoteError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -2772,7 +2851,12 @@ async fn __golem_tool_invoke_CanonicalRemote(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -2797,7 +2881,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
       match CanonicalRemote::remove(name) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalRemoteError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -2813,7 +2897,12 @@ async fn __golem_tool_invoke_CanonicalRemote(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -2878,7 +2967,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
       match CanonicalRemote::set_url(name, newurl, oldurl, push, add, delete) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalSetUrlError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -2894,7 +2983,12 @@ async fn __golem_tool_invoke_CanonicalRemote(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -3233,7 +3327,7 @@ async fn __golem_tool_invoke_CanonicalStash(
       match CanonicalStash::stash(verbose, message, keep_index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalStashError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -3249,7 +3343,12 @@ async fn __golem_tool_invoke_CanonicalStash(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -3282,7 +3381,7 @@ async fn __golem_tool_invoke_CanonicalStash(
       match CanonicalStash::pop(name, index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalStashError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -3298,7 +3397,12 @@ async fn __golem_tool_invoke_CanonicalStash(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -3331,7 +3435,7 @@ async fn __golem_tool_invoke_CanonicalStash(
       match CanonicalStash::apply(name, index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalStashError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -3347,7 +3451,12 @@ async fn __golem_tool_invoke_CanonicalStash(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }
@@ -3529,7 +3638,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
       match CanonicalBigBound::canonical_big_bound(count) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let payload = match
+          let (__golem_error_name, payload) = match
             CanonicalGrepError::to_error_payload_value(error) {
             Ok(payload) => payload
             Err(encode_error) =>
@@ -3545,7 +3654,12 @@ async fn __golem_tool_invoke_CanonicalBigBound(
               return Err(@toolCommon.ToolError::InvalidResult(message))
             error => raise error
           }
-          Err(@toolCommon.ToolError::CustomError(payload))
+          Err(
+            @toolCommon.ToolError::CustomError({
+              name: __golem_error_name,
+              payload,
+            }),
+          )
         }
       }
     }

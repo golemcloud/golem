@@ -69,7 +69,9 @@ use golem_cli::model::app::extracted_component_metadata_path;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::Security;
 use golem_client::api::HealthCheckClient;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
+use golem_common::schema::agent::AgentTypeSchema;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
@@ -1151,7 +1153,7 @@ fn extracted_component_metadata_path_hash(
 /// Planner tests intentionally pair placeholder wasm bytes with goldenfile metadata for agent
 /// types that are not present in the component. A future content-based cache key or
 /// metadata-vs-wasm consistency check should update this helper and all callers together.
-fn seed_extracted_metadata(
+fn seed_full_extracted_metadata(
     ctx: &TestContext,
     component_name: &str,
     source_wasm_path: &Path,
@@ -1163,8 +1165,33 @@ fn seed_extracted_metadata(
         source_wasm_path,
     ));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write_str(&path, json).unwrap();
+    let metadata: ExtractedComponentMetadata = serde_json::from_str(json).unwrap();
+    fs::write_str(&path, serde_json::to_string(&metadata).unwrap()).unwrap();
     path
+}
+
+fn extracted_metadata_json(json: &str) -> String {
+    let agent_types: Vec<AgentTypeSchema> = serde_json::from_str(json).unwrap();
+    serde_json::to_string(&ExtractedComponentMetadata {
+        agent_types,
+        tools: Vec::new(),
+        tool_middlewares: Vec::new(),
+    })
+    .unwrap()
+}
+
+fn seed_extracted_metadata(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+    json: &str,
+) -> PathBuf {
+    seed_full_extracted_metadata(
+        ctx,
+        component_name,
+        source_wasm_path,
+        &extracted_metadata_json(json),
+    )
 }
 
 fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {

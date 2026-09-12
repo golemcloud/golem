@@ -23,7 +23,7 @@ import golem.runtime.guest.ToolMiddlewareGuest
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
-import golem.tool.wire.WitToolError
+import golem.tool.wire.{WitCustomToolError, WitToolError}
 import golem.{FutureInterop, Principal}
 import zio.test._
 import zio.ZIO
@@ -323,7 +323,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
           WitToolError.InvalidInput("bad input"),
           WitToolError.ConstraintViolation("constraint"),
           WitToolError.InvalidResult("bad result"),
-          WitToolError.CustomError(typed("custom"))
+          WitToolError.CustomError(WitCustomToolError("failure", typed("custom")))
         )
         ZIO
           .foreach(errors) { expected =>

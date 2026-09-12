@@ -87,6 +87,7 @@ describe('tool middleware registry and guest boundary', () => {
       .body((body) => body.returns(z.string()));
     transparent.middleware({
       name: 'z-policy',
+      version: '7.1.0',
       aliases: ['z-alias'],
       doc: 'Transparent policy',
       implementation: { presented: async () => 'value' },
@@ -102,12 +103,14 @@ describe('tool middleware registry and guest boundary', () => {
     expect(discovered.map(({ name }) => name)).toEqual(['a-policy', 'z-policy']);
     expect(discovered[0]).toMatchObject({
       name: 'a-policy',
+      version: '0.0.0',
       aliases: ['a-alias'],
       scope: { tag: 'universal' },
     });
     expect(discovered[0].scope).not.toHaveProperty('val');
     expect(discovered[1]).toMatchObject({
       name: 'z-policy',
+      version: '7.1.0',
       aliases: ['z-alias'],
       doc: { summary: 'Transparent policy' },
       scope: {
@@ -191,7 +194,11 @@ describe('tool middleware registry and guest boundary', () => {
     universalToolMiddleware({
       name: 'wire-custom-error',
       invoke: async (request) => {
-        throw ToolInvokeError.tool(request.input);
+        throw new ToolInvokeError({
+          tag: 'unknown-error',
+          name: 'forwarded',
+          payload: request.input,
+        });
       },
     });
     await expect(
@@ -205,7 +212,7 @@ describe('tool middleware registry and guest boundary', () => {
         anonymous,
         raw,
       ),
-    ).rejects.toEqual({ tag: 'custom-error', val: input });
+    ).rejects.toEqual({ tag: 'custom-error', val: { name: 'forwarded', payload: input } });
 
     universalToolMiddleware({
       name: 'wire-protocol-error',

@@ -1124,6 +1124,12 @@ fn test_type_naming_rust_foo_agent_for_ts_bridge() {
 fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     let mut tool = grep_tool();
     let root_body = tool.commands.nodes[0].body.as_mut().unwrap();
+    let mut same_payload_error = root_body.errors[0].clone();
+    same_payload_error.name = "bad-query".to_string();
+    root_body.errors.push(same_payload_error);
+    let mut second_unit_error = root_body.errors[1].clone();
+    second_unit_error.name = "unavailable".to_string();
+    root_body.errors.push(second_unit_error);
     root_body.stdin = Some(StreamSpec {
         doc: Default::default(),
         mime: vec![],
@@ -1153,7 +1159,24 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(source.contains("typedInput = { graph: __golemSchemaGraphs.graph"));
     assert!(!source.contains("typedSchemaValueFromJson"));
     assert!(!source.contains("schemaGraphFromJson"));
-    assert!(source.contains("base.splitToolRpcError(error, decodeGrepError)"));
+    assert!(source.contains("base.splitToolRpcError(error, (name, payload) =>"));
+    assert!(source.contains(
+        "function decodeGrepError(name: string, typed: base.TypedSchemaValue): GrepError | undefined"
+    ));
+    for shape in [
+        "name === \"bad-pattern\"",
+        "return { tag: \"BadPattern\", value:",
+        "name === \"bad-query\"",
+        "return { tag: \"BadQuery\", value:",
+        "name === \"io\"",
+        "return { tag: \"Io\" }",
+        "name === \"unavailable\"",
+        "return { tag: \"Unavailable\" }",
+        "if (declared === undefined) throw { tag: 'rpc', error }",
+        "return undefined",
+    ] {
+        assert!(source.contains(shape), "missing {shape}:\n{source}");
+    }
     assert!(
         source.contains(
             "base.typedSchemaValueConforms(expectedResultGraph, invocationResult.result)"

@@ -23,7 +23,7 @@ pub(all) suberror ToolError {
   InvalidInput(String)
   ConstraintViolation(String)
   InvalidResult(String)
-  CustomError(@types.TypedSchemaValue)
+  CustomError(CustomToolError)
 } derive(Eq, @debug.Debug)
 
 // Types and methods
@@ -71,6 +71,11 @@ pub(all) enum Constraint {
   MutexGroups(Array[RefGroup])
   Implies(ImpliesC)
   Forbids(ForbidsC)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct CustomToolError {
+  name : String
+  payload : @types.TypedSchemaValue
 } derive(Eq, @debug.Debug)
 
 pub(all) struct Doc {
@@ -246,6 +251,7 @@ pub(all) struct Tool {
 
 pub(all) struct ToolMiddleware {
   name : String
+  version : String
   aliases : Array[String]
   doc : Doc
   scope : ToolMiddlewareScope

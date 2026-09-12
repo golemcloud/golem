@@ -24,6 +24,7 @@ use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::environment_tool_grant::DbEnvironmentToolGrantRepo;
+use golem_registry_service::repo::environment_tool_middleware_grant::DbEnvironmentToolMiddlewareGrantRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -31,6 +32,7 @@ use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::repo::tool_middleware_release::DbToolMiddlewareReleaseRepo;
 use golem_registry_service::repo::tool_release::DbToolReleaseRepo;
 use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
@@ -221,6 +223,9 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
         environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(pool.clone())),
+        environment_tool_middleware_grant_repo: Box::new(
+            DbEnvironmentToolMiddlewareGrantRepo::logged(pool.clone()),
+        ),
         plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(pool.clone())),
@@ -230,6 +235,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
         tool_release_repo: Box::new(DbToolReleaseRepo::logged(pool.clone())),
+        tool_middleware_release_repo: Box::new(DbToolMiddlewareReleaseRepo::logged(pool.clone())),
         test_db: TestDb::Postgres(pool.clone()),
     };
     deps.setup().await;
@@ -626,6 +632,13 @@ async fn test_tool_release_and_grant_repository_contracts(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_tool_release_and_grant_repository_contracts(deps).await;
+}
+
+#[test]
+async fn test_tool_middleware_release_and_grant_repository_contracts(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_tool_middleware_release_and_grant_repository_contracts(deps).await;
 }
 
 /// Tests that Postgres LISTEN/NOTIFY propagates events through the

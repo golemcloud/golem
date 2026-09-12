@@ -776,7 +776,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         self.with_tx_err("update", |tx| {
             async move {
                 if revision.version_check
-                    && tx
+                    && (tx
                         .fetch_optional(
                             sqlx::query(indoc! { r#"
                                 SELECT etg.environment_tool_grant_id
@@ -795,6 +795,25 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         )
                         .await?
                         .is_some()
+                        || tx
+                            .fetch_optional(
+                                sqlx::query(indoc! { r#"
+                                    SELECT etmg.environment_tool_middleware_grant_id
+                                    FROM environment_tool_middleware_grants etmg
+                                    JOIN tool_middleware_releases tmr
+                                        ON tmr.tool_middleware_release_id = etmg.tool_middleware_release_id
+                                    WHERE etmg.environment_id = $1
+                                        AND etmg.deleted_at IS NULL
+                                        AND NOT tmr.immutable
+                                        AND tmr.lifecycle IN ($2, $3)
+                                    LIMIT 1
+                                "#})
+                                .bind(revision.environment_id)
+                                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+                            )
+                            .await?
+                            .is_some())
                 {
                     return Err(EnvironmentRepoError::MutableToolGrantsInVersionCheckedEnvironment);
                 }

@@ -22,15 +22,17 @@ pub fn decode_canonical_input(@tool-core.ToolDef, Int, @types.TypedSchemaValue, 
 
 pub fn decode_invocation_input(@types.TypedSchemaValue, Int, String) -> Array[@schema_model.SchemaValue] raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
+pub fn[E : @tool-core.ToolErrorSchema] decode_named_tool_error(String, @schema_model.TypedSchemaValue) -> Result[E, String]?
+
 pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
 
 pub fn[E] decode_result_empty(@tool-core.InvocationResult) -> Result[Unit, ToolError[E]]
 
 pub fn[E] decode_result_stdout_only(@tool-core.InvocationResult) -> Result[@async-core.Stream[Byte], ToolError[E]]
 
-pub fn[T : @schema.FromSchema, E] decode_result_value(@tool-core.InvocationResult) -> Result[T, ToolError[E]]
+pub fn[T : @schema.FromSchema + @schema.IntoSchema, E] decode_result_value(@tool-core.InvocationResult) -> Result[T, ToolError[E]]
 
-pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(@tool-core.InvocationResult) -> Result[(T, @async-core.Stream[Byte]), ToolError[E]]
+pub fn[T : @schema.FromSchema + @schema.IntoSchema, E] decode_result_with_stdout(@tool-core.InvocationResult) -> Result[(T, @async-core.Stream[Byte]), ToolError[E]]
 
 pub fn discover_tools() -> Array[@golemcloud/golem_sdk/interface/golem/tool/common.Tool]
 
@@ -60,7 +62,7 @@ pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/g
 
 pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
-pub async fn[E] invoke_and_await(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[@tool-core.InvocationResult, ToolError[E]]
+pub async fn[E] invoke_and_await(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (String, @schema_model.TypedSchemaValue) -> Result[E, String]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 
 pub async fn invoke_and_await_no_tool_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, ToolError[@tool-core.NoToolError]]
 
@@ -132,16 +134,19 @@ pub(all) struct ToolClient {
   rpc : @host.ToolRpc
 }
 pub fn ToolClient::drop(Self) -> Unit
-pub async fn[E] ToolClient::invoke_and_await(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[@tool-core.InvocationResult, ToolError[E]]
+pub fn ToolClient::for_definition(String, @golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Self
+pub fn ToolClient::from_registered(@host.RegisteredTool) -> Self
+pub async fn[E] ToolClient::invoke_and_await(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (String, @schema_model.TypedSchemaValue) -> Result[E, String]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 pub async fn ToolClient::invoke_and_await_no_tool_error(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, ToolError[@tool-core.NoToolError]]
 pub async fn[E : @schema.FromSchema] ToolClient::invoke_and_await_payload_error(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 pub async fn[E : @tool-core.ToolErrorSchema] ToolClient::invoke_and_await_tool_error(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 pub fn ToolClient::new(String) -> Self
-pub fn[E] ToolClient::start(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, Bool, (@schema_model.TypedSchemaValue) -> Result[E, String]) -> Result[ToolInvocation[E], ToolError[E]]
+pub fn[E] ToolClient::start(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, Bool, (String, @schema_model.TypedSchemaValue) -> Result[E, String]?) -> Result[ToolInvocation[E], ToolError[E]]
 
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
   Tool(E)
+  UnknownToolError(String, @schema_model.TypedSchemaValue)
 }
 
 pub struct ToolInvocation[E] {

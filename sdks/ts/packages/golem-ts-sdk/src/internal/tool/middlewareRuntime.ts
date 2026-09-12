@@ -61,7 +61,13 @@ export class ToolUnderlyingMisuseError extends Error {
 
 export function decodeUnderlyingToolError<Errors>(
   error: unknown,
-  decodeCustomError: (payload: WireTypedSchemaValue) => Errors,
+  decodeCustomError: (error: Extract<WireToolError, { readonly tag: 'custom-error' }>['val']) =>
+    | Errors
+    | {
+        readonly tag: 'unknown-error';
+        readonly name: string;
+        readonly payload: WireTypedSchemaValue;
+      },
 ): unknown {
   const cause =
     error instanceof ToolInvokeError ? error.cause : isWireToolError(error) ? error : null;
@@ -71,9 +77,16 @@ export function decodeUnderlyingToolError<Errors>(
   }
 
   try {
-    const payload = cause.tag === 'tool' ? cause.error : cause.val;
-    preflightTypedSchemaValue(payload as WireTypedSchemaValue);
-    return ToolInvokeError.tool(decodeCustomError(payload as WireTypedSchemaValue));
+    const customError = cause.tag === 'tool' ? cause.error : cause.val;
+    if (!isCustomToolError(customError)) {
+      if (cause.tag === 'custom-error') throw new Error('malformed named custom error payload');
+      return ToolInvokeError.tool(customError as Errors);
+    }
+    preflightTypedSchemaValue(customError.payload);
+    const decoded = decodeCustomError(customError);
+    return isUnknownToolError(decoded)
+      ? new ToolInvokeError(decoded)
+      : ToolInvokeError.tool(decoded);
   } catch (decodeError) {
     return new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(decodeError) });
   }
@@ -84,12 +97,25 @@ export function encodeToolInvokeError<Errors>(
   encodeCustomError: (error: Errors) => WireTypedSchemaValue,
 ): WireToolError {
   if (!(error instanceof ToolInvokeError)) throw error;
+  if (error.cause.tag === 'unknown-error') {
+    try {
+      preflightTypedSchemaValue(error.cause.payload);
+      return {
+        tag: 'custom-error',
+        val: { name: error.cause.name, payload: error.cause.payload },
+      };
+    } catch (encodeError) {
+      return { tag: 'invalid-result', val: errorMessage(encodeError) };
+    }
+  }
   if (error.cause.tag !== 'tool') return error.cause;
 
   try {
     const payload = encodeCustomError(error.cause.error);
     preflightTypedSchemaValue(payload);
-    return { tag: 'custom-error', val: payload };
+    const name = isDeclaredToolError(error.cause.error) ? error.cause.error.name : undefined;
+    if (name === undefined) throw new Error('custom tool error is missing its declared name');
+    return { tag: 'custom-error', val: { name, payload } };
   } catch (encodeError) {
     return { tag: 'invalid-result', val: errorMessage(encodeError) };
   }
@@ -565,14 +591,34 @@ function encodePresentedMiddlewareError(
     encodeDeclaredMiddlewareError(body, declaredError, callName),
   );
   return encoded.tag === 'custom-error'
-    ? ToolInvokeError.tool(encoded.val)
+    ? new ToolInvokeError({
+        tag: 'unknown-error',
+        name: encoded.val.name,
+        payload: encoded.val.payload,
+      })
     : new ToolInvokeError(encoded);
 }
 
 function encodeRawMiddlewareError(error: unknown): unknown {
-  const encoded = encodeToolInvokeError(error, (payload) => payload as WireTypedSchemaValue);
+  if (error instanceof ToolInvokeError && error.cause.tag === 'tool') {
+    const raw = error.cause.error;
+    if (isCustomToolError(raw)) {
+      error = new ToolInvokeError({
+        tag: 'unknown-error',
+        name: raw.name,
+        payload: raw.payload,
+      });
+    }
+  }
+  const encoded = encodeToolInvokeError(error, () => {
+    throw new Error('raw middleware custom error is missing its named envelope');
+  });
   return encoded.tag === 'custom-error'
-    ? ToolInvokeError.tool(encoded.val)
+    ? new ToolInvokeError({
+        tag: 'unknown-error',
+        name: encoded.val.name,
+        payload: encoded.val.payload,
+      })
     : new ToolInvokeError(encoded);
 }
 
@@ -631,6 +677,20 @@ function isWireToolError(value: unknown): value is WireToolError {
     default:
       return false;
   }
+}
+
+function isUnknownToolError(value: unknown): value is {
+  readonly tag: 'unknown-error';
+  readonly name: string;
+  readonly payload: WireTypedSchemaValue;
+} {
+  return isObject(value) && value.tag === 'unknown-error';
+}
+
+function isCustomToolError(
+  value: unknown,
+): value is Extract<WireToolError, { readonly tag: 'custom-error' }>['val'] {
+  return isObject(value) && typeof value.name === 'string' && isObject(value.payload);
 }
 
 function isObject(value: unknown): value is Record<PropertyKey, unknown> {

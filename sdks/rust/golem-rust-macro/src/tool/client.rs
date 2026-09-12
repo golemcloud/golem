@@ -48,9 +48,15 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
 
         impl #client_ident {
             pub fn #constructor_ident() -> Self {
+                Self::new_with_lookup_name(#tool_name)
+            }
+
+            /// Constructs this presented-definition client while routing calls to an explicit leaf.
+            pub fn new_with_lookup_name(lookup_name: impl Into<::std::string::String>) -> Self {
+                let lookup_name = lookup_name.into();
                 Self {
-                    rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(#tool_name),
-                    root_tool_name: #tool_name.to_string(),
+                    rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&lookup_name),
+                    root_tool_name: lookup_name,
                     command_path: ::std::vec::Vec::new(),
                     schema_path: ::std::vec::Vec::new(),
                     inherited_prefix: ::std::vec::Vec::new(),
@@ -1227,7 +1233,7 @@ fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                 &__input,
                 #stdin_expr,
                 #decode,
-                |_| ::std::result::Result::Err("unexpected custom tool error".to_string()),
+                |_, _| ::std::result::Result::Ok(::std::option::Option::None),
             )
         },
     }

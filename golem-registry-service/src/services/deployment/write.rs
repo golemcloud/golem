@@ -20,9 +20,13 @@ use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreation
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
+use crate::services::deployment::tool_middlewares::compile_tool_middleware_chains;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::environment_tool_grant::{
     EnvironmentToolGrantError, EnvironmentToolGrantService,
+};
+use crate::services::environment_tool_middleware_grant::{
+    EnvironmentToolMiddlewareGrantError, EnvironmentToolMiddlewareGrantService,
 };
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
@@ -32,6 +36,9 @@ use crate::services::registry_change_notifier::{
 use crate::services::resource_definition::{ResourceDefinitionError, ResourceDefinitionService};
 use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
+use crate::services::tool_middleware_release::{
+    ToolMiddlewareReleaseError, ToolMiddlewareReleaseService,
+};
 use crate::services::tool_release::{ToolReleaseError, ToolReleaseService};
 use futures::TryFutureExt;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -77,6 +84,12 @@ pub enum DeploymentWriteError {
     ToolReleaseImmutableConflict,
     #[error("A de-published tool release must be restored explicitly before publication")]
     ToolReleaseDePublishedConflict,
+    #[error("Tool middleware release coordinate exists with different immutable metadata")]
+    ToolMiddlewareReleaseImmutableConflict,
+    #[error(
+        "A de-published tool middleware release must be restored explicitly before publication"
+    )]
+    ToolMiddlewareReleaseDePublishedConflict,
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -96,6 +109,8 @@ impl SafeDisplay for DeploymentWriteError {
             Self::NoOpDeployment => self.to_string(),
             Self::ToolReleaseImmutableConflict => self.to_string(),
             Self::ToolReleaseDePublishedConflict => self.to_string(),
+            Self::ToolMiddlewareReleaseImmutableConflict => self.to_string(),
+            Self::ToolMiddlewareReleaseDePublishedConflict => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -114,7 +129,9 @@ error_forwarding!(
     ResourceDefinitionError,
     RetryPolicyError,
     EnvironmentToolGrantError,
-    ToolReleaseError
+    ToolReleaseError,
+    EnvironmentToolMiddlewareGrantError,
+    ToolMiddlewareReleaseError
 );
 
 pub struct DeploymentWriteService {
@@ -130,6 +147,8 @@ pub struct DeploymentWriteService {
     retry_policy_service: Arc<RetryPolicyService>,
     environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
     tool_release_service: Arc<ToolReleaseService>,
+    environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
+    tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
 }
 
 impl DeploymentWriteService {
@@ -146,6 +165,8 @@ impl DeploymentWriteService {
         retry_policy_service: Arc<RetryPolicyService>,
         environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
         tool_release_service: Arc<ToolReleaseService>,
+        environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
+        tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -160,6 +181,8 @@ impl DeploymentWriteService {
             retry_policy_service,
             environment_tool_grant_service,
             tool_release_service,
+            environment_tool_middleware_grant_service,
+            tool_middleware_release_service,
         }
     }
 
@@ -267,6 +290,21 @@ impl DeploymentWriteService {
             .cloned()
             .zip(resolved_remote_tools)
             .collect::<Vec<_>>();
+        let remote_middleware_references = data
+            .remote_tool_middlewares
+            .iter()
+            .map(|deployment| deployment.release.clone())
+            .collect::<Vec<_>>();
+        let resolved_remote_middlewares = self
+            .environment_tool_middleware_grant_service
+            .resolve_active_references_partial(&environment, &remote_middleware_references, auth)
+            .await?;
+        let remote_middlewares = data
+            .remote_tool_middlewares
+            .iter()
+            .cloned()
+            .zip(resolved_remote_middlewares)
+            .collect::<Vec<_>>();
         let deployment_context = DeploymentContext::new(
             environment,
             components,
@@ -322,6 +360,49 @@ impl DeploymentWriteService {
             &mut errors,
             &mut warnings,
         );
+        let mut registered_tool_middlewares = deployment_context
+            .collect_tool_middleware_registrations(
+                next_deployment_revision,
+                &remote_middlewares,
+                &mut errors,
+            );
+        let (environment_tool_bindings, agent_tool_binding_inputs) =
+            deployment_context.tool_middleware_binding_inputs(&data.remote_tools);
+        let mut compiled_middleware = compile_tool_middleware_chains(
+            next_deployment_revision,
+            &compiled_tools.registered_tools,
+            &compiled_tools.agent_tool_bindings,
+            &registered_tool_middlewares,
+            &data.universal_tool_middlewares,
+            &environment_tool_bindings,
+            &agent_tool_binding_inputs,
+            data.tool_compatibility_mode,
+        );
+        for diagnostic in compiled_middleware.errors {
+            let middleware_name = diagnostic
+                .middleware_name
+                .as_deref()
+                .and_then(|name| name.try_into().ok());
+            errors.push(DeployValidationError::ToolMiddleware {
+                middleware_name,
+                agent_type_name: diagnostic.agent_type_name,
+                tool_name: diagnostic.tool_name,
+                message: diagnostic.message,
+            });
+        }
+        for diagnostic in compiled_middleware.warnings {
+            warnings.push(super::DeployValidationWarning::ToolMiddleware(
+                golem_common::model::deploy_validation_warning::ToolMiddlewareWarning {
+                    middleware_name: diagnostic
+                        .middleware_name
+                        .as_deref()
+                        .and_then(|name| name.try_into().ok()),
+                    agent_type: diagnostic.agent_type_name,
+                    tool_name: diagnostic.tool_name,
+                    message: diagnostic.message,
+                },
+            ));
+        }
 
         let registered_tools_by_name = compiled_tools
             .registered_tools
@@ -343,6 +424,58 @@ impl DeploymentWriteService {
             .tool_release_service
             .publications_need_change(&mut tool_releases)
             .await?;
+        let registered_middlewares_by_name = registered_tool_middlewares
+            .iter()
+            .cloned()
+            .map(|middleware| {
+                (
+                    middleware
+                        .definition
+                        .name
+                        .as_str()
+                        .try_into()
+                        .expect("validated middleware name"),
+                    middleware,
+                )
+            })
+            .collect();
+        let mut middleware_releases = self.tool_middleware_release_service.prepare_publications(
+            &deployment_context.environment,
+            &registered_middlewares_by_name,
+            &data.publish_tool_middlewares,
+            auth,
+        )?;
+        let middleware_publications_need_change = self
+            .tool_middleware_release_service
+            .publications_need_change(&mut middleware_releases)
+            .await?;
+        let middleware_release_ids = middleware_releases
+            .iter()
+            .map(|release| {
+                (
+                    release.tool_middleware_name.as_str(),
+                    release.tool_middleware_release_id,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for middleware in &mut registered_tool_middlewares {
+            if let Some(id) = middleware_release_ids.get(middleware.definition.name.as_str()) {
+                middleware.release_id = Some(
+                    golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*id),
+                );
+            }
+        }
+        for chain in &mut compiled_middleware.chains {
+            for occurrence in &mut chain.occurrences {
+                if let Some(id) =
+                    middleware_release_ids.get(occurrence.middleware.definition.name.as_str())
+                {
+                    occurrence.middleware.release_id = Some(
+                        golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*id),
+                    );
+                }
+            }
+        }
         let published_release_ids = tool_releases
             .iter()
             .map(|release| {
@@ -393,7 +526,16 @@ impl DeploymentWriteService {
         }
 
         let actual_hash = deployment_context
-            .hash_with_tools(&compiled_tools, &data.publish_tools)
+            .hash_with_tools(
+                &compiled_tools,
+                &data.publish_tools,
+                &registered_tool_middlewares,
+                &data.publish_tool_middlewares,
+                &data.universal_tool_middlewares,
+                data.tool_compatibility_mode,
+                &environment_tool_bindings,
+                &agent_tool_binding_inputs,
+            )
             .map_err(anyhow::Error::new)?;
         if data.expected_deployment_hash != actual_hash {
             return Err(DeploymentWriteError::DeploymentHashMismatch {
@@ -409,6 +551,7 @@ impl DeploymentWriteService {
             && new_resource_definitions.is_empty()
             && new_retry_policies.is_empty()
             && !publications_need_change
+            && !middleware_publications_need_change
         {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
@@ -434,6 +577,21 @@ impl DeploymentWriteService {
             compiled_tools.registered_tools,
             compiled_tools.agent_tool_bindings,
             tool_releases,
+            crate::repo::model::deployment::DeploymentMiddlewareCreationInput {
+                registered: registered_tool_middlewares,
+                chains: compiled_middleware.chains,
+                releases: middleware_releases,
+                universal: data.universal_tool_middlewares,
+                compatibility_mode: data.tool_compatibility_mode,
+                published: data.publish_tool_middlewares,
+                remote: data
+                    .remote_tool_middlewares
+                    .into_iter()
+                    .map(|middleware| middleware.name)
+                    .collect(),
+                environment_bindings: environment_tool_bindings,
+                agent_bindings: agent_tool_binding_inputs,
+            },
             new_agent_secrets,
             updated_agent_secrets,
             replaced_agent_secrets,
@@ -472,6 +630,12 @@ impl DeploymentWriteService {
                 }
                 DeployRepoError::ToolReleaseDePublishedConflict => {
                     DeploymentWriteError::ToolReleaseDePublishedConflict
+                }
+                DeployRepoError::ToolMiddlewareReleaseImmutableConflict => {
+                    DeploymentWriteError::ToolMiddlewareReleaseImmutableConflict
+                }
+                DeployRepoError::ToolMiddlewareReleaseDePublishedConflict => {
+                    DeploymentWriteError::ToolMiddlewareReleaseDePublishedConflict
                 }
                 other => other.into(),
             })?

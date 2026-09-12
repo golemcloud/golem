@@ -141,6 +141,67 @@ agents:
 
 For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
 
+### Tool middleware
+
+Tool middleware has its own namespace under `tools.middleware`, so `middleware` is reserved and cannot be used as a tool name. A declaration selects one locally discovered implementation, optionally using `component` to disambiguate it, or one published release. Configuration in the declaration is consumer-owned and is not copied from a publisher:
+
+```yaml
+tools:
+  middleware:
+    audit:
+      component: acme:audit
+      config:
+        logLevel: info
+    path-policy:
+      release:
+        account: middleware@example.com
+        name: path-policy
+        version: "1.2.0"
+      config:
+        allowedPrefix: /documents
+```
+
+As with tools, `release: { releaseId: "..." }` is the exact-ID alternative to the `account`, `name`, and `version` coordinates. A remote declaration causes deployment to reconcile an automatically managed grant for the selected environment. Administrators can manage grants independently with `golem tool middleware grant create`, `list`, `get`, `delete`, and `restore`. Release lifecycle commands are under `golem tool middleware release`. Consumers can read the granted middleware descriptor but not the publisher's component identity, configuration, environment, files, or plugins.
+
+Publish a local middleware from an environment deployment with `toolMiddlewareReleases`:
+
+```yaml
+toolMiddlewareReleases:
+  production:
+    audit: {}
+```
+
+Publication and lifecycle follow tool releases: publication is committed atomically with deployment, the environment's `deployment.versionCheck` controls immutability, and removing an entry does not de-publish it. Existing deployment snapshots remain pinned when a release or grant changes.
+
+Universal middleware is configured once for the environment. Per-tool middleware can then be added at the environment and agent binding layers. Lists preserve order and duplicate occurrences; each occurrence may have separate parameters and filesystem access:
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      middleware:
+        - name: audit
+          parameters: { channel: security }
+        - name: audit
+          parameters: { channel: operations }
+      search:
+        middleware:
+          - name: path-policy
+            filesystemAccess: denied
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        middleware: []
+        middlewareMergeMode: replace
+```
+
+The effective chain is the environment universal list `U`, followed by the merged per-tool list `P`, followed by the leaf tool: `U ++ P ++ [leaf]`, outermost first. On agent tool bindings, `middlewareMergeMode` is `prepend` by default and can be `append` or `replace`; it changes only `P`. Environment tool bindings cannot set it. In the example, replacing `P` removes `path-policy` for `SupportAgent`, but both `audit` occurrences remain. Compact entries such as `path-policy@1.2.0` are also accepted. An installation's `account` and `version`, when present, assert the selected declaration rather than selecting another release.
+
+`deployment.compatibilityMode` controls middleware edge checks. `structural-subtype` (the default) accepts compatible projections and emits deployment warnings for input fields that a middleware discards. `strict-equality` requires equal runtime shapes while ignoring documentation and schema-version metadata. `nominal` requires the named command and its named input and error structures to match, then dynamically checks runtime values against those shapes. Until middleware chain traversal is implemented, deployments can compile and expose these chains, but invoking a tool with a nonempty chain fails closed before leaf dispatch. Tools without middleware continue to dispatch normally.
+
 ### Secret policy
 
 `secretKeysReadable` and `secretKeysRevealable` accept either `"*"` or a list of secret paths. Policies are narrowing-only across an agent's binding layers, and revealable keys outside the effective readable scope are dropped with a deployment warning. The only supported secret merge mode is `intersect`, which is also the default.
@@ -572,6 +633,12 @@ The generator reads only the release's safe tool definition and metadata digest.
   </Field>
 
   <Field meta={{
+    path: "environments.<environment-name>.deployment.compatibilityMode",
+  }}>
+    ***Optional tool middleware compatibility mode***. Accepted values are `structural-subtype` (the default), `strict-equality`, and `nominal`. Structural subtype mode warns about inputs discarded by a middleware; strict equality ignores documentation and schema-version metadata; nominal mode checks named command, input, and error structures and dynamically validates runtime shapes.
+  </Field>
+
+  <Field meta={{
     path: "environments.<environment-name>.deployment.versionCheck",
     since: Release.R_1_4_0
   }}>
@@ -589,6 +656,12 @@ The generator reads only the release's safe tool definition and metadata digest.
     path: "toolReleases.<environment-name>",
   }}>
     ***Optional additive map of local tool names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication records the exact source and metadata of the deployed local tool and follows the environment's `deployment.versionCheck` policy. Removing a name does not de-publish an existing release; use `golem tool release de-publish <release-id>` for that explicit lifecycle action.
+  </Field>
+
+  <Field meta={{
+    path: "toolMiddlewareReleases.<environment-name>",
+  }}>
+    ***Optional additive map of local tool middleware names*** to publish as grantable releases when this environment is deployed. Each value is an empty object. Publication and lifecycle follow tool releases and the environment's `deployment.versionCheck` policy.
   </Field>
 
   <Field meta={{
@@ -1612,6 +1685,36 @@ The generator reads only the release's safe tool definition and metadata digest.
     path: "tools.<tool-name>.component",
   }}>
     ***Optional local implementing component name***. Use it to disambiguate components that export the same tool name and to let a name-only `dependencies.tools` entry resolve to its local build dependency.
+  </Field>
+
+  <Field meta={{
+    path: "tools.middleware.<middleware-name>",
+  }}>
+    ***Optional canonical tool middleware declaration***. Select a local implementation with `component` or an exact published release with `release`; these source forms are mutually exclusive. Consumer-owned provision fields include `config`, `env`, `plugins`, and `files`.
+  </Field>
+
+  <Field meta={{
+    path: "environments.<environment-name>.tools.middleware",
+  }}>
+    ***Optional ordered universal middleware list*** applied before every per-tool middleware chain. Duplicate middleware occurrences are preserved.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.middleware",
+  }}>
+    ***Optional ordered per-tool middleware list***. Entries may be compact `name@version` strings or records with `name`, optional `version`, `account`, `parameters`, and `filesystemAccess`.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.middlewareMergeMode",
+  }}>
+    ***Optional agent per-tool middleware list merge mode***: `prepend` (the default), `append`, or `replace`. It is not valid on environment tool bindings and never changes the environment universal middleware list.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools.<tool-name>.filesystemAccess",
+  }}>
+    ***Optional filesystem policy*** for a tool binding. Accepted values are `unset`, `allowed`, and `denied`. Middleware installation records support the same field per occurrence.
   </Field>
 
   <Field meta={{

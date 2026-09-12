@@ -47,8 +47,8 @@ pub fn MoonbitStreamingClient::stream(
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   match
-    self.client.start(["stream"], __golem_input, Some(stdin), true, fn(_) {
-      Err("remote custom tool error is not declared by this client")
+    self.client.start(["stream"], __golem_input, Some(stdin), true, fn(_, _) {
+      None
     }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_invocation) =>
@@ -113,8 +113,15 @@ pub fn CanonicalGrepClient::canonical_grep(
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   match
-    self.client.start([], __golem_input, Some(stdin), true, fn(__golem_value) {
-      CanonicalGrepError::from_error_payload_value(__golem_value)
+    self.client.start([], __golem_input, Some(stdin), true, fn(
+      __golem_name,
+      __golem_value,
+    ) {
+      Some(
+        CanonicalGrepError::from_error_payload_value(
+          __golem_name, __golem_value,
+        ),
+      )
     }) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_invocation) =>
