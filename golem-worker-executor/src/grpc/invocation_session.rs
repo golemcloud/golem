@@ -382,14 +382,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ));
             }
             let inv_status = match self.get_or_create_pending_for_lookup(request).await? {
-                Some(worker) => match worker.lookup_invocation_result(&ik).await {
-                    crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
-                    crate::model::LookupResult::Complete(Err(err)) => return Err(err),
-                    crate::model::LookupResult::Pending => InvocationStatus::Pending,
-                    crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
-                        InvocationStatus::Unknown
+                Some((worker, _response_lease)) => {
+                    match worker.lookup_invocation_result(&ik).await {
+                        crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Err(err)) => return Err(err),
+                        crate::model::LookupResult::Pending => InvocationStatus::Pending,
+                        crate::model::LookupResult::New
+                        | crate::model::LookupResult::Interrupted => InvocationStatus::Unknown,
                     }
-                },
+                }
                 None => InvocationStatus::Unknown,
             };
             publish_acceptance(acceptance_committed, accepted, None)?;
@@ -457,7 +458,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                let worker = self
+                let (worker, _response_lease) = self
                     .get_or_create_pending_with_freshness(request, freshness_disposition)
                     .await?;
                 let status = worker.get_last_known_status().await;
@@ -642,7 +643,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 creation_principal: Box::new(worker_creation_principal),
                             }
                         } else {
-                            let worker = self
+                            let (worker, _response_lease) = self
                                 .get_or_create_pending_with_freshness(
                                     request,
                                     freshness_disposition,
@@ -677,7 +678,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         })
                     }
                     None => {
-                        let worker = self
+                        let (worker, _response_lease) = self
                             .get_or_create_pending_with_freshness(request, freshness_disposition)
                             .await?;
                         let result = worker.clone().invoke(invocation).await?;
@@ -1456,14 +1457,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
                 ..Default::default()
             };
-            let worker = self
+            let (worker, _response_lease) = self
                 .get_or_create_pending_for_lookup(&lookup)
                 .await?
                 .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "NotFound: durable Stream Session worker was not found",
-                    )
-                })?;
+                WorkerExecutorError::invalid_request(
+                    "NotFound: durable Stream Session worker was not found",
+                )
+            })?;
             worker.resume_durable_streaming_invocation(attempt).await
         }
         .await;

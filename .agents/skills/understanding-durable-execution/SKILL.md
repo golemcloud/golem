@@ -144,6 +144,12 @@ terminal interrupt already claimed by the invocation loop is not recorded again,
 or failed invocation is not overwritten. Test:
 `tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart`.
 
+Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
+The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
+If normal archival already fenced the owner, lookup joins archival through cache removal, then
+resolves an observation-only owner from storage. Archive failure or cancellation rejects the lookup;
+it never grants access to the old poisoned producer or restarts the ephemeral invocation.
+
 ## Oplog model
 
 Entries are positional or hints (`OplogEntry::is_hint()`). Replay consumes positional entries in

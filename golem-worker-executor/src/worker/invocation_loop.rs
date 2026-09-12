@@ -880,12 +880,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let shutdown_worker = worker.clone();
         let invocation_loops = worker.active_agents().invocation_loops();
         invocation_loops.spawn(async move {
-            worker.durable_stream_producer.wait_for_responses_and_fence().await;
+            let archival = worker.durable_stream_producer.wait_for_responses_and_fence().await;
             let forwarding = worker.fence_oplog_forwarding();
             let mut cleanup = worker.owner_cleanup.lock().await;
             if *cleanup != super::OwnerCleanupState::PreRemoval
                 || !worker.is_current_cached_owner().await
             {
+                if let Some(archival) = archival {
+                    archival.send_replace(Some(Err(
+                        crate::durable_host::durable_stream::DurableStreamProducerError::RecoveryRequired,
+                    )));
+                }
                 return;
             }
             let result: Result<(), WorkerExecutorError> = async {
@@ -923,6 +928,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Ok(())
             }
             .await;
+            if let Some(archival) = archival {
+                archival.send_replace(Some(result.clone().map_err(|error| {
+                    crate::durable_host::durable_stream::DurableStreamProducerError::Oplog(error.to_string())
+                })));
+            }
             if let Err(error) = result {
                 tracing::error!(agent_id = %worker.agent_id(), error = %error, "Failed to retire ephemeral worker before archival");
             }

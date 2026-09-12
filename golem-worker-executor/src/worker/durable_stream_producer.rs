@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
 type LoadResult = Result<Arc<DurableStreamProducer>, DurableStreamProducerError>;
+pub(super) type EphemeralArchival = watch::Sender<Option<Result<(), DurableStreamProducerError>>>;
 
 /// Owns initialization and replacement independently of the callers waiting for a producer.
 #[derive(Default)]
@@ -38,6 +39,7 @@ struct SlotState {
     failure: Option<DurableStreamProducerError>,
     retired: bool,
     retirement: Option<watch::Receiver<Option<Result<(), DurableStreamProducerError>>>>,
+    archival: Option<watch::Receiver<Option<Result<(), DurableStreamProducerError>>>>,
 }
 
 /// Keeps normal ephemeral archival behind the response and all of its stream readers.
@@ -65,19 +67,46 @@ impl DurableStreamProducerSlot {
         Ok(Arc::new(EphemeralResponseLease { slot: self.clone() }))
     }
 
-    pub(super) async fn wait_for_responses_and_fence(&self) {
+    /// A missing lease means normal archival completed; the caller must resolve a new owner.
+    pub(super) async fn retain_response_or_wait_for_archive(
+        self: &Arc<Self>,
+    ) -> Result<Option<Arc<EphemeralResponseLease>>, DurableStreamProducerError> {
+        let archival = {
+            let mut state = self.state.lock().unwrap();
+            if !state.retired {
+                state.responses += 1;
+                return Ok(Some(Arc::new(EphemeralResponseLease {
+                    slot: self.clone(),
+                })));
+            }
+            state
+                .archival
+                .clone()
+                .ok_or(DurableStreamProducerError::RecoveryRequired)?
+        };
+        wait_for_result(archival).await?;
+        Ok(None)
+    }
+
+    pub(super) async fn wait_for_responses_and_fence(&self) -> Option<EphemeralArchival> {
         loop {
             let changed = self.responses_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
             {
                 let mut state = self.state.lock().unwrap();
-                if state.responses == 0 || state.retired {
+                if state.retired {
+                    return None;
+                }
+                if state.responses == 0 {
+                    // Publish the full archive join before another request can see the fence.
+                    let (reply, archival) = watch::channel(None);
+                    state.archival = Some(archival);
                     state.retired = true;
                     if let Some(producer) = &state.producer {
                         producer.poison();
                     }
-                    return;
+                    return Some(reply);
                 }
             }
             changed.await;
@@ -317,13 +346,41 @@ mod tests {
         producer.ensure_healthy().unwrap();
         drop(response);
         assert!(futures::poll!(archive.as_mut()).is_pending());
-        let second_response = slot.retain_response().unwrap();
+        let second_response = slot
+            .retain_response_or_wait_for_archive()
+            .await
+            .unwrap()
+            .unwrap();
         drop(reader);
         assert!(futures::poll!(archive.as_mut()).is_pending());
         drop(second_response);
-        archive.await;
+        let archival = archive.await.unwrap();
         assert!(producer.ensure_healthy().is_err());
         assert!(slot.retain_response().is_err());
+        let mut response = Box::pin(slot.retain_response_or_wait_for_archive());
+        assert!(futures::poll!(response.as_mut()).is_pending());
+        archival.send_replace(Some(Ok(())));
+        assert!(response.await.unwrap().is_none());
+        // The old owner remains fenced even after a replacement may be resolved.
+        assert!(slot.retain_response().is_err());
+        assert!(producer.ensure_healthy().is_err());
+    }
+
+    #[test]
+    async fn failed_or_aborted_ephemeral_archive_rejects_response_admission() {
+        for abort in [false, true] {
+            let slot = Arc::new(DurableStreamProducerSlot::default());
+            let archival = slot.wait_for_responses_and_fence().await.unwrap();
+            let mut response = Box::pin(slot.retain_response_or_wait_for_archive());
+            assert!(futures::poll!(response.as_mut()).is_pending());
+            if !abort {
+                archival.send_replace(Some(Err(DurableStreamProducerError::Oplog(
+                    "archive failed".to_string(),
+                ))));
+            }
+            drop(archival);
+            assert!(response.await.is_err());
+        }
     }
 
     #[test]
@@ -334,7 +391,8 @@ mod tests {
         let mut archive = Box::pin(slot.wait_for_responses_and_fence());
         assert!(futures::poll!(archive.as_mut()).is_pending());
         slot.fence();
-        archive.await;
+        assert!(archive.await.is_none());
+        assert!(slot.retain_response_or_wait_for_archive().await.is_err());
         assert!(producer.ensure_healthy().is_err());
         assert!(slot.retain_response().is_err());
         slot.shutdown().await.unwrap();
@@ -351,7 +409,9 @@ mod tests {
         let archive_slot = slot.clone();
         let shutdown_slot = slot.clone();
         loops.spawn(
-            async move { archive_slot.wait_for_responses_and_fence().await },
+            async move {
+                archive_slot.wait_for_responses_and_fence().await;
+            },
             move || {
                 let drain = shutdown_slot.shutdown();
                 Box::pin(async move { drain.await.unwrap() })

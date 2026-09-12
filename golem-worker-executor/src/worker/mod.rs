@@ -981,6 +981,49 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
+    /// Pins response metadata before normal ephemeral archival, or joins archival and reloads.
+    pub(crate) async fn get_or_create_suspended_for_response<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        parent: Option<AgentId>,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+        mut freshness_disposition: InvocationFreshnessDisposition,
+    ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        loop {
+            let worker = Self::get_or_create_suspended_with_freshness(
+                deps,
+                owned_agent_id,
+                worker_env.clone(),
+                worker_agent_config.clone(),
+                component_revision,
+                parent.clone(),
+                invocation_context_stack,
+                principal.clone(),
+                freshness_disposition,
+            )
+            .await?;
+            if worker.agent_mode() != AgentMode::Ephemeral {
+                return Ok((worker, None));
+            }
+            if let Some(lease) = worker
+                .durable_stream_producer
+                .retain_response_or_wait_for_archive()
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            {
+                return Ok((worker, Some(lease)));
+            }
+            freshness_disposition = InvocationFreshnessDisposition::MayExist;
+        }
+    }
+
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,

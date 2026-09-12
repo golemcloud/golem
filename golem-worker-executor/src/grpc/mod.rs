@@ -758,16 +758,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .map_err(WorkerExecutorError::invalid_request)?;
         let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&id)?;
-        let worker = match self.get_or_create_pending_for_lookup(&request).await? {
-            Some(worker) => worker,
-            None => {
-                self.get_or_create_pending_with_freshness(
-                    &request,
-                    InvocationFreshnessDisposition::MayExist,
-                )
-                .await?
-            }
-        };
+        let (worker, _response_lease) =
+            match self.get_or_create_pending_for_lookup(&request).await? {
+                Some(worker) => worker,
+                None => {
+                    self.get_or_create_pending_with_freshness(
+                        &request,
+                        InvocationFreshnessDisposition::MayExist,
+                    )
+                    .await?
+                }
+            };
         let producer = worker.durable_stream_producer().await?;
         let pinned = producer
             .with_metadata_activity(worker.prepared_stream_session(&key))
@@ -1104,7 +1105,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         async {
-            let worker = self
+            let (worker, _response_lease) = self
                 .get_or_create_pending_with_freshness(request, freshness_disposition)
                 .await?;
             Worker::start_if_needed(worker.clone()).await?;
@@ -1117,7 +1118,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_or_create_pending_for_lookup<Req: CanStartWorker>(
         &self,
         request: &Req,
-    ) -> Result<Option<Arc<Worker<Ctx>>>, WorkerExecutorError> {
+    ) -> Result<
+        Option<(
+            Arc<Worker<Ctx>>,
+            Option<Arc<crate::worker::EphemeralResponseLease>>,
+        )>,
+        WorkerExecutorError,
+    > {
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
 
@@ -1154,7 +1161,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         // Lookup must be able to observe the current idempotency state even while the
         // invocation is still retrying and has transient error entries in the oplog.
-        Worker::get_or_create_suspended(
+        Worker::get_or_create_suspended_for_response(
             self,
             &owned_agent_id,
             request.env(),
@@ -1163,6 +1170,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             request.parent(),
             &invocation_context,
             request.principal(),
+            InvocationFreshnessDisposition::MayExist,
         )
         .await
         .map(Some)
@@ -1172,7 +1180,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
         freshness_disposition: InvocationFreshnessDisposition,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+    ) -> Result<
+        (
+            Arc<Worker<Ctx>>,
+            Option<Arc<crate::worker::EphemeralResponseLease>>,
+        ),
+        WorkerExecutorError,
+    > {
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
 
@@ -1206,7 +1220,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .unwrap_or_else(InvocationContextStack::fresh);
         let invocation_context = self.limit_invocation_context_stack_depth(invocation_context);
 
-        Worker::get_or_create_suspended_with_freshness(
+        Worker::get_or_create_suspended_for_response(
             self,
             &owned_agent_id,
             request.env(),
@@ -2034,7 +2048,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        let worker = self
+        let (worker, _response_lease) = self
             .get_or_create_pending_with_freshness(
                 &request,
                 InvocationFreshnessDisposition::MayExist,

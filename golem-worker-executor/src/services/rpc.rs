@@ -1516,7 +1516,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         )
         .await?;
         let principal = caller_agent_principal(self_agent_id);
-        let worker = Worker::get_or_create_suspended_with_freshness(
+        let (worker, _response_lease) = Worker::get_or_create_suspended_for_response(
             self,
             owned_agent_id,
             Some(self_env.to_vec()),
