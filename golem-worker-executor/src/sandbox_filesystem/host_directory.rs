@@ -77,12 +77,11 @@ impl HostDirectory {
             ));
         }
         let path = HostPath(tree_copy::child_path(root.path, name).into_boxed_path());
-        let name: Box<OsStr> = name.into();
         if !root
             .names
             .lock()
             .expect("host directory name registry poisoned")
-            .insert(name.clone())
+            .insert(Box::from(name))
         {
             return Err(FilesystemStorageError::io(
                 "create a host directory that this provisioning already made",
@@ -110,11 +109,11 @@ impl HostDirectory {
                 _temporary_root: root.temporary_root,
             }),
             Ok((_, Err(error))) => {
-                forget_name(root.names, &name);
+                forget_name(root.names, name);
                 Err(error)
             }
             Err(error) => {
-                forget_name(root.names, &name);
+                forget_name(root.names, name);
                 Err(FilesystemStorageError::task_failure(
                     "create host directory",
                     root.path,
