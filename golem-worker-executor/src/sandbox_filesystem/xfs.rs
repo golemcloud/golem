@@ -2153,7 +2153,7 @@ mod tests {
         let allocation_after = filesystem.observe_allocation().await.unwrap().unwrap();
         assert_eq!(allocation_after, allocation_before);
 
-        assert_eq!(copy_root.parent(), Some(copies_root.as_path()));
+        assert_eq!(copy_root.parent(), Some(copies.path().as_path()));
         assert_eq!(
             std::fs::read(copy_root.join("data/file-0")).unwrap(),
             unsynced
