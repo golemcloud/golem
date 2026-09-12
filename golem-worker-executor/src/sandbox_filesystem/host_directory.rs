@@ -183,7 +183,7 @@ impl HostDirectory {
                 self.path.as_path(),
                 error,
             );
-            failure.cleanup_failed = true;
+            failure.inner.cleanup_failed = true;
             failure
         })?
     }

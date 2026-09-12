@@ -17,7 +17,7 @@ use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Component, Path, PathBuf};
@@ -47,8 +47,13 @@ enum FilesystemStorageErrorKind {
     AllocationUnsupported,
 }
 
-#[derive(Debug)]
 pub struct FilesystemStorageError {
+    inner: Box<FilesystemStorageErrorInner>,
+}
+
+/// The facts of one [`FilesystemStorageError`]. They stay behind one box, so that the error is one
+/// pointer wide.
+struct FilesystemStorageErrorInner {
     operation: &'static str,
     path: PathBuf,
     source: Option<std::io::Error>,
@@ -60,67 +65,79 @@ pub struct FilesystemStorageError {
 impl FilesystemStorageError {
     pub(crate) fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(source),
-            cleanup_failed: false,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: Some(source),
+                cleanup_failed: false,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     pub(crate) fn verification(operation: &'static str, path: &Path) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: false,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: None,
+                cleanup_failed: false,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     pub(crate) fn allocation_unsupported(path: &Path) -> Self {
         Self {
-            operation: "observe allocation without quota authority",
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: false,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::AllocationUnsupported,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation: "observe allocation without quota authority",
+                path: path.to_path_buf(),
+                source: None,
+                cleanup_failed: false,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::AllocationUnsupported,
+            }),
         }
     }
 
     pub(crate) fn cleanup_io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(source),
-            cleanup_failed: true,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: Some(source),
+                cleanup_failed: true,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     fn cleanup_verification(operation: &'static str, path: &Path) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: true,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: None,
+                cleanup_failed: true,
+                task_failed: false,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
     fn task_failure(operation: &'static str, path: &Path, source: NativeExecutionError) -> Self {
         Self {
-            operation,
-            path: path.to_path_buf(),
-            source: Some(std::io::Error::other(source)),
-            cleanup_failed: false,
-            task_failed: true,
-            kind: FilesystemStorageErrorKind::General,
+            inner: Box::new(FilesystemStorageErrorInner {
+                operation,
+                path: path.to_path_buf(),
+                source: Some(std::io::Error::other(source)),
+                cleanup_failed: false,
+                task_failed: true,
+                kind: FilesystemStorageErrorKind::General,
+            }),
         }
     }
 
@@ -134,11 +151,11 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn cleanup_failed(&self) -> bool {
-        self.cleanup_failed
+        self.inner.cleanup_failed
     }
 
     pub(crate) fn is_storage_exhaustion(&self) -> bool {
-        self.source.as_ref().is_some_and(|source| {
+        self.inner.source.as_ref().is_some_and(|source| {
             matches!(
                 source.kind(),
                 std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
@@ -147,8 +164,8 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn is_terminal_failure(&self) -> bool {
-        self.task_failed
-            || self.source.as_ref().is_some_and(|source| {
+        self.inner.task_failed
+            || self.inner.source.as_ref().is_some_and(|source| {
                 matches!(
                     source.kind(),
                     std::io::ErrorKind::InvalidData
@@ -159,15 +176,15 @@ impl FilesystemStorageError {
     }
 
     pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {
-        self.source.as_ref().map(std::io::Error::kind)
+        self.inner.source.as_ref().map(std::io::Error::kind)
     }
 
     pub(crate) fn io_error(&self) -> Option<&std::io::Error> {
-        self.source.as_ref()
+        self.inner.source.as_ref()
     }
 
     pub(crate) fn allocation_is_unsupported(&self) -> bool {
-        self.kind == FilesystemStorageErrorKind::AllocationUnsupported
+        self.inner.kind == FilesystemStorageErrorKind::AllocationUnsupported
     }
 }
 
@@ -292,15 +309,29 @@ fn is_terminal_storage_errno(_error: &std::io::Error) -> bool {
     false
 }
 
+impl Debug for FilesystemStorageError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FilesystemStorageError")
+            .field("operation", &self.inner.operation)
+            .field("path", &self.inner.path)
+            .field("source", &self.inner.source)
+            .field("cleanup_failed", &self.inner.cleanup_failed)
+            .field("task_failed", &self.inner.task_failed)
+            .field("kind", &self.inner.kind)
+            .finish()
+    }
+}
+
 impl Display for FilesystemStorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
             "failed to {} filesystem {}",
-            self.operation,
-            self.path.display()
+            self.inner.operation,
+            self.inner.path.display()
         )?;
-        if let Some(source) = &self.source {
+        if let Some(source) = &self.inner.source {
             write!(formatter, ": {source}")?;
         }
         Ok(())
@@ -309,7 +340,8 @@ impl Display for FilesystemStorageError {
 
 impl std::error::Error for FilesystemStorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
+        self.inner
+            .source
             .as_ref()
             .map(|source| source as &(dyn std::error::Error + 'static))
     }
@@ -1891,6 +1923,25 @@ mod tests {
         SandboxFilesystem::delete_and_verify(&first).await.unwrap();
         let second = second.await.unwrap().unwrap();
         SandboxFilesystem::delete_and_verify(&second).await.unwrap();
+    }
+
+    #[test]
+    fn storage_error_is_one_pointer_wide() {
+        assert_eq!(
+            std::mem::size_of::<FilesystemStorageError>(),
+            std::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn storage_error_debug_output_names_each_fact() {
+        let error =
+            FilesystemStorageError::cleanup_verification("remove directory", Path::new("/root/a"));
+
+        assert_eq!(
+            format!("{error:?}"),
+            "FilesystemStorageError { operation: \"remove directory\", path: \"/root/a\", source: None, cleanup_failed: true, task_failed: false, kind: General }"
+        );
     }
 
     #[test]

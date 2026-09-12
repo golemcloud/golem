@@ -1369,7 +1369,7 @@ impl ProjectCleanup {
                     &self.path,
                     error,
                 );
-                failure.cleanup_failed = true;
+                failure.inner.cleanup_failed = true;
                 failure
             })?;
             match attempt {
