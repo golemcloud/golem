@@ -147,6 +147,27 @@ async fn initial_files_directory() -> HostDirectory {
         .unwrap()
 }
 
+/// Makes a scratch directory on unmanaged storage with a temporary root.
+pub(crate) async fn scratch_directory() -> Arc<HostDirectory> {
+    let provisioning = sandbox_provisioning(&FilesystemStorageConfig::default()).unwrap();
+    Arc::new(
+        HostDirectory::create_at_root(&provisioning, std::ffi::OsStr::new(".scratch"))
+            .await
+            .unwrap(),
+    )
+}
+
+/// Prepares no initial files, with a file loader on in-memory storage.
+pub(crate) async fn no_initial_files() -> PreparedInitialFiles {
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    prepare_initial_files(loader, EnvironmentId::new(), &[])
+        .await
+        .unwrap()
+}
+
 async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
     let id = agent_id();
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
@@ -165,7 +186,7 @@ async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
         .unwrap();
     let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
-        &loader,
+        Arc::clone(&loader),
         id.environment_id,
         &[InitialAgentFile {
             content_hash,
@@ -186,6 +207,9 @@ fn sandbox_attributes(kind: SandboxObjectKind) -> SandboxAttributes {
         size: 0,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }
 }
 
@@ -241,9 +265,13 @@ async fn reconstructing_with_recovery(
 ) {
     let (filesystem, control, entry) =
         bound_reconstructing_with_recovery(limits, pressure_recovery).await;
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let filesystem = finish_replay(filesystem).await.unwrap();
     (filesystem, control, entry)
 }
@@ -259,6 +287,7 @@ async fn bound_reconstructing_with_recovery(
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         limits,
         pressure_recovery,
@@ -290,6 +319,7 @@ async fn unmetered_reconstructing_with_recovery(
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         limits,
         pressure_recovery,
@@ -311,6 +341,7 @@ async fn created_product_supports_observed_verified_cleanup() {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
@@ -382,6 +413,7 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
@@ -390,9 +422,13 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
     .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     control.push_observe_allocation(Err(unsupported_allocation()));
     let filesystem = finish_reconstruction(reconstructing).await.unwrap();
@@ -727,9 +763,13 @@ async fn reconstruction_requires_initial_materialization_and_replay_drain() {
 
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         reconstruction_generation_handle(&filesystem),
         Ok(FilesystemGenerationHandle {
@@ -763,7 +803,7 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
         .unwrap();
     let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
     let prepared = prepare_initial_files(
-        &loader,
+        Arc::clone(&loader),
         id.environment_id,
         &[InitialAgentFile {
             content_hash,
@@ -777,8 +817,9 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
 
-    let filesystem = materialize_initial_files(filesystem, prepared)
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap();
     assert!(has_call(&control, "seed("));
@@ -815,7 +856,7 @@ async fn initial_files_are_seeded_as_one_file_entry_each_that_fails_on_an_existi
         permissions,
         size: content.len() as u64,
     });
-    let prepared = prepare_initial_files(&loader, id.environment_id, &files)
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
         .await
         .unwrap();
     let source = prepared.files[0].source.path().as_path().to_path_buf();
@@ -823,8 +864,9 @@ async fn initial_files_are_seeded_as_one_file_entry_each_that_fails_on_an_existi
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     control.push_seed(Ok(()));
     control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
 
-    let filesystem = materialize_initial_files(filesystem, prepared)
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap();
 
@@ -855,9 +897,14 @@ async fn external_seed_source_retains_its_cache_lease_through_seeding() {
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     let gate = control.block("seed");
 
-    let materializing = tokio::spawn(materialize_initial_files(filesystem, prepared));
+    let materializing = tokio::spawn(materialize_baseline(
+        filesystem,
+        prepared,
+        None::<std::convert::Infallible>,
+    ));
     gate.wait_started().await;
     assert!(source_path.exists());
     let seed_call = control
@@ -872,6 +919,56 @@ async fn external_seed_source_retains_its_cache_lease_through_seeding() {
     assert!(!source_path.exists());
     control.push_delete_and_verify(Ok(()));
     delete(abort_reconstruction(filesystem)).await.unwrap();
+    drop(loader);
+}
+
+#[test]
+async fn initial_file_seed_retries_a_failure_with_no_effect_twice_then_returns_it() {
+    let seed_calls = |control: &ScriptedSandboxFilesystemControl| {
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("seed("))
+            .count()
+    };
+    let no_effect = || sandbox_error("seed initial file", std::io::ErrorKind::Interrupted);
+
+    let (prepared, loader) = prepared_initial_file().await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    let materialized =
+        materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>).await;
+    assert_eq!(
+        seed_calls(&control),
+        3,
+        "two failures with no effect are retried"
+    );
+    let filesystem = materialized.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(abort_reconstruction(filesystem)).await.unwrap();
+    drop(loader);
+
+    let (prepared, loader) = prepared_initial_file().await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Err(no_effect()));
+    control.push_seed(Err(no_effect()));
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
+        .await
+        .unwrap_err();
+    assert_eq!(seed_calls(&control), 3, "the budget allows two retries");
+    assert!(
+        matches!(failure.source, Error::Sandbox(_)),
+        "{}",
+        failure.source
+    );
+    control.push_delete_and_verify(Ok(()));
+    delete(failure.filesystem).await.unwrap();
     drop(loader);
 }
 
@@ -891,7 +988,7 @@ async fn reconstruction_seed_storage_full_at_limit_is_agent_quota() {
     control.push_observe_allocation(Ok(allocation(storage_limits.allocated_bytes, 1)));
 
     let (prepared, loader) = prepared_initial_file().await;
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -920,7 +1017,7 @@ async fn managed_quota_behavior_remains_active_with_storage_metering_disabled() 
     control.push_observe_allocation(Ok(allocation(storage_limits.allocated_bytes, 1)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -955,7 +1052,7 @@ async fn managed_pressure_behavior_remains_active_with_storage_metering_disabled
     control.push_observe_allocation(Ok(allocation(512, 1)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -991,7 +1088,7 @@ async fn reconstruction_seed_storage_full_below_limit_is_physical_capacity() {
     control.push_observe_allocation(Ok(allocation(512, 1)));
 
     let (prepared, loader) = prepared_initial_file().await;
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
 
@@ -1023,9 +1120,10 @@ async fn reconstruction_seed_retries_after_physical_capacity_recovery() {
     control.push_observe_allocation(Ok(allocation(512, 1)));
     control.push_seed(Ok(()));
     control.push_observe_allocation(Ok(allocation(1024, 1)));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let filesystem = materialize_initial_files(filesystem, prepared)
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap();
 
@@ -1053,7 +1151,7 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
     )));
     control.push_observe_allocation(Ok(allocation(low_limits.allocated_bytes, 1)));
     let (prepared, loader) = prepared_initial_file().await;
-    let failure = materialize_initial_files(filesystem, prepared)
+    let failure = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap_err();
     assert!(matches!(failure.source, Error::AgentQuota(_)));
@@ -1072,9 +1170,10 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
         .unwrap();
     control.push_seed(Ok(()));
     control.push_observe_allocation(Ok(allocation(4096, 1)));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     let (prepared, loader) = prepared_initial_file().await;
 
-    let filesystem = materialize_initial_files(filesystem, prepared)
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
         .await
         .unwrap();
 
@@ -1091,9 +1190,13 @@ async fn increased_limit_permits_fresh_reconstruction_after_quota_failure() {
 async fn reconstruction_mutations_without_storage_metering_need_no_billing_window() {
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstruction_generation_handle = reconstruction_generation_handle(&filesystem).unwrap();
     let target =
         PathTarget::at_root(&reconstruction_generation_handle, "replayed-directory").unwrap();
@@ -1137,9 +1240,13 @@ async fn reconstruction_opened_unlinked_node_close_does_not_observe_allocation()
     let window = open_resource_usage_window(&filesystem, permit(&entry).await)
         .await
         .unwrap();
-    let filesystem = materialize_initial_files(filesystem, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstruction_generation_handle = reconstruction_generation_handle(&filesystem).unwrap();
     let target = PathTarget::at_root(&reconstruction_generation_handle, "open-unlinked").unwrap();
     control.push_open(Ok(SandboxOpened::scripted_file(90)));
@@ -1547,6 +1654,9 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
         size: 4,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_read_link(Ok(SandboxSymlinkTarget(PathBuf::from("target"))));
     let directory_gate = control.block("read_directory");
@@ -2370,6 +2480,9 @@ async fn unknown_hard_link_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
 
     assert!(matches!(
@@ -2494,6 +2607,9 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
         size: 0,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_times(Err(sandbox_error("set times", std::io::ErrorKind::Other)));
     control.push_get_attributes(Ok(SandboxAttributes {
@@ -2502,6 +2618,9 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
         size: 0,
         accessed: Some(accessed),
         modified: Some(modified),
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     set_attributes(
         &generation_handle,
@@ -2586,6 +2705,9 @@ async fn unknown_attribute_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Err(sandbox_error("set size", std::io::ErrorKind::Other)));
     control.push_get_attributes(Err(sandbox_error(
@@ -2637,6 +2759,9 @@ async fn unknown_namespace_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_get_attributes(Err(sandbox_error(
         "rename source after",
@@ -2979,116 +3104,50 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
 }
 
 #[test]
-async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets() {
+async fn read_only_permission_bits_refuse_content_and_time_changes_and_allow_namespace_edits() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
-    let generation = generation_handle.generation.upgrade().unwrap();
-    generation.initial_files.lock().unwrap().insert(
-        PathBuf::from("logical/read-only"),
-        InitialAgentFile {
-            content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
-            path: AgentFilePath::from_abs_str("/logical/read-only").unwrap(),
-            permissions: AgentFilePermissions::ReadOnly,
-            size: 0,
-        },
-    );
     let parent = open_directory_at(
         &generation_handle,
         &control,
         120,
         AccessMode::ReadWrite,
-        "backend/physical/parent",
+        "parent",
     )
     .await;
+    let not_permitted = |result: &Result<Opened, Error>| {
+        matches!(result, Err(Error::Access(AccessError::NotPermitted)))
+    };
 
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
+    control.push_read_only_resolution(700, "read-only", true, true);
     let root_write = open(
         &generation_handle,
-        PathTarget::at_root(&generation_handle, "backend/physical/read-only").unwrap(),
+        PathTarget::at_root(&generation_handle, "parent/read-only").unwrap(),
         OpenOptions::Existing {
             expected: ObjectKind::File,
             access: AccessMode::Write,
-            follow: Follow::Yes,
+            follow: Follow::No,
         },
     )
     .unwrap()
     .await;
-    assert!(matches!(
-        root_write,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
+    assert!(not_permitted(&root_write));
 
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_write = open(
+    control.push_read_only_resolution(700, "read-only", true, true);
+    let parent_truncate = open(
         &generation_handle,
         PathTarget::at(&parent, "read-only"),
-        OpenOptions::Existing {
-            expected: ObjectKind::File,
+        OpenOptions::File {
             access: AccessMode::Write,
+            disposition: FileDisposition::TruncateExisting,
             follow: Follow::Yes,
         },
     )
     .unwrap()
     .await;
-    assert!(matches!(
-        parent_write,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
+    assert!(not_permitted(&parent_truncate));
 
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_unlink = edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Remove {
-            target: PathTarget::at(&parent, "read-only"),
-            expected: ObjectKind::File,
-        },
-    )
-    .unwrap()
-    .await;
-    assert!(matches!(
-        parent_unlink,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
-
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "renamed", None, None);
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_rename = edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Move {
-            source: PathTarget::at(&parent, "read-only"),
-            destination: PathTarget::at(&parent, "renamed"),
-        },
-    )
-    .unwrap()
-    .await;
-    assert!(matches!(
-        parent_rename,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
-
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_policy_resolution(700, "hard-link", None, None);
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    let parent_link = edit_namespace(
-        &generation_handle,
-        NamespaceEdit::Link {
-            source: PathTarget::at(&parent, "read-only"),
-            destination: PathTarget::at(&parent, "hard-link"),
-        },
-    )
-    .unwrap()
-    .await;
-    assert!(matches!(
-        parent_link,
-        Err(Error::Access(AccessError::NotPermitted))
-    ));
-
-    control.push_policy_resolution(700, "alias", Some(901), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
+    control.push_read_only_resolution(700, "alias", false, true);
     let alias_write = open(
         &generation_handle,
         PathTarget::at(&parent, "alias"),
@@ -3100,21 +3159,69 @@ async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets()
     )
     .unwrap()
     .await;
+    assert!(not_permitted(&alias_write));
+
+    control.push_read_only_resolution(700, "read-only", true, true);
+    let path_times = set_attributes(
+        &generation_handle,
+        Target::Path(&PathTarget::at(&parent, "read-only"), Follow::Yes),
+        AttributeChanges::Times(TimeChanges {
+            accessed: TimeChange::Now,
+            modified: TimeChange::Keep,
+        }),
+    )
+    .unwrap()
+    .await;
     assert!(matches!(
-        alias_write,
+        path_times,
         Err(Error::Access(AccessError::NotPermitted))
     ));
+    assert_eq!(call_count(&control, "open("), 1);
+    assert!(!has_call(&control, "set_times("));
 
-    control.push_policy_resolution(700, "alias", Some(901), Some(900));
-    control.push_policy_resolution(700, "read-only", Some(900), Some(900));
-    control.push_namespace_resolution(700, "alias", None);
-    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Symlink)));
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "hard-link", false, false);
+    control.push_get_attributes(Err(missing("inspect hard link destination")));
+    control.push_hard_link(Ok(()));
+    control.push_observe_allocation(Ok(allocation(0, 0)));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: PathTarget::at(&parent, "read-only"),
+            destination: PathTarget::at(&parent, "hard-link"),
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "renamed", false, false);
+    control.push_read_only_resolution(700, "read-only", true, true);
+    control.push_read_only_resolution(700, "renamed", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_rename(Ok(()));
+    control.push_observe_allocation(Ok(allocation(0, 0)));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Move {
+            source: PathTarget::at(&parent, "read-only"),
+            destination: PathTarget::at(&parent, "renamed"),
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    control.push_read_only_resolution(700, "renamed", true, true);
+    control.push_read_only_resolution(700, "renamed", true, true);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
     control.push_unlink_file(Ok(()));
     control.push_observe_allocation(Ok(allocation(0, 0)));
     edit_namespace(
         &generation_handle,
         NamespaceEdit::Remove {
-            target: PathTarget::at(&parent, "alias"),
+            target: PathTarget::at(&parent, "renamed"),
             expected: ObjectKind::File,
         },
     )
@@ -3122,9 +3229,9 @@ async fn semantic_initial_file_policy_covers_root_descriptor_and_alias_targets()
     .await
     .unwrap();
 
+    assert_eq!(call_count(&control, "hard_link("), 1);
+    assert_eq!(call_count(&control, "rename("), 1);
     assert_eq!(call_count(&control, "unlink_file("), 1);
-    assert!(!has_call(&control, "rename("));
-    assert!(!has_call(&control, "hard_link("));
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
@@ -4745,6 +4852,7 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     assert!(
         create_fresh(
             provisioning,
+            scratch_directory().await,
             id,
             ResolvedStorageLimits::Finite(limits(1024, 16))
         )
@@ -4777,14 +4885,20 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
 
     let first = create_fresh(
         provisioning.clone(),
+        scratch_directory().await,
         first_id,
         ResolvedStorageLimits::Unlimited,
     )
     .await
     .unwrap();
-    let second = create_fresh(provisioning, second_id, ResolvedStorageLimits::Unlimited)
-        .await
-        .unwrap();
+    let second = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        second_id,
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
 
     assert!(first_root.is_dir());
     assert!(second_root.is_dir());
@@ -4848,13 +4962,18 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
             size: read_write.len() as u64,
         },
     ];
-    let prepared = prepare_initial_files(&loader, id.environment_id, &files)
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
         .await
         .unwrap();
     let provisioning = sandbox_provisioning(&profile).unwrap();
-    let created = create_fresh(provisioning, id.clone(), ResolvedStorageLimits::Unlimited)
-        .await
-        .unwrap();
+    let created = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        id.clone(),
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_configured_resource_usage_metering(
         created,
@@ -4870,9 +4989,10 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         .await
         .unwrap();
 
-    let reconstructing = materialize_initial_files(reconstructing, prepared)
-        .await
-        .unwrap();
+    let reconstructing =
+        materialize_baseline(reconstructing, prepared, None::<std::convert::Infallible>)
+            .await
+            .unwrap();
     assert_eq!(std::fs::read(root.join("read-only")).unwrap(), read_only);
     assert_eq!(std::fs::read(root.join("read-write")).unwrap(), read_write);
     #[cfg(unix)]
@@ -4971,17 +5091,17 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
         std::fs::read(root.join("entity-provisioned")).unwrap(),
         read_only
     );
-    assert_eq!(
-        path_permissions(
-            &generation_handle,
-            std::path::Path::new("replacement-read-only")
-        )
-        .unwrap(),
-        AgentFilePermissions::ReadOnly
+    assert!(
+        std::fs::metadata(root.join("replacement-read-only"))
+            .unwrap()
+            .permissions()
+            .readonly()
     );
-    assert_eq!(
-        path_permissions(&generation_handle, std::path::Path::new("read-write")).unwrap(),
-        AgentFilePermissions::ReadWrite
+    assert!(
+        !std::fs::metadata(root.join("read-write"))
+            .unwrap()
+            .permissions()
+            .readonly()
     );
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await
@@ -4989,16 +5109,6 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
     drop(loader);
     delete(seal(resident)).await.unwrap();
     assert!(!root.exists());
-}
-
-#[test]
-fn initial_file_sandbox_task_failure_invalidates_the_generation() {
-    let registry = GenerationRegistry::new();
-    let failure = FilesystemStorageError::scripted_task_failure("update initial files");
-
-    record_initial_file_update_failure(&registry, &failure);
-
-    assert!(registry.is_invalidated());
 }
 
 #[cfg(target_os = "linux")]
@@ -5017,6 +5127,7 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
     let provisioning = sandbox_provisioning(&profile).unwrap();
     let created = create_fresh(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Finite(initial_limits),
     )
@@ -5024,9 +5135,13 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
     .unwrap();
     let (account, _) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
     let lowered_limits = limits(64 * 1024 * 1024, 4096);
@@ -5058,6 +5173,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
     let provisioning = sandbox_provisioning(&profile).unwrap();
     let created = create_fresh(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Finite(limits(16 * 1024 * 1024, 1024)),
     )
@@ -5065,9 +5181,13 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
     .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
     let window = open_resource_usage_window(&resident, permit(&entry).await)
@@ -5143,6 +5263,7 @@ async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
+        scratch_directory().await,
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
@@ -5151,9 +5272,13 @@ async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
     .unwrap();
     let (account, entry) = account();
     let reconstructing = bind_resource_usage_metering(created, account).unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     control.push_observe_allocation(Err(unsupported_allocation()));
     let filesystem = finish_reconstruction(reconstructing).await.unwrap();
@@ -6725,6 +6850,9 @@ async fn successful_set_size_does_not_observe_allocation() {
         size: 4,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Ok(()));
     let observations_before = call_count(&control, "observe_allocation(");
@@ -6769,6 +6897,9 @@ async fn resize_postconditions_accept_desired_retry_no_effect_and_invalidate_unk
         size,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     control.push_get_attributes(Ok(attributes(4)));
     control.push_set_size(Err(sandbox_error("set size", std::io::ErrorKind::Other)));
@@ -6861,6 +6992,9 @@ async fn replay_time_restoration_accepts_a_read_only_descriptor() {
         size: 0,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_times(Ok(()));
 
@@ -6899,6 +7033,9 @@ async fn timestamp_postconditions_preserve_keep_and_retry_only_proven_no_effect(
         size: 0,
         accessed,
         modified,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     control.push_get_attributes(Ok(attributes(Some(old_accessed), Some(old_modified))));
     control.push_set_times(Err(sandbox_error(
@@ -6962,6 +7099,9 @@ async fn successful_set_times_never_observes_allocation() {
         size: 0,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     let (filesystem, control, window) =
         authoritative_metered_resident(ResolvedStorageLimits::Unlimited, allocation(40, 1)).await;
@@ -7043,6 +7183,9 @@ async fn successful_resize_ignores_unrelated_observer_failure() {
         size: 4,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Ok(()));
     let observations_before = call_count(&control, "observe_allocation(");
@@ -7091,6 +7234,9 @@ async fn resize_quota_precedes_pressure_and_growth_can_use_proven_recovery() {
         size,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     };
     control.push_get_attributes(Ok(attributes(10)));
     control.push_set_size(Err(sandbox_error(
@@ -7251,6 +7397,9 @@ async fn dropped_attribute_and_flush_observers_need_no_billing_close_coupling() 
         size: 1,
         accessed: None,
         modified: None,
+        created: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
     }));
     control.push_set_size(Ok(()));
     let resize_gate = control.block("set_size");
@@ -7510,6 +7659,9 @@ proptest! {
             size: 0,
             accessed: time(before_accessed),
             modified: time(before_modified),
+            created: None,
+            read_only: false,
+            object: SandboxObjectId::scripted(0),
         };
         let observed = SandboxAttributes {
             accessed: time(observed_accessed),
@@ -7597,3 +7749,5 @@ proptest! {
         prop_assert!(second_suffix.len() <= first_suffix.len());
     }
 }
+
+mod capture_and_baseline;

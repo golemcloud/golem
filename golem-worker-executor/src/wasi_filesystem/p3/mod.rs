@@ -117,7 +117,9 @@ fn p3_agent_error(error: AgentFilesystemError) -> FilesystemError {
         AgentFilesystemError::Sandbox(error) => p3_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => types::ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => types::ErrorCode::InsufficientSpace.into(),
-        error @ (AgentFilesystemError::Access(_) | AgentFilesystemError::RuntimeInvalidated) => {
+        error @ (AgentFilesystemError::Access(_)
+        | AgentFilesystemError::Baseline(_)
+        | AgentFilesystemError::RuntimeInvalidated) => {
             FilesystemError::trap(wasmtime::Error::msg(error.to_string()))
         }
     }
@@ -504,7 +506,9 @@ fn p3_agent_write_result(
             Ok(Err(types::ErrorCode::InsufficientSpace))
         }
         Err(
-            error @ (AgentFilesystemError::Access(_) | AgentFilesystemError::RuntimeInvalidated),
+            error @ (AgentFilesystemError::Access(_)
+            | AgentFilesystemError::Baseline(_)
+            | AgentFilesystemError::RuntimeInvalidated),
         ) => Err(wasmtime::Error::msg(error.to_string())),
     }
 }
@@ -984,7 +988,6 @@ fn agent_path_target(
 }
 
 fn agent_descriptor_flags(
-    generation_handle: &FilesystemGenerationHandle,
     descriptor: &AgentDescriptor,
 ) -> FilesystemResult<types::DescriptorFlags> {
     let (kind, mode) = descriptor.with_node(|node| (node.kind(), node.access()));
@@ -1004,13 +1007,6 @@ fn agent_descriptor_flags(
         } else {
             types::DescriptorFlags::WRITE
         };
-    }
-    if kind == ObjectKind::File
-        && agent_filesystem::path_permissions(generation_handle, descriptor.path())
-            .map_err(|error| p3_agent_error(AgentFilesystemError::Access(error)))?
-            == golem_common::model::component::AgentFilePermissions::ReadOnly
-    {
-        flags &= !types::DescriptorFlags::WRITE;
     }
     Ok(flags)
 }
@@ -1538,7 +1534,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
-        if !agent_descriptor_flags(&generation_handle, &descriptor)
+        if !agent_descriptor_flags(&descriptor)
             .map_err(|error| match error.downcast() {
                 Ok(error) => wasmtime::Error::msg(format!("{error:?}")),
                 Err(error) => error,
@@ -1613,7 +1609,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
-        if !agent_descriptor_flags(&generation_handle, &descriptor)
+        if !agent_descriptor_flags(&descriptor)
             .map_err(|error| match error.downcast() {
                 Ok(error) => wasmtime::Error::msg(format!("{error:?}")),
                 Err(error) => error,
@@ -1712,13 +1708,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "get-flags",
             )
         });
-        let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
-        });
         let descriptor = accessor
             .with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))
             .map_err(FilesystemError::trap)?;
-        agent_descriptor_flags(&generation_handle, &descriptor)
+        agent_descriptor_flags(&descriptor)
     }
 
     async fn get_type(
@@ -2361,10 +2354,10 @@ mod tests {
             use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
             use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
             use crate::services::agent_filesystem::{
-                PreparedInitialFiles, ResolvedStorageLimits, bind_resource_usage_metering,
-                create_fresh, finish_reconstruction, finish_replay, materialize_initial_files,
+                ResolvedStorageLimits, bind_resource_usage_metering, create_fresh,
+                finish_reconstruction, finish_replay, materialize_baseline, no_initial_files,
                 open_resource_usage_window, reconstruction_generation_handle,
-                resident_generation_handle,
+                resident_generation_handle, scratch_directory,
             };
             use crate::services::golem_config::FilesystemStorageConfig;
             use crate::services::linear_memory::LinearMemoryTracker;
@@ -2396,6 +2389,7 @@ mod tests {
             .unwrap();
             let created = create_fresh(
                 provisioning,
+                scratch_directory().await,
                 agent.clone(),
                 ResolvedStorageLimits::Unlimited,
             )
@@ -2423,10 +2417,13 @@ mod tests {
             let window = open_resource_usage_window(&reconstructing, permit)
                 .await
                 .unwrap();
-            let reconstructing =
-                materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-                    .await
-                    .unwrap();
+            let reconstructing = materialize_baseline(
+                reconstructing,
+                no_initial_files().await,
+                None::<std::convert::Infallible>,
+            )
+            .await
+            .unwrap();
             let generation_handle = reconstruction_generation_handle(&reconstructing).unwrap();
             let opened = route_open(
                 &generation_handle,
@@ -2916,6 +2913,7 @@ mod tests {
             size: 0,
             accessed: Some(SystemTime::UNIX_EPOCH - Duration::from_millis(1)),
             modified: None,
+            read_only: false,
         })
         .unwrap_err();
 
@@ -2961,6 +2959,7 @@ mod tests {
             size: 7,
             accessed: Some(accessed),
             modified: Some(modified),
+            read_only: false,
         };
 
         let p2 = p2_agent_stat(attributes.clone()).unwrap();
@@ -3145,10 +3144,10 @@ mod tests {
         use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
         use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
         use crate::services::agent_filesystem::{
-            PreparedInitialFiles, ResolvedStorageLimits, bind_resource_usage_metering, close,
-            create_fresh, delete, finish_reconstruction, finish_replay, materialize_initial_files,
-            open, open_resource_usage_window, reconstruction_generation_handle,
-            resident_generation_handle, seal,
+            ResolvedStorageLimits, bind_resource_usage_metering, close, create_fresh, delete,
+            finish_reconstruction, finish_replay, materialize_baseline, no_initial_files, open,
+            open_resource_usage_window, reconstruction_generation_handle,
+            resident_generation_handle, scratch_directory, seal,
         };
         use crate::services::golem_config::FilesystemStorageConfig;
         use crate::services::linear_memory::LinearMemoryTracker;
@@ -3180,6 +3179,7 @@ mod tests {
         .unwrap();
         let created = create_fresh(
             provisioning,
+            scratch_directory().await,
             agent.clone(),
             ResolvedStorageLimits::Unlimited,
         )
@@ -3207,10 +3207,13 @@ mod tests {
         let window = open_resource_usage_window(&reconstructing, permit)
             .await
             .unwrap();
-        let reconstructing =
-            materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-                .await
-                .unwrap();
+        let reconstructing = materialize_baseline(
+            reconstructing,
+            no_initial_files().await,
+            None::<std::convert::Infallible>,
+        )
+        .await
+        .unwrap();
         let generation_handle = reconstruction_generation_handle(&reconstructing).unwrap();
         let opened = route_open(
             &generation_handle,

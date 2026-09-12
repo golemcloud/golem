@@ -229,48 +229,8 @@ pub(crate) async fn run() -> Vec<String> {
             Err(error) => format!("err:{}", p3_err(error)),
         }
     ));
-    results.push(format!(
-        "ro_parent_unlink_p2={}",
-        p2_result(root_p2.unlink_file_at("foo.txt"))
-    ));
-    results.push(format!(
-        "ro_parent_unlink_p3={}",
-        p3_result(root_p3.unlink_file_at("foo.txt".to_string()).await)
-    ));
-    results.push(format!(
-        "ro_parent_rename_p2={}",
-        p2_result(root_p2.rename_at("foo.txt", &root_p2, "foo-moved.txt"))
-    ));
-    results.push(format!(
-        "ro_parent_rename_p3={}",
-        p3_result(
-            root_p3
-                .rename_at("foo.txt".to_string(), &root_p3, "foo-moved.txt".to_string(),)
-                .await
-        )
-    ));
-    results.push(format!(
-        "ro_parent_link_p2={}",
-        p2_result(root_p2.link_at(
-            p2_types::PathFlags::empty(),
-            "foo.txt",
-            &root_p2,
-            "foo-alias.txt",
-        ))
-    ));
-    results.push(format!(
-        "ro_parent_link_p3={}",
-        p3_result(
-            root_p3
-                .link_at(
-                    p3_types::PathFlags::empty(),
-                    "foo.txt".to_string(),
-                    &root_p3,
-                    "foo-alias.txt".to_string(),
-                )
-                .await
-        )
-    ));
+    results.extend(read_only_file_semantics_p2(&root_p2));
+    results.extend(read_only_file_semantics_p3(&root_p3).await);
     results.push(format!(
         "ro_alias_create_p2={}",
         p2_result(root_p2.symlink_at("foo.txt", "foo-link-p2"))
@@ -394,6 +354,270 @@ pub(crate) async fn run() -> Vec<String> {
     ));
 
     results
+}
+
+/// Deletes, renames and hard links read-only initial files through P2 and moves a directory
+/// above one. Checks that each file still refuses changes to its contents and times, and that
+/// other files stay writable.
+fn read_only_file_semantics_p2(root: &p2_types::Descriptor) -> Vec<String> {
+    let edits = vec![
+        format!(
+            "ro_unlink_p2={}",
+            p2_result(root.unlink_file_at("p2/unlink.txt"))
+        ),
+        format!(
+            "ro_rename_p2={}",
+            p2_result(root.rename_at("p2/rename.txt", root, "p2/renamed.txt"))
+        ),
+        format!(
+            "ro_link_p2={}",
+            p2_result(root.link_at(
+                p2_types::PathFlags::empty(),
+                "p2/link.txt",
+                root,
+                "p2/linked.txt",
+            ))
+        ),
+        format!(
+            "ro_directory_move_p2={}",
+            p2_result(root.rename_at("p2/dir", root, "p2/moved-dir"))
+        ),
+    ];
+    let refusals = [
+        ("installed", "foo.txt"),
+        ("renamed", "p2/renamed.txt"),
+        ("linked", "p2/linked.txt"),
+        ("moved", "p2/moved-dir/inner.txt"),
+    ]
+    .into_iter()
+    .flat_map(|(name, path)| read_only_refusals_p2(root, name, path));
+    let writable = root
+        .open_at(
+            p2_types::PathFlags::empty(),
+            "p2/writable.txt",
+            p2_types::OpenFlags::empty(),
+            p2_types::DescriptorFlags::WRITE,
+        )
+        .and_then(|file| file.write(b"written", 0).map(drop));
+    let created = root
+        .open_at(
+            p2_types::PathFlags::empty(),
+            "p2/moved-dir/created.txt",
+            p2_types::OpenFlags::CREATE | p2_types::OpenFlags::EXCLUSIVE,
+            p2_types::DescriptorFlags::WRITE,
+        )
+        .map(drop);
+    edits
+        .into_iter()
+        .chain(refusals)
+        .chain([
+            format!("rw_write_after_directory_move_p2={}", p2_result(writable)),
+            format!("create_after_directory_move_p2={}", p2_result(created)),
+        ])
+        .collect()
+}
+
+fn read_only_refusals_p2(root: &p2_types::Descriptor, name: &str, path: &str) -> Vec<String> {
+    let open_write = root
+        .open_at(
+            p2_types::PathFlags::empty(),
+            path,
+            p2_types::OpenFlags::empty(),
+            p2_types::DescriptorFlags::WRITE,
+        )
+        .map(drop);
+    let truncate = root
+        .open_at(
+            p2_types::PathFlags::empty(),
+            path,
+            p2_types::OpenFlags::TRUNCATE,
+            p2_types::DescriptorFlags::WRITE,
+        )
+        .map(drop);
+    let set_times_at = root.set_times_at(
+        p2_types::PathFlags::empty(),
+        path,
+        p2_types::NewTimestamp::Now,
+        p2_types::NewTimestamp::Now,
+    );
+    let descriptor = match root.open_at(
+        p2_types::PathFlags::empty(),
+        path,
+        p2_types::OpenFlags::empty(),
+        p2_types::DescriptorFlags::READ,
+    ) {
+        Ok(reader) => vec![
+            format!("ro_{name}_set_size_p2={}", p2_result(reader.set_size(0))),
+            format!(
+                "ro_{name}_set_times_p2={}",
+                p2_result(
+                    reader.set_times(p2_types::NewTimestamp::Now, p2_types::NewTimestamp::Now)
+                )
+            ),
+            format!(
+                "ro_{name}_flags_write_p2={}",
+                reader
+                    .get_flags()
+                    .expect("P2 get_flags failed")
+                    .contains(p2_types::DescriptorFlags::WRITE)
+            ),
+        ],
+        Err(error) => vec![format!("ro_{name}_read_open_p2={}", p2_result(Err(error)))],
+    };
+    [
+        format!("ro_{name}_open_write_p2={}", p2_result(open_write)),
+        format!("ro_{name}_truncate_p2={}", p2_result(truncate)),
+        format!("ro_{name}_set_times_at_p2={}", p2_result(set_times_at)),
+    ]
+    .into_iter()
+    .chain(descriptor)
+    .collect()
+}
+
+/// Deletes, renames and hard links read-only initial files through P3 and moves a directory
+/// above one. Checks that each file still refuses changes to its contents and times, and that
+/// other files stay writable.
+async fn read_only_file_semantics_p3(root: &p3_types::Descriptor) -> Vec<String> {
+    let mut results = vec![
+        format!(
+            "ro_unlink_p3={}",
+            p3_result(root.unlink_file_at("p3/unlink.txt".to_string()).await)
+        ),
+        format!(
+            "ro_rename_p3={}",
+            p3_result(
+                root.rename_at(
+                    "p3/rename.txt".to_string(),
+                    root,
+                    "p3/renamed.txt".to_string()
+                )
+                .await
+            )
+        ),
+        format!(
+            "ro_link_p3={}",
+            p3_result(
+                root.link_at(
+                    p3_types::PathFlags::empty(),
+                    "p3/link.txt".to_string(),
+                    root,
+                    "p3/linked.txt".to_string(),
+                )
+                .await
+            )
+        ),
+        format!(
+            "ro_directory_move_p3={}",
+            p3_result(
+                root.rename_at("p3/dir".to_string(), root, "p3/moved-dir".to_string())
+                    .await
+            )
+        ),
+    ];
+    results.extend(read_only_refusals_p3(root, "installed", "foo.txt").await);
+    results.extend(read_only_refusals_p3(root, "renamed", "p3/renamed.txt").await);
+    results.extend(read_only_refusals_p3(root, "linked", "p3/linked.txt").await);
+    results.extend(read_only_refusals_p3(root, "moved", "p3/moved-dir/inner.txt").await);
+    let writable = match root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            "p3/writable.txt".to_string(),
+            p3_types::OpenFlags::empty(),
+            p3_types::DescriptorFlags::WRITE,
+        )
+        .await
+    {
+        Ok(file) => {
+            let (mut writer, data) = wit_stream::new();
+            let completion = file.write_via_stream(data, 0);
+            let unwritten = writer.write_all(b"written".to_vec()).await;
+            assert!(unwritten.is_empty(), "P3 stream did not accept all bytes");
+            drop(writer);
+            completion.await
+        }
+        Err(error) => Err(error),
+    };
+    let created = root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            "p3/moved-dir/created.txt".to_string(),
+            p3_types::OpenFlags::CREATE | p3_types::OpenFlags::EXCLUSIVE,
+            p3_types::DescriptorFlags::WRITE,
+        )
+        .await
+        .map(drop);
+    results.push(format!(
+        "rw_write_after_directory_move_p3={}",
+        p3_result(writable)
+    ));
+    results.push(format!(
+        "create_after_directory_move_p3={}",
+        p3_result(created)
+    ));
+    results
+}
+
+async fn read_only_refusals_p3(root: &p3_types::Descriptor, name: &str, path: &str) -> Vec<String> {
+    let open_write = root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            path.to_string(),
+            p3_types::OpenFlags::empty(),
+            p3_types::DescriptorFlags::WRITE,
+        )
+        .await
+        .map(drop);
+    let truncate = root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            path.to_string(),
+            p3_types::OpenFlags::TRUNCATE,
+            p3_types::DescriptorFlags::WRITE,
+        )
+        .await
+        .map(drop);
+    let set_times_at = root
+        .set_times_at(
+            p3_types::PathFlags::empty(),
+            path.to_string(),
+            p3_types::NewTimestamp::Now,
+            p3_types::NewTimestamp::Now,
+        )
+        .await;
+    let descriptor = match root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            path.to_string(),
+            p3_types::OpenFlags::empty(),
+            p3_types::DescriptorFlags::READ,
+        )
+        .await
+    {
+        Ok(reader) => {
+            let set_size = reader.set_size(0).await;
+            let set_times = reader
+                .set_times(p3_types::NewTimestamp::Now, p3_types::NewTimestamp::Now)
+                .await;
+            let flags = reader.get_flags().await.expect("P3 get_flags failed");
+            vec![
+                format!("ro_{name}_set_size_p3={}", p3_result(set_size)),
+                format!("ro_{name}_set_times_p3={}", p3_result(set_times)),
+                format!(
+                    "ro_{name}_flags_write_p3={}",
+                    flags.contains(p3_types::DescriptorFlags::WRITE)
+                ),
+            ]
+        }
+        Err(error) => vec![format!("ro_{name}_read_open_p3={}", p3_result(Err(error)))],
+    };
+    [
+        format!("ro_{name}_open_write_p3={}", p3_result(open_write)),
+        format!("ro_{name}_truncate_p3={}", p3_result(truncate)),
+        format!("ro_{name}_set_times_at_p3={}", p3_result(set_times_at)),
+    ]
+    .into_iter()
+    .chain(descriptor)
+    .collect()
 }
 
 pub(crate) async fn run_writable() -> Vec<String> {

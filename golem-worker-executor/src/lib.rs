@@ -179,18 +179,21 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// (cgroup/process/override). The in-process test harness overrides this to
     /// inject a probe with a pinned limit and usage so the gate is deterministic
     /// and isolated from the shared test process's RSS.
-    fn create_active_agents(
+    async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
-        Ok(Arc::new(ActiveAgents::<Ctx>::new(
-            &golem_config.active_agents,
-            &golem_config.memory,
-            &golem_config.filesystem_storage,
-            &golem_config.agent_status_flush,
-            shutdown_token,
-        )?))
+        Ok(Arc::new(
+            ActiveAgents::<Ctx>::new(
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )
+            .await?,
+        ))
     }
 
     fn create_shard_manager_service(
@@ -835,7 +838,9 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_agents = bootstrap.create_active_agents(&golem_config, shutdown_token.clone())?;
+    let active_agents = bootstrap
+        .create_active_agents(&golem_config, shutdown_token.clone())
+        .await?;
 
     let initial_files = sandbox_filesystem::HostDirectory::create_at_root(
         active_agents.agent_filesystems().provisioning(),

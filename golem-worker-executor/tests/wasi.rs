@@ -1331,7 +1331,24 @@ async fn initial_file_p3_parity_impl(
                     target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                     permissions: AgentFilePermissions::ReadWrite,
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(["p2", "p3"].into_iter().flat_map(|preview| {
+                [
+                    ("unlink.txt", AgentFilePermissions::ReadOnly),
+                    ("rename.txt", AgentFilePermissions::ReadOnly),
+                    ("link.txt", AgentFilePermissions::ReadOnly),
+                    ("dir/inner.txt", AgentFilePermissions::ReadOnly),
+                    ("writable.txt", AgentFilePermissions::ReadWrite),
+                ]
+                .map(|(name, permissions)| IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str(&format!("/{preview}/{name}"))
+                        .unwrap(),
+                    permissions,
+                })
+            }))
+            .collect::<Vec<_>>(),
         )
         .store()
         .await?;
@@ -1372,12 +1389,66 @@ async fn initial_file_p3_parity_impl(
         "ro_parent_open_write_p3=err:not-permitted".to_string(),
         "ro_invalid_flags_p2=err:unsupported".to_string(),
         "ro_invalid_flags_p3=err:unsupported".to_string(),
-        "ro_parent_unlink_p2=err:not-permitted".to_string(),
-        "ro_parent_unlink_p3=err:not-permitted".to_string(),
-        "ro_parent_rename_p2=err:not-permitted".to_string(),
-        "ro_parent_rename_p3=err:not-permitted".to_string(),
-        "ro_parent_link_p2=err:not-permitted".to_string(),
-        "ro_parent_link_p3=err:not-permitted".to_string(),
+        "ro_unlink_p2=ok".to_string(),
+        "ro_rename_p2=ok".to_string(),
+        "ro_link_p2=ok".to_string(),
+        "ro_directory_move_p2=ok".to_string(),
+        "ro_installed_open_write_p2=err:not-permitted".to_string(),
+        "ro_installed_truncate_p2=err:not-permitted".to_string(),
+        "ro_installed_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_installed_set_size_p2=err:not-permitted".to_string(),
+        "ro_installed_set_times_p2=err:not-permitted".to_string(),
+        "ro_installed_flags_write_p2=false".to_string(),
+        "ro_renamed_open_write_p2=err:not-permitted".to_string(),
+        "ro_renamed_truncate_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_size_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_times_p2=err:not-permitted".to_string(),
+        "ro_renamed_flags_write_p2=false".to_string(),
+        "ro_linked_open_write_p2=err:not-permitted".to_string(),
+        "ro_linked_truncate_p2=err:not-permitted".to_string(),
+        "ro_linked_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_linked_set_size_p2=err:not-permitted".to_string(),
+        "ro_linked_set_times_p2=err:not-permitted".to_string(),
+        "ro_linked_flags_write_p2=false".to_string(),
+        "ro_moved_open_write_p2=err:not-permitted".to_string(),
+        "ro_moved_truncate_p2=err:not-permitted".to_string(),
+        "ro_moved_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_moved_set_size_p2=err:not-permitted".to_string(),
+        "ro_moved_set_times_p2=err:not-permitted".to_string(),
+        "ro_moved_flags_write_p2=false".to_string(),
+        "rw_write_after_directory_move_p2=ok".to_string(),
+        "create_after_directory_move_p2=ok".to_string(),
+        "ro_unlink_p3=ok".to_string(),
+        "ro_rename_p3=ok".to_string(),
+        "ro_link_p3=ok".to_string(),
+        "ro_directory_move_p3=ok".to_string(),
+        "ro_installed_open_write_p3=err:not-permitted".to_string(),
+        "ro_installed_truncate_p3=err:not-permitted".to_string(),
+        "ro_installed_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_installed_set_size_p3=err:not-permitted".to_string(),
+        "ro_installed_set_times_p3=err:not-permitted".to_string(),
+        "ro_installed_flags_write_p3=false".to_string(),
+        "ro_renamed_open_write_p3=err:not-permitted".to_string(),
+        "ro_renamed_truncate_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_size_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_times_p3=err:not-permitted".to_string(),
+        "ro_renamed_flags_write_p3=false".to_string(),
+        "ro_linked_open_write_p3=err:not-permitted".to_string(),
+        "ro_linked_truncate_p3=err:not-permitted".to_string(),
+        "ro_linked_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_linked_set_size_p3=err:not-permitted".to_string(),
+        "ro_linked_set_times_p3=err:not-permitted".to_string(),
+        "ro_linked_flags_write_p3=false".to_string(),
+        "ro_moved_open_write_p3=err:not-permitted".to_string(),
+        "ro_moved_truncate_p3=err:not-permitted".to_string(),
+        "ro_moved_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_moved_set_size_p3=err:not-permitted".to_string(),
+        "ro_moved_set_times_p3=err:not-permitted".to_string(),
+        "ro_moved_flags_write_p3=false".to_string(),
+        "rw_write_after_directory_move_p3=ok".to_string(),
+        "create_after_directory_move_p3=ok".to_string(),
         "ro_alias_create_p2=ok".to_string(),
         "ro_alias_open_write_p2=err:not-permitted".to_string(),
         "ro_alias_unlink_p2=ok".to_string(),
@@ -1425,6 +1496,242 @@ async fn initial_file_p3_parity_impl(
         ]
     );
 
+    Ok(())
+}
+
+async fn filesystem_tree_apply(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::base_model::component::ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentId,
+    operation: &str,
+    path: &str,
+    argument: &str,
+) -> anyhow::Result<Option<SchemaValue>> {
+    use golem_common::data_value;
+
+    let (operation, path, argument) = (
+        operation.to_string(),
+        path.to_string(),
+        argument.to_string(),
+    );
+    Ok(executor
+        .invoke_and_await_agent(
+            component,
+            agent,
+            "apply",
+            data_value!(operation, path, argument),
+        )
+        .await?
+        .into_return_value())
+}
+
+async fn filesystem_tree_describe(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::base_model::component::ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentId,
+) -> anyhow::Result<Vec<String>> {
+    use golem_common::data_value;
+
+    let result = executor
+        .invoke_and_await_agent(component, agent, "describe", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("describe returned no value"))?;
+    Ok(schema_string_list(result))
+}
+
+async fn start_on_empty_root_without_snapshots(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    root: &std::path::Path,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let root = root.to_path_buf();
+    start_with_overrides(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_operations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::agent_id;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let first_root = tempfile::tempdir()?;
+    let second_root = tempfile::tempdir()?;
+    let executor = start_on_empty_root_without_snapshots(deps, &context, first_root.path()).await?;
+    let entry = |source: &str, target: &str, permissions| IFSEntry {
+        source_path: PathBuf::from(format!("initial-file-system/files/{source}")),
+        target_path: CanonicalFilePath::from_abs_str(target).unwrap(),
+        permissions,
+    };
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "FilesystemTree",
+            &[
+                entry("foo.txt", "/ro-kept.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-deleted.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-renamed.txt", AgentFilePermissions::ReadOnly),
+                entry("bar.txt", "/ro-linked.txt", AgentFilePermissions::ReadOnly),
+                entry(
+                    "bar.txt",
+                    "/dir/ro-in-dir.txt",
+                    AgentFilePermissions::ReadOnly,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-modified.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-deleted.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
+            ],
+        )
+        .store()
+        .await?;
+    let agent = agent_id!("FilesystemTree", "full-replay");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let ok = Some(SchemaValue::String("ok".to_string()));
+
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "remove",
+            "ro-deleted.txt",
+            ""
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "write",
+            "rw-modified.txt",
+            "modified by the agent"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "remove",
+            "rw-deleted.txt",
+            ""
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "rename",
+            "ro-renamed.txt",
+            "renamed.txt"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "link",
+            "ro-linked.txt",
+            "second-name.txt"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(&executor, &component, &agent, "rename", "dir", "moved-dir").await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "write",
+            "agent.txt",
+            "agent data"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "link",
+            "agent.txt",
+            "agent-alias.txt"
+        )
+        .await?,
+        ok
+    );
+    let live = filesystem_tree_describe(&executor, &component, &agent).await?;
+    assert_eq!(
+        live,
+        [
+            r#"agent-alias.txt file links=2 writable=true content="agent data""#,
+            r#"agent.txt file links=2 writable=true content="agent data""#,
+            "moved-dir dir",
+            r#"moved-dir/ro-in-dir.txt file links=1 writable=false content="bar\n""#,
+            r#"renamed.txt file links=1 writable=false content="foo\n""#,
+            r#"ro-kept.txt file links=1 writable=false content="foo\n""#,
+            r#"ro-linked.txt file links=2 writable=false content="bar\n""#,
+            r#"rw-modified.txt file links=1 writable=true content="modified by the agent""#,
+            r#"second-name.txt file links=2 writable=false content="bar\n""#,
+        ]
+        .map(String::from)
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_))),
+        "the oplog holds a snapshot, so the restart could skip part of the replay"
+    );
+    drop(executor);
+
+    let restarted =
+        start_on_empty_root_without_snapshots(deps, &context, second_root.path()).await?;
+    let replayed = filesystem_tree_describe(&restarted, &component, &agent).await?;
+
+    assert_eq!(replayed, live);
     Ok(())
 }
 

@@ -8623,9 +8623,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
 
         if attributes.kind == agent_fs::ObjectKind::File {
             return Ok(GetFileSystemNodeResult::File(component_file_node(
-                &generation_handle,
-                relative,
-                attributes,
+                relative, attributes,
             )?));
         }
         if attributes.kind != agent_fs::ObjectKind::Directory {
@@ -8664,11 +8662,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
             .map_err(|error| filesystem_read_error(path, error))?
             .await
             .map_err(|error| filesystem_read_error(path, error))?;
-            result.push(component_file_node(
-                &generation_handle,
-                entry_relative,
-                attributes,
-            )?);
+            result.push(component_file_node(entry_relative, attributes)?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
     }
@@ -8748,7 +8742,6 @@ fn filesystem_read_error(path: &CanonicalFilePath, error: impl Display) -> Worke
 }
 
 fn component_file_node(
-    generation_handle: &FilesystemGenerationHandle,
     relative: PathBuf,
     attributes: crate::services::agent_filesystem::Attributes,
 ) -> Result<ComponentFileSystemNode, WorkerExecutorError> {
@@ -8762,8 +8755,11 @@ fn component_file_node(
     let details = match attributes.kind {
         agent_fs::ObjectKind::File => ComponentFileSystemNodeDetails::File {
             size: attributes.size,
-            permissions: agent_fs::path_permissions(generation_handle, &relative)
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+            permissions: if attributes.read_only {
+                golem_common::model::component::AgentFilePermissions::ReadOnly
+            } else {
+                golem_common::model::component::AgentFilePermissions::ReadWrite
+            },
         },
         agent_fs::ObjectKind::Directory | agent_fs::ObjectKind::Symlink => {
             ComponentFileSystemNodeDetails::Directory

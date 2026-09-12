@@ -1,3 +1,4 @@
+use super::tests::{no_initial_files, scratch_directory};
 use super::*;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
 use crate::services::golem_config::ResourceUsageMeteringConfig;
@@ -144,9 +145,14 @@ async fn create_benchmark_filesystem(
     limits: ResolvedStorageLimits,
     filesystem_metering: bool,
 ) -> BenchmarkFilesystem {
-    let created = create_fresh(provisioning, agent.clone(), limits)
-        .await
-        .unwrap();
+    let created = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        agent.clone(),
+        limits,
+    )
+    .await
+    .unwrap();
     let (account, entry) = benchmark_account();
     let reconstructing = bind_configured_resource_usage_metering(
         created,
@@ -158,9 +164,13 @@ async fn create_benchmark_filesystem(
         },
     )
     .unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
     let window = open_resource_usage_window(&resident, benchmark_permit(&entry, &agent).await)

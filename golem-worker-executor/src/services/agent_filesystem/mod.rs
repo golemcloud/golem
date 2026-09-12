@@ -16,7 +16,7 @@ use crate::filesystem_pressure::FilesystemWriteRecovery;
 pub use crate::sandbox_filesystem::FilesystemStorageError;
 pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
 use crate::sandbox_filesystem::{
-    FilesystemVolume, SandboxFilesystemProvisioning, observe_space_blocking,
+    FilesystemVolume, HostDirectory, SandboxFilesystemProvisioning, observe_space_blocking,
 };
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
@@ -24,6 +24,7 @@ use crate::services::golem_config::{
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::OwnedAgentId;
 use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(test)]
 thread_local! {
@@ -37,7 +38,8 @@ mod lifecycle;
 #[cfg(test)]
 pub(crate) use lifecycle::tests::{
     billing_metered_resident_with_open_node_for_unload_test,
-    metered_resident_with_open_node_for_unload_test, resident_for_unload_test,
+    metered_resident_with_open_node_for_unload_test, no_initial_files, resident_for_unload_test,
+    scratch_directory,
 };
 pub(crate) use lifecycle::*;
 
@@ -84,15 +86,20 @@ pub(crate) struct AgentFilesystems {
     provisioning: SandboxFilesystemProvisioning,
     pressure: FilesystemPressureConfig,
     filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
+    scratch: Arc<HostDirectory>,
 }
 
 impl AgentFilesystems {
-    /// Binds filesystem provisioning and pressure settings for an executor.
+    /// Binds filesystem provisioning and pressure settings for an executor, and makes the
+    /// `.scratch` host directory for captures and restores.
     ///
     /// Callers create this service during executor startup, before any agent filesystem exists.
-    /// Returns an error for invalid provisioning settings, failed volume observation, or a
-    /// pressure target larger than the observed managed volume.
-    pub(crate) fn new(settings: &FilesystemStorageConfig) -> Result<Self, FilesystemStorageError> {
+    /// Making `.scratch` removes what an earlier process left under the name. Returns an error for
+    /// invalid provisioning settings, failed volume observation, a pressure target larger than the
+    /// observed managed volume, or a `.scratch` directory that cannot be made.
+    pub(crate) async fn new(
+        settings: &FilesystemStorageConfig,
+    ) -> Result<Self, FilesystemStorageError> {
         let provisioning = SandboxFilesystemProvisioning::new(
             settings.deterministic_root_dir.clone(),
             settings.managed_xfs_root_dir.clone(),
@@ -109,10 +116,13 @@ impl AgentFilesystems {
                 .pressure
                 .validate_capacity(total_bytes, total_filesystem_objects)?;
         }
+        let scratch =
+            HostDirectory::create_at_root(&provisioning, std::ffi::OsStr::new(".scratch")).await?;
         Ok(Self {
             provisioning,
             pressure: settings.pressure.clone(),
             filesystem_object_limit_policy: settings.filesystem_object_limit_policy.clone(),
+            scratch: Arc::new(scratch),
         })
     }
 
@@ -170,6 +180,7 @@ impl AgentFilesystems {
     ) -> Result<CreatedFilesystem, CreateFailure> {
         lifecycle::create_fresh_with_pressure_recovery(
             self.provisioning.clone(),
+            Arc::clone(&self.scratch),
             agent,
             limits,
             pressure_recovery,
@@ -191,10 +202,13 @@ mod tests {
         }
     }
 
-    fn with_binding_space_observation<T>(space: FilesystemSpace, f: impl FnOnce() -> T) -> T {
+    async fn with_binding_space_observation<T>(
+        space: FilesystemSpace,
+        binding: impl Future<Output = T>,
+    ) -> T {
         let previous = BINDING_SPACE_OBSERVATION.replace(Some(space));
         let _guard = BindingSpaceObservationGuard(previous);
-        f()
+        binding.await
     }
 
     #[test]
@@ -232,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_disk_sentinel_resolves_as_unlimited() {
+    async fn registry_disk_sentinel_resolves_as_unlimited() {
         let settings = FilesystemStorageConfig::default();
         let observed_total_bytes = settings.pressure.target_available_bytes();
         let filesystems = with_binding_space_observation(
@@ -242,8 +256,9 @@ mod tests {
                 total_filesystem_objects: u64::MAX,
                 available_filesystem_objects: u64::MAX,
             },
-            || AgentFilesystems::new(&settings),
+            AgentFilesystems::new(&settings),
         )
+        .await
         .unwrap();
 
         assert!(matches!(
@@ -265,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_filesystems_binding_rejects_pressure_target_above_observed_capacity() {
+    async fn agent_filesystems_binding_rejects_pressure_target_above_observed_capacity() {
         let settings = FilesystemStorageConfig::default();
         let observed_total_bytes = settings.pressure.target_available_bytes() - 1;
 
@@ -276,8 +291,9 @@ mod tests {
                 total_filesystem_objects: u64::MAX,
                 available_filesystem_objects: u64::MAX,
             },
-            || AgentFilesystems::new(&settings),
-        );
+            AgentFilesystems::new(&settings),
+        )
+        .await;
 
         let error = result
             .err()
@@ -290,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_filesystems_binding_accepts_pressure_target_equal_to_observed_capacity() {
+    async fn agent_filesystems_binding_accepts_pressure_target_equal_to_observed_capacity() {
         let settings = FilesystemStorageConfig::default();
         let observed_total_bytes = settings.pressure.target_available_bytes();
 
@@ -301,8 +317,9 @@ mod tests {
                 total_filesystem_objects: u64::MAX,
                 available_filesystem_objects: u64::MAX,
             },
-            || AgentFilesystems::new(&settings),
-        );
+            AgentFilesystems::new(&settings),
+        )
+        .await;
 
         if let Err(error) = result {
             panic!("binding rejected a pressure target equal to observed capacity: {error}");
@@ -310,7 +327,34 @@ mod tests {
     }
 
     #[test]
-    fn agent_filesystems_binding_rejects_object_pressure_target_above_observed_capacity() {
+    async fn agent_filesystems_make_the_scratch_directory_once_at_binding() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".scratch/left-by-an-earlier-process")).unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+
+        let filesystems = AgentFilesystems::new(&settings).await.unwrap();
+
+        assert!(
+            std::fs::read_dir(root.path().join(".scratch"))
+                .unwrap()
+                .next()
+                .is_none(),
+            "binding must remove what an earlier process left in the scratch directory"
+        );
+        let again = HostDirectory::create_at_root(
+            filesystems.provisioning(),
+            std::ffi::OsStr::new(".scratch"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(again.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+    }
+
+    #[test]
+    async fn agent_filesystems_binding_rejects_object_pressure_target_above_observed_capacity() {
         let settings = FilesystemStorageConfig::default();
         let observed_total_objects = settings.pressure.target_available_filesystem_objects() - 1;
 
@@ -321,8 +365,9 @@ mod tests {
                 total_filesystem_objects: observed_total_objects,
                 available_filesystem_objects: observed_total_objects,
             },
-            || AgentFilesystems::new(&settings),
-        );
+            AgentFilesystems::new(&settings),
+        )
+        .await;
 
         let error = result
             .err()
