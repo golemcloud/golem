@@ -775,6 +775,45 @@ async fn wait_for_primary_oplog_empty(
 }
 
 #[test]
+#[timeout("60s")]
+async fn auto_committed_invocations_publish_idle_status(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let oplog_config = OplogConfig {
+        max_operations_before_commit: 0,
+        ..Default::default()
+    };
+    let executor = start_with_redis_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Environment", "auto-commit-status");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
+        .await?;
+    let metadata = executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
+        .await?;
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        metadata.last_oplog_index,
+        entries.last().unwrap().oplog_index
+    );
+    assert_eq!(metadata.pending_invocation_count, 0);
+
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn oplog_archive_scheduled_when_worker_becomes_idle(
     last_unique_id: &LastUniqueId,
