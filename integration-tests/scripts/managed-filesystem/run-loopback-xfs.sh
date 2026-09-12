@@ -703,12 +703,12 @@ run_privileged_test \
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::managed_xfs_capture_tree_shares_extents_and_charges_no_agent_quota
+  sandbox_filesystem::xfs::tests::managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota
 
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::managed_xfs_write_after_capture_consumes_one_cow_extent
+  sandbox_filesystem::xfs::tests::managed_xfs_write_after_copy_contents_consumes_one_cow_extent
 
 run_privileged_test \
   lib \

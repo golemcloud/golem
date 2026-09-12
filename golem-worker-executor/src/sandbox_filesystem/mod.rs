@@ -27,15 +27,12 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 mod adapter;
 mod file_update;
 mod host_directory;
-mod scratch;
 mod tree_copy;
 mod unmanaged;
 
 #[allow(unused_imports)]
 pub(crate) use adapter::*;
 pub(crate) use host_directory::{HostDirectory, HostPath};
-use scratch::ScratchSpace;
-pub(crate) use scratch::ScratchTree;
 pub(crate) use tree_copy::TreeExclusions;
 
 #[cfg(target_os = "linux")]
@@ -48,7 +45,6 @@ static FILESYSTEM_LEASES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<AsyncM
 enum FilesystemStorageErrorKind {
     General,
     AllocationUnsupported,
-    CaptureUnsupported,
 }
 
 #[derive(Debug)]
@@ -92,18 +88,6 @@ impl FilesystemStorageError {
             cleanup_failed: false,
             task_failed: false,
             kind: FilesystemStorageErrorKind::AllocationUnsupported,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn capture_unsupported(path: &Path) -> Self {
-        Self {
-            operation: "capture tree without managed XFS storage",
-            path: path.to_path_buf(),
-            source: None,
-            cleanup_failed: false,
-            task_failed: false,
-            kind: FilesystemStorageErrorKind::CaptureUnsupported,
         }
     }
 
@@ -184,11 +168,6 @@ impl FilesystemStorageError {
 
     pub(crate) fn allocation_is_unsupported(&self) -> bool {
         self.kind == FilesystemStorageErrorKind::AllocationUnsupported
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn capture_is_unsupported(&self) -> bool {
-        self.kind == FilesystemStorageErrorKind::CaptureUnsupported
     }
 }
 
@@ -471,7 +450,6 @@ pub(crate) struct SandboxFilesystem {
     name_mode_source: NativeNameModeSource,
     name_mode_probe: NativeNameModeProbe,
     append_coordinators: Arc<AppendCoordinatorRegistry>,
-    scratch: Option<ScratchSpace>,
 }
 
 #[derive(Clone, Copy)]
@@ -782,42 +760,6 @@ impl SandboxFilesystemProvisioning {
         }
     }
 
-    /// Tells whether this storage can capture a tree by reflink. Only managed XFS can.
-    #[allow(dead_code)]
-    pub(crate) fn supports_tree_capture(&self) -> bool {
-        self.scratch_space().is_some()
-    }
-
-    /// Creates an empty scratch tree in the executor-owned scratch space.
-    ///
-    /// Storage without tree capture has no scratch space and gives the capture-unsupported error.
-    #[allow(dead_code)]
-    pub(crate) async fn create_scratch_tree(&self) -> Result<ScratchTree, FilesystemStorageError> {
-        let Some(scratch) = self.scratch_space().cloned() else {
-            return Err(FilesystemStorageError::capture_unsupported(Path::new(
-                "<unmanaged-storage>",
-            )));
-        };
-        let error_path = scratch.root().to_path_buf();
-        execute_native(
-            NativeStorageProfile::KnownLocal,
-            NativeOperation::Namespace,
-            move || scratch.create_tree_blocking(),
-        )
-        .await
-        .map_err(|error| {
-            FilesystemStorageError::task_failure("create scratch tree", &error_path, error)
-        })?
-    }
-
-    fn scratch_space(&self) -> Option<&ScratchSpace> {
-        match &self.mode {
-            SandboxFilesystemProvisioningMode::Unmanaged(_) => None,
-            #[cfg(target_os = "linux")]
-            SandboxFilesystemProvisioningMode::Managed(managed) => Some(managed.scratch()),
-        }
-    }
-
     pub(crate) async fn create_fresh(
         &self,
         name: SandboxFilesystemName,
@@ -946,7 +888,6 @@ impl SandboxFilesystem {
         file_copy_mode: FileCopyMode,
         quota_authority: QuotaAuthority,
         name_mode_source: NativeNameModeSource,
-        scratch: Option<ScratchSpace>,
     ) -> Self {
         Self {
             root,
@@ -959,7 +900,6 @@ impl SandboxFilesystem {
             name_mode_source,
             name_mode_probe: NativeNameModeProbe::default(),
             append_coordinators: Arc::new(AppendCoordinatorRegistry::default()),
-            scratch,
         }
     }
 
@@ -1951,43 +1891,6 @@ mod tests {
         SandboxFilesystem::delete_and_verify(&first).await.unwrap();
         let second = second.await.unwrap().unwrap();
         SandboxFilesystem::delete_and_verify(&second).await.unwrap();
-    }
-
-    #[test]
-    async fn unmanaged_storage_has_no_scratch_space_and_refuses_capture() {
-        let parent = tempfile::tempdir().unwrap();
-        let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
-
-        assert!(!provisioning.supports_tree_capture());
-        let error = provisioning.create_scratch_tree().await.unwrap_err();
-        assert!(error.capture_is_unsupported());
-        assert!(!error.allocation_is_unsupported());
-
-        let filesystem = provisioning.create_fresh(name()).await.unwrap();
-        let error = filesystem
-            .capture_tree(Arc::new(TreeExclusions::new([PathBuf::from("file")])))
-            .await
-            .unwrap_err();
-        assert!(error.capture_is_unsupported());
-        assert!(!parent.path().join(scratch::SCRATCH_DIRECTORY_NAME).exists());
-        assert!(
-            !filesystem
-                .root()
-                .join(scratch::SCRATCH_DIRECTORY_NAME)
-                .exists()
-        );
-        assert!(
-            !FilesystemStorageError::allocation_unsupported(Path::new("<other>"))
-                .capture_is_unsupported()
-        );
-        assert!(
-            !FilesystemStorageError::verification("other operation", Path::new("<other>"))
-                .capture_is_unsupported()
-        );
-
-        SandboxFilesystem::delete_and_verify(&filesystem)
-            .await
-            .unwrap();
     }
 
     #[test]

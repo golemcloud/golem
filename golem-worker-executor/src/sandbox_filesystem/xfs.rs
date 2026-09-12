@@ -148,7 +148,6 @@ pub(super) struct ManagedProvisioning {
     filesystem_block_bytes: NonZeroU64,
     validated_name_mode: ValidatedManagedXfsNameMode,
     cleanup_retry: RetryConfig,
-    scratch: ScratchSpace,
 }
 
 impl ManagedProvisioning {
@@ -204,8 +203,6 @@ impl ManagedProvisioning {
                 .expect("validated XFS filesystem type must produce a name-mode proof");
         clear_root_project_assignment(&root_fd, &stable_root)?;
         let root_fd = Arc::new(root_fd);
-        let scratch =
-            ScratchSpace::create(&stable_root, Some(Arc::clone(&root_fd)), cleanup_retry)?;
         let backend = Self {
             volume: FilesystemVolume::managed(Arc::clone(&root_fd), identity),
             root: stable_root,
@@ -218,25 +215,15 @@ impl ManagedProvisioning {
                 .expect("validated XFS filesystem block size must be nonzero"),
             validated_name_mode,
             cleanup_retry: cleanup_retry.clone(),
-            scratch,
         };
         backend.validate_project_quota_state()?;
         backend.validate_project_assignment(cleanup_retry)?;
-        backend.validate_scratch_has_no_project()?;
 
         Ok(backend)
     }
 
     pub(super) fn volume(&self) -> &FilesystemVolume {
         &self.volume
-    }
-
-    pub(super) fn scratch(&self) -> &ScratchSpace {
-        &self.scratch
-    }
-
-    fn validate_scratch_has_no_project(&self) -> Result<(), FilesystemStorageError> {
-        verify_host_directory_has_no_project(self.scratch.root())
     }
 
     pub(super) fn root(&self) -> &Path {
@@ -676,7 +663,7 @@ impl ManagedProvisioning {
 }
 
 // The root must have no project id and no inheritance before anything is created under it,
-// so a directory made at startup, such as the scratch space, belongs to no project.
+// so a host directory made under it belongs to no project.
 fn clear_root_project_assignment(
     root_fd: &File,
     root: &Path,
@@ -1260,7 +1247,6 @@ impl ManagedProvisioning {
                 filesystem_block_bytes: self.filesystem_block_bytes,
             },
             NativeNameModeSource::ValidatedManagedXfs(self.validated_name_mode),
-            Some(self.scratch.clone()),
         ));
         if let Err(error) = assignment_result {
             return Err(match SandboxFilesystem::delete_and_verify(&created).await {
@@ -2054,30 +2040,33 @@ mod tests {
     #[test]
     #[ignore = "requires the privileged managed XFS test runner"]
     #[timeout("120s")]
-    async fn managed_xfs_capture_tree_shares_extents_and_charges_no_agent_quota() {
+    async fn managed_xfs_copy_contents_shares_extents_and_charges_no_agent_quota() {
         use std::os::unix::fs::PermissionsExt;
 
         const FILE_COUNT: usize = 48;
         const FILE_BYTES: usize = 64 * 1024;
 
         let root = managed_test_root();
-        let stale_scratch = root
-            .join(scratch::SCRATCH_DIRECTORY_NAME)
-            .join("stale-tree");
-        std::fs::create_dir_all(&stale_scratch).unwrap();
-        std::fs::write(stale_scratch.join("garbage"), b"stale").unwrap();
+        let stale_copies = root.join(".native-test-copies").join("stale-copy");
+        std::fs::create_dir_all(&stale_copies).unwrap();
+        std::fs::write(stale_copies.join("garbage"), b"stale").unwrap();
         let inherited_project = NonZeroU32::new(0x7fff_0001).unwrap();
         assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
         let provisioning =
             SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
                 .unwrap();
-        assert!(provisioning.supports_tree_capture());
-        let scratch_root = root.join(scratch::SCRATCH_DIRECTORY_NAME);
-        assert!(std::fs::read_dir(&scratch_root).unwrap().next().is_none());
-        let scratch_attributes = get_fsxattr(&File::open(&scratch_root).unwrap()).unwrap();
-        assert_eq!(scratch_attributes.fsx_projid, 0);
+        let copies = HostDirectory::create_at_root(
+            &provisioning,
+            std::ffi::OsStr::new(".native-test-copies"),
+        )
+        .await
+        .unwrap();
+        let copies_root = root.join(".native-test-copies");
+        assert!(std::fs::read_dir(&copies_root).unwrap().next().is_none());
+        let copies_attributes = get_fsxattr(&File::open(&copies_root).unwrap()).unwrap();
+        assert_eq!(copies_attributes.fsx_projid, 0);
         assert_eq!(
-            scratch_attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
+            copies_attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
             0
         );
         let root_attributes = get_fsxattr(&File::open(&root).unwrap()).unwrap();
@@ -2088,14 +2077,9 @@ mod tests {
         );
         let volume_root = volume_root(&provisioning);
         let block_bytes = filesystem_block_bytes(&volume_root);
-        let scratch_space_root = provisioning
-            .scratch_space()
-            .expect("managed provisioning must have a scratch space")
-            .root()
-            .to_path_buf();
 
         let filesystem = provisioning
-            .create_fresh(managed_test_name("native-test-capture"))
+            .create_fresh(managed_test_name("native-test-copy"))
             .await
             .unwrap();
         let project_id = filesystem.project_id_for_test();
@@ -2143,36 +2127,42 @@ mod tests {
             PathBuf::from("static/asset.bin"),
             PathBuf::from("data/nested"),
         ]));
-        let capture =
-            <SandboxFilesystem as SandboxFilesystemAdapter>::capture_tree(&filesystem, excluded)
-                .await
-                .unwrap();
+        let copy = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("copy"))
+            .await
+            .unwrap();
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root(""),
+            excluded,
+            copy.path(),
+        )
+        .await
+        .unwrap();
+        let copy_root = copy.path().as_path().to_path_buf();
 
         let available_after = available_bytes(&provisioning).await;
-        let capture_bytes = available_before.saturating_sub(available_after);
+        let copy_bytes = available_before.saturating_sub(available_after);
         let tree_bytes = (FILE_COUNT * FILE_BYTES) as u64;
         println!(
-            "CAPTURE_METADATA_BYTES={capture_bytes} tree_bytes={tree_bytes} block_bytes={block_bytes}"
+            "COPY_METADATA_BYTES={copy_bytes} tree_bytes={tree_bytes} block_bytes={block_bytes}"
         );
         assert!(
-            capture_bytes <= 32 * block_bytes,
-            "capture consumed {capture_bytes} bytes for a {tree_bytes} byte tree"
+            copy_bytes <= 32 * block_bytes,
+            "the copy consumed {copy_bytes} bytes for a {tree_bytes} byte tree"
         );
         let allocation_after = filesystem.observe_allocation().await.unwrap().unwrap();
         assert_eq!(allocation_after, allocation_before);
 
-        assert_eq!(capture.root().parent(), Some(scratch_space_root.as_path()));
-        let capture_name = capture.root().file_name().unwrap().to_owned();
-        assert!(scratch_root.join(&capture_name).is_dir());
+        assert_eq!(copy_root.parent(), Some(copies_root.as_path()));
         assert_eq!(
-            std::fs::read(capture.root().join("data/file-0")).unwrap(),
+            std::fs::read(copy_root.join("data/file-0")).unwrap(),
             unsynced
         );
         (1..FILE_COUNT).for_each(|index| {
             assert_eq!(
-                std::fs::read(capture.root().join(format!("data/file-{index}"))).unwrap(),
+                std::fs::read(copy_root.join(format!("data/file-{index}"))).unwrap(),
                 vec![index as u8; FILE_BYTES],
-                "data/file-{index} in the capture must have the bytes of the agent file"
+                "data/file-{index} in the copy must have the bytes of the agent file"
             );
         });
         let mut expected = tree_copy::tree_listing(&agent_root);
@@ -2184,9 +2174,9 @@ mod tests {
                     "{absent} must be in the agent tree listing"
                 );
             });
-        assert_eq!(tree_copy::tree_listing(capture.root()), expected);
+        assert_eq!(tree_copy::tree_listing(&copy_root), expected);
         assert_eq!(
-            std::fs::metadata(capture.root().join("config.toml"))
+            std::fs::metadata(copy_root.join("config.toml"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -2194,16 +2184,16 @@ mod tests {
             0o444
         );
         assert_eq!(
-            std::fs::read_link(capture.root().join("link")).unwrap(),
+            std::fs::read_link(copy_root.join("link")).unwrap(),
             PathBuf::from("data/file-0")
         );
         ["data", "data/file-1", "config.toml"]
             .into_iter()
             .for_each(|relative| {
                 assert_eq!(
-                    file_project_id(&File::open(capture.root().join(relative)).unwrap()).unwrap(),
+                    file_project_id(&File::open(copy_root.join(relative)).unwrap()).unwrap(),
                     None,
-                    "{relative} in the capture must belong to no project"
+                    "{relative} in the copy must belong to no project"
                 );
             });
         assert_eq!(
@@ -2211,10 +2201,10 @@ mod tests {
             Some(project_id)
         );
 
-        let capture_root = capture.root().to_path_buf();
-        capture.discard().await.unwrap();
-        assert!(!capture_root.exists());
-        assert!(!scratch_root.join(&capture_name).exists());
+        copy.discard().await.unwrap();
+        assert!(!copy_root.exists());
+        copies.discard().await.unwrap();
+        assert!(!copies_root.exists());
         SandboxFilesystem::delete_and_verify(&filesystem)
             .await
             .unwrap();
@@ -2232,7 +2222,7 @@ mod tests {
     #[test]
     #[ignore = "requires the privileged managed XFS test runner"]
     #[timeout("120s")]
-    async fn managed_xfs_write_after_capture_consumes_one_cow_extent() {
+    async fn managed_xfs_write_after_copy_contents_consumes_one_cow_extent() {
         const FILE_BYTES: usize = 1024 * 1024;
 
         let root = managed_test_root();
@@ -2249,9 +2239,20 @@ mod tests {
             .unwrap();
         let agent_file = filesystem.root().join("db");
         std::fs::write(&agent_file, vec![0x11; FILE_BYTES]).unwrap();
-        let capture = <SandboxFilesystem as SandboxFilesystemAdapter>::capture_tree(
+        let copies = HostDirectory::create_at_root(
+            &provisioning,
+            std::ffi::OsStr::new(".native-test-cow-copies"),
+        )
+        .await
+        .unwrap();
+        let copy = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("copy"))
+            .await
+            .unwrap();
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
             &filesystem,
+            SandboxPath::at_root(""),
             Arc::new(TreeExclusions::default()),
+            copy.path(),
         )
         .await
         .unwrap();
@@ -2283,7 +2284,7 @@ mod tests {
             "a {block_bytes} byte write into a shared extent must consume one copy-on-write extent"
         );
         // The agent project gains at most the new extent. The overwritten block stays allocated
-        // because the capture still maps it.
+        // because the copy still maps it.
         assert!(
             charged > 0 && charged <= cow_extent_size,
             "the agent project must pay for the copy-on-write extent and nothing more: charged={charged}"
@@ -2297,11 +2298,12 @@ mod tests {
             &written[..]
         );
         assert_eq!(
-            std::fs::read(capture.root().join("db")).unwrap(),
+            std::fs::read(copy.path().as_path().join("db")).unwrap(),
             vec![0x11; FILE_BYTES]
         );
 
-        capture.discard().await.unwrap();
+        copy.discard().await.unwrap();
+        copies.discard().await.unwrap();
         SandboxFilesystem::delete_and_verify(&filesystem)
             .await
             .unwrap();

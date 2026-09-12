@@ -191,25 +191,55 @@ fn tree_entry(
     })
 }
 
-/// Copies the tree under `source`, minus `excluded`, into the empty host directory `destination`.
+/// Copies what is under `source` in `base`, minus `excluded`, into the empty host directory
+/// `destination`.
 ///
-/// Directories and symlinks are made again. Permissions and modification times are copied. Each
-/// regular file is transferred with `copy_mode`.
-pub(super) fn capture(
-    source: &cap_std::fs::Dir,
-    destination: &Path,
+/// An empty `source` names `base`. The paths in `excluded` are relative to `source`.
+/// `destination` must be an empty directory and not a symlink: a missing path gives a `NotFound`
+/// error, another kind of object gives a `NotADirectory` error, and a directory with an entry
+/// gives a `DirectoryNotEmpty` error. Directories and symlinks are made again. Permissions and
+/// modification times are copied. Each regular file is transferred with `copy_mode`.
+pub(super) fn copy_contents(
+    base: &cap_std::fs::Dir,
+    source: &Path,
     excluded: &TreeExclusions,
+    destination: &Path,
     copy_mode: FileCopyMode,
 ) -> std::io::Result<()> {
+    verify_empty_directory(destination)?;
+    let opened;
+    let source = if source.as_os_str().is_empty() {
+        base
+    } else {
+        opened = base.open_dir_nofollow(source)?;
+        &opened
+    };
     let entries = list_tree(source, excluded)?;
     entries
         .iter()
-        .try_for_each(|entry| capture_entry(source, destination, entry, copy_mode))?;
+        .try_for_each(|entry| copy_out_entry(source, destination, entry, copy_mode))?;
     entries
         .iter()
         .rev()
         .filter(|entry| entry.kind == TreeEntryKind::Directory)
-        .try_for_each(|entry| set_captured_directory_attributes(destination, entry))
+        .try_for_each(|entry| set_copied_directory_attributes(destination, entry))
+}
+
+/// Checks that `path` is an empty directory and not a symlink.
+fn verify_empty_directory(path: &Path) -> std::io::Result<()> {
+    if !std::fs::symlink_metadata(path)?.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            "copy target is not a directory",
+        ));
+    }
+    if std::fs::read_dir(path)?.next().is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::DirectoryNotEmpty,
+            "copy target is not empty",
+        ));
+    }
+    Ok(())
 }
 
 /// Makes one listed entry again under the host directory `destination`.
@@ -217,7 +247,7 @@ pub(super) fn capture(
 /// For a directory entry, this function makes an empty directory. A regular file is transferred
 /// with `copy_mode` and gets the permissions and the modification time of the entry. A symlink is
 /// made with the same target and gets the modification time of the entry.
-fn capture_entry(
+fn copy_out_entry(
     source: &cap_std::fs::Dir,
     destination: &Path,
     entry: &TreeEntry,
@@ -227,9 +257,7 @@ fn capture_entry(
     match &entry.kind {
         TreeEntryKind::Directory => std::fs::create_dir(&target),
         TreeEntryKind::File => {
-            let mut options = cap_std::fs::OpenOptions::new();
-            options.read(true).follow(FollowSymlinks::No);
-            let source_file = source.open_with(&entry.relative, &options)?.into_std();
+            let source_file = open_file_nofollow(source, &entry.relative)?;
             let target_file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -257,7 +285,7 @@ fn capture_entry(
 
 /// Gives a directory under the host directory `destination` the permissions and the modification
 /// time of its listed entry.
-fn set_captured_directory_attributes(destination: &Path, entry: &TreeEntry) -> std::io::Result<()> {
+fn set_copied_directory_attributes(destination: &Path, entry: &TreeEntry) -> std::io::Result<()> {
     let directory = File::open(destination.join(&entry.relative))?;
     directory.set_permissions(host_permissions(&entry.permissions, &directory)?)?;
     if let Some(modified) = entry.modified {
@@ -909,10 +937,11 @@ mod tests {
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("pipe"), "{error}");
-        let error = capture(
+        let error = copy_contents(
             &open(source.path()),
-            destination.path(),
+            Path::new(""),
             &TreeExclusions::default(),
+            destination.path(),
             FileCopyMode::Buffered,
         )
         .unwrap_err();
@@ -946,15 +975,16 @@ mod tests {
     }
 
     #[test]
-    fn capture_copies_everything_except_the_exclusions() {
+    fn copy_contents_copies_everything_except_the_exclusions() {
         let source = tempfile::tempdir().unwrap();
         fixture_tree(source.path());
         let destination = tempfile::tempdir().unwrap();
 
-        capture(
+        copy_contents(
             &open(source.path()),
-            destination.path(),
+            Path::new(""),
             &exclusions(&["static/asset.bin", "data/nested"]),
+            destination.path(),
             FileCopyMode::Buffered,
         )
         .unwrap();

@@ -780,9 +780,9 @@ pub(crate) trait SandboxFilesystemAllocationReader: Clone + Send + Sync + 'stati
 /// [`SandboxFile`], [`SandboxDirectory`], or [`SandboxNode`] operate on a handle returned by `open` and
 /// remain valid after its path is renamed or unlinked.
 ///
-/// No path operation provides ambient access to the executor node. [`Self::seed`] is the sole
-/// asymmetric operation: its sources are host paths, while its targets stay confined to this
-/// filesystem.
+/// No path operation provides ambient access to the executor node. [`Self::seed`] and
+/// [`Self::copy_contents`] are the asymmetric operations: seed reads host paths and copy_contents
+/// writes into a host path, while sandbox paths stay confined to this filesystem.
 pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// Backend-specific configuration consumed when a fresh filesystem is created.
     type Provisioning: Send + 'static;
@@ -991,20 +991,23 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
         limits: FilesystemLimits,
     ) -> impl Future<Output = Result<InstalledLimits, FilesystemStorageError>> + Send;
 
-    /// Makes a stable copy of the tree in a new scratch tree. The copy does not include the
-    /// root-relative paths in `excluded`.
+    /// Takes a stable copy of the contents under `source` out of this sandbox into `target`,
+    /// minus the paths in `excluded`. The opposite of seed.
     ///
-    /// The exclusion set is applied and nothing else. An excluded directory is absent together
-    /// with its contents. Directories and symlinks are made again. Permissions and modification
-    /// times are copied. On managed XFS each file is one reflink, so the cost follows the number of
-    /// files, not the bytes, and the copy adds nothing to the quota of this filesystem. Storage
-    /// without reflink gives an error for which [`FilesystemStorageError::capture_is_unsupported`]
-    /// is true.
+    /// `target` must be an empty directory, or the call fails. The caller decides what to leave
+    /// out. The sandbox applies the set and nothing else. The set is shared and already
+    /// normalized, so a copy does no work per excluded path before the walk. Directories and
+    /// symlinks are made again. Permissions and modification times are copied. On managed XFS
+    /// each file is one reflink: the cost follows the number of files, not the bytes, and the
+    /// copy adds nothing to any quota, because a HostPath is outside every agent project. On
+    /// unmanaged storage each file is copied.
     #[allow(dead_code)]
-    fn capture_tree(
+    fn copy_contents(
         &self,
+        source: SandboxPath,
         excluded: Arc<TreeExclusions>,
-    ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send;
+        target: &HostPath,
+    ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send;
 
     /// Consumes exclusive ownership, deletes the runtime filesystem, and verifies its absence.
     fn delete_and_verify(self) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send
@@ -1743,32 +1746,35 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         SandboxFilesystem::install_limits(self, limits)
     }
 
-    fn capture_tree(
+    fn copy_contents(
         &self,
+        source: SandboxPath,
         excluded: Arc<TreeExclusions>,
-    ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send {
-        let operation_path = self.root().to_path_buf();
-        let scratch = self.scratch.clone();
+        target: &HostPath,
+    ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
+        let operation_path = source.operation_path(self.root());
         let root_directory = self.root_directory_state();
         let copy_mode = self.file_copy_mode;
         let storage_profile = self.storage_profile();
+        let target = target.clone();
         async move {
-            let Some(scratch) = scratch else {
-                return Err(FilesystemStorageError::capture_unsupported(&operation_path));
-            };
             execute_native(storage_profile, NativeOperation::TreeCopy, move || {
-                let source = directory_for(&root_directory, &SandboxPath::at_root(""))?;
-                let tree = scratch
-                    .create_tree_blocking()
-                    .map_err(std::io::Error::other)?;
-                tree_copy::capture(&source, tree.root(), &excluded, copy_mode)?;
-                Ok(tree)
+                let base = directory_for(&root_directory, &source)?;
+                tree_copy::copy_contents(
+                    &base,
+                    &source.path,
+                    &excluded,
+                    target.as_path(),
+                    copy_mode,
+                )
             })
             .await
-            .map_err(|error| task_error("capture sandbox filesystem tree", &operation_path, error))?
-            .map_err(|error: std::io::Error| {
+            .map_err(|error| {
+                task_error("copy sandbox filesystem contents", &operation_path, error)
+            })?
+            .map_err(|error| {
                 FilesystemStorageError::io(
-                    "capture sandbox filesystem tree",
+                    "copy sandbox filesystem contents",
                     &operation_path,
                     error,
                 )
@@ -2317,8 +2323,7 @@ mod scripted {
         seed: VecDeque<Result<(), FilesystemStorageError>>,
         observe_allocation: VecDeque<Result<FilesystemAllocation, FilesystemStorageError>>,
         install_limits: VecDeque<Result<InstalledLimits, FilesystemStorageError>>,
-        capture_tree: VecDeque<Result<ScratchTree, FilesystemStorageError>>,
-        create_scratch_tree: VecDeque<Result<ScratchTree, FilesystemStorageError>>,
+        copy_contents: VecDeque<Result<(), FilesystemStorageError>>,
         delete_and_verify: VecDeque<Result<(), FilesystemStorageError>>,
     }
 
@@ -2341,17 +2346,6 @@ mod scripted {
                     state: Arc::clone(&state),
                 },
                 ScriptedSandboxFilesystemControl { state },
-            )
-        }
-
-        pub(crate) fn create_scratch_tree(
-            &self,
-        ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send + use<>
-        {
-            scripted_outcome(
-                Arc::clone(&self.state),
-                "create_scratch_tree()".to_string(),
-                |state| &mut state.create_scratch_tree,
             )
         }
     }
@@ -2540,18 +2534,8 @@ mod scripted {
             self.state().install_limits.push_back(outcome);
         }
 
-        pub(crate) fn push_capture_tree(
-            &self,
-            outcome: Result<ScratchTree, FilesystemStorageError>,
-        ) {
-            self.state().capture_tree.push_back(outcome);
-        }
-
-        pub(crate) fn push_create_scratch_tree(
-            &self,
-            outcome: Result<ScratchTree, FilesystemStorageError>,
-        ) {
-            self.state().create_scratch_tree.push_back(outcome);
+        pub(crate) fn push_copy_contents(&self, outcome: Result<(), FilesystemStorageError>) {
+            self.state().copy_contents.push_back(outcome);
         }
 
         pub(crate) fn push_delete_and_verify(&self, outcome: Result<(), FilesystemStorageError>) {
@@ -2934,19 +2918,25 @@ mod scripted {
             })
         }
 
-        fn capture_tree(
+        fn copy_contents(
             &self,
+            source: SandboxPath,
             excluded: Arc<TreeExclusions>,
-        ) -> impl Future<Output = Result<ScratchTree, FilesystemStorageError>> + Send {
+            target: &HostPath,
+        ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
             let mut excluded = excluded
                 .paths()
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>();
             excluded.sort();
-            self.outcome(format!("capture_tree(excluded={excluded:?})"), |state| {
-                &mut state.capture_tree
-            })
+            self.outcome(
+                format!(
+                    "copy_contents(source={source:?}, excluded={excluded:?}, target={})",
+                    target.as_path().display()
+                ),
+                |state| &mut state.copy_contents,
+            )
         }
 
         fn delete_and_verify(
@@ -3258,7 +3248,6 @@ mod tests {
             NativeNameModeSource::ValidatedManagedXfs(
                 xfs::validated_managed_xfs_name_mode_for_test(device),
             ),
-            None,
         )
     }
 
@@ -3839,65 +3828,201 @@ mod tests {
     }
 
     #[test]
-    async fn scripted_adapter_programs_tree_operations_with_gates() {
-        let scratch_parent = tempfile::tempdir().unwrap();
-        let scratch =
-            ScratchSpace::create(scratch_parent.path(), None, &RetryConfig::default()).unwrap();
+    async fn scripted_adapter_programs_copy_contents_with_gates() {
+        let parent = tempfile::tempdir().unwrap();
+        let copies = host_directory_at(parent.path(), ".copies").await;
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
-        let created = scratch.create_tree_blocking().unwrap();
-        let created_root = created.root().to_path_buf();
-        control.push_create_scratch_tree(Ok(created));
-        let captured = scratch.create_tree_blocking().unwrap();
-        let captured_root = captured.root().to_path_buf();
-        control.push_capture_tree(Ok(captured));
-        control.push_capture_tree(Err(FilesystemStorageError::capture_unsupported(Path::new(
-            "<scripted-test>",
-        ))));
-        let scratch_tree = provisioning.create_scratch_tree().await.unwrap();
-        assert_eq!(scratch_tree.root(), created_root);
+        control.push_copy_contents(Ok(()));
+        control.push_copy_contents(Err(scripted_error("programmed copy failure")));
         let filesystem = create_scripted(provisioning).await;
-
-        let gate = control.block("capture_tree");
+        let target = host_child(&copies, "copy");
         let excluded = Arc::new(TreeExclusions::new([
             PathBuf::from("lib/b.txt"),
             PathBuf::from("a.txt"),
         ]));
-        let capture = tokio::spawn({
+
+        let gate = control.block("copy_contents");
+        let copying = tokio::spawn({
             let filesystem = filesystem.clone();
-            async move { filesystem.capture_tree(excluded).await }
+            let excluded = Arc::clone(&excluded);
+            let target = target.clone();
+            async move {
+                filesystem
+                    .copy_contents(SandboxPath::at_root("data"), excluded, &target)
+                    .await
+            }
         });
         gate.wait_started().await;
-        assert!(!capture.is_finished());
+        assert!(!copying.is_finished());
         gate.release();
         gate.wait_completed().await;
-        let capture = capture.await.unwrap().unwrap();
-        assert_eq!(capture.root(), captured_root);
-        let unsupported = filesystem
-            .capture_tree(Arc::new(TreeExclusions::default()))
+        copying.await.unwrap().unwrap();
+        let failed = filesystem
+            .copy_contents(
+                SandboxPath::at_root(""),
+                Arc::new(TreeExclusions::default()),
+                &target,
+            )
             .await
             .unwrap_err();
-        assert!(unsupported.capture_is_unsupported());
-
         let unprogrammed = filesystem
-            .capture_tree(Arc::new(TreeExclusions::default()))
+            .copy_contents(SandboxPath::at_root(""), excluded, &target)
             .await
             .unwrap_err();
+
+        assert_eq!(
+            failed.to_string(),
+            "failed to programmed copy failure filesystem <scripted-test>"
+        );
         assert_eq!(
             unprogrammed.to_string(),
             "failed to consume programmed scripted sandbox filesystem outcome filesystem <scripted-sandbox-filesystem>"
         );
-        drop(scratch_tree);
-
+        let target_path = target.as_path().display();
         assert_eq!(
             control.calls(),
             vec![
-                "create_scratch_tree()".to_string(),
                 "create_fresh(name=environment/component/filesystem, limits=None)".to_string(),
-                "capture_tree(excluded=[\"a.txt\", \"lib/b.txt\"])".to_string(),
-                "capture_tree(excluded=[])".to_string(),
-                "capture_tree(excluded=[])".to_string(),
+                format!(
+                    "copy_contents(source=SandboxPath {{ base: Root, path: \"data\" }}, excluded=[\"a.txt\", \"lib/b.txt\"], target={target_path})"
+                ),
+                format!(
+                    "copy_contents(source=SandboxPath {{ base: Root, path: \"\" }}, excluded=[], target={target_path})"
+                ),
+                format!(
+                    "copy_contents(source=SandboxPath {{ base: Root, path: \"\" }}, excluded=[\"a.txt\", \"lib/b.txt\"], target={target_path})"
+                ),
             ]
         );
+    }
+
+    #[test]
+    async fn copy_contents_copies_what_is_under_the_source_minus_the_exclusions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let copies = host_directory_at(parent.path(), ".copies").await;
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        let root = filesystem.root().to_path_buf();
+        std::fs::create_dir_all(root.join("data/nested")).unwrap();
+        std::fs::write(root.join("data/nested/note"), b"note").unwrap();
+        std::fs::write(root.join("data/db"), b"db").unwrap();
+        std::fs::write(root.join("static.bin"), b"static").unwrap();
+        std::fs::set_permissions(root.join("data/db"), std::fs::Permissions::from_mode(0o640))
+            .unwrap();
+        std::os::unix::fs::symlink("data/db", root.join("link")).unwrap();
+        let whole = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("whole"))
+            .await
+            .unwrap();
+        let part = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("part"))
+            .await
+            .unwrap();
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root(""),
+            Arc::new(TreeExclusions::new([
+                PathBuf::from("static.bin"),
+                PathBuf::from("data/nested"),
+            ])),
+            whole.path(),
+        )
+        .await
+        .unwrap();
+        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root("data"),
+            Arc::new(TreeExclusions::new([PathBuf::from("db")])),
+            part.path(),
+        )
+        .await
+        .unwrap();
+
+        let whole_root = whole.path().as_path();
+        assert_eq!(
+            tree_copy::tree_listing(whole_root),
+            std::collections::BTreeSet::from(["data", "data/db", "link"].map(String::from))
+        );
+        assert_eq!(std::fs::read(whole_root.join("data/db")).unwrap(), b"db");
+        assert_eq!(mode(&whole_root.join("data/db")), 0o640);
+        assert_eq!(
+            std::fs::read_link(whole_root.join("link")).unwrap(),
+            PathBuf::from("data/db")
+        );
+        assert_eq!(
+            tree_copy::tree_listing(part.path().as_path()),
+            std::collections::BTreeSet::from(["nested", "nested/note"].map(String::from))
+        );
+        assert_eq!(
+            std::fs::read(root.join("static.bin")).unwrap(),
+            b"static",
+            "the sandbox must stay as it is"
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    async fn copy_contents_refuses_a_target_that_is_not_an_empty_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let copies = host_directory_at(parent.path(), ".copies").await;
+        let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
+            .create_fresh(name())
+            .await
+            .unwrap();
+        std::fs::write(filesystem.root().join("file"), b"file").unwrap();
+        let copies_root = copies.path().as_path().to_path_buf();
+        std::fs::create_dir(copies_root.join("full")).unwrap();
+        std::fs::write(copies_root.join("full/kept"), b"kept").unwrap();
+        std::fs::write(copies_root.join("plain-file"), b"plain").unwrap();
+        std::fs::create_dir(copies_root.join("real")).unwrap();
+        std::os::unix::fs::symlink("real", copies_root.join("alias")).unwrap();
+
+        let results = futures::future::join_all(
+            [
+                ("full", std::io::ErrorKind::DirectoryNotEmpty),
+                ("absent", std::io::ErrorKind::NotFound),
+                ("plain-file", std::io::ErrorKind::NotADirectory),
+                ("alias", std::io::ErrorKind::NotADirectory),
+            ]
+            .into_iter()
+            .map(|(name, expected)| {
+                let target = host_child(&copies, name);
+                let filesystem = &filesystem;
+                async move {
+                    let result = <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+                        filesystem,
+                        SandboxPath::at_root(""),
+                        Arc::new(TreeExclusions::default()),
+                        &target,
+                    )
+                    .await;
+                    (name, expected, result)
+                }
+            }),
+        )
+        .await;
+
+        results.into_iter().for_each(|(name, expected, result)| {
+            assert_eq!(
+                result.unwrap_err().io_kind(),
+                Some(expected),
+                "a copy into {name} must be refused"
+            );
+        });
+        assert_eq!(
+            tree_copy::tree_listing(&copies_root),
+            std::collections::BTreeSet::from(
+                ["alias", "full", "full/kept", "plain-file", "real"].map(String::from)
+            )
+        );
+        SandboxFilesystem::delete_and_verify(&filesystem)
+            .await
+            .unwrap();
     }
 
     #[test]
