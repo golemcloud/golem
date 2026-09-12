@@ -35,8 +35,8 @@ pub enum ProducerMetadataKey {
     AttachmentPage(u64),
     AttachmentPosition(AttachmentId, StreamId, EnvironmentId, AgentId),
     Position(StreamId, OplogIndex),
-    ExternalProducerHead(StreamSessionKeyV1, StreamId, String),
-    ExternalProducerSequence(StreamSessionKeyV1, StreamId, String, u64, u64),
+    ExternalProducerHead(StreamSessionKeyV1, StreamId, ExternalProducerIdV1),
+    ExternalProducerSequence(StreamSessionKeyV1, StreamId, ExternalProducerIdV1, u64, u64),
 }
 
 impl ProducerMetadataKey {
@@ -1008,6 +1008,38 @@ impl DurableStreamProducer {
                 ProducerMetadataKey::Position(stream, offset) => {
                     index.batch_positions.contains_key(&(*stream, *offset))
                 }
+                ProducerMetadataKey::ExternalProducerSequence(
+                    session,
+                    stream,
+                    producer,
+                    epoch,
+                    sequence,
+                ) => {
+                    index.external_producer_offsets.contains_key(&(
+                        session.clone(),
+                        *stream,
+                        producer.clone(),
+                        *epoch,
+                        *sequence,
+                    )) || index
+                        .external_producer_heads
+                        .get(&(session.clone(), *stream, producer.clone()))
+                        .is_some_and(|head| {
+                            *epoch > head.epoch
+                                || *epoch == head.epoch && *sequence >= head.next_sequence
+                        })
+                        || index.loaded_metadata.contains(
+                            &ProducerMetadataKey::ExternalProducerHead(
+                                session.clone(),
+                                *stream,
+                                producer.clone(),
+                            ),
+                        ) && !index.external_producer_heads.contains_key(&(
+                            session.clone(),
+                            *stream,
+                            producer.clone(),
+                        ))
+                }
                 _ => false,
             }
     }
@@ -1172,6 +1204,17 @@ impl DurableStreamProducer {
                         .get(coordinate)
                         .copied()
                         .map(ProducerMetadataKey::Stream),
+                    ProducerMetadataKey::ExternalProducerSequence(
+                        session,
+                        stream,
+                        producer,
+                        _,
+                        _,
+                    ) => Some(ProducerMetadataKey::ExternalProducerHead(
+                        session.clone(),
+                        *stream,
+                        producer.clone(),
+                    )),
                     _ => None,
                 };
                 if let Some(dependency) = dependency
@@ -1946,7 +1989,7 @@ mod tests {
             .unwrap()
             .value;
         let request = ExternalProducerV1 {
-            id: "indexed".into(),
+            id: ExternalProducerIdV1::Client("indexed".into()),
             epoch: 3,
             sequence: 0,
         };
@@ -1977,8 +2020,158 @@ mod tests {
             )
             .await
             .unwrap(),
-            ExternalAppendOutcomeV1::Duplicate(offset)
+            ExternalAppendOutcomeV1::Duplicate {
+                offset,
+                highest_sequence: Some(0),
+            }
         );
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn attached_transport_sequences_survive_indexed_cold_load_with_http_interleaving() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(fixture.input_registration(97))
+            .await
+            .unwrap()
+            .value;
+        let first = producer
+            .write_attached_items_with_nested(
+                &fixture.identity.invocation,
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![10, 11]),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.value.len(), 2);
+        assert!(matches!(
+            producer
+                .append_external_input(
+                    &fixture.identity.invocation,
+                    handle.stream_id,
+                    Some(StreamItemsPayloadV1::Values(vec![
+                        vec![20],
+                        vec![30],
+                        vec![31],
+                    ])),
+                    false,
+                    None,
+                )
+                .await
+                .unwrap(),
+            ExternalAppendOutcomeV1::Accepted(_)
+        ));
+        let nested = registration(
+            &fixture.identity,
+            StreamRegistrationCoordinateV1::Nested {
+                parent_stream_id: handle.stream_id,
+                parent_producer_sequence: 2,
+                recursive_value_path: vec![
+                    golem_common::model::durable_stream::StreamValuePathStepV1::TupleElement(0),
+                ],
+            },
+            StreamSourceKindV1::Nested,
+        );
+        let payload = StreamItemsPayloadV1::Values(vec![vec![40]]);
+        let reads = fixture.indexed.reads();
+        assert_eq!(
+            producer
+                .attached_global_sequence(&fixture.identity.invocation, handle.stream_id, 2)
+                .await
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            fixture.indexed.reads(),
+            reads,
+            "a hot attached sequence lookup must not project an absent sequence from storage"
+        );
+        let fresh = producer
+            .write_attached_items_with_nested(
+                &fixture.identity.invocation,
+                handle.stream_id,
+                2,
+                payload.clone(),
+                vec![nested.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(!fresh.replayed);
+        assert_eq!(
+            producer
+                .attached_global_sequence(&fixture.identity.invocation, handle.stream_id, 2)
+                .await
+                .unwrap(),
+            5
+        );
+        fixture.persist().await;
+        drop(producer);
+
+        let cold = fixture.producer().await;
+        let retry = cold
+            .write_attached_items_with_nested(
+                &fixture.identity.invocation,
+                handle.stream_id,
+                2,
+                payload.clone(),
+                vec![nested.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(retry.replayed);
+        assert_eq!(retry.value, fresh.value);
+        assert_eq!(
+            cold.attached_global_sequence(&fixture.identity.invocation, handle.stream_id, 2)
+                .await
+                .unwrap(),
+            5
+        );
+        let high_water = cold
+            .attached_input_high_water(&fixture.identity.invocation, handle.stream_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(high_water.highest_contiguous_sequence, 2);
+        assert!(!high_water.terminal);
+
+        *cold.index.lock().await = ProducerStreamIndex::default();
+        fixture.indexed.reset();
+        let rehydrated = cold
+            .write_attached_items_with_nested(
+                &fixture.identity.invocation,
+                handle.stream_id,
+                2,
+                payload,
+                vec![nested],
+            )
+            .await
+            .unwrap();
+        assert!(rehydrated.replayed);
+        assert_eq!(rehydrated.value, fresh.value);
+        cold.append_external_input(
+            &fixture.identity.invocation,
+            handle.stream_id,
+            None,
+            true,
+            Some(ExternalProducerV1 {
+                id: ExternalProducerIdV1::Attached,
+                epoch: 0,
+                sequence: 3,
+            }),
+        )
+        .await
+        .unwrap();
+        let high_water = cold
+            .attached_input_high_water(&fixture.identity.invocation, handle.stream_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(high_water.highest_contiguous_sequence, 3);
+        assert!(high_water.terminal);
     }
 
     #[test]

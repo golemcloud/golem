@@ -17,6 +17,12 @@ pub struct EchoOutput {
     pub output: AgentStream<String>,
 }
 
+#[derive(IntoSchema, FromSchema)]
+pub struct FramedRecord {
+    pub name: String,
+    pub number: u32,
+}
+
 #[agent_definition(mount = "/durable-stream-agents/{id}")]
 pub trait DurableStreamAgent {
     fn new(id: String) -> Self;
@@ -32,6 +38,15 @@ pub trait DurableStreamAgent {
 
     #[endpoint(put = "/echo")]
     fn echo(&self, input: AgentStream<String>) -> EchoOutput;
+
+    #[endpoint(put = "/echo-bytes")]
+    fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
+
+    #[endpoint(put = "/echo-records")]
+    fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord>;
+
+    #[endpoint(put = "/prefixed")]
+    fn prefixed(&self, input: AgentStream<String>, prefix: String) -> AgentStream<String>;
 
     #[endpoint(put = "/cancellation-output/{count}?delay_ms={delay_ms}")]
     fn cancellation_output(&self, count: u32, delay_ms: u64) -> AgentStream<String>;
@@ -127,6 +142,18 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
         EchoOutput { output }
     }
 
+    fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8> {
+        copy_stream(input, |value| value)
+    }
+
+    fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord> {
+        copy_stream(input, |value| value)
+    }
+
+    fn prefixed(&self, input: AgentStream<String>, prefix: String) -> AgentStream<String> {
+        copy_stream(input, move |value| format!("{prefix}{value}"))
+    }
+
     fn cancellation_output(&self, count: u32, delay_ms: u64) -> AgentStream<String> {
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
@@ -216,6 +243,22 @@ fn stream_with_delay<T: IntoSchema + FromSchema + 'static>(
         }
     });
     stream
+}
+
+fn copy_stream<T, U>(mut input: AgentStream<T>, map: impl Fn(T) -> U + 'static) -> AgentStream<U>
+where
+    T: IntoSchema + FromSchema + 'static,
+    U: IntoSchema + FromSchema + 'static,
+{
+    let (mut writer, output) = AgentStream::new();
+    spawn_local(async move {
+        while let Ok(Some(value)) = input.next().await {
+            if writer.write_one(map(value)).await.is_err() {
+                break;
+            }
+        }
+    });
+    output
 }
 
 #[agent_definition(ephemeral, mount = "/ephemeral-stream-agents")]

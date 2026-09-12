@@ -31,8 +31,8 @@ use futures::FutureExt;
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::durable_stream::{
     AttachedStreamSegmentRequestV1, AttachmentId, DEFAULT_LIVE_JOIN_BUFFER_SIZE,
-    DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1, InputStreamHighWaterV1,
-    MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
+    DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1, ExternalProducerIdV1,
+    InputStreamHighWaterV1, MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
     MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
     MAX_STREAM_VALUE_TRAVERSAL_DEPTH, STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRoleV1,
     StreamAttachmentActivatedRecordV1, StreamAttachmentControlOperationV1,
@@ -185,7 +185,7 @@ pub(crate) struct StreamHandleReadResultV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ExternalProducerV1 {
-    pub(crate) id: String,
+    pub(crate) id: ExternalProducerIdV1,
     pub(crate) epoch: u64,
     pub(crate) sequence: u64,
 }
@@ -193,9 +193,15 @@ pub(crate) struct ExternalProducerV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ExternalAppendOutcomeV1 {
     Accepted(StreamOffsetV1),
-    Duplicate(StreamOffsetV1),
+    Duplicate {
+        offset: StreamOffsetV1,
+        highest_sequence: Option<u64>,
+    },
     EpochFenced(u64),
-    SeqGap { expected: u64, received: u64 },
+    SeqGap {
+        expected: u64,
+        received: u64,
+    },
     Closed,
     NotFound,
 }
@@ -208,6 +214,7 @@ pub(crate) enum DurableStreamProducerError {
     UnknownStream(StreamId),
     AlreadyTerminal(StreamId),
     FencedByTerminal(CommittedProducerStreamEventPayloadV1),
+    ClosedByOtherProducer,
     EventConflict,
     SequenceGap { expected: u64, actual: u64 },
     CounterOverflow,
@@ -310,9 +317,9 @@ struct ProducerStreamIndex {
     cascade_outbox: HashMap<StreamAttachmentKeyV1, StreamCascadeDependentResultV1>,
     consumer_journals: HashMap<(StreamSessionKeyV1, StreamId), IndexedConsumerJournal>,
     external_producer_heads:
-        HashMap<(StreamSessionKeyV1, StreamId, String), IndexedExternalProducer>,
+        HashMap<(StreamSessionKeyV1, StreamId, ExternalProducerIdV1), IndexedExternalProducer>,
     external_producer_offsets:
-        HashMap<(StreamSessionKeyV1, StreamId, String, u64, u64), StreamOffsetV1>,
+        HashMap<(StreamSessionKeyV1, StreamId, ExternalProducerIdV1, u64, u64), StreamOffsetV1>,
     open_streams: usize,
     deleting: bool,
     consumer_deleting: bool,
@@ -404,6 +411,7 @@ struct IndexedProducerStream {
 pub struct IndexedExternalProducer {
     epoch: u64,
     last_sequence: u64,
+    next_sequence: u64,
     last_offset: StreamOffsetV1,
 }
 
@@ -439,6 +447,7 @@ impl ProducerStreamIndex {
             IndexedExternalProducer {
                 epoch: record.epoch,
                 last_sequence: record.sequence,
+                next_sequence: record.next_sequence,
                 last_offset: record.resulting_offset,
             },
         );
@@ -4352,6 +4361,56 @@ impl DurableStreamProducer {
         }))
     }
 
+    pub(crate) async fn attached_input_high_water(
+        &self,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+    ) -> Result<Option<InputStreamHighWaterV1>, DurableStreamProducerError> {
+        let index = self
+            .index_for_terminal(
+                [
+                    ProducerMetadataKey::Stream(stream_id),
+                    ProducerMetadataKey::ExternalProducerHead(
+                        session_key.clone(),
+                        stream_id,
+                        ExternalProducerIdV1::Attached,
+                    ),
+                ],
+                stream_id,
+            )
+            .await?;
+        let stream = index
+            .streams
+            .get(&stream_id)
+            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+        let head = index.external_producer_heads.get(&(
+            session_key.clone(),
+            stream_id,
+            ExternalProducerIdV1::Attached,
+        ));
+        let next_sequence = head.map_or(0, |head| head.next_sequence);
+        if next_sequence == 0 && !stream.terminal {
+            return Ok(None);
+        }
+        let resulting_offset = stream.last_offset.ok_or_else(|| {
+            DurableStreamProducerError::CorruptHistory(
+                "terminal attached input has no resulting offset".into(),
+            )
+        })?;
+        Ok(Some(InputStreamHighWaterV1 {
+            highest_contiguous_sequence: if stream.terminal
+                && head.is_none_or(|head| head.last_offset != resulting_offset)
+            {
+                next_sequence
+            } else {
+                next_sequence.saturating_sub(1)
+            },
+            resulting_offset,
+            terminal: stream.terminal,
+        }))
+    }
+
+    #[cfg(test)]
     pub(crate) async fn write_items_with_nested(
         &self,
         stream_id: StreamId,
@@ -4427,10 +4486,196 @@ impl DurableStreamProducer {
                     payload,
                     nested_sources,
                     traversal_depth,
+                    None,
+                    None,
                 )
                 .await
         })
         .await
+    }
+
+    pub(crate) async fn write_attached_items_with_nested(
+        self: &Arc<Self>,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+        transport_first_sequence: u64,
+        payload: StreamItemsPayloadV1,
+        nested: Vec<ProducerRegistrationRequestV1>,
+    ) -> Result<ProducerWriteOutcomeV1<Vec<StreamOffsetV1>>, DurableStreamProducerError> {
+        let memory = Self::retained_payload_bytes(&payload)?;
+        let _transport_next_sequence = transport_first_sequence
+            .checked_add(payload.logical_item_count() as u64)
+            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+        let session_key = session_key.clone();
+        self.run_owned(memory, move |owner| async move {
+            let id = ExternalProducerIdV1::Attached;
+            let index = owner
+                .index_for_terminal(
+                    [
+                        ProducerMetadataKey::Stream(stream_id),
+                        ProducerMetadataKey::ExternalProducerHead(
+                            session_key.clone(),
+                            stream_id,
+                            id.clone(),
+                        ),
+                        ProducerMetadataKey::ExternalProducerSequence(
+                            session_key.clone(),
+                            stream_id,
+                            id.clone(),
+                            0,
+                            transport_first_sequence,
+                        ),
+                    ],
+                    stream_id,
+                )
+                .await?;
+            let identity = (session_key.clone(), stream_id, id.clone());
+            let stream = index
+                .streams
+                .get(&stream_id)
+                .ok_or(DurableStreamProducerError::UnknownStream(stream_id))?;
+            let (global_first_sequence, index) =
+                if let Some(head) = index.external_producer_heads.get(&identity) {
+                    if transport_first_sequence < head.next_sequence {
+                        let offset = index
+                            .external_producer_offsets
+                            .get(&(
+                                identity.0,
+                                identity.1,
+                                identity.2,
+                                0,
+                                transport_first_sequence,
+                            ))
+                            .copied()
+                            .ok_or_else(|| {
+                                DurableStreamProducerError::CorruptHistory(
+                                    "attached producer sequence has no original offset".into(),
+                                )
+                            })?;
+                        if stream.terminal && stream.last_offset == Some(offset) {
+                            return Err(DurableStreamProducerError::EventConflict);
+                        }
+                        drop(index);
+                        let sequence = owner
+                            .read_item_batch(offset.producer_oplog_index())
+                            .await?
+                            .first_sequence;
+                        (sequence, None)
+                    } else {
+                        if stream.terminal {
+                            return Err(if Some(head.last_offset) == stream.last_offset {
+                                fenced_by_terminal(stream)
+                            } else {
+                                DurableStreamProducerError::ClosedByOtherProducer
+                            });
+                        }
+                        if transport_first_sequence != head.next_sequence {
+                            return Err(DurableStreamProducerError::SequenceGap {
+                                expected: head.next_sequence,
+                                actual: transport_first_sequence,
+                            });
+                        }
+                        (stream.next_sequence, Some(index))
+                    }
+                } else {
+                    if stream.terminal {
+                        return Err(DurableStreamProducerError::ClosedByOtherProducer);
+                    }
+                    if transport_first_sequence != 0 {
+                        return Err(DurableStreamProducerError::SequenceGap {
+                            expected: 0,
+                            actual: transport_first_sequence,
+                        });
+                    }
+                    (stream.next_sequence, Some(index))
+                };
+            let delta = global_first_sequence
+                .checked_sub(transport_first_sequence)
+                .ok_or_else(|| {
+                    DurableStreamProducerError::CorruptHistory(
+                        "attached transport sequence exceeds global stream sequence".into(),
+                    )
+                })?;
+            let nested = nested
+                .into_iter()
+                .map(|mut request| {
+                    if let StreamRegistrationCoordinateV1::Nested {
+                        parent_producer_sequence,
+                        ..
+                    } = &mut request.coordinate
+                    {
+                        *parent_producer_sequence = parent_producer_sequence
+                            .checked_add(delta)
+                            .ok_or(DurableStreamProducerError::CounterOverflow)?;
+                    }
+                    Ok(request)
+                })
+                .collect::<Result<Vec<_>, DurableStreamProducerError>>()?;
+            owner
+                .write_items_owned(
+                    stream_id,
+                    global_first_sequence,
+                    payload,
+                    nested
+                        .into_iter()
+                        .map(NestedStreamWriteV1::Register)
+                        .collect(),
+                    0,
+                    Some(ExternalProducerV1 {
+                        id,
+                        epoch: 0,
+                        sequence: transport_first_sequence,
+                    }),
+                    index,
+                )
+                .await
+        })
+        .await
+    }
+
+    pub(crate) async fn attached_global_sequence(
+        &self,
+        session_key: &StreamSessionKeyV1,
+        stream_id: StreamId,
+        transport_sequence: u64,
+    ) -> Result<u64, DurableStreamProducerError> {
+        let index = self
+            .index_for_terminal(
+                [
+                    ProducerMetadataKey::Stream(stream_id),
+                    ProducerMetadataKey::ExternalProducerSequence(
+                        session_key.clone(),
+                        stream_id,
+                        ExternalProducerIdV1::Attached,
+                        0,
+                        transport_sequence,
+                    ),
+                ],
+                stream_id,
+            )
+            .await?;
+        if let Some(offset) = index
+            .external_producer_offsets
+            .get(&(
+                session_key.clone(),
+                stream_id,
+                ExternalProducerIdV1::Attached,
+                0,
+                transport_sequence,
+            ))
+            .copied()
+        {
+            drop(index);
+            return Ok(self
+                .read_item_batch(offset.producer_oplog_index())
+                .await?
+                .first_sequence);
+        }
+        index
+            .streams
+            .get(&stream_id)
+            .map(|stream| stream.next_sequence)
+            .ok_or(DurableStreamProducerError::UnknownStream(stream_id))
     }
 
     async fn write_items_owned(
@@ -4440,6 +4685,8 @@ impl DurableStreamProducer {
         payload: StreamItemsPayloadV1,
         nested_sources: Vec<NestedStreamWriteV1>,
         traversal_depth: usize,
+        external_producer: Option<ExternalProducerV1>,
+        index: Option<MutexGuard<'_, ProducerStreamIndex>>,
     ) -> Result<ProducerWriteOutcomeV1<Vec<StreamOffsetV1>>, DurableStreamProducerError> {
         validate_items_payload(&payload)?;
         let item_count = payload.logical_item_count() as u64;
@@ -4464,7 +4711,14 @@ impl DurableStreamProducer {
             }
         }
         keys.push(ProducerMetadataKey::Batch(stream_id, first_sequence));
-        let mut index = self.index_for_terminal(keys, stream_id).await?;
+        let mut index = if let Some(mut index) = index {
+            // Attached writers retain the guard from global sequence assignment
+            // through commit, so HTTP writers cannot take that sequence meanwhile.
+            self.load_index_keys(&mut index, keys).await?;
+            index
+        } else {
+            self.index_for_terminal(keys, stream_id).await?
+        };
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         if nested
             .iter()
@@ -4678,6 +4932,7 @@ impl DurableStreamProducer {
         let payload_for_entry = payload.clone();
         let registrations_for_entry = new_nested;
         let nested_for_entry = nested_sources;
+        let external_session_key = session_key.clone();
         self.begin_durable_effect();
         let entries = self
             .oplog
@@ -4725,6 +4980,7 @@ impl DurableStreamProducer {
                 let offsets = (0..payload_for_entry.logical_item_count())
                     .map(|sub_index| StreamOffsetV1::new(item_index, sub_index as u32))
                     .collect::<Vec<_>>();
+                let resulting_offset = *offsets.last().expect("validated input contains an item");
                 let payload_for_high_water = payload_for_entry.clone();
                 records.push(DurableStreamOplogRecord::Items(
                     entity_parent_start_index,
@@ -4763,6 +5019,26 @@ impl DurableStreamProducer {
                                     resulting_offset,
                                     terminal: false,
                                 },
+                            },
+                        )),
+                    ));
+                }
+                if let Some(producer) = external_producer {
+                    records.push(DurableStreamOplogRecord::Session(
+                        entity_parent_start_index,
+                        Box::new(StreamSessionRecordV1::ExternalProducerState(
+                            StreamExternalProducerStateRecordV1 {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: external_session_key,
+                                stream_id,
+                                producer_id: producer.id,
+                                epoch: producer.epoch,
+                                sequence: producer.sequence,
+                                next_sequence: producer
+                                    .sequence
+                                    .checked_add(item_count)
+                                    .expect("validated attached sequence does not overflow"),
+                                resulting_offset,
                             },
                         )),
                     ));
@@ -4905,7 +5181,20 @@ impl DurableStreamProducer {
         producer: Option<ExternalProducerV1>,
     ) -> Result<ExternalAppendOutcomeV1, DurableStreamProducerError> {
         if let Some(payload) = &payload {
-            validate_items_payload(payload)?;
+            match payload {
+                StreamItemsPayloadV1::Values(values) => {
+                    if values.is_empty() {
+                        return Err(DurableStreamProducerError::InvalidValueBatch);
+                    }
+                    if values
+                        .iter()
+                        .any(|value| value.len() > MAX_DURABLE_STREAM_ITEM_SIZE)
+                    {
+                        return Err(DurableStreamProducerError::ItemTooLarge);
+                    }
+                }
+                StreamItemsPayloadV1::PackedU8(_) => validate_items_payload(payload)?,
+            }
         }
         let retained_bytes = match &payload {
             Some(StreamItemsPayloadV1::Values(values)) => {
@@ -4915,7 +5204,10 @@ impl DurableStreamProducer {
                 bytes.len() * (std::mem::size_of::<CommittedProducerStreamEventV1>() + 2)
             }
             None => 0,
-        } + producer.as_ref().map_or(0, |producer| producer.id.len());
+        } + producer.as_ref().map_or(0, |producer| match &producer.id {
+            ExternalProducerIdV1::Client(id) => id.len(),
+            ExternalProducerIdV1::Attached => 0,
+        });
         let session_key = session_key.clone();
         self.run_owned(retained_bytes, move |owner| async move {
             owner
@@ -4933,12 +5225,9 @@ impl DurableStreamProducer {
         close: bool,
         producer: Option<ExternalProducerV1>,
     ) -> Result<ExternalAppendOutcomeV1, DurableStreamProducerError> {
-        if let Some(payload) = &payload {
-            validate_items_payload(payload)?;
-        }
         let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
         if let Some(producer) = &producer {
-            if producer.id.is_empty() {
+            if matches!(&producer.id, ExternalProducerIdV1::Client(id) if id.is_empty()) {
                 return Err(DurableStreamProducerError::InvalidValueBatch);
             }
             keys.push(ProducerMetadataKey::ExternalProducerHead(
@@ -4961,13 +5250,51 @@ impl DurableStreamProducer {
         if index.stream_sessions.get(&stream_id) != Some(session_key) {
             return Ok(ExternalAppendOutcomeV1::NotFound);
         }
-        if registration.source_kind != StreamSourceKindV1::ExternalInlineInput {
+        if registration.source_kind != StreamSourceKindV1::ExternalInlineInput
+            && !(registration.source_kind == StreamSourceKindV1::Nested
+                && producer
+                    .as_ref()
+                    .is_some_and(|producer| producer.id == ExternalProducerIdV1::Attached))
+        {
             return Err(DurableStreamProducerError::InvalidHandle);
         }
         let stream = &index.streams[&stream_id];
         index.ensure_producer_write_allowed()?;
         if payload.is_none() && !close {
             return Err(DurableStreamProducerError::InvalidValueBatch);
+        }
+        if stream.terminal {
+            if close
+                && let Some(event) = &stream.terminal_event
+                && matches!(
+                    event.payload,
+                    CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+                )
+            {
+                if payload.is_none() && producer.is_none() {
+                    return Ok(ExternalAppendOutcomeV1::Duplicate {
+                        offset: event.offset,
+                        highest_sequence: None,
+                    });
+                }
+                if let Some(request) = &producer {
+                    let identity = (session_key.clone(), stream_id, request.id.clone());
+                    if let Some(head) = index.external_producer_heads.get(&identity)
+                        && head.epoch == request.epoch
+                        && head.last_sequence == request.sequence
+                        && head.last_offset == event.offset
+                    {
+                        return Ok(ExternalAppendOutcomeV1::Duplicate {
+                            offset: event.offset,
+                            highest_sequence: Some(head.last_sequence),
+                        });
+                    }
+                }
+            }
+            return Ok(ExternalAppendOutcomeV1::Closed);
+        }
+        if index.finished_sessions.contains(session_key) {
+            return Ok(ExternalAppendOutcomeV1::Closed);
         }
         if let Some(request) = &producer {
             let identity = (session_key.clone(), stream_id, request.id.clone());
@@ -4976,6 +5303,11 @@ impl DurableStreamProducer {
                     return Ok(ExternalAppendOutcomeV1::EpochFenced(head.epoch));
                 }
                 if request.epoch == head.epoch && request.sequence <= head.last_sequence {
+                    if request.id == ExternalProducerIdV1::Attached {
+                        // Attached item retries validate their original payload through
+                        // write_items_owned; an end frame cannot stand in for an item.
+                        return Err(DurableStreamProducerError::EventConflict);
+                    }
                     let offset = index
                         .external_producer_offsets
                         .get(&(
@@ -4991,12 +5323,13 @@ impl DurableStreamProducer {
                                 "external producer sequence has no original offset".into(),
                             )
                         })?;
-                    return Ok(ExternalAppendOutcomeV1::Duplicate(offset));
+                    return Ok(ExternalAppendOutcomeV1::Duplicate {
+                        offset,
+                        highest_sequence: Some(head.last_sequence),
+                    });
                 }
                 let expected = if request.epoch == head.epoch {
-                    head.last_sequence
-                        .checked_add(1)
-                        .ok_or(DurableStreamProducerError::CounterOverflow)?
+                    head.next_sequence
                 } else {
                     0
                 };
@@ -5014,24 +5347,6 @@ impl DurableStreamProducer {
             }
         }
 
-        if stream.terminal {
-            if close
-                && payload.is_none()
-                && producer.is_none()
-                && let Some(event) = &stream.terminal_event
-                && matches!(
-                    event.payload,
-                    CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
-                )
-            {
-                return Ok(ExternalAppendOutcomeV1::Duplicate(event.offset));
-            }
-            return Ok(ExternalAppendOutcomeV1::Closed);
-        }
-        if index.finished_sessions.contains(session_key) {
-            return Ok(ExternalAppendOutcomeV1::Closed);
-        }
-
         let first_sequence = stream.next_sequence;
         let item_count = payload
             .as_ref()
@@ -5041,6 +5356,12 @@ impl DurableStreamProducer {
             .ok_or(DurableStreamProducerError::CounterOverflow)?;
         let producer_fingerprint = self.producer_fingerprint;
         let session = session_key.clone();
+        if let Some(producer) = &producer {
+            producer
+                .sequence
+                .checked_add(1)
+                .ok_or(DurableStreamProducerError::CounterOverflow)?;
+        }
         let producer_record = producer.clone();
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         self.begin_durable_effect();
@@ -5048,26 +5369,50 @@ impl DurableStreamProducer {
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
                 let mut records = Vec::new();
-                let item_index = first_index;
                 let mut resulting_offset = None;
                 if let Some(payload) = &payload {
-                    let offsets = (0..payload.logical_item_count())
-                        .map(|sub| StreamOffsetV1::new(item_index, sub as u32))
-                        .collect::<Vec<_>>();
-                    resulting_offset = offsets.last().copied();
-                    records.push(DurableStreamOplogRecord::Items(
-                        entity_parent_start_index,
-                        StreamItemsRecordV1 {
-                            format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            stream_id,
-                            producer_fingerprint,
-                            first_sequence,
-                            nested_stream_ids: Vec::new(),
-                            newly_registered_stream_ids: Vec::new(),
-                            payload: payload.clone(),
-                            offsets,
-                        },
-                    ));
+                    match payload {
+                        StreamItemsPayloadV1::Values(values) => {
+                            for (position, value) in values.iter().enumerate() {
+                                let item_index =
+                                    OplogIndex::from_u64(first_index.as_u64() + position as u64);
+                                let offset = StreamOffsetV1::new(item_index, 0);
+                                resulting_offset = Some(offset);
+                                records.push(DurableStreamOplogRecord::Items(
+                                    entity_parent_start_index,
+                                    StreamItemsRecordV1 {
+                                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                        stream_id,
+                                        producer_fingerprint,
+                                        first_sequence: first_sequence + position as u64,
+                                        nested_stream_ids: Vec::new(),
+                                        newly_registered_stream_ids: Vec::new(),
+                                        payload: StreamItemsPayloadV1::Values(vec![value.clone()]),
+                                        offsets: vec![offset],
+                                    },
+                                ));
+                            }
+                        }
+                        StreamItemsPayloadV1::PackedU8(_) => {
+                            let offsets = (0..payload.logical_item_count())
+                                .map(|sub| StreamOffsetV1::new(first_index, sub as u32))
+                                .collect::<Vec<_>>();
+                            resulting_offset = offsets.last().copied();
+                            records.push(DurableStreamOplogRecord::Items(
+                                entity_parent_start_index,
+                                StreamItemsRecordV1 {
+                                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                    stream_id,
+                                    producer_fingerprint,
+                                    first_sequence,
+                                    nested_stream_ids: Vec::new(),
+                                    newly_registered_stream_ids: Vec::new(),
+                                    payload: payload.clone(),
+                                    offsets,
+                                },
+                            ));
+                        }
+                    }
                 }
                 let end_index =
                     OplogIndex::from_u64(first_index.as_u64() + records.len() as u64 + 1);
@@ -5124,6 +5469,9 @@ impl DurableStreamProducer {
                                 producer_id: producer.id,
                                 epoch: producer.epoch,
                                 sequence: producer.sequence,
+                                next_sequence: producer.sequence.checked_add(1).expect(
+                                    "validated external producer sequence does not overflow",
+                                ),
                                 resulting_offset,
                             },
                         )),
@@ -8350,14 +8698,14 @@ pub(crate) mod tests {
     use futures::FutureExt;
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
     use golem_common::base_model::durable_stream::{
-        AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, InputStreamHighWaterV1,
-        MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION, MAX_LIVE_JOIN_BUFFER_SIZE,
-        MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
-        MAX_STREAM_VALUE_TRAVERSAL_DEPTH, PersistedStreamInvocationDescriptorV1,
-        STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS, STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-        SessionStreamRoleV1, StartAttemptDescriptorV1, StreamAttachmentFinalizationReasonV1,
-        StreamAttachmentKeyV1, StreamCancelReasonV1, StreamCancelRoleV1,
-        StreamCascadeDependentResultV1, StreamConsumerDeletingRecordV1,
+        AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, ExternalProducerIdV1,
+        InputStreamHighWaterV1, MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
+        MAX_LIVE_JOIN_BUFFER_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE,
+        MAX_PACKED_U8_STREAM_ITEM_SIZE, MAX_STREAM_VALUE_TRAVERSAL_DEPTH,
+        PersistedStreamInvocationDescriptorV1, STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
+        STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRoleV1, StartAttemptDescriptorV1,
+        StreamAttachmentFinalizationReasonV1, StreamAttachmentKeyV1, StreamCancelReasonV1,
+        StreamCancelRoleV1, StreamCascadeDependentResultV1, StreamConsumerDeletingRecordV1,
         StreamConsumerItemValueRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1,
         StreamItemsPayloadV1, StreamItemsRecordV1, StreamOffsetV1, StreamRegistrationCoordinateV1,
         StreamRootKindV1, StreamSessionKeyV1, StreamSessionMappingRecordV1,
@@ -11585,7 +11933,7 @@ pub(crate) mod tests {
             .unwrap()
             .value;
         let external = ExternalProducerV1 {
-            id: "retrying-producer".into(),
+            id: ExternalProducerIdV1::Client("retrying-producer".into()),
             epoch: 1,
             sequence: 0,
         };
@@ -11623,7 +11971,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(
-            matches!(retry, ExternalAppendOutcomeV1::Duplicate(_)),
+            matches!(retry, ExternalAppendOutcomeV1::Duplicate { .. }),
             "durably committed producer sequence was appended again: {retry:?}"
         );
     }
@@ -11654,7 +12002,7 @@ pub(crate) mod tests {
             Some(StreamItemsPayloadV1::PackedU8(vec![7])),
             true,
             Some(ExternalProducerV1 {
-                id: "attributed-producer".into(),
+                id: ExternalProducerIdV1::Client("attributed-producer".into()),
                 epoch: 1,
                 sequence: 0,
             }),
@@ -11672,6 +12020,431 @@ pub(crate) mod tests {
                 attribution
             );
         }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn attached_input_distinguishes_foreign_close_from_its_own_end_after_reload() {
+        for sent_item in [false, true] {
+            for own_end in [false, true] {
+                let identity = identity();
+                let oplog = Arc::new(TestOplog::default());
+                let live = producer(oplog.clone(), &identity, None).await;
+                let handle = live
+                    .register(registration(
+                        &identity,
+                        StreamRegistrationCoordinateV1::Root {
+                            invocation_id: identity.invocation.clone(),
+                            root_kind: StreamRootKindV1::MethodInput,
+                            recursive_value_path: vec![StreamValuePathStepV1::TupleElement(0)],
+                        },
+                        StreamSourceKindV1::ExternalInlineInput,
+                    ))
+                    .await
+                    .unwrap()
+                    .value;
+                if sent_item {
+                    live.write_attached_items_with_nested(
+                        &identity.invocation,
+                        handle.stream_id,
+                        0,
+                        StreamItemsPayloadV1::PackedU8(vec![13]),
+                        Vec::new(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let end_sequence = u64::from(sent_item);
+                live.append_external_input(
+                    &identity.invocation,
+                    handle.stream_id,
+                    None,
+                    true,
+                    own_end.then_some(ExternalProducerV1 {
+                        id: ExternalProducerIdV1::Attached,
+                        epoch: 0,
+                        sequence: end_sequence,
+                    }),
+                )
+                .await
+                .unwrap();
+                drop(live);
+
+                let recovered = producer(oplog.clone(), &identity, None).await;
+                let tip = oplog.current_oplog_index().await;
+                let error = recovered
+                    .write_attached_items_with_nested(
+                        &identity.invocation,
+                        handle.stream_id,
+                        end_sequence + u64::from(own_end),
+                        StreamItemsPayloadV1::PackedU8(vec![17]),
+                        Vec::new(),
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error,
+                    if own_end {
+                        DurableStreamProducerError::FencedByTerminal(
+                            CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok),
+                        )
+                    } else {
+                        DurableStreamProducerError::ClosedByOtherProducer
+                    }
+                );
+                if !own_end {
+                    assert_eq!(
+                        recovered
+                            .write_attached_items_with_nested(
+                                &identity.invocation,
+                                handle.stream_id,
+                                end_sequence + 2,
+                                StreamItemsPayloadV1::PackedU8(vec![23]),
+                                Vec::new(),
+                            )
+                            .await
+                            .unwrap_err(),
+                        DurableStreamProducerError::ClosedByOtherProducer,
+                        "all frames already in flight must be discarded after a foreign close",
+                    );
+                }
+                if own_end {
+                    assert_eq!(
+                        recovered
+                            .write_attached_items_with_nested(
+                                &identity.invocation,
+                                handle.stream_id,
+                                end_sequence,
+                                StreamItemsPayloadV1::PackedU8(vec![19]),
+                                Vec::new(),
+                            )
+                            .await
+                            .unwrap_err(),
+                        DurableStreamProducerError::EventConflict,
+                    );
+                }
+                assert_eq!(oplog.current_oplog_index().await, tip);
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn attached_and_client_appends_interleave_and_reconstruct_multi_value_retry() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(98)],
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+
+        live.write_attached_items_with_nested(
+            &identity.invocation,
+            handle.stream_id,
+            0,
+            StreamItemsPayloadV1::PackedU8(vec![10]),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        let client = ExternalProducerV1 {
+            id: ExternalProducerIdV1::Client("multi".into()),
+            epoch: 0,
+            sequence: 0,
+        };
+        let accepted = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::Values(vec![vec![20], vec![30]])),
+                false,
+                Some(client.clone()),
+            )
+            .await
+            .unwrap();
+        live.write_attached_items_with_nested(
+            &identity.invocation,
+            handle.stream_id,
+            1,
+            StreamItemsPayloadV1::PackedU8(vec![40]),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        drop(live);
+
+        let recovered = producer(oplog.clone(), &identity, None).await;
+        let ExternalAppendOutcomeV1::Accepted(original_offset) = accepted else {
+            panic!("client append was not accepted")
+        };
+        assert_eq!(
+            recovered
+                .append_external_input(
+                    &identity.invocation,
+                    handle.stream_id,
+                    Some(StreamItemsPayloadV1::Values(vec![vec![20], vec![30]])),
+                    false,
+                    Some(client),
+                )
+                .await
+                .unwrap(),
+            ExternalAppendOutcomeV1::Duplicate {
+                offset: original_offset,
+                highest_sequence: Some(0),
+            }
+        );
+        assert_eq!(
+            recovered
+                .attached_input_high_water(&identity.invocation, handle.stream_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .highest_contiguous_sequence,
+            1
+        );
+        let retry = recovered
+            .write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                1,
+                StreamItemsPayloadV1::PackedU8(vec![40]),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        assert!(retry.replayed);
+        assert!(matches!(
+            recovered
+                .write_attached_items_with_nested(
+                    &identity.invocation,
+                    handle.stream_id,
+                    1,
+                    StreamItemsPayloadV1::PackedU8(vec![41]),
+                    Vec::new(),
+                )
+                .await,
+            Err(DurableStreamProducerError::EventConflict)
+        ));
+        recovered
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                None,
+                true,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Attached,
+                    epoch: 0,
+                    sequence: 2,
+                }),
+            )
+            .await
+            .unwrap();
+        let events = recovered.read_segment(&handle, None, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.producer_sequence)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4]
+        );
+        assert!(matches!(
+            events[0].payload,
+            CommittedProducerStreamEventPayloadV1::PackedU8(10)
+        ));
+        assert_eq!(
+            events[1].payload,
+            CommittedProducerStreamEventPayloadV1::Value(vec![20])
+        );
+        assert_eq!(
+            events[2].payload,
+            CommittedProducerStreamEventPayloadV1::Value(vec![30])
+        );
+        assert!(matches!(
+            events[3].payload,
+            CommittedProducerStreamEventPayloadV1::PackedU8(40)
+        ));
+        assert!(events[4].is_terminal());
+
+        let item_records = oplog
+            .read_exact(
+                OplogIndex::INITIAL,
+                oplog.current_oplog_index().await.as_u64(),
+            )
+            .await
+            .into_iter()
+            .filter(|(_, entry)| matches!(entry, OplogEntry::StreamItems { .. }))
+            .count();
+        assert_eq!(
+            item_records, 4,
+            "each value append must have its own Items record"
+        );
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn attached_packed_and_nested_inputs_keep_transport_sequences_during_http_writes() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let live = producer(oplog.clone(), &identity, None).await;
+        let handle = live
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: vec![StreamValuePathStepV1::TupleElement(97)],
+                },
+                StreamSourceKindV1::ExternalInlineInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let (attached, http) = tokio::join!(
+            live.write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::PackedU8(vec![10, 11]),
+                Vec::new(),
+            ),
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::Values(vec![
+                    vec![20],
+                    vec![30],
+                    vec![31]
+                ])),
+                false,
+                None,
+            ),
+        );
+        assert_eq!(attached.unwrap().value.len(), 2);
+        assert!(matches!(
+            http.unwrap(),
+            ExternalAppendOutcomeV1::Accepted(_)
+        ));
+        let nested = registration(
+            &identity,
+            StreamRegistrationCoordinateV1::Nested {
+                parent_stream_id: handle.stream_id,
+                parent_producer_sequence: 2,
+                recursive_value_path: vec![StreamValuePathStepV1::TupleElement(0)],
+            },
+            StreamSourceKindV1::Nested,
+        );
+        let payload = StreamItemsPayloadV1::Values(vec![vec![40]]);
+        let fresh = live
+            .write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                2,
+                payload.clone(),
+                vec![nested.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(!fresh.replayed);
+        assert_eq!(
+            live.attached_global_sequence(&identity.invocation, handle.stream_id, 2)
+                .await
+                .unwrap(),
+            5
+        );
+        let child = live
+            .nested_handles(handle.stream_id, 5)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        live.append_external_input(
+            &identity.invocation,
+            child.stream_id,
+            None,
+            true,
+            Some(ExternalProducerV1 {
+                id: ExternalProducerIdV1::Attached,
+                epoch: 0,
+                sequence: 0,
+            }),
+        )
+        .await
+        .unwrap();
+        drop(live);
+        let recovered = producer(oplog, &identity, None).await;
+        let retry = recovered
+            .write_attached_items_with_nested(
+                &identity.invocation,
+                handle.stream_id,
+                2,
+                payload,
+                vec![nested],
+            )
+            .await
+            .unwrap();
+        assert!(retry.replayed);
+        assert_eq!(retry.value, fresh.value);
+        assert_eq!(
+            recovered.nested_handles(handle.stream_id, 5).await.unwrap(),
+            vec![child]
+        );
+        let high_water = recovered
+            .attached_input_high_water(&identity.invocation, handle.stream_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(high_water.highest_contiguous_sequence, 2);
+        assert!(!high_water.terminal);
+        assert!(matches!(
+            recovered
+                .append_external_input(
+                    &identity.invocation,
+                    handle.stream_id,
+                    None,
+                    true,
+                    Some(ExternalProducerV1 {
+                        id: ExternalProducerIdV1::Attached,
+                        epoch: 0,
+                        sequence: 2
+                    }),
+                )
+                .await,
+            Err(DurableStreamProducerError::EventConflict)
+        ));
+        recovered
+            .append_external_input(&identity.invocation, handle.stream_id, None, true, None)
+            .await
+            .unwrap();
+        let high_water = recovered
+            .attached_input_high_water(&identity.invocation, handle.stream_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(high_water.highest_contiguous_sequence, 3);
+        assert!(high_water.terminal);
+        let events = recovered.read_segment(&handle, None, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.producer_sequence)
+                .collect::<Vec<_>>(),
+            (0..7).collect::<Vec<_>>()
+        );
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].offset < pair[1].offset)
+        );
     }
 
     #[test]
@@ -11693,7 +12466,7 @@ pub(crate) mod tests {
             .unwrap()
             .value;
         let p0 = ExternalProducerV1 {
-            id: "p1".into(),
+            id: ExternalProducerIdV1::Client("p1".into()),
             epoch: 1,
             sequence: 0,
         };
@@ -11726,8 +12499,46 @@ pub(crate) mod tests {
                 Some(p0)
             ),
         );
-        assert_eq!(a.unwrap(), ExternalAppendOutcomeV1::Duplicate(original));
-        assert_eq!(b.unwrap(), ExternalAppendOutcomeV1::Duplicate(original));
+        let duplicate = ExternalAppendOutcomeV1::Duplicate {
+            offset: original,
+            highest_sequence: Some(0),
+        };
+        assert_eq!(a.unwrap(), duplicate);
+        assert_eq!(b.unwrap(), duplicate);
+        let newer = live
+            .append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![3])),
+                false,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p1".into()),
+                    epoch: 1,
+                    sequence: 1,
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(newer, ExternalAppendOutcomeV1::Accepted(_)));
+        assert_eq!(
+            live.append_external_input(
+                &identity.invocation,
+                handle.stream_id,
+                Some(StreamItemsPayloadV1::PackedU8(vec![1, 2])),
+                false,
+                Some(ExternalProducerV1 {
+                    id: ExternalProducerIdV1::Client("p1".into()),
+                    epoch: 1,
+                    sequence: 0,
+                }),
+            )
+            .await
+            .unwrap(),
+            ExternalAppendOutcomeV1::Duplicate {
+                offset: original,
+                highest_sequence: Some(1),
+            }
+        );
         assert_eq!(
             live.append_external_input(
                 &identity.invocation,
@@ -11735,16 +12546,16 @@ pub(crate) mod tests {
                 Some(StreamItemsPayloadV1::PackedU8(vec![3])),
                 false,
                 Some(ExternalProducerV1 {
-                    id: "p1".into(),
+                    id: ExternalProducerIdV1::Client("p1".into()),
                     epoch: 1,
-                    sequence: 2
+                    sequence: 3
                 })
             )
             .await
             .unwrap(),
             ExternalAppendOutcomeV1::SeqGap {
-                expected: 1,
-                received: 2
+                expected: 2,
+                received: 3
             }
         );
         assert!(matches!(
@@ -11754,7 +12565,7 @@ pub(crate) mod tests {
                 Some(StreamItemsPayloadV1::PackedU8(vec![3])),
                 false,
                 Some(ExternalProducerV1 {
-                    id: "p1".into(),
+                    id: ExternalProducerIdV1::Client("p1".into()),
                     epoch: 2,
                     sequence: 0
                 })
@@ -11770,7 +12581,7 @@ pub(crate) mod tests {
                 Some(StreamItemsPayloadV1::PackedU8(vec![4])),
                 false,
                 Some(ExternalProducerV1 {
-                    id: "p1".into(),
+                    id: ExternalProducerIdV1::Client("p1".into()),
                     epoch: 1,
                     sequence: 1
                 })
@@ -11780,7 +12591,7 @@ pub(crate) mod tests {
             ExternalAppendOutcomeV1::EpochFenced(2)
         );
         let normal = live
-            .write_items(handle.stream_id, 3, StreamItemsPayloadV1::PackedU8(vec![8]))
+            .write_items(handle.stream_id, 4, StreamItemsPayloadV1::PackedU8(vec![8]))
             .await
             .unwrap()
             .value[0];
@@ -11791,7 +12602,7 @@ pub(crate) mod tests {
                 Some(StreamItemsPayloadV1::PackedU8(vec![4])),
                 true,
                 Some(ExternalProducerV1 {
-                    id: "p2".into(),
+                    id: ExternalProducerIdV1::Client("p2".into()),
                     epoch: 0,
                     sequence: 0,
                 }),
@@ -11806,7 +12617,10 @@ pub(crate) mod tests {
             live.append_external_input(&identity.invocation, handle.stream_id, None, true, None)
                 .await
                 .unwrap(),
-            ExternalAppendOutcomeV1::Duplicate(closed)
+            ExternalAppendOutcomeV1::Duplicate {
+                offset: closed,
+                highest_sequence: None,
+            }
         );
         drop(live);
         let recovered = producer(oplog, &identity, None).await;
@@ -11843,18 +12657,27 @@ pub(crate) mod tests {
             .await
             .unwrap()
             .value;
-        let close = |id: &str| ExternalProducerV1 {
-            id: id.into(),
+        let producer_tuple = |id: &str, sequence| ExternalProducerV1 {
+            id: ExternalProducerIdV1::Client(id.into()),
             epoch: 0,
-            sequence: 0,
+            sequence,
         };
+        live.append_external_input(
+            &identity.invocation,
+            handle.stream_id,
+            Some(StreamItemsPayloadV1::PackedU8(vec![1])),
+            false,
+            Some(producer_tuple("first", 0)),
+        )
+        .await
+        .unwrap();
         let accepted = live
             .append_external_input(
                 &identity.invocation,
                 handle.stream_id,
                 None,
                 true,
-                Some(close("first")),
+                Some(producer_tuple("first", 1)),
             )
             .await
             .unwrap();
@@ -11872,21 +12695,21 @@ pub(crate) mod tests {
                         handle.stream_id,
                         None,
                         true,
-                        Some(close("first")),
+                        Some(producer_tuple("first", 1)),
                     )
                     .await
                     .unwrap(),
-                ExternalAppendOutcomeV1::Duplicate(offset)
+                ExternalAppendOutcomeV1::Duplicate {
+                    offset,
+                    highest_sequence: Some(1),
+                }
             );
             for request in [
-                close("different"),
-                ExternalProducerV1 {
-                    sequence: 1,
-                    ..close("first")
-                },
+                producer_tuple("different", 0),
+                producer_tuple("first", 2),
                 ExternalProducerV1 {
                     epoch: 1,
-                    ..close("first")
+                    ..producer_tuple("first", 1)
                 },
             ] {
                 assert_eq!(
@@ -11903,6 +12726,19 @@ pub(crate) mod tests {
                     ExternalAppendOutcomeV1::Closed
                 );
             }
+            assert_eq!(
+                current
+                    .append_external_input(
+                        &identity.invocation,
+                        handle.stream_id,
+                        Some(StreamItemsPayloadV1::PackedU8(vec![1])),
+                        false,
+                        Some(producer_tuple("first", 0)),
+                    )
+                    .await
+                    .unwrap(),
+                ExternalAppendOutcomeV1::Closed
+            );
             assert_eq!(oplog.current_oplog_index().await, before);
         }
     }

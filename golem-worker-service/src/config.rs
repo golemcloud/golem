@@ -379,6 +379,7 @@ impl Default for AgentResolutionCacheConfig {
 pub struct DurableStreamsConfig {
     #[serde(with = "humantime_serde")]
     pub long_poll_timeout: Duration,
+    pub max_append_body_bytes: usize,
     pub load: DurableStreamsLoadConfig,
 }
 
@@ -390,6 +391,11 @@ impl SafeDisplay for DurableStreamsConfig {
             "long_poll_timeout: {:?}",
             self.long_poll_timeout
         );
+        let _ = writeln!(
+            &mut result,
+            "max_append_body_bytes: {}",
+            self.max_append_body_bytes
+        );
         let _ = writeln!(&mut result, "load:");
         let _ = writeln!(&mut result, "{}", self.load.to_safe_string_indented());
         result
@@ -400,6 +406,7 @@ impl Default for DurableStreamsConfig {
     fn default() -> Self {
         Self {
             long_poll_timeout: Duration::from_secs(30),
+            max_append_body_bytes: 1024 * 1024,
             load: DurableStreamsLoadConfig::default(),
         }
     }
@@ -410,6 +417,7 @@ pub struct DurableStreamsLoadConfig {
     pub max_concurrent_readers_per_stream: usize,
     pub max_concurrent_readers_per_node: usize,
     pub max_catch_up_requests_per_second_per_stream: u32,
+    pub max_append_requests_per_second_per_stream: u32,
 }
 
 impl SafeDisplay for DurableStreamsLoadConfig {
@@ -430,6 +438,11 @@ impl SafeDisplay for DurableStreamsLoadConfig {
             "max_catch_up_requests_per_second_per_stream: {}",
             self.max_catch_up_requests_per_second_per_stream
         );
+        let _ = writeln!(
+            &mut result,
+            "max_append_requests_per_second_per_stream: {}",
+            self.max_append_requests_per_second_per_stream
+        );
         result
     }
 }
@@ -440,6 +453,7 @@ impl Default for DurableStreamsLoadConfig {
             max_concurrent_readers_per_stream: 16,
             max_concurrent_readers_per_node: 4096,
             max_catch_up_requests_per_second_per_stream: 100,
+            max_append_requests_per_second_per_stream: 100,
         }
     }
 }

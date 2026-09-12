@@ -140,6 +140,496 @@ async fn wait_for_observations(
     .await?
 }
 
+fn echo_stream_path(session: &str, slot: &str) -> String {
+    format!("/durable-stream-agents/ds3-{session}/echo/invocations/{session}/streams/{slot}")
+}
+
+async fn append_json(
+    agent: &HttpTestContext,
+    path: &str,
+    value: Value,
+    close: bool,
+) -> anyhow::Result<reqwest::Response> {
+    let mut request = agent
+        .client
+        .post(agent.base_url.join(path)?)
+        .header(CONTENT_TYPE, "application/json")
+        .json(&value);
+    if close {
+        request = request.header("stream-closed", "true");
+    }
+    Ok(request.send().await?)
+}
+
+#[test]
+#[timeout("120s")]
+async fn post_input_accepts_json_batches_and_is_idempotently_closed(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let input = echo_stream_path(&session, "input");
+    let output = echo_stream_path(&session, "output");
+
+    let batch = append_json(agent, &input, serde_json::json!(["a", "b"]), false).await?;
+    assert_eq!(batch.status(), StatusCode::NO_CONTENT);
+    assert_eq!(header(&batch, "stream-closed"), "false");
+    let first_offset = header(&batch, "stream-next-offset");
+    let single = append_json(agent, &input, serde_json::json!("c"), false).await?;
+    assert_eq!(single.status(), StatusCode::NO_CONTENT);
+    assert!(header(&single, "stream-next-offset") > first_offset);
+
+    for value in ["true", "TRUE"] {
+        let closed = agent
+            .client
+            .post(agent.base_url.join(&input)?)
+            .header("stream-closed", value)
+            .send()
+            .await?;
+        assert_eq!(closed.status(), StatusCode::NO_CONTENT);
+        assert_eq!(header(&closed, "stream-closed"), "true");
+    }
+    wait_for_closed(agent, &output).await?;
+    let echoed = agent
+        .client
+        .get(agent.base_url.join(&output)?)
+        .send()
+        .await?;
+    assert_eq!(echoed.status(), StatusCode::OK);
+    assert_eq!(
+        echoed.json::<Value>().await?,
+        serde_json::json!(["a", "b", "c"])
+    );
+
+    let read_only = agent
+        .client
+        .post(agent.base_url.join(&output)?)
+        .json(&serde_json::json!("no"))
+        .send()
+        .await?;
+    assert_eq!(read_only.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(header(&read_only, ALLOW.as_str()), "PUT, HEAD, GET, DELETE");
+
+    assert_eq!(
+        agent
+            .client
+            .delete(agent.base_url.join(&input)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        append_json(agent, &input, serde_json::json!("gone"), false)
+            .await?
+            .status(),
+        StatusCode::GONE
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn post_input_frames_binary_batches_and_json_records(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let binary_session = Uuid::new_v4().to_string();
+    let binary_base = format!(
+        "/durable-stream-agents/ds3-{binary_session}/echo-bytes/invocations/{binary_session}/streams"
+    );
+    let binary_input = format!("{binary_base}/input");
+    let binary_output = format!("{binary_base}/$result");
+    for (bytes, close) in [(&b"\x00\x01\xfe"[..], false), (&b"hello\xff"[..], true)] {
+        let response = agent
+            .client
+            .post(agent.base_url.join(&binary_input)?)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header("stream-closed", close.to_string())
+            .body(bytes)
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+    wait_for_closed(agent, &binary_output).await?;
+    let response = agent
+        .client
+        .get(agent.base_url.join(&binary_output)?)
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.bytes().await?.as_ref(), b"\x00\x01\xfehello\xff");
+
+    let record_session = Uuid::new_v4().to_string();
+    let record_base = format!(
+        "/durable-stream-agents/ds3-{record_session}/echo-records/invocations/{record_session}/streams"
+    );
+    let record_input = format!("{record_base}/input");
+    let record_output = format!("{record_base}/$result");
+    assert_eq!(
+        append_json(
+            agent,
+            &record_input,
+            serde_json::json!({"name": "one", "number": 1}),
+            false,
+        )
+        .await?
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        append_json(
+            agent,
+            &record_input,
+            serde_json::json!([
+                {"name": "two", "number": 2},
+                {"name": "three", "number": 3}
+            ]),
+            false,
+        )
+        .await?
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let invalid = append_json(
+        agent,
+        &record_input,
+        serde_json::json!([
+            {"name": "must-not-append", "number": 4},
+            {"name": "invalid", "number": "not-a-number"}
+        ]),
+        false,
+    )
+    .await?;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    let problem = invalid.text().await?;
+    assert!(problem.contains("$[1]"), "missing item path: {problem}");
+    assert!(
+        problem.contains("number"),
+        "missing field path/detail: {problem}"
+    );
+    let close = agent
+        .client
+        .post(agent.base_url.join(&record_input)?)
+        .header("stream-closed", "true")
+        .send()
+        .await?;
+    assert_eq!(close.status(), StatusCode::NO_CONTENT);
+    wait_for_closed(agent, &record_output).await?;
+    let records = agent
+        .client
+        .get(agent.base_url.join(&record_output)?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(
+        records,
+        serde_json::json!([
+            {"name": "one", "number": 1},
+            {"name": "two", "number": 2},
+            {"name": "three", "number": 3}
+        ])
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn post_input_requires_explicit_body_arguments_before_lazy_start(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let base = format!("/durable-stream-agents/ds3-{session}/prefixed/invocations/{session}");
+    let input = format!("{base}/streams/input");
+    let output = format!("{base}/streams/$result");
+    let rejected = append_json(agent, &input, serde_json::json!("value"), false).await?;
+    assert_eq!(rejected.status(), StatusCode::NOT_FOUND);
+    let problem = rejected.text().await?;
+    assert!(
+        problem.contains("PUT"),
+        "missing PUT instruction: {problem}"
+    );
+    assert!(problem.contains(&base), "missing session URL: {problem}");
+
+    let created = agent
+        .client
+        .put(agent.base_url.join(&base)?)
+        .json(&serde_json::json!({"prefix": "prefix:"}))
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        append_json(agent, &input, serde_json::json!("value"), true)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    wait_for_closed(agent, &output).await?;
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&output)?)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?,
+        serde_json::json!(["prefix:value"])
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn post_input_validates_body_content_type_and_control_headers(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let input = echo_stream_path(&session, "input");
+    let url = agent.base_url.join(&input)?;
+
+    for request in [
+        agent
+            .client
+            .post(url.clone())
+            .body("\"missing content type\""),
+        agent
+            .client
+            .post(url.clone())
+            .header(CONTENT_TYPE, "application/json")
+            .body("not json"),
+        agent
+            .client
+            .post(url.clone())
+            .header(CONTENT_TYPE, "application/json")
+            .body("[]"),
+        agent.client.post(url.clone()),
+    ] {
+        assert_eq!(request.send().await?.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        agent
+            .client
+            .post(url.clone())
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body("x")
+            .send()
+            .await?
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        agent
+            .client
+            .post(url.clone())
+            .header(CONTENT_TYPE, "application/json")
+            .body(vec![b'x'; 1024 * 1024 + 1])
+            .send()
+            .await?
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    assert_eq!(
+        agent
+            .client
+            .post(url.clone())
+            .json(&vec!["tiny"; 4097])
+            .send()
+            .await?
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    let ignored_close = append_json(agent, &input, serde_json::json!("open"), false).await?;
+    assert_eq!(ignored_close.status(), StatusCode::NO_CONTENT);
+    let ignored_close = agent
+        .client
+        .post(url)
+        .header(CONTENT_TYPE, "application/json")
+        .header("stream-closed", "yes")
+        .body("\"still-open\"")
+        .send()
+        .await?;
+    assert_eq!(ignored_close.status(), StatusCode::NO_CONTENT);
+    assert_eq!(header(&ignored_close, "stream-closed"), "false");
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn post_input_enforces_external_producer_sequence_and_epoch(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let input = echo_stream_path(&session, "input");
+    let url = agent.base_url.join(&input)?;
+    let post = |epoch: &str, sequence: &str, value: &str| {
+        agent
+            .client
+            .post(url.clone())
+            .header(CONTENT_TYPE, "application/json")
+            .header("producer-id", "producer")
+            .header("producer-epoch", epoch)
+            .header("producer-seq", sequence)
+            .body(format!("\"{value}\""))
+    };
+
+    for (epoch, sequence) in [("-1", "0"), ("0", "1.0"), ("9007199254740992", "0")] {
+        assert_eq!(
+            post(epoch, sequence, "bad").send().await?.status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        agent
+            .client
+            .post(url.clone())
+            .header("producer-id", "producer")
+            .send()
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let first = post("7", "0", "zero").send().await?;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_offset = header(&first, "stream-next-offset");
+    let second = post("7", "1", "one").send().await?;
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(header(&second, "producer-seq"), "1");
+    let duplicate = post("7", "0", "ignored").send().await?;
+    assert_eq!(duplicate.status(), StatusCode::NO_CONTENT);
+    assert_eq!(header(&duplicate, "stream-next-offset"), first_offset);
+    assert_eq!(header(&duplicate, "producer-seq"), "1");
+
+    let gap = post("7", "3", "gap").send().await?;
+    assert_eq!(gap.status(), StatusCode::CONFLICT);
+    assert_eq!(header(&gap, "producer-expected-seq"), "2");
+    assert_eq!(header(&gap, "producer-received-seq"), "3");
+    let fenced = post("6", "2", "fenced").send().await?;
+    assert_eq!(fenced.status(), StatusCode::FORBIDDEN);
+    assert_eq!(header(&fenced, "producer-epoch"), "7");
+
+    let new_epoch = post("8", "0", "new-epoch").send().await?;
+    assert_eq!(new_epoch.status(), StatusCode::OK);
+    assert_eq!(header(&new_epoch, "producer-seq"), "0");
+
+    let closed = post("8", "1", "closed")
+        .header("stream-closed", "true")
+        .send()
+        .await?;
+    assert_eq!(closed.status(), StatusCode::OK);
+    let final_offset = header(&closed, "stream-next-offset");
+    let retried = post("8", "1", "different")
+        .header("stream-closed", "true")
+        .send()
+        .await?;
+    assert_eq!(retried.status(), StatusCode::NO_CONTENT);
+    assert_eq!(header(&retried, "producer-seq"), "1");
+    assert_eq!(header(&retried, "stream-next-offset"), final_offset);
+
+    let after_close = post("8", "2", "after-close").send().await?;
+    assert_eq!(after_close.status(), StatusCode::CONFLICT);
+    assert_eq!(header(&after_close, "stream-closed"), "true");
+    assert_eq!(header(&after_close, "stream-next-offset"), final_offset);
+
+    let output = echo_stream_path(&session, "output");
+    wait_for_closed(agent, &output).await?;
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&output)?)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?,
+        serde_json::json!(["zero", "one", "new-epoch", "closed"])
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn post_input_offsets_and_retry_survive_reconstruction(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let id = format!("ds3-{session}");
+    let component_id = agent
+        .client
+        .put(
+            agent
+                .base_url
+                .join(&format!("/durable-stream-agents/{id}/component-id"))?,
+        )
+        .send()
+        .await?
+        .json::<String>()
+        .await?;
+    let worker = AgentId {
+        component_id: ComponentId(Uuid::parse_str(&component_id)?),
+        agent_id: format!("DurableStreamAgent(\"{id}\")"),
+    };
+    let input = echo_stream_path(&session, "input");
+    let output = echo_stream_path(&session, "output");
+    let mut offsets = Vec::new();
+    for sequence in 0..100 {
+        let response = agent
+            .client
+            .post(agent.base_url.join(&input)?)
+            .header(CONTENT_TYPE, "application/json")
+            .header("producer-id", "sequential")
+            .header("producer-epoch", "0")
+            .header("producer-seq", sequence.to_string())
+            .json(&format!("value-{sequence:03}"))
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK, "sequence {sequence}");
+        offsets.push(header(&response, "stream-next-offset"));
+    }
+    assert!(offsets.windows(2).all(|pair| pair[0] < pair[1]));
+
+    // The per-stream append budget is exactly 100 requests per one-second window.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+
+    agent.user.simulated_crash(&worker).await?;
+
+    let retry = agent
+        .client
+        .post(agent.base_url.join(&input)?)
+        .header(CONTENT_TYPE, "application/json")
+        .header("producer-id", "sequential")
+        .header("producer-epoch", "0")
+        .header("producer-seq", "99")
+        .header("stream-closed", "true")
+        .json("value-099")
+        .send()
+        .await?;
+    assert_eq!(retry.status(), StatusCode::NO_CONTENT);
+    assert_eq!(header(&retry, "stream-next-offset"), offsets[99]);
+    assert_eq!(header(&retry, "producer-seq"), "99");
+
+    let close = agent
+        .client
+        .post(agent.base_url.join(&input)?)
+        .header("stream-closed", "true")
+        .send()
+        .await?;
+    assert_eq!(close.status(), StatusCode::NO_CONTENT);
+    wait_for_closed(agent, &output).await?;
+    let values = agent
+        .client
+        .get(agent.base_url.join(&output)?)
+        .send()
+        .await?
+        .json::<Vec<String>>()
+        .await?;
+    assert_eq!(
+        values,
+        (0..100)
+            .map(|i| format!("value-{i:03}"))
+            .collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
 #[test]
 #[timeout("120s")]
 async fn lifecycle_json_binary_head_and_methods(
@@ -681,29 +1171,59 @@ async fn websocket_input_is_readable_through_http(
         }
         other => anyhow::bail!("invocation was not accepted: {other:?}"),
     };
-    let values = ["first: λ\nline", "second: different length"];
-    for (sequence, value) in values.iter().enumerate() {
-        send_public_request(
-            &mut socket,
-            &PublicClientMessage::InputStreamItem {
-                channel: input_channel,
-                sequence: DecimalU64(sequence as u64),
-                value: serde_json::json!(value),
-                version: INVOCATION_SESSION_VERSION,
-            },
-        )
-        .await?;
-    }
     send_public_request(
         &mut socket,
-        &PublicClientMessage::InputStreamEnd {
+        &PublicClientMessage::InputStreamItem {
             channel: input_channel,
-            sequence: DecimalU64(values.len() as u64),
+            sequence: DecimalU64(0),
+            value: serde_json::json!("ws-first"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
     .await?;
     let mut output = Vec::new();
+    loop {
+        if let PublicServerMessage::OutputStreamItem { value, .. } =
+            receive_public_response(&mut socket).await?
+        {
+            output.push(value);
+            break;
+        }
+    }
+    let input_path = echo_stream_path(&session, "input");
+    assert_eq!(
+        append_json(agent, &input_path, serde_json::json!("post-middle"), false)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    loop {
+        if let PublicServerMessage::OutputStreamItem { value, .. } =
+            receive_public_response(&mut socket).await?
+        {
+            output.push(value);
+            break;
+        }
+    }
+    send_public_request(
+        &mut socket,
+        &PublicClientMessage::InputStreamItem {
+            channel: input_channel,
+            sequence: DecimalU64(1),
+            value: serde_json::json!("ws-last"),
+            version: INVOCATION_SESSION_VERSION,
+        },
+    )
+    .await?;
+    send_public_request(
+        &mut socket,
+        &PublicClientMessage::InputStreamEnd {
+            channel: input_channel,
+            sequence: DecimalU64(2),
+            version: INVOCATION_SESSION_VERSION,
+        },
+    )
+    .await?;
     loop {
         match receive_public_response(&mut socket).await? {
             PublicServerMessage::OutputStreamItem { value, .. } => output.push(value),
@@ -717,7 +1237,8 @@ async fn websocket_input_is_readable_through_http(
             _ => {}
         }
     }
-    assert_eq!(serde_json::json!(output), serde_json::json!(values));
+    let values = serde_json::json!(["ws-first", "post-middle", "ws-last"]);
+    assert_eq!(serde_json::json!(output), values);
     for slot in ["input", "output"] {
         let path = stream_path("echo", &session, slot, 0);
         wait_for_closed(agent, &path).await?;
@@ -731,7 +1252,7 @@ async fn websocket_input_is_readable_through_http(
         let response = agent.client.get(agent.base_url.join(&path)?).send().await?;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(header(&response, "stream-closed"), "true");
-        assert_eq!(response.json::<Value>().await?, serde_json::json!(values));
+        assert_eq!(response.json::<Value>().await?, values);
     }
     Ok(())
 }

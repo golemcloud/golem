@@ -51,6 +51,44 @@ Use the worker-executor metrics and traces to inspect attachment activity:
 
 See [Metrics](/next/operate/metrics) and [Logs](/next/operate/logs) for endpoint and exporter setup.
 
+## Writing input streams over HTTP
+
+Input slots accept Durable Streams `POST` requests by default. Output slots and `$result` are read-only (`405` with `Allow`). For a `stream<string>` input named `input`, append two messages with:
+
+```http
+POST {base}/invocations/{session}/streams/input
+Content-Type: application/json
+Producer-Id: uploader
+Producer-Epoch: 0
+Producer-Seq: 0
+
+["first", "second"]
+```
+
+Each JSON array element is one message; a single non-array JSON value is one message. Arrays are flattened only one level, and an empty array is invalid. Every item is validated against the invocation's pinned element schema before any item in the batch is appended. Invalid input returns `400` with an `application/problem+json` body containing `path` and `detail`. A `stream<u8>` input instead accepts one binary batch with `Content-Type: application/octet-stream`.
+
+A nonempty append requires the slot's content type (`400` if missing, `409` if mismatched). Send `Stream-Closed: true` to append and close atomically, or send an empty body with that header to close without appending. An empty close-only request may omit Content-Type; any supplied Content-Type is ignored. Other Stream-Closed values are treated as absent. Successful ordinary writes return `204`; a newly accepted write with producer headers returns `200`, and its duplicate retry returns `204`. All successful writes include `Stream-Next-Offset` and `Stream-Closed`. Further writes after closure return `409` with the final offset and `Stream-Closed: true`; repeating an ordinary empty close returns `204`.
+
+The three `Producer-*` headers are optional but must be supplied together. Epoch and sequence are decimal integers from 0 through 9007199254740991. Sequence starts at zero and increases per request, not per item. A larger epoch fences older epochs and starts again at sequence zero. Successful producer responses echo `Producer-Epoch` and report the highest accepted `Producer-Seq`. While the stream is open, repeating a sequence returns its original offset without writing again. After closure, only the original closing producer tuple gets this successful retry; other producer tuples return `409`. A stale epoch returns `403` with the current epoch; a sequence gap returns `409` with `Producer-Expected-Seq` and `Producer-Received-Seq`.
+
+Producer state and stream data are committed in the same oplog batch before acknowledgment. After losing a response, retry with the same producer tuple to avoid duplicate items. Plain appends without producer headers do not have this guarantee, and the gateway does not transparently retry append calls. HTTP writes and an attached WebSocket can interleave on the same input: the WebSocket keeps its own continuous sequence counter, while the shared durable offsets order all messages. Reconnecting the WebSocket restores its counter from durable history, independently of HTTP producer counters.
+
+Closing the input over HTTP also ends input from an attached WebSocket. WebSocket frames already in flight after that close are discarded without failing the invocation or adding items to durable history. A WebSocket sender must still stop after sending its own End frame; sending more items after its own End is a protocol error.
+
+POST can create a missing session when every non-stream argument is supplied by the route's path or query. Otherwise, first `PUT {base}/invocations/{session}` with the non-stream argument object; POST returns `404` with that instruction until the session exists. A deleted slot returns `410` rather than recreating it.
+
+Worker-service limits are independent of the executor's stream limits:
+
+```toml
+[durable_streams]
+max_append_body_bytes = 1048576
+
+[durable_streams.load]
+max_append_requests_per_second_per_stream = 100
+```
+
+Oversized bodies and JSON batches with more than 4096 messages return `413`. The append cap is enforced per stream on each worker-service node in one-second windows and returns `429`; it does not consume the catch-up read budget. Append admission happens before storage access, including for closed or deleted slots, so an exhausted budget returns `429` before checking those states. Monitor `durable_stream_append_total` with outcomes `accepted`, `duplicate`, `fenced`, and `gap`, and `durable_stream_load_rejection_total` with reason `append-rate-limit`.
+
 ## Cancelling a session
 
 Delete an invocation session to cooperatively cancel all of its open streams:
@@ -83,7 +121,7 @@ DELETE {base}/invocations/{session}/streams/{slot}
 
 For an input slot, cancellation closes the external producer side; the Rust agent's input reader observes EOF after any already-buffered items. For an output slot or `$result`, cancellation records that the consumer has gone away. A write already accepted by the guest transport can still report success without being added to durable history; subsequent writes fail when the producer observes the closed consumer. Transport acceptance is not an acknowledgment of durable publication.
 
-Every stream deletion is a soft delete. After the successful deletion, all later requests to that URL use these statuses:
+Every stream deletion is a soft delete. After the successful deletion, authenticated requests admitted by the load limits use these statuses:
 
 | Method                       | Status         |
 | ---------------------------- | -------------- |

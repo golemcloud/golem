@@ -958,10 +958,19 @@ pub struct StreamExternalProducerStateRecordV1 {
     pub format_version: u8,
     pub session_key: StreamSessionKeyV1,
     pub stream_id: StreamId,
-    pub producer_id: String,
+    pub producer_id: ExternalProducerIdV1,
     pub epoch: u64,
     pub sequence: u64,
+    pub next_sequence: u64,
     pub resulting_offset: StreamOffsetV1,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum ExternalProducerIdV1 {
+    Client(String),
+    Attached,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1248,7 +1257,8 @@ impl StreamSessionRecordV1 {
                 StreamOffsetV1::from_bytes(record.high_water.resulting_offset.0).is_ok()
             }
             Self::ExternalProducerState(record) => {
-                !record.producer_id.is_empty()
+                !matches!(&record.producer_id, ExternalProducerIdV1::Client(id) if id.is_empty())
+                    && record.next_sequence > record.sequence
                     && StreamOffsetV1::from_bytes(record.resulting_offset.0).is_ok()
             }
             Self::ConsumerItemValue(record) => {

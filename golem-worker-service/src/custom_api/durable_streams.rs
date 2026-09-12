@@ -4,6 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
+mod append;
 mod load;
 
 use super::call_agent::{CallAgentHandler, principal_from_request};
@@ -44,6 +45,7 @@ pub struct DurableStreamsHandler {
     call_agent: Arc<CallAgentHandler>,
     limiter: DurableStreamLoadLimiter,
     long_poll_timeout: Duration,
+    max_append_body_bytes: usize,
 }
 
 impl DurableStreamsHandler {
@@ -57,6 +59,7 @@ impl DurableStreamsHandler {
             call_agent,
             limiter: DurableStreamLoadLimiter::new(config.load.clone()),
             long_poll_timeout: config.long_poll_timeout,
+            max_append_body_bytes: config.max_append_body_bytes,
         }
     }
 
@@ -103,22 +106,12 @@ impl DurableStreamsHandler {
             }
         });
         let agent_id = self.call_agent.build_agent_id(route, behaviour, phantom)?;
-        if request.underlying.method() == Method::POST {
-            if let (Some(session), Some(slot)) = (&suffix.session, &suffix.slot)
-                && self
-                    .read_slot(route, &agent_id, session, slot, Vec::new(), 0, 0)
-                    .await?
-                    .is_some_and(|metadata| metadata.tombstoned)
-            {
-                return Ok(response(StatusCode::GONE));
-            }
-            let mut result = response(StatusCode::METHOD_NOT_ALLOWED);
-            result
-                .headers
-                .insert(http::header::ALLOW, "PUT, HEAD, GET, DELETE".into());
-            return Ok(result);
-        }
         match (request.underlying.method(), suffix.session, suffix.slot) {
+            (&Method::POST, Some(session), Some(slot)) => {
+                self.append(request, route, behaviour, &agent_id, &session, &slot)
+                    .await
+            }
+            (&Method::POST, _, _) => Ok(append::read_only_response()),
             (&Method::DELETE, Some(session), slot) => {
                 let result = self
                     .worker_service

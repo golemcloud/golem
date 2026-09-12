@@ -91,6 +91,30 @@ context, then appends `Finished`; a protocol terminal fences any later guest ter
 failing locally does not fail sibling streams or the invocation
 (`tests/rpc.rs::stream_local_output_failure_does_not_fail_sibling_or_invocation`).
 
+### External HTTP input appends
+
+`AppendToStreamSlot` resolves the route-authorized method and canonical input slot using the
+invocation's pinned schema. HTTP POST validates JSON batches or packed bytes before dispatch;
+it never retries a plain append transparently. `append_external_input_owned` checks the producer
+epoch/sequence and commits `ExternalProducerState`, items and optional terminal in the same oplog
+batch before publishing to the existing live bus. WebSocket input shares that history.
+
+JSON batches emit one `StreamItems` record per value in a single atomic commit. The
+`ExternalProducerIdV1` identity distinguishes HTTP `Client(String)` from `Attached`, so a client
+cannot claim the WebSocket's producer identity. Attached sequences count only WebSocket items
+(including packed bytes), continuously across attachment epochs. The producer assigns global
+sequences under its index guard and commits the transport-sequence-to-offset mapping alongside
+the items. Nested coordinates use global sequences; retries resolve the original batch and retain
+payload/topology validation. Resume reports the attached counter, not the global stream count.
+After another producer closes the input, fresh attached frames already in flight are discarded
+without failing the invocation. Items after the attached producer's own End remain protocol errors;
+terminal authorship is reconstructed from the producer head and stream terminal offsets.
+
+An open-stream duplicate returns its original offset and the producer's highest accepted sequence,
+not the current stream tail. After closure, only the original closing tuple is a producer duplicate:
+the persisted producer head must match the terminal offset. Other tuples return Closed; an ordinary
+producer-less empty close remains idempotent. No resident dedupe state or new replay path is used.
+
 ### External cancellation and deleted URLs
 
 HTTP export controls reuse `ControlDurableStreamAttachment`, with a system-only export request

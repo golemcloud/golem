@@ -1854,6 +1854,27 @@ impl WorkerService {
         self.worker_client.read_stream_slot(agent_id, request).await
     }
 
+    pub async fn append_to_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<
+        golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result,
+    > {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("append to authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .append_to_stream_slot(agent_id, request)
+            .await
+    }
+
     pub async fn invoke_public_agent_session_v1(
         &self,
         start: PublicAgentSessionStart,

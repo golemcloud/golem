@@ -30,8 +30,17 @@ static EPHEMERAL_PHANTOM_INVOCATION_REJECTION_TOTAL: LazyLock<IntCounterVec> =
 static DURABLE_STREAM_LOAD_REJECTION_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "durable_stream_load_rejection_total",
-        "Number of durable stream read requests rejected by load limiting, by reason",
+        "Number of durable stream requests rejected by load limiting, by reason",
         &["reason"]
+    )
+    .unwrap()
+});
+
+static DURABLE_STREAM_APPEND_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        "durable_stream_append_total",
+        "Number of durable stream append requests by bounded outcome",
+        &["outcome"]
     )
     .unwrap()
 });
@@ -39,6 +48,12 @@ static DURABLE_STREAM_LOAD_REJECTION_TOTAL: LazyLock<IntCounterVec> = LazyLock::
 pub fn record_durable_stream_load_rejection(reason: &str) {
     DURABLE_STREAM_LOAD_REJECTION_TOTAL
         .with_label_values(&[reason])
+        .inc();
+}
+
+pub fn record_durable_stream_append(outcome: &'static str) {
+    DURABLE_STREAM_APPEND_TOTAL
+        .with_label_values(&[outcome])
         .inc();
 }
 

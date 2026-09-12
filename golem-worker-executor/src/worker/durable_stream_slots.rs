@@ -14,8 +14,8 @@
 
 use super::*;
 use crate::durable_host::durable_stream::{
-    CommittedProducerStreamEventPayloadV1, ExternalAppendOutcomeV1, ExternalProducerV1,
-    StreamHandleReadResultV1,
+    CommittedProducerStreamEventPayloadV1, DurableStreamProducerError, ExternalAppendOutcomeV1,
+    ExternalProducerV1, StreamHandleReadResultV1,
 };
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -25,8 +25,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     append_to_stream_slot_request, append_to_stream_slot_response, stream_slot_item,
 };
 use golem_common::model::durable_stream::{
-    DurableStreamHandleV1, DurableStreamReadRequestV1, StreamHandleReadRequestV1,
-    StreamItemsPayloadV1, StreamOffsetV1, StreamSessionKeyV1,
+    DurableStreamHandleV1, DurableStreamReadRequestV1, ExternalProducerIdV1,
+    StreamHandleReadRequestV1, StreamItemsPayloadV1, StreamOffsetV1, StreamSessionKeyV1,
 };
 use golem_common::model::invocation_session_public::validate_durable_stream_session_id;
 use golem_common::schema::{
@@ -54,6 +54,19 @@ enum SlotSource {
 }
 
 type SlotSchema = (SchemaType, Option<usize>, bool, bool);
+
+fn append_error(error: DurableStreamProducerError) -> WorkerExecutorError {
+    match error {
+        DurableStreamProducerError::InvalidValueBatch
+        | DurableStreamProducerError::ItemTooLarge
+        | DurableStreamProducerError::InvalidPackedU8Batch
+        | DurableStreamProducerError::InvalidHandle
+        | DurableStreamProducerError::UnknownStream(_) => {
+            WorkerExecutorError::invalid_request(error.to_string())
+        }
+        _ => WorkerExecutorError::runtime(error.to_string()),
+    }
+}
 
 /// Returns the element type, root record-field index, direction and whether the slot is a stream.
 fn slot_schema(
@@ -360,6 +373,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             stream_identity: blake3::hash(&identity).to_hex().to_string(),
             slots: slot.slots,
             tombstoned: matches!(slot.source, SlotSource::Tombstoned),
+            writable: slot.writable,
         };
         match slot.source {
             SlotSource::Stream(handle) => {
@@ -548,7 +562,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let empty = || golem_api_grpc::proto::golem::common::Empty {};
         let producer = self.durable_stream_producer().await?;
         let Some(slot) = producer
-            .with_metadata_activity(self.resolve_stream_slot(&request.session, &request.slot, None))
+            .with_metadata_activity(self.resolve_stream_slot(
+                &request.session,
+                &request.slot,
+                Some(&request.expected_method),
+            ))
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??
         else {
@@ -556,10 +574,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 result: Some(Outcome::NotFound(empty())),
             });
         };
+        if matches!(slot.source, SlotSource::Tombstoned) {
+            return Ok(AppendToStreamSlotResponse {
+                result: Some(Outcome::Gone(empty())),
+            });
+        }
         if !slot.writable {
-            return Err(WorkerExecutorError::invalid_request(
-                "stream slot is read-only",
-            ));
+            return Ok(AppendToStreamSlotResponse {
+                result: Some(Outcome::ReadOnly(empty())),
+            });
         }
         let SlotSource::Stream(handle) = slot.source else {
             return Err(WorkerExecutorError::runtime("input slot has no stream"));
@@ -593,7 +616,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         producer
             .validate_handle(&handle)
             .await
-            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            .map_err(append_error)?;
         let result = producer
             .append_external_input(
                 &slot.session,
@@ -601,20 +624,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 payload,
                 request.close,
                 request.producer.map(|producer| ExternalProducerV1 {
-                    id: producer.id,
+                    id: ExternalProducerIdV1::Client(producer.id),
                     epoch: producer.epoch,
                     sequence: producer.sequence,
                 }),
             )
             .await
-            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            .map_err(append_error)?;
         Ok(AppendToStreamSlotResponse {
             result: Some(match result {
                 ExternalAppendOutcomeV1::Accepted(offset) => Outcome::Accepted(AppendAccepted {
                     offset: offset.0.to_vec(),
                 }),
-                ExternalAppendOutcomeV1::Duplicate(offset) => Outcome::Duplicate(AppendDuplicate {
+                ExternalAppendOutcomeV1::Duplicate {
+                    offset,
+                    highest_sequence,
+                } => Outcome::Duplicate(AppendDuplicate {
                     offset: offset.0.to_vec(),
+                    highest_sequence,
                 }),
                 ExternalAppendOutcomeV1::EpochFenced(current_epoch) => {
                     Outcome::EpochFenced(AppendEpochFenced { current_epoch })

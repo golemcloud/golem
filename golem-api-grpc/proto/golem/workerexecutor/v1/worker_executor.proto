@@ -598,6 +598,8 @@ message ReadStreamSlotSuccess {
   repeated string slots = 10;
   // The canonical slot URL is soft-deleted; no stream content is returned.
   bool tombstoned = 11;
+  // Direction from the invocation's pinned schema, not the current deployment.
+  bool writable = 12;
 }
 
 message ReadStreamSlotResponse {
@@ -627,6 +629,7 @@ message AppendToStreamSlotRequest {
   }
   bool close = 8;
   optional ExternalStreamProducer producer = 9;
+  string expected_method = 10;
 }
 
 message TypedStreamSlotItems {
@@ -634,7 +637,11 @@ message TypedStreamSlotItems {
 }
 
 message AppendAccepted { bytes offset = 1; }
-message AppendDuplicate { bytes offset = 1; }
+message AppendDuplicate {
+  bytes offset = 1;
+  // Highest sequence accepted in the producer's current epoch. Absent for a close without producer headers.
+  optional uint64 highest_sequence = 2;
+}
 message AppendEpochFenced { uint64 current_epoch = 1; }
 message AppendSequenceGap { uint64 expected = 1; uint64 received = 2; }
 
@@ -647,6 +654,8 @@ message AppendToStreamSlotResponse {
     golem.common.Empty closed = 5;
     golem.common.Empty not_found = 6;
     golem.worker.v1.WorkerExecutionError failure = 7;
+    golem.common.Empty gone = 8;
+    golem.common.Empty read_only = 9;
   }
 }
 

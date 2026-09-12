@@ -515,6 +515,16 @@ pub trait WorkerClient: Send + Sync {
         ))
     }
 
+    async fn append_to_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+        Err(WorkerServiceError::Internal(
+            "durable stream appends are not supported by this worker client".to_string(),
+        ))
+    }
+
     async fn control_export_stream(
         &self,
         _agent_id: &AgentId,
@@ -1956,6 +1966,53 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             WorkerServiceError::InternalCallError,
         )
         .await
+    }
+
+    async fn append_to_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+        let routing_table = self
+            .routing_table_service
+            .get_routing_table()
+            .await
+            .map_err(|error| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToGetRoutingTable(error),
+                )
+            })?;
+        let pod = routing_table.lookup(agent_id).ok_or_else(|| {
+            WorkerServiceError::InternalCallError(CallWorkerExecutorError::FailedToConnectToPod(
+                Status::unavailable(format!("no active shard for agent {agent_id}")),
+            ))
+        })?;
+        // A plain append has no retry identity. Let the HTTP producer decide whether
+        // to retry an ambiguous response, rather than silently appending twice.
+        let response = self
+            .worker_executor_clients
+            .call_without_retry(
+                "append_to_stream_slot",
+                pod.uri(self.worker_executor_clients.uses_tls()),
+                move |client| Box::pin(client.append_to_stream_slot(request.clone())),
+            )
+            .await
+            .map_err(|status| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(status),
+                )
+            })?;
+        match response.into_inner().result {
+            Some(workerexecutor::v1::append_to_stream_slot_response::Result::Failure(error)) => {
+                let error: WorkerExecutorError =
+                    error.try_into().map_err(WorkerServiceError::Internal)?;
+                Err(WorkerServiceError::GolemError(error))
+            }
+            Some(result) => Ok(result),
+            None => Err(WorkerServiceError::Internal(
+                "Empty append stream response".into(),
+            )),
+        }
     }
 
     async fn control_durable_stream_attachment(

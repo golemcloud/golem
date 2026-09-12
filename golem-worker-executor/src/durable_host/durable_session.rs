@@ -2015,18 +2015,38 @@ impl DurableSessionStreams {
                         parent_producer_sequence,
                         recursive_value_path: path,
                     };
-                    if let Some(existing) = self.handle(nested_transport_id)
-                        && self
+                    if let Some(existing) = self.handle(nested_transport_id) {
+                        let global_parent_sequence = self
                             .producer
-                            .handle_for_coordinate(&coordinate)
+                            .attached_global_sequence(
+                                &self.session_key,
+                                handle.stream_id,
+                                first_sequence,
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?
+                            .checked_add(item_index as u64)
+                            .ok_or_else(|| "durable input sequence overflow".to_string())?;
+                        let mut global_coordinate = coordinate.clone();
+                        if let StreamRegistrationCoordinateV1::Nested {
+                            parent_producer_sequence,
+                            ..
+                        } = &mut global_coordinate
+                        {
+                            *parent_producer_sequence = global_parent_sequence;
+                        }
+                        if self
+                            .producer
+                            .handle_for_coordinate(&global_coordinate)
                             .await
                             .map_err(|error| error.to_string())?
                             .as_ref()
                             != Some(&existing)
-                    {
-                        return Err(format!(
-                            "nested durable transport stream id {nested_transport_id} conflicts with its persisted coordinate"
-                        ));
+                        {
+                            return Err(format!(
+                                "nested durable transport stream id {nested_transport_id} conflicts with its persisted coordinate"
+                            ));
+                        }
                     }
                     nested_transport_ids.push(nested_transport_id);
                     nested_element_types
@@ -2082,7 +2102,8 @@ impl DurableSessionStreams {
         };
         let outcome = match self
             .producer
-            .write_items_with_nested(
+            .write_attached_items_with_nested(
+                &self.session_key,
                 handle.stream_id,
                 first_sequence,
                 canonical_payload,
@@ -2112,9 +2133,14 @@ impl DurableSessionStreams {
         };
         let mut nested_mappings = Vec::with_capacity(nested_transport_ids.len());
         if !nested_transport_ids.is_empty() {
+            let global_first_sequence = self
+                .producer
+                .attached_global_sequence(&self.session_key, handle.stream_id, first_sequence)
+                .await
+                .map_err(|error| error.to_string())?;
             let nested_handles = self
                 .producer
-                .nested_handles(handle.stream_id, first_sequence)
+                .nested_handles(handle.stream_id, global_first_sequence)
                 .await
                 .map_err(|error| error.to_string())?;
             if nested_handles.len() != nested_transport_ids.len() {
@@ -2190,10 +2216,27 @@ impl DurableSessionStreams {
             .ok_or_else(|| format!("unknown durable input stream {transport_stream_id}"))?;
         match self
             .producer
-            .end(handle.stream_id, sequence, StreamEndResultV1::Ok)
+            .append_external_input(
+                &self.session_key,
+                handle.stream_id,
+                None,
+                true,
+                Some(super::durable_stream::ExternalProducerV1 {
+                    id: golem_common::base_model::durable_stream::ExternalProducerIdV1::Attached,
+                    epoch: 0,
+                    sequence,
+                }),
+            )
             .await
         {
-            Ok(outcome) => Ok(Some(outcome.value)),
+            Ok(
+                super::durable_stream::ExternalAppendOutcomeV1::Accepted(offset)
+                | super::durable_stream::ExternalAppendOutcomeV1::Duplicate { offset, .. },
+            ) => Ok(Some(offset)),
+            Ok(super::durable_stream::ExternalAppendOutcomeV1::Closed) => Ok(None),
+            Ok(outcome) => Err(format!(
+                "unexpected attached input end outcome: {outcome:?}"
+            )),
             Err(error) if discards_input_after_terminal(&error, &self.session_key) => {
                 tracing::debug!(
                     transport_stream_id,
@@ -2702,7 +2745,7 @@ impl DurableSessionStreams {
             }
             if let Some(high_water) = self
                 .producer
-                .input_high_water(handle.stream_id)
+                .attached_input_high_water(&self.session_key, handle.stream_id)
                 .await
                 .map_err(|error| error.to_string())?
             {
@@ -5798,12 +5841,13 @@ fn discards_input_after_terminal(
         DurableStreamProducerError::SessionFinished(finished) if finished == session_key
     ) || matches!(
         error,
-        DurableStreamProducerError::FencedByTerminal(
-            CommittedProducerStreamEventPayloadV1::Cancel {
-                role: StreamCancelRoleV1::InputConsumer,
-                ..
-            }
-        )
+        DurableStreamProducerError::ClosedByOtherProducer
+            | DurableStreamProducerError::FencedByTerminal(
+                CommittedProducerStreamEventPayloadV1::Cancel {
+                    role: StreamCancelRoleV1::InputConsumer,
+                    ..
+                }
+            )
     )
 }
 
@@ -6810,6 +6854,10 @@ mod tests {
         let session_key = identity().invocation;
         assert!(discards_input_after_terminal(
             &DurableStreamProducerError::SessionFinished(session_key.clone()),
+            &session_key,
+        ));
+        assert!(discards_input_after_terminal(
+            &DurableStreamProducerError::ClosedByOtherProducer,
             &session_key,
         ));
         assert!(discards_input_after_terminal(
