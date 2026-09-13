@@ -42,6 +42,41 @@ object AgentClientDefinitionCompileSpec extends ZIOSpecDefault {
         ).bind(ParsedAgentId("Request(live)"))
       """)
       assertTrue(errors.nonEmpty)
+    },
+    test("complete definitions expose identity and lifecycle factories") {
+      val errors = typeCheckErrors("""
+        import golem.reflection.*
+        import golem.runtime.InputRecordCodec
+
+        val durable = AgentClientDefinition.complete(
+          name = "Counter",
+          mode = AgentMode.Durable,
+          constructor = InputRecordCodec.single[String]("name")
+        )
+        durable.agentId("main")
+        durable.client.get("main")
+        durable.client.getPhantom("main", golem.Uuid.random())
+        durable.client.newPhantom("main")
+
+        val ephemeral = AgentClientDefinition.complete(
+          name = "Request",
+          mode = AgentMode.Ephemeral,
+          constructor = InputRecordCodec.single[String]("route")
+        )
+        ephemeral.agentId("live")
+        ephemeral.client.getPhantom("live", golem.Uuid.random())
+        ephemeral.client.newPhantom("live")
+      """)
+      assertTrue(errors.isEmpty)
+    },
+    test("binding-only definitions do not expose identity or lifecycle factories") {
+      val errors = typeCheckErrors("""
+        import golem.reflection.*
+
+        AgentClientDefinition.bindingOnly.agentId(())
+        AgentClientDefinition.bindingOnly.client
+      """)
+      assertTrue(errors.nonEmpty)
     }
   )
 }
