@@ -836,31 +836,6 @@ pub(super) fn clone_file(target: &File, source: &File) -> std::io::Result<()> {
     ioctl_ficlone(target, source).map_err(errno_to_io)
 }
 
-pub(super) fn reflink_file(
-    root: &Path,
-    project_id: NonZeroU32,
-    source: &Path,
-    target: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let parent = create_copy_parent(root, target)?;
-    let temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let source = File::open(source)?;
-    if NonZeroU32::new(get_fsxattr(temporary.as_file())?.fsx_projid) != Some(project_id) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "managed XFS file-copy destination did not inherit its project identity",
-        ));
-    }
-    ioctl_ficlone(temporary.as_file(), &source).map_err(errno_to_io)?;
-    temporary.as_file().sync_all()?;
-    set_file_permissions(temporary.as_file(), read_only)?;
-    temporary
-        .persist_noclobber(target)
-        .map_err(|error| error.error)?;
-    rustix::fs::syncfs(&File::open(root)?).map_err(errno_to_io)
-}
-
 /// Makes the new file `target` share the extents of `source`.
 ///
 /// `target` must have `project_id`, which it gets from its directory, so that the extents are
@@ -2144,6 +2119,12 @@ mod tests {
         )
         .unwrap();
         std::os::unix::fs::symlink("data/file-0", agent_root.join("link")).unwrap();
+        std::fs::hard_link(agent_root.join("link"), agent_root.join("link-name")).unwrap();
+        std::fs::hard_link(
+            agent_root.join("data/file-1"),
+            agent_root.join("data/file-1-name"),
+        )
+        .unwrap();
         rustix::fs::syncfs(&*volume_root).unwrap();
 
         let unsynced = vec![0xa5; FILE_BYTES];
@@ -2172,7 +2153,7 @@ mod tests {
         let copy = HostDirectory::create_in(copies.path(), std::ffi::OsStr::new("copy"))
             .await
             .unwrap();
-        <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+        let groups = <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
             &filesystem,
             SandboxPath::at_root(""),
             excluded,
@@ -2207,15 +2188,34 @@ mod tests {
                 "data/file-{index} in the copy must have the bytes of the agent file"
             );
         });
+        assert_eq!(
+            groups.as_ref(),
+            [
+                LinkGroup {
+                    first: Path::new("data/file-1").into(),
+                    others: Box::new([Box::from(Path::new("data/file-1-name"))]),
+                },
+                LinkGroup {
+                    first: Path::new("link").into(),
+                    others: Box::new([Box::from(Path::new("link-name"))]),
+                },
+            ]
+        );
         let mut expected = tree_copy::tree_listing(&agent_root);
-        ["static/asset.bin", "data/nested", "data/nested/hidden"]
-            .into_iter()
-            .for_each(|absent| {
-                assert!(
-                    expected.remove(absent),
-                    "{absent} must be in the agent tree listing"
-                );
-            });
+        [
+            "static/asset.bin",
+            "data/nested",
+            "data/nested/hidden",
+            "data/file-1-name",
+            "link-name",
+        ]
+        .into_iter()
+        .for_each(|absent| {
+            assert!(
+                expected.remove(absent),
+                "{absent} must be in the agent tree listing"
+            );
+        });
         assert_eq!(tree_copy::tree_listing(&copy_root), expected);
         assert_eq!(
             std::fs::metadata(copy_root.join("config.toml"))
@@ -2429,6 +2429,17 @@ mod tests {
                 );
             });
         assert!(tree.as_path().join("data/large").is_file());
+        let seeded = <SandboxFilesystem as SandboxFilesystemAdapter>::get_path_attributes(
+            &filesystem,
+            SandboxPath::at_root("data/large"),
+            SandboxFollow::No,
+        )
+        .await
+        .unwrap();
+        assert!(
+            seeded.created.is_some(),
+            "managed XFS must report the creation time of a seeded file"
+        );
 
         let existing = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
@@ -2441,20 +2452,12 @@ mod tests {
 
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
-            Box::new([
-                entry(
-                    &replacement,
-                    "data/small",
-                    SeedAccess::ReadOnly,
-                    OnExisting::Replace,
-                ),
-                entry(
-                    &replacement,
-                    "data/large",
-                    SeedAccess::ReadWrite,
-                    OnExisting::Keep,
-                ),
-            ]),
+            Box::new([entry(
+                &replacement,
+                "data/small",
+                SeedAccess::ReadOnly,
+                OnExisting::Replace,
+            )]),
         )
         .await
         .unwrap();
@@ -2487,18 +2490,7 @@ mod tests {
         );
 
         std::fs::write(filesystem.root().join("data/agent"), vec![0x34; 32 * 1024]).unwrap();
-        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
-            &filesystem,
-            Box::new([entry(&tree, "", SeedAccess::FromSource, OnExisting::Keep)]),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            std::fs::read(filesystem.root().join("data/small")).unwrap(),
-            vec![0x33; 128 * 1024],
-            "keep must leave a file below a merged directory"
-        );
-        let allocation_kept = settled_allocation(&filesystem).await;
+        let allocation_before_replace = settled_allocation(&filesystem).await;
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
             Box::new([entry(
@@ -2526,12 +2518,12 @@ mod tests {
         );
         let allocation_restored = settled_allocation(&filesystem).await;
         assert!(
-            allocation_restored.allocated_bytes < allocation_kept.allocated_bytes,
-            "a replacement with fewer bytes must release project bytes: before={allocation_kept:?}, after={allocation_restored:?}"
+            allocation_restored.allocated_bytes < allocation_before_replace.allocated_bytes,
+            "a replacement with fewer bytes must release project bytes: before={allocation_before_replace:?}, after={allocation_restored:?}"
         );
         assert_eq!(
             allocation_restored.filesystem_objects,
-            allocation_kept.filesystem_objects
+            allocation_before_replace.filesystem_objects
         );
 
         let limited = provisioning

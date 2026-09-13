@@ -126,7 +126,6 @@ impl HostDirectory {
 
     /// Makes an empty directory with this name in `parent`. Fails if the name exists, or if the
     /// name is not one normal component.
-    #[allow(dead_code)]
     pub(crate) async fn create_in(
         parent: &HostPath,
         name: &OsStr,
@@ -167,7 +166,6 @@ impl HostDirectory {
     ///
     /// A directory that is already absent, for example because its parent was removed first, gives
     /// success.
-    #[allow(dead_code)]
     pub(crate) async fn discard(mut self) -> Result<(), FilesystemStorageError> {
         self.removed = true;
         let path = self.path.clone();
