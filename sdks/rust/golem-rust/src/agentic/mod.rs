@@ -66,6 +66,7 @@ mod extended_tool_type;
 mod http;
 mod multimodal;
 mod principal_serde;
+pub mod reflection;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
