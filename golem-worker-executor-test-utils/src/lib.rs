@@ -155,7 +155,7 @@ use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
-use golem_worker_executor::worker::{RetryDecision, Worker};
+use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
@@ -620,6 +620,10 @@ impl TestWorkerExecutor {
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
         self.additional_test_deps
             .fail_next_oplog_download(agent_id.clone());
+    }
+
+    pub fn set_worker_deletion_hook(&self, hook: Arc<dyn WorkerDeletionHook>) {
+        self.additional_test_deps.set_worker_deletion_hook(hook);
     }
 
     pub fn return_no_op_after_oplog_reads(
@@ -2050,6 +2054,10 @@ impl WorkerCtx for TestWorkerCtx {
             .map(|scope| scope.activation().entity().name().to_string());
         self.additional_test_deps
             .entity_invocation_body_hook(self.agent_id.clone(), entity_name)
+    }
+
+    fn worker_deletion_hook(extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
+        extra_deps.worker_deletion_hook()
     }
 
     async fn create(
@@ -4060,6 +4068,7 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
     agent_invocation_success_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
+    worker_deletion_hook: Arc<Mutex<Option<Arc<dyn WorkerDeletionHook>>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -4093,8 +4102,17 @@ impl AdditionalTestDeps {
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            worker_deletion_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    fn set_worker_deletion_hook(&self, hook: Arc<dyn WorkerDeletionHook>) {
+        *self.worker_deletion_hook.lock().unwrap() = Some(hook);
+    }
+
+    fn worker_deletion_hook(&self) -> Option<Arc<dyn WorkerDeletionHook>> {
+        self.worker_deletion_hook.lock().unwrap().clone()
     }
 
     fn gate_next_completed_entity_reconstruction(

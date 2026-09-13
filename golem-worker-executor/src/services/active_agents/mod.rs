@@ -50,6 +50,7 @@ use crate::services::golem_config::{
     ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
+use crate::worker::Worker;
 use crate::worker::entity_invocation::{
     EntityInvocationHandle, start_entity_invocation, start_pre_acquired_entity_invocation,
 };
@@ -63,7 +64,6 @@ use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
-use crate::worker::{Worker, WorkerAcquisition};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -737,15 +737,13 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                         &deps,
                         self.card_interest_index.clone(),
                         owned_agent_id.clone(),
-                        WorkerAcquisition::create_or_load(
-                            worker_env,
-                            worker_agent_config,
-                            component_revision,
-                            parent,
-                            invocation_context_stack,
-                            principal,
-                            freshness_disposition,
-                        ),
+                        worker_env,
+                        worker_agent_config,
+                        component_revision,
+                        parent,
+                        invocation_context_stack,
+                        principal,
+                        freshness_disposition,
                     )
                     .in_current_span()
                     .await;
@@ -779,19 +777,14 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .agents
             .get_or_insert_simple(&cache_key, || {
                 Box::pin(async move {
-                    Worker::new(
-                        &deps,
-                        self.card_interest_index.clone(),
-                        owned_agent_id,
-                        WorkerAcquisition::ExistingOnly,
-                    )
-                    .in_current_span()
-                    .await
-                    .map(|worker| {
-                        let worker = Arc::new(worker);
-                        Worker::start_durable_stream_attachment_reconciler(&worker);
-                        Arc::new(ActiveAgent::new(worker))
-                    })
+                    Worker::load_existing(&deps, self.card_interest_index.clone(), owned_agent_id)
+                        .in_current_span()
+                        .await
+                        .map(|worker| {
+                            let worker = Arc::new(worker);
+                            Worker::start_durable_stream_attachment_reconciler(&worker);
+                            Arc::new(ActiveAgent::new(worker))
+                        })
                 })
             })
             .await?;
@@ -802,6 +795,13 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         self.try_get_active_agent(owned_agent_id)
             .await
             .map(|active_agent| active_agent.primary())
+    }
+
+    pub(crate) async fn contains_worker_generation(&self, expected: &Arc<Worker<Ctx>>) -> bool {
+        self.agents
+            .get(expected.owned_agent_id())
+            .await
+            .is_some_and(|active_agent| Arc::ptr_eq(&active_agent.primary, expected))
     }
 
     pub async fn try_get_active_agent(
@@ -851,9 +851,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         expected: &Arc<Worker<Ctx>>,
         deletion_owner: bool,
     ) -> bool {
-        if !deletion_owner && expected.deletion_owns_retirement() {
-            return false;
-        }
         let owned_agent_id = expected.owned_agent_id().clone();
         let Some(active_agent) = self.agents.get(&owned_agent_id).await else {
             return false;
@@ -862,25 +859,36 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             return false;
         }
         if !deletion_owner {
+            let lifecycle = expected.instance.lock().await;
+            if lifecycle.deletion_owns_retirement() {
+                return false;
+            }
+            drop(lifecycle);
             active_agent
                 .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
                     Timestamp::now_utc(),
                 )))
                 .await;
         }
+        let lifecycle = expected.instance.lock().await;
+        if !deletion_owner && lifecycle.deletion_owns_retirement() {
+            return false;
+        }
         let expected_active = active_agent.clone();
         let expected_worker = expected.clone();
-        self.card_interest_index
+        let removed = self
+            .card_interest_index
             .clear_agent_interest_if(
                 &owned_agent_id,
                 self.agents
                     .remove_if_cached(&owned_agent_id, move |current| {
                         Arc::ptr_eq(current, &expected_active)
                             && Arc::ptr_eq(&current.primary, &expected_worker)
-                            && (deletion_owner || !expected_worker.deletion_owns_retirement())
                     }),
             )
-            .await
+            .await;
+        drop(lifecycle);
+        removed
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {

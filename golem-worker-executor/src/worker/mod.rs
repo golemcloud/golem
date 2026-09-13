@@ -94,7 +94,7 @@ use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerFilesystemContext};
-use futures::channel::oneshot;
+use futures::{FutureExt, channel::oneshot};
 use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::durable_stream::{
     AttachedStreamSegmentRequestV1, AttemptId, DURABLE_STREAM_FORMAT_VERSION,
@@ -414,55 +414,6 @@ impl StartupAttemptTracker {
     }
 }
 
-/// Represents worker that may be running or suspended.
-///
-/// It is responsible for receiving incoming worker invocations in a non-blocking way,
-/// persisting them and also making sure that all the enqueued invocations eventually get
-/// processed, in the same order as they came in.
-///
-/// Invocations have an associated idempotency key used to ensure that the same invocation
-/// is not processed multiple times.
-///
-/// If the queue is empty, the service can trigger invocations directly as an optimization.
-///
-/// Every worker invocation should be done through this service.
-pub(crate) enum WorkerAcquisition {
-    CreateOrLoad(Box<WorkerCreation>),
-    ExistingOnly,
-}
-
-pub(crate) struct WorkerCreation {
-    worker_env: Option<Vec<(String, String)>>,
-    worker_agent_config: Vec<AgentConfigEntryDto>,
-    component_revision: Option<ComponentRevision>,
-    parent: Option<AgentId>,
-    invocation_context_stack: InvocationContextStack,
-    principal: Principal,
-    freshness_disposition: InvocationFreshnessDisposition,
-}
-
-impl WorkerAcquisition {
-    pub(crate) fn create_or_load(
-        worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
-        component_revision: Option<ComponentRevision>,
-        parent: Option<AgentId>,
-        invocation_context_stack: InvocationContextStack,
-        principal: Principal,
-        freshness_disposition: InvocationFreshnessDisposition,
-    ) -> Self {
-        Self::CreateOrLoad(Box::new(WorkerCreation {
-            worker_env,
-            worker_agent_config,
-            component_revision,
-            parent,
-            invocation_context_stack,
-            principal,
-            freshness_disposition,
-        }))
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct DeletionHandle {
     completion: Arc<DeletionCompletion>,
@@ -485,6 +436,10 @@ impl DeletionHandle {
 
     fn same_attempt(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.completion, &other.completion)
+    }
+
+    fn result(&self) -> Option<Result<(), WorkerExecutorError>> {
+        self.completion.result.lock().unwrap().clone()
     }
 
     fn complete(&self, result: Result<(), WorkerExecutorError>) {
@@ -520,8 +475,9 @@ impl DeleteOutcome {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum DeletionStage {
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WorkerDeletionStage {
     Claimed,
     ExecutionFenced,
     BarriersClosed,
@@ -529,6 +485,19 @@ enum DeletionStage {
     StreamsCleaned,
     DurableStateRemoved,
     CacheRemoved,
+}
+
+/// Test-harness coordination at retryable worker-deletion stage boundaries.
+#[doc(hidden)]
+#[async_trait::async_trait]
+pub trait WorkerDeletionHook: Send + Sync {
+    fn claimed(&self, _owned_agent_id: &OwnedAgentId, _started: bool) {}
+
+    async fn before_stage(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 enum DeletionPhase {
@@ -540,20 +509,27 @@ enum DeletionPhase {
 
 struct WorkerDeletionState {
     phase: DeletionPhase,
-    completed_stage: DeletionStage,
+    completed_stage: WorkerDeletionStage,
 }
 
 impl Default for WorkerDeletionState {
     fn default() -> Self {
         Self {
             phase: DeletionPhase::Idle,
-            completed_stage: DeletionStage::Claimed,
+            completed_stage: WorkerDeletionStage::Claimed,
         }
     }
 }
 
 impl WorkerDeletionState {
     fn claim(&mut self) -> DeleteOutcome {
+        if let DeletionPhase::Running(handle) = &self.phase
+            && handle.result().is_some()
+        {
+            self.phase = DeletionPhase::Failed {
+                _handle: handle.clone(),
+            };
+        }
         match &self.phase {
             DeletionPhase::Running(handle) | DeletionPhase::Succeeded(handle) => {
                 DeleteOutcome::AlreadyDeleting(handle.clone())
@@ -567,33 +543,69 @@ impl WorkerDeletionState {
     }
 }
 
-struct DeletionAttemptGuard<Ctx: WorkerCtx> {
-    worker: Arc<Worker<Ctx>>,
+struct DeletionAttemptGuard {
     handle: DeletionHandle,
     finished: bool,
 }
 
-impl<Ctx: WorkerCtx> DeletionAttemptGuard<Ctx> {
+impl DeletionAttemptGuard {
     fn finish(mut self, result: Result<(), WorkerExecutorError>) {
-        let succeeded = result.is_ok();
-        self.worker.finish_deletion_attempt(&self.handle, succeeded);
         self.handle.complete(result);
         self.finished = true;
     }
 }
 
-impl<Ctx: WorkerCtx> Drop for DeletionAttemptGuard<Ctx> {
+impl Drop for DeletionAttemptGuard {
     fn drop(&mut self) {
         if !self.finished {
             let error = WorkerExecutorError::runtime(
                 "Worker deletion task ended before publishing a terminal result",
             );
-            self.worker.finish_deletion_attempt(&self.handle, false);
             self.handle.complete(Err(error));
         }
     }
 }
 
+pub(super) struct WorkerLifecycleState {
+    instance: WorkerInstance,
+    deletion: WorkerDeletionState,
+}
+
+impl WorkerLifecycleState {
+    fn new(instance: WorkerInstance) -> Self {
+        Self {
+            instance,
+            deletion: WorkerDeletionState::default(),
+        }
+    }
+
+    fn ensure_not_deleting(&self) -> Result<(), WorkerExecutorError> {
+        if matches!(self.deletion.phase, DeletionPhase::Idle) {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            ))
+        }
+    }
+
+    pub(crate) fn deletion_owns_retirement(&self) -> bool {
+        !matches!(self.deletion.phase, DeletionPhase::Idle)
+    }
+}
+
+/// Represents worker that may be running or suspended.
+///
+/// It is responsible for receiving incoming worker invocations in a non-blocking way,
+/// persisting them and also making sure that all the enqueued invocations eventually get
+/// processed, in the same order as they came in.
+///
+/// Invocations have an associated idempotency key used to ensure that the same invocation
+/// is not processed multiple times.
+///
+/// If the queue is empty, the service can trigger invocations directly as an optimization.
+///
+/// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     parsed_agent_id: Option<ParsedAgentId>,
@@ -644,11 +656,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// entries are folded into worker status.
     published_authority_generation: Arc<AtomicU64>,
 
-    // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
-    instance: Arc<Mutex<WorkerInstance>>,
-    /// Worker-owned deletion attempt and monotonic cleanup progress. This is deliberately
-    /// retained after failure or success so stale worker references remain permanently fenced.
-    deletion: StdMutex<WorkerDeletionState>,
+    /// Serializes runtime transitions with deletion admission. No caller may retain this lock
+    /// while waiting for the invocation loop, entity drain, or durable cleanup.
+    pub(crate) instance: Arc<Mutex<WorkerLifecycleState>>,
     /// Prevents weak-reference background work from starting while an unloaded
     /// worker is being conditionally removed from `ActiveAgents`.
     cache_retirement_in_progress: AtomicBool,
@@ -904,27 +914,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.deps.active_agents().remove_worker(self, false).await;
     }
 
-    pub(crate) fn deletion_owns_retirement(&self) -> bool {
-        !matches!(self.deletion.lock().unwrap().phase, DeletionPhase::Idle)
+    pub(crate) async fn deletion_owns_retirement(&self) -> bool {
+        !matches!(
+            self.instance.lock().await.deletion.phase,
+            DeletionPhase::Idle
+        )
     }
 
-    fn deletion_stage_completed(&self, stage: DeletionStage) -> bool {
-        self.deletion.lock().unwrap().completed_stage >= stage
+    async fn deletion_stage_completed(&self, stage: WorkerDeletionStage) -> bool {
+        self.instance.lock().await.deletion.completed_stage >= stage
     }
 
-    fn complete_deletion_stage(&self, stage: DeletionStage) {
-        let mut deletion = self.deletion.lock().unwrap();
-        deletion.completed_stage = deletion.completed_stage.max(stage);
+    async fn complete_deletion_stage(&self, stage: WorkerDeletionStage) {
+        let mut lifecycle = self.instance.lock().await;
+        lifecycle.deletion.completed_stage = lifecycle.deletion.completed_stage.max(stage);
     }
 
-    fn finish_deletion_attempt(&self, handle: &DeletionHandle, succeeded: bool) {
-        let mut deletion = self.deletion.lock().unwrap();
-        let is_current = match &deletion.phase {
+    async fn finish_deletion_attempt(&self, handle: &DeletionHandle, succeeded: bool) {
+        let mut lifecycle = self.instance.lock().await;
+        let is_current = match &lifecycle.deletion.phase {
             DeletionPhase::Running(current) => current.same_attempt(handle),
             _ => false,
         };
         if is_current {
-            deletion.phase = if succeeded {
+            lifecycle.deletion.phase = if succeeded {
                 DeletionPhase::Succeeded(handle.clone())
             } else {
                 DeletionPhase::Failed {
@@ -1142,35 +1155,68 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         card_interest_index: Arc<CardInterestIndex>,
         owned_agent_id: OwnedAgentId,
-        acquisition: WorkerAcquisition,
+        worker_env: Option<Vec<(String, String)>>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
+        component_revision: Option<ComponentRevision>,
+        parent: Option<AgentId>,
+        invocation_context_stack: InvocationContextStack,
+        principal: Principal,
+        freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Self, WorkerExecutorError> {
         let start = std::time::Instant::now();
-        let existing_only = matches!(acquisition, WorkerAcquisition::ExistingOnly);
-        let (
+        let initialization = Some((invocation_context_stack, principal));
+        let metadata = Self::get_or_create_worker_metadata(
+            deps,
+            &owned_agent_id,
+            component_revision,
             worker_env,
             worker_agent_config,
-            component_revision,
             parent,
             freshness_disposition,
+        )
+        .await;
+        Self::finish_construction(
+            deps,
+            card_interest_index,
+            owned_agent_id,
+            start,
+            metadata,
             initialization,
-        ) = match acquisition {
-            WorkerAcquisition::CreateOrLoad(creation) => (
-                creation.worker_env,
-                creation.worker_agent_config,
-                creation.component_revision,
-                creation.parent,
-                creation.freshness_disposition,
-                Some((creation.invocation_context_stack, creation.principal)),
-            ),
-            WorkerAcquisition::ExistingOnly => (
-                None,
-                Vec::new(),
-                None,
-                None,
-                InvocationFreshnessDisposition::MayExist,
-                None,
-            ),
-        };
+        )
+        .await
+    }
+
+    pub(crate) async fn load_existing<T: HasAll<Ctx>>(
+        deps: &T,
+        card_interest_index: Arc<CardInterestIndex>,
+        owned_agent_id: OwnedAgentId,
+    ) -> Result<Self, WorkerExecutorError> {
+        let start = std::time::Instant::now();
+        let metadata = Self::get_existing_worker_metadata(deps, &owned_agent_id)
+            .await
+            .and_then(|metadata| {
+                metadata
+                    .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
+            });
+        Self::finish_construction(
+            deps,
+            card_interest_index,
+            owned_agent_id,
+            start,
+            metadata,
+            None,
+        )
+        .await
+    }
+
+    async fn finish_construction<T: HasAll<Ctx>>(
+        deps: &T,
+        card_interest_index: Arc<CardInterestIndex>,
+        owned_agent_id: OwnedAgentId,
+        start: std::time::Instant,
+        metadata: Result<GetOrCreateWorkerResult, WorkerExecutorError>,
+        initialization: Option<(InvocationContextStack, Principal)>,
+    ) -> Result<Self, WorkerExecutorError> {
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
             current_status,
@@ -1181,18 +1227,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oplog,
             initial_component,
             reconstructed_ephemeral,
-        } = match Self::get_or_create_worker_metadata(
-            deps,
-            &owned_agent_id,
-            component_revision,
-            worker_env,
-            worker_agent_config,
-            parent,
-            freshness_disposition,
-            existing_only,
-        )
-        .await
-        {
+        } = match metadata {
             Ok(result) => result,
             Err(err) => {
                 crate::metrics::wasm::record_create_worker_failure(&err);
@@ -1219,9 +1254,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 deps.config().invocation_results.hydrated_cache_capacity,
             )));
 
-        let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded {
-            startup_failure: reconstructed_ephemeral.then(inactive_ephemeral_agent_error),
-        }));
+        let instance = Arc::new(Mutex::new(WorkerLifecycleState::new(
+            WorkerInstance::Unloaded {
+                startup_failure: reconstructed_ephemeral.then(inactive_ephemeral_agent_error),
+            },
+        )));
 
         // Fetch the account's resource entry and register it with the
         // concurrent-agents semaphore. This must happen before WaitingWorker
@@ -1318,7 +1355,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             instance,
-            deletion: StdMutex::new(WorkerDeletionState::default()),
             cache_retirement_in_progress: AtomicBool::new(false),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
@@ -1600,12 +1636,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let mut instance_guard = this.lock_non_stopping_worker().await;
-        if this.deletion_owns_retirement() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Worker is being deleted",
-            ));
-        }
-        match &*instance_guard {
+        instance_guard.ensure_not_deleting()?;
+        match &instance_guard.instance {
             WorkerInstance::Unloaded {
                 startup_failure: Some(err),
             } if this.agent_mode() == AgentMode::Ephemeral => {
@@ -1618,7 +1650,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
                     Err(error) => {
-                        *instance_guard = WorkerInstance::Unloaded {
+                        instance_guard.instance = WorkerInstance::Unloaded {
                             startup_failure: Some(error.clone()),
                         };
                         this.fail_pending_invocations(error.clone()).await;
@@ -1632,7 +1664,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let start_attempt = this.startup_attempt.begin(start_attempt);
                 this.mark_as_loading(start_attempt);
                 crate::metrics::workers::inc_worker_waiting_for_memory();
-                *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
+                instance_guard.instance = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     memory_requirement,
                     oom_retry_count,
@@ -1661,14 +1693,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// - the ExecutionStatus must be suspended; this means the worker is currently not running any invocations
     /// - there must be no more pending invocations in the invocation queue
     ///
-    /// Here we first acquire the `instance` lock. This means the worker cannot be started/stopped while we
-    /// are processing this method.
+    /// Here we first acquire the worker lifecycle lock. This means the worker cannot be
+    /// started/stopped or claimed for deletion while we are processing this method.
     /// If it was not running, then we don't have to stop it.
     /// If it was running, then we recheck the conditions and then stop the worker.
     ///
     /// We know that the conditions remain true because:
     /// - the invocation queue is empty, so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
-    /// - nothing can be added to the invocation queue because we are holding the `instance` lock
+    /// - nothing can be added to the invocation queue because we are holding the worker lifecycle lock
     ///
     /// By passing the running lock to `stop_internal_running` it is never released and the stop eventually
     /// drops the `RunningWorker` instance.
@@ -1676,9 +1708,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
     /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
-        if self.deletion_owns_retirement() {
-            return false;
-        }
         let active_agent = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
@@ -1691,7 +1720,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None => None,
         };
         let mut instance_guard = self.lock_non_stopping_worker().await;
-        let stop_result = match &*instance_guard {
+        if instance_guard.ensure_not_deleting().is_err() {
+            return false;
+        }
+        let stop_result = match &instance_guard.instance {
             WorkerInstance::Running(running) => {
                 if self.is_running_worker_idle(running).await {
                     let stop_result = self
@@ -1734,55 +1766,88 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Atomically claims worker-owned deletion and starts an executor-owned attempt. Overlapping
     /// callers share the retained result; after failure, the next explicit call claims one retry.
-    pub(crate) async fn start_deletion(self: &Arc<Self>) -> DeleteOutcome {
-        // Serialize the publication of the deletion claim with the brief instance checks used by
-        // starts and external operations. No lock is retained while cleanup awaits.
-        let instance_guard = self.instance.lock().await;
-        let mut deletion = self.deletion.lock().unwrap();
-        let outcome = deletion.claim();
+    pub(crate) async fn start_deletion(
+        self: &Arc<Self>,
+    ) -> Result<DeleteOutcome, WorkerExecutorError> {
+        // The lifecycle-to-cache lock order serializes the claim with ordinary retirement. The
+        // cache lookup itself never takes a worker lifecycle lock.
+        let mut lifecycle = self.instance.lock().await;
+        if !self.active_agents().contains_worker_generation(self).await {
+            return Err(WorkerExecutorError::worker_not_found(self.agent_id()));
+        }
+        let outcome = lifecycle.deletion.claim();
+        let started = matches!(outcome, DeleteOutcome::Started(_));
+        drop(lifecycle);
+        if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
+            hook.claimed(&self.owned_agent_id, started);
+        }
         let handle = match &outcome {
             DeleteOutcome::Started(handle) => handle.clone(),
-            DeleteOutcome::AlreadyDeleting(_) => return outcome,
+            DeleteOutcome::AlreadyDeleting(_) => return Ok(outcome),
         };
-        drop(deletion);
-        drop(instance_guard);
 
         let worker = self.clone();
         let task_handle = handle.clone();
+        let guard = DeletionAttemptGuard {
+            handle: task_handle.clone(),
+            finished: false,
+        };
         tokio::spawn(async move {
-            let guard = DeletionAttemptGuard {
-                worker: worker.clone(),
-                handle: task_handle,
-                finished: false,
-            };
-            let result = worker.run_deletion_attempt().await;
+            let result = std::panic::AssertUnwindSafe(worker.run_deletion_attempt())
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    Err(WorkerExecutorError::runtime(
+                        "Worker deletion task panicked",
+                    ))
+                });
+            worker
+                .finish_deletion_attempt(&task_handle, result.is_ok())
+                .await;
             guard.finish(result);
         });
 
-        outcome
+        Ok(outcome)
     }
 
     /// Runs monotonic cleanup. A retry skips every stage already completed by an earlier attempt.
     async fn run_deletion_attempt(self: &Arc<Self>) -> Result<(), WorkerExecutorError> {
         let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
-        if !self.deletion_stage_completed(DeletionStage::ExecutionFenced) {
+        if !self
+            .deletion_stage_completed(WorkerDeletionStage::ExecutionFenced)
+            .await
+        {
+            self.before_deletion_stage(WorkerDeletionStage::ExecutionFenced)
+                .await?;
             info!(agent_id = %self.owned_agent_id, "Fencing worker execution for deletion");
-            self.set_interrupting_internal(interrupt_kind, false, UnloadReason::Deleting)
+            self.set_interrupting_internal(interrupt_kind, false, UnloadReason::Deleting, true)
                 .await;
-            self.complete_deletion_stage(DeletionStage::ExecutionFenced);
+            self.complete_deletion_stage(WorkerDeletionStage::ExecutionFenced)
+                .await;
         }
 
         // Stop any future background flush or clean-checkpoint write from resurrecting the cached
         // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
         // latter clears both the live cache and the checkpoint). Each awaits any in-flight write so
         // none can land after the delete.
-        if !self.deletion_stage_completed(DeletionStage::BarriersClosed) {
+        if !self
+            .deletion_stage_completed(WorkerDeletionStage::BarriersClosed)
+            .await
+        {
+            self.before_deletion_stage(WorkerDeletionStage::BarriersClosed)
+                .await?;
             self.status_flusher.begin_delete().await;
             self.status_checkpointer.begin_delete().await;
-            self.complete_deletion_stage(DeletionStage::BarriersClosed);
+            self.complete_deletion_stage(WorkerDeletionStage::BarriersClosed)
+                .await;
         }
 
-        if !self.deletion_stage_completed(DeletionStage::RuntimeStopped) {
+        if !self
+            .deletion_stage_completed(WorkerDeletionStage::RuntimeStopped)
+            .await
+        {
+            self.before_deletion_stage(WorkerDeletionStage::RuntimeStopped)
+                .await?;
             let error = WorkerExecutorError::invalid_request("Worker is being deleted");
             self.stop_internal(
                 false,
@@ -1793,13 +1858,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
             self.durable_stream_attachment_reconciler.stop().await;
-            if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
+            if let WorkerInstance::CleanupFailed(error) = &self.instance.lock().await.instance {
                 return Err(error.clone());
             }
-            self.complete_deletion_stage(DeletionStage::RuntimeStopped);
+            self.complete_deletion_stage(WorkerDeletionStage::RuntimeStopped)
+                .await;
         }
 
-        if !self.deletion_stage_completed(DeletionStage::StreamsCleaned) {
+        if !self
+            .deletion_stage_completed(WorkerDeletionStage::StreamsCleaned)
+            .await
+        {
+            self.before_deletion_stage(WorkerDeletionStage::StreamsCleaned)
+                .await?;
             self.finalize_durable_stream_consumer_dependencies().await?;
             self.reconcile_durable_stream_attachments().await?;
             let probe = DbDirectStreamAttachmentConsumerProbe::new_routed(
@@ -1831,17 +1902,44 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 cascade_completed = ?diagnostics.cascade_completed,
                 "Durable stream deletion cascade completed"
             );
-            self.complete_deletion_stage(DeletionStage::StreamsCleaned);
+            self.complete_deletion_stage(WorkerDeletionStage::StreamsCleaned)
+                .await;
         }
 
-        if !self.deletion_stage_completed(DeletionStage::DurableStateRemoved) {
+        if !self
+            .deletion_stage_completed(WorkerDeletionStage::DurableStateRemoved)
+            .await
+        {
+            self.before_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
+                .await?;
             self.worker_service().remove(&self.owned_agent_id).await?;
-            self.complete_deletion_stage(DeletionStage::DurableStateRemoved);
+            self.complete_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
+                .await;
         }
 
-        if !self.deletion_stage_completed(DeletionStage::CacheRemoved) {
-            self.active_agents().remove_worker(self, true).await;
-            self.complete_deletion_stage(DeletionStage::CacheRemoved);
+        if !self
+            .deletion_stage_completed(WorkerDeletionStage::CacheRemoved)
+            .await
+        {
+            self.before_deletion_stage(WorkerDeletionStage::CacheRemoved)
+                .await?;
+            if !self.active_agents().remove_worker(self, true).await {
+                return Err(WorkerExecutorError::runtime(
+                    "Deleting worker lost active-cache authority before retirement",
+                ));
+            }
+            self.complete_deletion_stage(WorkerDeletionStage::CacheRemoved)
+                .await;
+        }
+        Ok(())
+    }
+
+    async fn before_deletion_stage(
+        &self,
+        stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
+            hook.before_stage(&self.owned_agent_id, stage).await?;
         }
         Ok(())
     }
@@ -2015,7 +2113,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn complete_startup_success(&self, start_attempt: Uuid) -> bool {
         let instance_guard = self.instance.lock().await;
-        let active_attempt = match &*instance_guard {
+        let active_attempt = match &instance_guard.instance {
             WorkerInstance::Running(running) => Some(running.start_attempt),
             _ => None,
         };
@@ -2097,13 +2195,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   automatically resumed when the worker is needed again. This only works if the worker context
     ///   supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        if self.deletion_owns_retirement() {
-            return None;
-        }
         self.set_interrupting_internal(
             interrupt_kind,
             false,
             UnloadReason::from_interrupt(interrupt_kind),
+            false,
         )
         .await
     }
@@ -2113,9 +2209,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt_kind: InterruptKind,
         reacquire_permits: bool,
         unload_reason: UnloadReason,
+        allow_deleting: bool,
     ) -> Option<Receiver<()>> {
         if !self
-            .queue_interrupt(interrupt_kind, reacquire_permits, unload_reason)
+            .queue_interrupt(
+                interrupt_kind,
+                reacquire_permits,
+                unload_reason,
+                allow_deleting,
+            )
             .await
         {
             return None;
@@ -2140,7 +2242,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
         let instance_guard = self.lock_non_stopping_worker().await;
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = &instance_guard.instance {
             let _ = running.sender.send(WorkerCommand::WorkAvailable);
         }
         drop(instance_guard);
@@ -2193,13 +2295,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt_kind: InterruptKind,
         reacquire_permits: bool,
         unload_reason: UnloadReason,
+        allow_deleting: bool,
     ) -> bool {
-        let mut state = self.interrupt_signal.lock().await;
-        state.queue(PendingWorkerInterrupt {
-            kind: interrupt_kind,
-            reacquire_permits,
-            unload_request: UnloadRequest::ordinary(unload_reason),
-        })
+        loop {
+            let lifecycle = self.instance.lock().await;
+            if !allow_deleting && lifecycle.ensure_not_deleting().is_err() {
+                return false;
+            }
+            if let Some(mut state) = self.interrupt_signal.try_lock() {
+                return state.queue(PendingWorkerInterrupt {
+                    kind: interrupt_kind,
+                    reacquire_permits,
+                    unload_request: UnloadRequest::ordinary(unload_reason),
+                });
+            }
+            drop(lifecycle);
+            tokio::task::yield_now().await;
+        }
     }
 
     pub(crate) async fn set_interrupting_for(
@@ -2207,12 +2319,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         interrupt_kind: InterruptKind,
         unload_reason: UnloadReason,
     ) -> Option<Receiver<()>> {
-        self.set_interrupting_internal(interrupt_kind, false, unload_reason)
+        self.set_interrupting_internal(interrupt_kind, false, unload_reason, false)
             .await
     }
 
     pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
-        match &*self.lock_non_stopping_worker().await {
+        let lifecycle = self.lock_non_stopping_worker().await;
+        lifecycle.ensure_not_deleting()?;
+        match &lifecycle.instance {
             WorkerInstance::Running(running) => {
                 running.resume_replay_pending.store(true, Ordering::Release);
                 running
@@ -2309,12 +2423,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(entry) = self.read_only_cache.try_get(&key).await {
                     if !entry.is_expired(tokio::time::Instant::now()) {
                         let instance_guard = self.lock_non_stopping_worker().await;
-                        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+                        if instance_guard.ensure_not_deleting().is_err() {
                             return Err(WorkerExecutorError::invalid_request(
                                 "Cannot enqueue invocation to a deleting worker",
                             ));
                         }
-                        if let Some(err) = instance_guard.startup_failure() {
+                        if let Some(err) = instance_guard.instance.startup_failure() {
                             return Err(err.clone());
                         }
                         drop(instance_guard);
@@ -2533,12 +2647,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // the HIT path in `invoke` applies, so we don't return a
                     // cached value for a worker that's about to disappear.
                     let instance_guard = self.lock_non_stopping_worker().await;
-                    if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+                    if instance_guard.ensure_not_deleting().is_err() {
                         return Err(WorkerExecutorError::invalid_request(
                             "Cannot enqueue invocation to a deleting worker",
                         ));
                     }
-                    if let Some(err) = instance_guard.startup_failure() {
+                    if let Some(err) = instance_guard.instance.startup_failure() {
                         return Err(err.clone());
                     }
                     drop(instance_guard);
@@ -2747,9 +2861,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// The update itself is not performed by the invocation queue's processing loop,
     /// it is going to affect how the worker is recovered next time.
-    pub async fn enqueue_update(&self, update_description: UpdateDescription) {
-        // Bump + commit under the same instance lock.
+    pub async fn enqueue_update(
+        &self,
+        update_description: UpdateDescription,
+    ) -> Result<(), WorkerExecutorError> {
+        // Bump + commit under the same worker lifecycle lock.
         let instance_guard = self.lock_non_stopping_worker().await;
+        instance_guard.ensure_not_deleting()?;
         self.bump_read_only_cache_epoch();
         let entry = OplogEntry::pending_update(update_description.clone());
         self.add_and_commit_oplog_internal(
@@ -2759,6 +2877,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
         .await;
         drop(instance_guard);
+        Ok(())
     }
 
     /// Enqueues a manual update.
@@ -3077,7 +3196,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// These workers can be stopped to free up available worker memory.
     pub async fn is_currently_idle_but_running(&self) -> bool {
-        match &*self.instance.lock().await {
+        match &self.instance.lock().await.instance {
             WorkerInstance::Running(running) => self.is_running_worker_idle(running).await,
             WorkerInstance::WaitingForPermit(_) => {
                 debug!(
@@ -3161,16 +3280,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// invocations, …) can keep serving. This accessor lets callers
     /// distinguish those two states.
     pub async fn is_loaded(&self) -> bool {
-        matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
+        matches!(
+            &self.instance.lock().await.instance,
+            WorkerInstance::Running(_)
+        )
     }
 
     /// Starts a conditional `ActiveAgents` retirement if this worker is
     /// exactly unloaded. The returned guard rolls the marker back unless the
     /// cache removal commits.
     pub(crate) async fn try_begin_cache_retirement(&self) -> Option<WorkerCacheRetirement<'_>> {
-        if self.deletion_owns_retirement() {
-            return None;
-        }
         if self
             .cache_retirement_in_progress
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -3183,10 +3302,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             in_progress: &self.cache_retirement_in_progress,
             committed: false,
         };
-        if matches!(
-            &*self.instance.lock().await,
-            WorkerInstance::Unloaded { .. }
-        ) && !self.deletion_owns_retirement()
+        let lifecycle = self.instance.lock().await;
+        if matches!(&lifecycle.instance, WorkerInstance::Unloaded { .. })
+            && !lifecycle.deletion_owns_retirement()
         {
             Some(retirement)
         } else {
@@ -3221,7 +3339,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return None;
         }
-        match &*self.instance.lock().await {
+        match &self.instance.lock().await.instance {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_queued_internal_work = !running.queue.read().await.is_empty();
@@ -3256,7 +3374,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Stop this worker if it matches the given eviction class.
     ///
-    /// Re-checks the eviction classification under the instance lock to avoid
+    /// Re-checks the eviction classification under the worker lifecycle lock to avoid
     /// races. Returns `true` if the worker was actually stopped.
     pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
         self.stop_if_evictable_with_outcome(
@@ -3274,9 +3392,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         expected_eligibility: Option<FilesystemPressureEligibility>,
         unload_request: UnloadRequest,
     ) -> EvictionStopOutcome {
-        if self.deletion_owns_retirement() {
-            return EvictionStopOutcome::Ineligible;
-        }
         let active_agent = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
@@ -3289,7 +3404,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None => None,
         };
         let mut instance_guard = self.lock_non_stopping_worker().await;
-        let should_stop = match &*instance_guard {
+        if instance_guard.ensure_not_deleting().is_err() {
+            return EvictionStopOutcome::Ineligible;
+        }
+        let should_stop = match &instance_guard.instance {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_queued_internal_work = !running.queue.read().await.is_empty();
@@ -3338,7 +3456,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            match &*self.instance.lock().await {
+            match &self.instance.lock().await.instance {
                 WorkerInstance::CleanupFailed(_) => EvictionStopOutcome::CleanupFailed,
                 WorkerInstance::Unloaded { .. } => EvictionStopOutcome::Unloaded,
                 _ => EvictionStopOutcome::CleanupFailed,
@@ -3361,7 +3479,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn filesystem_pressure_eligibility(
         &self,
     ) -> Option<FilesystemPressureEligibility> {
-        match &*self.instance.lock().await {
+        match &self.instance.lock().await.instance {
             WorkerInstance::Running(running) => {
                 Some(self.current_filesystem_pressure_eligibility(running))
             }
@@ -3478,7 +3596,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let receiver = {
             let instance = self.lock_non_stopping_worker().await;
-            let WorkerInstance::Running(running) = &*instance else {
+            let WorkerInstance::Running(running) = &instance.instance else {
                 return Ok(());
             };
             let (sender, receiver) = oneshot::channel();
@@ -3596,13 +3714,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.accept_ephemeral_invocation(&invocation)?;
             let instance_guard = self.lock_non_stopping_worker().await;
 
-            if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+            if instance_guard.ensure_not_deleting().is_err() {
                 return Err(WorkerExecutorError::invalid_request(
                     "Cannot enqueue invocation to a deleting worker",
                 ));
             };
 
-            if let Some(err) = instance_guard.startup_failure() {
+            if let Some(err) = instance_guard.instance.startup_failure() {
                 if self.agent_mode() == AgentMode::Ephemeral {
                     crate::metrics::ephemeral::record_inactive_invocation_failure();
                 }
@@ -3642,7 +3760,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
 
             // Snapshot the epoch for a later read-only cache fill. Keyed admission releases and
-            // reacquires the instance lock below; that staleness is safe because
+            // reacquires the worker lifecycle lock below; that staleness is safe because
             // `populate_read_only_cache` rechecks the epoch before publishing the result. Mutating
             // invocations no longer bump here — the bump happens on *successful completion* in
             // `DurableWorkerCtx::on_agent_invocation_success`, so a cached
@@ -3673,7 +3791,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         continue;
                     }
                     let instance_guard = self.lock_non_stopping_worker_owned().await;
-                    if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+                    if instance_guard.ensure_not_deleting().is_err() {
                         return Err(WorkerExecutorError::invalid_request(
                             "Cannot enqueue invocation to a deleting worker",
                         ));
@@ -3719,7 +3837,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let Some(instance_guard) = caller_instance_guard.as_ref()
-                && let WorkerInstance::Running(running) = &**instance_guard
+                && let WorkerInstance::Running(running) = &instance_guard.instance
             {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
@@ -3760,13 +3878,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot access filesystem of a deleting worker",
             ));
         };
 
-        if let Some(err) = instance_guard.startup_failure() {
+        if let Some(err) = instance_guard.instance.startup_failure() {
             return Err(err.clone());
         }
 
@@ -3781,7 +3899,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // - Worker is running, we can send the invocation command, and the worker will look at the queue immediately
         // - Worker is starting, it will process the request when it is started
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = &instance_guard.instance {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -3793,13 +3911,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_wallet_cards(&self) -> Result<Vec<StoredCard>, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot access wallet of a deleting worker",
             ));
         };
 
-        if let Some(err) = instance_guard.startup_failure() {
+        if let Some(err) = instance_guard.instance.startup_failure() {
             return Err(err.clone());
         }
 
@@ -3810,7 +3928,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .push_back(QueuedWorkerInvocation::GetWalletCards { sender });
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = &instance_guard.instance {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -3839,13 +3957,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot access filesystem of a deleting worker",
             ));
         };
 
-        if let Some(err) = instance_guard.startup_failure() {
+        if let Some(err) = instance_guard.instance.startup_failure() {
             return Err(err.clone());
         }
 
@@ -3856,7 +3974,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .push_back(QueuedWorkerInvocation::ReadFile { path, sender });
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = &instance_guard.instance {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -3868,13 +3986,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn await_ready_to_process_commands(&self) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot await readiness of a deleting worker",
             ));
         };
 
-        if let Some(err) = instance_guard.startup_failure() {
+        if let Some(err) = instance_guard.instance.startup_failure() {
             return Err(err.clone());
         }
 
@@ -3883,7 +4001,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // example a debugging worker that suspended itself after replaying to its target), which
         // is exactly the "not processing anything until the next explicit start" condition
         // callers wait for.
-        if matches!(&*instance_guard, WorkerInstance::Unloaded { .. }) {
+        if matches!(&instance_guard.instance, WorkerInstance::Unloaded { .. }) {
             return Ok(());
         }
 
@@ -3894,7 +4012,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
 
-        if let WorkerInstance::Running(running) = &*instance_guard {
+        if let WorkerInstance::Running(running) = &instance_guard.instance {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
@@ -3964,12 +4082,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         request: DurableStreamingInvocationRequest,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot invoke a deleting worker",
             ));
         }
-        if let Some(error) = instance_guard.startup_failure() {
+        if let Some(error) = instance_guard.instance.startup_failure() {
             return Err(error.clone());
         }
 
@@ -4262,7 +4380,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             self.state_actor.notify_status_changed();
         }
-        if !already_attached && let WorkerInstance::Running(running) = &*instance_guard {
+        if !already_attached && let WorkerInstance::Running(running) = &instance_guard.instance {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         }
         drop(instance_guard);
@@ -4308,12 +4426,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         attempt: ResumeAttemptDescriptorV1,
     ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot resume a deleting worker",
             ));
         }
-        if let Some(error) = instance_guard.startup_failure() {
+        if let Some(error) = instance_guard.instance.startup_failure() {
             return Err(error.clone());
         }
 
@@ -5376,7 +5494,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let (result, changed) = self.state_actor.commit_and_update_state(commit_level).await;
         if changed {
             // The notification goes through the worker-state actor's lifecycle queue so that
-            // this method never waits on (or becomes a queued owner of) the instance lock. This
+            // this method never waits on (or becomes a queued owner of) the worker lifecycle lock. This
             // method runs inside durable-call host futures polled by wasmtime's store event loop
             // and on store-keeping wasm fibers, neither of which may block on locks shared with
             // the other (see the `state_actor` module docs).
@@ -5457,7 +5575,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker_owned().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot deliver a permission card to a deleting worker",
             ));
@@ -5520,14 +5638,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn add_and_commit_oplog_internal(
         &self,
-        instance_guard: &MutexGuard<'_, WorkerInstance>,
+        instance_guard: &MutexGuard<'_, WorkerLifecycleState>,
         entry: OplogEntry,
         wakeup: Option<WorkerCommand>,
     ) -> OplogIndex {
         let result = self.add_to_oplog(entry).await;
-        // The caller already holds the instance lock (and sends the wakeup itself below), so
+        // The caller already holds the worker lifecycle lock (and sends the wakeup itself below), so
         // this must not enqueue a `NotifyStatusChanged` lifecycle job: the commit job is safe to
-        // await while holding the instance lock precisely because the status task never takes
+        // await while holding the worker lifecycle lock precisely because the status task never takes
         // that lock.
         let (_, changed) = self
             .state_actor
@@ -5536,7 +5654,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         if changed
             && let Some(wakeup) = wakeup
-            && let WorkerInstance::Running(running) = &**instance_guard
+            && let WorkerInstance::Running(running) = &instance_guard.instance
         {
             running.sender.send(wakeup).unwrap();
         };
@@ -5550,7 +5668,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot activate plugin on a deleting worker",
             ));
@@ -5575,7 +5693,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot deactivate plugin on a deleting worker",
             ));
@@ -5635,7 +5753,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() || self.deletion_owns_retirement() {
+        if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
                 "Cannot cancel invocation on a deleting worker",
             ));
@@ -5664,7 +5782,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let instance_guard = self.lock_stopped_worker().await;
-        match &*instance_guard {
+        instance_guard.ensure_not_deleting()?;
+        match &instance_guard.instance {
             WorkerInstance::Unloaded { .. } => {}
             WorkerInstance::Deleting => {
                 return Err(WorkerExecutorError::invalid_request(
@@ -5727,7 +5846,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             self.reattach_worker_status().await;
 
-            if let WorkerInstance::Running(running) = &*instance_guard {
+            if let WorkerInstance::Running(running) = &instance_guard.instance {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
             };
             drop(instance_guard);
@@ -6014,7 +6133,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn stop_internal_locked(
         &self,
-        instance_guard: &mut MutexGuard<'_, WorkerInstance>,
+        instance_guard: &mut MutexGuard<'_, WorkerLifecycleState>,
         called_from_invocation_loop: bool,
         // Only respected when this is the call that triggered the stop
         fail_pending_invocations: Option<WorkerExecutorError>,
@@ -6025,7 +6144,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Temporarily set the instance to unloaded so we can work with the old value.
         // This is not visible to anyone as long as we are holding the lock.
         let previous_instance_state = std::mem::replace(
-            &mut **instance_guard,
+            &mut instance_guard.instance,
             WorkerInstance::Unloaded {
                 startup_failure: None,
             },
@@ -6036,8 +6155,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(ref error) = fail_pending_invocations {
                     self.fail_pending_invocations(error.clone()).await;
                 }
-                **instance_guard = final_state.into_instance();
-                if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
+                instance_guard.instance = final_state.into_instance();
+                if let WorkerInstance::Unloaded { startup_failure } = &instance_guard.instance {
                     self.resolve_pending_queue_on_unload(
                         startup_failure.as_ref(),
                         pending_live_invocations,
@@ -6050,7 +6169,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(ref pending_error) = fail_pending_invocations {
                     self.fail_pending_invocations(pending_error.clone()).await;
                 }
-                **instance_guard = WorkerInstance::CleanupFailed(error);
+                instance_guard.instance = if matches!(final_state, FinalWorkerState::Deleting) {
+                    // The invocation loop is already gone. The attempt that observed its failure
+                    // reports it; a later deletion retry can continue durable cleanup.
+                    WorkerInstance::Deleting
+                } else {
+                    WorkerInstance::CleanupFailed(error)
+                };
                 StopResult::Stopped
             }
             WorkerInstance::WaitingForPermit(_) => {
@@ -6058,8 +6183,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations(error.clone()).await;
                 }
                 crate::metrics::workers::dec_worker_waiting_for_memory();
-                **instance_guard = final_state.into_instance();
-                match &**instance_guard {
+                instance_guard.instance = final_state.into_instance();
+                match &instance_guard.instance {
                     WorkerInstance::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
@@ -6076,7 +6201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 StopResult::Stopped
             }
             WorkerInstance::Deleting => {
-                **instance_guard = previous_instance_state;
+                instance_guard.instance = previous_instance_state;
                 // Should we return an error here?
                 StopResult::Stopped
             }
@@ -6086,8 +6211,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 let pending_live_invocations = stopping.pending_live_invocations;
                 let (instance, notify) = complete_stopping_worker(stopping, final_state);
-                **instance_guard = instance;
-                match &**instance_guard {
+                instance_guard.instance = instance;
+                match &instance_guard.instance {
                     WorkerInstance::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
@@ -6114,7 +6239,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations(error.clone()).await;
                 }
                 let notify = stopping.notify.clone();
-                **instance_guard = WorkerInstance::Stopping(stopping);
+                instance_guard.instance = WorkerInstance::Stopping(stopping);
                 StopResult::AlreadyStopping { notify }
             }
             WorkerInstance::Running(running) => {
@@ -6154,8 +6279,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // register and admit the replacement generation without overlapping
                     // the old generation's grant.
                     self.release_linear_memory_grant();
-                    **instance_guard = final_state.into_instance();
-                    match &**instance_guard {
+                    instance_guard.instance = final_state.into_instance();
+                    match &instance_guard.instance {
                         WorkerInstance::Unloaded { startup_failure } => {
                             self.resolve_pending_queue_on_unload(
                                 startup_failure.as_ref(),
@@ -6177,7 +6302,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let run_loop_handle = running.stop(unload_request);
                     let notify = OneShotEvent::new();
                     crate::metrics::workers::dec_worker_memory_resident();
-                    **instance_guard = WorkerInstance::Stopping(StoppingWorker {
+                    instance_guard.instance = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
                         final_state,
                         pending_live_invocations,
@@ -6191,7 +6316,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    // IMPORTANT: must not be called within a held instance lock
+    // IMPORTANT: must not be called while holding the worker lifecycle lock
     async fn handle_stop_result(&self, stop_result: StopResult) {
         match stop_result {
             StopResult::Stopped => {}
@@ -6208,9 +6333,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let mut instance_guard = self.instance.lock().await;
                 if let Some(error) = run_loop_failure.as_ref() {
-                    merge_run_loop_failure(&mut instance_guard, error.clone());
+                    merge_run_loop_failure(&mut instance_guard.instance, error.clone());
                 }
-                let is_deleting = match &*instance_guard {
+                let is_deleting = match &instance_guard.instance {
                     WorkerInstance::Stopping(stopping) => {
                         matches!(stopping.final_state, FinalWorkerState::Deleting)
                     }
@@ -6237,16 +6362,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
 
                 let pending_live_invocations =
-                    if matches!(&*instance_guard, WorkerInstance::Stopping(_)) {
+                    if matches!(&instance_guard.instance, WorkerInstance::Stopping(_)) {
                         match std::mem::replace(
-                            &mut *instance_guard,
+                            &mut instance_guard.instance,
                             WorkerInstance::Unloaded {
                                 startup_failure: None,
                             },
                         ) {
                             WorkerInstance::Stopping(stopping) => {
                                 let pending_live_invocations = stopping.pending_live_invocations;
-                                *instance_guard = stopping.final_state.into_instance();
+                                instance_guard.instance = stopping.final_state.into_instance();
                                 Some(pending_live_invocations)
                             }
                             _ => unreachable!(),
@@ -6254,7 +6379,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     } else {
                         None
                     };
-                match &*instance_guard {
+                match &instance_guard.instance {
                     WorkerInstance::Unloaded { startup_failure } => {
                         self.resolve_pending_queue_on_unload(
                             startup_failure.as_ref(),
@@ -6368,11 +6493,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     // Lock a worker not in stopping state.
-    async fn lock_non_stopping_worker(&self) -> MutexGuard<'_, WorkerInstance> {
+    async fn lock_non_stopping_worker(&self) -> MutexGuard<'_, WorkerLifecycleState> {
         loop {
             let instance_guard = self.instance.lock().await;
 
-            match &*instance_guard {
+            match &instance_guard.instance {
                 WorkerInstance::Stopping(stopping) => {
                     let notify = stopping.notify.clone();
                     drop(instance_guard);
@@ -6383,11 +6508,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn lock_non_stopping_worker_owned(&self) -> OwnedMutexGuard<WorkerInstance> {
+    async fn lock_non_stopping_worker_owned(&self) -> OwnedMutexGuard<WorkerLifecycleState> {
         loop {
             let instance_guard = self.instance.clone().lock_owned().await;
 
-            match &*instance_guard {
+            match &instance_guard.instance {
                 WorkerInstance::Stopping(stopping) => {
                     let notify = stopping.notify.clone();
                     drop(instance_guard);
@@ -6399,7 +6524,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     // Lock a worker in either Unloaded or Deleting state.
-    async fn lock_stopped_worker(&self) -> MutexGuard<'_, WorkerInstance> {
+    async fn lock_stopped_worker(&self) -> MutexGuard<'_, WorkerLifecycleState> {
         loop {
             self.stop_internal(
                 false,
@@ -6413,7 +6538,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await;
             let instance_guard = self.instance.lock().await;
 
-            if let WorkerInstance::Deleting | WorkerInstance::Unloaded { .. } = &*instance_guard {
+            if let WorkerInstance::Deleting | WorkerInstance::Unloaded { .. } =
+                &instance_guard.instance
+            {
                 return instance_guard;
             }
         }
@@ -6442,6 +6569,98 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Self::start_if_needed_internal(this, oom_retry_count, start_attempt).await
     }
 
+    async fn get_existing_worker_metadata<
+        T: HasWorkerService + HasComponentService + HasOplogService + HasConfig + Sync,
+    >(
+        this: &T,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetOrCreateWorkerResult>, WorkerExecutorError> {
+        let Some(metadata) = this.worker_service().get(owned_agent_id).await? else {
+            return Ok(None);
+        };
+        Self::hydrate_existing_worker_metadata(this, owned_agent_id, metadata)
+            .await
+            .map(Some)
+    }
+
+    async fn hydrate_existing_worker_metadata<
+        T: HasWorkerService + HasComponentService + HasOplogService + HasConfig + Sync,
+    >(
+        this: &T,
+        owned_agent_id: &OwnedAgentId,
+        metadata: GetWorkerMetadataResult,
+    ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
+        let component_id = owned_agent_id.component_id();
+        let GetWorkerMetadataResult {
+            initial_worker_metadata,
+            last_known_status,
+        } = metadata;
+        let persisted_status = last_known_status.clone();
+        let agent_mode = initial_worker_metadata.agent_mode;
+        let current_status = calculate_last_known_status_with_checkpoint(
+            this,
+            owned_agent_id,
+            agent_mode,
+            last_known_status,
+        )
+        .await
+        .map_err(WorkerExecutorError::runtime)?
+        .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+
+        // Reconstruction is pinned to the revision and mode recorded by the Create entry.
+        let initial_component = this
+            .component_service()
+            .get_metadata(
+                component_id,
+                Some(initial_worker_metadata.last_known_status.component_revision),
+            )
+            .await?;
+        let current_status = Arc::new(arc_swap::ArcSwap::from_pointee(current_status));
+        let agent_id = if initial_component.metadata.is_agent() {
+            Some(
+                ParsedAgentId::parse(
+                    &owned_agent_id.agent_id.agent_id,
+                    &initial_component.metadata,
+                )
+                .map_err(|error| {
+                    WorkerExecutorError::invalid_request(format!("Invalid agent id: {error}"))
+                })?,
+            )
+        } else {
+            None
+        };
+        let ResolvedAgentProperties {
+            snapshot_policy, ..
+        } = resolve_agent_properties(this, agent_id.as_ref(), &initial_component.metadata);
+        let execution_status = Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
+            agent_mode,
+            timestamp: Timestamp::now_utc(),
+        }));
+        let oplog = this
+            .oplog_service()
+            .open(
+                owned_agent_id,
+                agent_mode,
+                None,
+                initial_worker_metadata.clone(),
+                read_only_lock::arc_swap::ReadOnlyView::new(current_status.clone()),
+                read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
+            )
+            .await;
+
+        Ok(GetOrCreateWorkerResult {
+            initial_worker_metadata,
+            current_status,
+            persisted_status,
+            execution_status,
+            agent_id,
+            snapshot_policy,
+            oplog,
+            initial_component: Arc::new(initial_component),
+            reconstructed_ephemeral: agent_mode == AgentMode::Ephemeral,
+        })
+    }
+
     async fn get_or_create_worker_metadata<
         T: HasWorkerService
             + HasComponentService
@@ -6457,111 +6676,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
         freshness_disposition: InvocationFreshnessDisposition,
-        existing_only: bool,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
 
         // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
         // idempotency key at invocation ingress. All other paths retain the checked lookup.
-        let existing_worker_metadata =
-            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-                None
-            } else {
-                // Note: this also checks the oplog for the existence of the create entry.
-                this.worker_service().get(owned_agent_id).await?
-            };
+        let existing = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+            None
+        } else {
+            Self::get_existing_worker_metadata(this, owned_agent_id).await?
+        };
 
-        match existing_worker_metadata {
-            Some(GetWorkerMetadataResult {
-                initial_worker_metadata,
-                last_known_status,
-            }) => {
-                let persisted_status = last_known_status.clone();
-                // make sure we are fully up to date on the oplog
-                let agent_mode = initial_worker_metadata.agent_mode;
-                let current_status = calculate_last_known_status_with_checkpoint(
-                    this,
-                    owned_agent_id,
-                    agent_mode,
-                    last_known_status,
-                )
-                .await
-                .map_err(WorkerExecutorError::runtime)?
-                .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
-
-                // Use the CREATE-time revision: `agent_id` parsing and
-                // `resolve_agent_properties` must stay tied to the metadata
-                // the oplog was committed against. `current_component` is
-                // refreshed to the live revision by `create_instance`.
-                let initial_component = this
-                    .component_service()
-                    .get_metadata(
-                        component_id,
-                        Some(initial_worker_metadata.last_known_status.component_revision),
-                    )
-                    .await?;
-
-                let current_status = Arc::new(arc_swap::ArcSwap::from_pointee(current_status));
-
-                let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &initial_component.metadata,
-                    )
-                    .map_err(|err| {
-                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {}", err))
-                    })?;
-                    Some(agent_id)
-                } else {
-                    None
-                };
-
-                // For an existing worker, the authoritative `agent_mode` was decided at create
-                // time and is persisted in the `Create` oplog entry; we do not re-resolve it
-                // from the (possibly newer) component metadata to avoid silently routing the
-                // worker to a different oplog namespace if the agent type's mode was changed
-                // in a later component revision.
-                let agent_mode = initial_worker_metadata.agent_mode;
-                let ResolvedAgentProperties {
-                    snapshot_policy, ..
-                } = resolve_agent_properties(this, agent_id.as_ref(), &initial_component.metadata);
-
-                let execution_status =
-                    Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
-                        agent_mode,
-                        timestamp: Timestamp::now_utc(),
-                    }));
-
-                let oplog = this
-                    .oplog_service()
-                    .open(
-                        owned_agent_id,
-                        agent_mode,
-                        None,
-                        initial_worker_metadata.clone(),
-                        read_only_lock::arc_swap::ReadOnlyView::new(current_status.clone()),
-                        read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
-                    )
-                    .await;
-
-                Ok(GetOrCreateWorkerResult {
-                    initial_worker_metadata,
-                    current_status,
-                    persisted_status,
-                    execution_status,
-                    agent_id,
-                    snapshot_policy,
-                    oplog,
-                    initial_component: Arc::new(initial_component),
-                    reconstructed_ephemeral: agent_mode == AgentMode::Ephemeral,
-                })
-            }
+        match existing {
+            Some(existing) => Ok(existing),
             None => {
-                if existing_only {
-                    return Err(WorkerExecutorError::worker_not_found(
-                        owned_agent_id.agent_id(),
-                    ));
-                }
                 // Create and initialize a new worker.
                 let component = this
                     .component_service()
@@ -6765,7 +6893,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_trace: WorkerTrace,
     ) {
         let mut instance_guard = this.instance.lock().await;
-        match &*instance_guard {
+        match &instance_guard.instance {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
@@ -6787,7 +6915,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 crate::metrics::workers::inc_worker_memory_resident();
-                *instance_guard = WorkerInstance::Running(running);
+                instance_guard.instance = WorkerInstance::Running(running);
             }
             _ => {
                 debug!("worker was not waiting for permit anymore, not starting");
@@ -6929,17 +7057,6 @@ enum WorkerInstance {
 }
 
 impl WorkerInstance {
-    fn is_deleting(&self) -> bool {
-        matches!(
-            self,
-            Self::Deleting
-                | Self::Stopping(StoppingWorker {
-                    final_state: FinalWorkerState::Deleting,
-                    ..
-                })
-        )
-    }
-
     fn startup_failure(&self) -> Option<&WorkerExecutorError> {
         match self {
             Self::Unloaded {
@@ -8474,18 +8591,29 @@ mod tests {
         let first_handle = first.handle();
         assert!(matches!(state.claim(), DeleteOutcome::AlreadyDeleting(_)));
 
-        state.phase = DeletionPhase::Failed {
-            _handle: first_handle.clone(),
-        };
+        first_handle.complete(Err(WorkerExecutorError::runtime("cancelled attempt")));
         let retry = state.claim();
         let retry_handle = retry.handle();
         assert!(!first_handle.same_attempt(&retry_handle));
+        assert!(first_handle.wait().await.is_err());
 
         retry_handle.complete(Ok(()));
         state.phase = DeletionPhase::Succeeded(retry_handle.clone());
         let late = state.claim().handle();
         assert!(late.same_attempt(&retry_handle));
         assert_eq!(late.wait().await, Ok(()));
+    }
+
+    #[test]
+    async fn deletion_guard_completes_an_attempt_dropped_before_polling() {
+        let handle = DeletionHandle::new();
+        drop(DeletionAttemptGuard {
+            handle: handle.clone(),
+            finished: false,
+        });
+
+        let error = handle.wait().await.expect_err("guard must publish failure");
+        assert!(error.to_string().contains("terminal result"));
     }
 
     #[test]

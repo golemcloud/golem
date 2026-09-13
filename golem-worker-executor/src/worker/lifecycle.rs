@@ -125,7 +125,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
-        worker.start_deletion().await.handle().wait().await
+        worker.start_deletion().await?.handle().wait().await
     }
 
     pub async fn interrupt<T>(
@@ -249,7 +249,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         let metadata = worker.get_latest_worker_metadata().await;
-        if worker.deletion_owns_retirement() {
+        if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             ));
@@ -354,7 +354,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 debug!("Enqueuing update");
                 worker
                     .enqueue_update(UpdateDescription::Automatic { target_revision })
-                    .await;
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -490,7 +490,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         let metadata = worker.get_latest_worker_metadata().await;
-        if worker.deletion_owns_retirement() {
+        if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             ));

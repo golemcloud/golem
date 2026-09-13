@@ -44,7 +44,9 @@ use golem_test_framework::dsl::{
 };
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
-use golem_worker_executor::worker::INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+use golem_worker_executor::worker::{
+    INVOCATION_OWNERSHIP_RECHECK_INTERVAL, WorkerDeletionHook, WorkerDeletionStage,
+};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, fake_ownership, registry_test_card, start, start_customized,
@@ -58,7 +60,7 @@ use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
@@ -68,6 +70,103 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info};
+
+struct DeletionStageHook {
+    target: OwnedAgentId,
+    calls: Mutex<HashMap<WorkerDeletionStage, usize>>,
+    gated_stage: Option<WorkerDeletionStage>,
+    gated_once: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+    fail_once: Mutex<Option<WorkerDeletionStage>>,
+    claims: AtomicUsize,
+    started_claims: AtomicUsize,
+    claim_events: tokio::sync::Semaphore,
+}
+
+impl DeletionStageHook {
+    fn new(
+        target: OwnedAgentId,
+        gated_stage: Option<WorkerDeletionStage>,
+        fail_once: Option<WorkerDeletionStage>,
+    ) -> Self {
+        Self {
+            target,
+            calls: Mutex::new(HashMap::new()),
+            gated_stage,
+            gated_once: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+            fail_once: Mutex::new(fail_once),
+            claims: AtomicUsize::new(0),
+            started_claims: AtomicUsize::new(0),
+            claim_events: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    async fn wait_until_gated(&self) {
+        self.entered.acquire().await.unwrap().forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+
+    fn calls(&self, stage: WorkerDeletionStage) -> usize {
+        self.calls.lock().unwrap().get(&stage).copied().unwrap_or(0)
+    }
+
+    async fn wait_for_claims(&self, count: u32) {
+        self.claim_events
+            .acquire_many(count)
+            .await
+            .unwrap()
+            .forget();
+    }
+
+    fn claims(&self) -> (usize, usize) {
+        (
+            self.claims.load(Ordering::Acquire),
+            self.started_claims.load(Ordering::Acquire),
+        )
+    }
+}
+
+#[async_trait]
+impl WorkerDeletionHook for DeletionStageHook {
+    fn claimed(&self, owned_agent_id: &OwnedAgentId, started: bool) {
+        if owned_agent_id == &self.target {
+            self.claims.fetch_add(1, Ordering::AcqRel);
+            if started {
+                self.started_claims.fetch_add(1, Ordering::AcqRel);
+            }
+            self.claim_events.add_permits(1);
+        }
+    }
+
+    async fn before_stage(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        if owned_agent_id != &self.target {
+            return Ok(());
+        }
+        *self.calls.lock().unwrap().entry(stage).or_default() += 1;
+        if self.gated_stage == Some(stage) && !self.gated_once.swap(true, Ordering::AcqRel) {
+            self.entered.add_permits(1);
+            self.release.acquire().await.unwrap().forget();
+        }
+        let mut fail_once = self.fail_once.lock().unwrap();
+        if *fail_once == Some(stage) {
+            *fail_once = None;
+            return Err(WorkerExecutorError::runtime(
+                "injected worker deletion stage failure",
+            ));
+        }
+        Ok(())
+    }
+}
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -3127,6 +3226,230 @@ async fn delete_nonexistent_worker(
         err_msg.contains("AgentNotFound"),
         "Expected AgentNotFound error, got: {err_msg}"
     );
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    assert_eq!(executor.oplog_service_call_count(&worker_id, "commit"), 0);
+    assert_eq!(
+        executor.oplog_service_call_count(&worker_id, "read_exact"),
+        0
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn concurrent_deletes_share_worker_owned_completion(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "concurrent-delete-completion");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(DeletionStageHook::new(
+        owned_agent_id.clone(),
+        Some(WorkerDeletionStage::CacheRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let initiating_executor = executor.clone();
+    let initiating_worker_id = worker_id.clone();
+    let initiator = tokio::spawn(async move {
+        initiating_executor
+            .delete_worker(&initiating_worker_id)
+            .await
+    });
+    hook.wait_until_gated().await;
+    initiator.abort();
+    assert!(initiator.await.unwrap_err().is_cancelled());
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+
+    let first_executor = executor.clone();
+    let first_worker_id = worker_id.clone();
+    let first = tokio::spawn(async move { first_executor.delete_worker(&first_worker_id).await });
+    let second_executor = executor.clone();
+    let second_worker_id = worker_id.clone();
+    let second =
+        tokio::spawn(async move { second_executor.delete_worker(&second_worker_id).await });
+    hook.wait_for_claims(3).await;
+    assert_eq!(hook.claims(), (3, 1));
+    assert!(!first.is_finished());
+    assert!(!second.is_finished());
+
+    hook.release();
+    first.await??;
+    second.await??;
+
+    for stage in [
+        WorkerDeletionStage::ExecutionFenced,
+        WorkerDeletionStage::BarriersClosed,
+        WorkerDeletionStage::RuntimeStopped,
+        WorkerDeletionStage::StreamsCleaned,
+        WorkerDeletionStage::DurableStateRemoved,
+        WorkerDeletionStage::CacheRemoved,
+    ] {
+        assert_eq!(hook.calls(stage), 1, "unexpected calls for {stage:?}");
+    }
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn failed_delete_is_shared_and_one_retry_resumes_completed_stages(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "retry-delete-completion");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(DeletionStageHook::new(
+        owned_agent_id.clone(),
+        Some(WorkerDeletionStage::ExecutionFenced),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let first_executor = executor.clone();
+    let first_worker_id = worker_id.clone();
+    let first = tokio::spawn(async move { first_executor.delete_worker(&first_worker_id).await });
+    hook.wait_until_gated().await;
+    let second_executor = executor.clone();
+    let second_worker_id = worker_id.clone();
+    let second =
+        tokio::spawn(async move { second_executor.delete_worker(&second_worker_id).await });
+    hook.wait_for_claims(2).await;
+    assert_eq!(hook.claims(), (2, 1));
+    hook.release();
+
+    let first_error = first.await?.unwrap_err().to_string();
+    let second_error = second.await?.unwrap_err().to_string();
+    assert_eq!(first_error, second_error);
+    assert!(first_error.contains("injected worker deletion stage failure"));
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+
+    let retry_hook = Arc::new(DeletionStageHook::new(
+        owned_agent_id.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(retry_hook.clone());
+    let retry_a_executor = executor.clone();
+    let retry_a_worker_id = worker_id.clone();
+    let retry_a =
+        tokio::spawn(async move { retry_a_executor.delete_worker(&retry_a_worker_id).await });
+    retry_hook.wait_until_gated().await;
+    let retry_b_executor = executor.clone();
+    let retry_b_worker_id = worker_id.clone();
+    let retry_b =
+        tokio::spawn(async move { retry_b_executor.delete_worker(&retry_b_worker_id).await });
+    retry_hook.wait_for_claims(2).await;
+    assert_eq!(retry_hook.claims(), (2, 1));
+    retry_hook.release();
+    retry_a.await??;
+    retry_b.await??;
+
+    for stage in [
+        WorkerDeletionStage::ExecutionFenced,
+        WorkerDeletionStage::BarriersClosed,
+        WorkerDeletionStage::RuntimeStopped,
+        WorkerDeletionStage::StreamsCleaned,
+    ] {
+        assert_eq!(hook.calls(stage), 1, "completed stage reran: {stage:?}");
+    }
+    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 1);
+    assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    assert_eq!(
+        retry_hook.calls(WorkerDeletionStage::DurableStateRemoved),
+        1
+    );
+    assert_eq!(retry_hook.calls(WorkerDeletionStage::CacheRemoved), 1);
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn cold_existing_only_acquisition_preserves_persisted_identity_without_starting(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "cold-existing-only");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("ACQUISITION_TEST".to_string(), "preserved".to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    executor
+        .invoke_agent(&component, &agent_id, "sleep", data_value!(30u64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+    executor.interrupt(&worker_id).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let before = executor.get_worker_metadata(&worker_id).await?;
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+
+    // Interrupting an already-interrupted worker is a no-op after acquisition. It exercises the
+    // cold existing-only constructor without starting a guest generation.
+    executor.interrupt(&worker_id).await?;
+    let after = executor.get_worker_metadata(&worker_id).await?;
+    assert!(executor.worker_is_cached(&owned_agent_id).await);
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+    assert_eq!(after.component_revision, before.component_revision);
+    assert_eq!(after.env, before.env);
+    assert_eq!(after.config, before.config);
+    assert_eq!(after.fingerprint, before.fingerprint);
+    assert_eq!(after.status, AgentStatus::Interrupted);
     Ok(())
 }
 
