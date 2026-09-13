@@ -13,6 +13,7 @@ package golem.reflection
 import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
+import golem.runtime.InputRecordCodec
 import zio.test._
 import zio.blocks.schema.json.Json
 
@@ -122,6 +123,23 @@ object SchemaRefSpec extends ZIOSpecDefault {
         ReflectionInternals
           .validateInvocationOutput(single, Invocation(metadata, Some(StringValue("ok"))))
           .isRight
+      )
+    },
+    test("caller-owned contracts expose two tiers and validate complete identity shapes") {
+      val binding: AgentClientDefinition[BindingOnly, Unit, NoConfig] = AgentClientDefinition.bindingOnly
+      val complete: AgentClientDefinition[Complete, String, NoConfig] = AgentClientDefinition.complete(
+        name = "CounterAgent",
+        constructor = InputRecordCodec.single[String]("name")
+      )
+      val wrongShape = ReflectionInternals.validate(
+        SchemaRef(complete.constructorCodec.get.graph),
+        RecordValue(List(U32Value(1)))
+      )
+
+      assertTrue(
+        binding.contractName.isEmpty,
+        complete.contractName.contains("CounterAgent"),
+        wrongShape.isLeft
       )
     }
   )
