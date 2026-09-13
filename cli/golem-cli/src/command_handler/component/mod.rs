@@ -49,7 +49,7 @@ use crate::model::environment::{
 };
 use crate::model::help::ComponentNameHelp;
 use crate::model::language::GuestLanguage;
-use crate::model::plugin::PluginNameAndVersion;
+use crate::model::plugin::PluginGrantKey;
 use crate::model::text_format::log_text_view;
 use crate::model::tool_deployment::{
     DiscoveredToolImplementation, ToolEntityPath, ToolImplementationSource, ToolValidationCode,
@@ -1382,18 +1382,19 @@ impl ComponentCommandHandler {
         &self,
         tool_name: &ToolName,
         provision: &ToolManifestProvisionConfig,
-        plugin_grants: &HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+        plugin_grants: &HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
     ) -> anyhow::Result<(ToolProvisionConfig, Vec<PendingRemoteInitialFile>)> {
         let plugins = provision
             .plugins
             .iter()
             .enumerate()
             .map(|(index, plugin)| {
-                let grant = plugin_grants
-                    .get(&PluginNameAndVersion {
-                        name: plugin.name.clone(),
-                        version: plugin.version.clone(),
-                    })
+                let grant = PluginGrantKey::resolve(
+                    plugin_grants,
+                    plugin.account.as_deref(),
+                    &plugin.name,
+                    &plugin.version,
+                )?
                     .with_context(|| {
                         format!(
                             "Plugin {}/{} required by remote tool {} is not granted to this environment",
@@ -1650,27 +1651,26 @@ impl ComponentCommandHandler {
                 })
                 .collect();
 
-            // TODO: atomic: cannot lookup by account email
-            // Look up plugin grants
             let plugins_by_grant_id = manifest_config
                 .plugins
                 .iter()
                 .enumerate()
                 .map(|(idx, p)| {
-                    let grant = plugin_grants
-                        .get(&PluginNameAndVersion {
-                            name: p.name.clone(),
-                            version: p.version.clone(),
-                        })
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "Plugin {}/{} is not available in this environment. \
+                    let grant = PluginGrantKey::resolve(
+                        &plugin_grants,
+                        p.account.as_deref(),
+                        &p.name,
+                        &p.version,
+                    )?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Plugin {}/{} is not available in this environment. \
                                  Use 'golem plugin list' to see available plugins, \
                                  or grant the plugin to this environment first.",
-                                p.name,
-                                p.version
-                            )
-                        })?;
+                            p.name,
+                            p.version
+                        )
+                    })?;
                     Ok((
                         grant.id.0,
                         diff::PluginInstallation {
@@ -1785,11 +1785,12 @@ impl ComponentCommandHandler {
                 .iter()
                 .enumerate()
                 .map(|(index, plugin)| {
-                    let grant = plugin_grants
-                        .get(&PluginNameAndVersion {
-                            name: plugin.name.clone(),
-                            version: plugin.version.clone(),
-                        })
+                    let grant = PluginGrantKey::resolve(
+                        &plugin_grants,
+                        plugin.account.as_deref(),
+                        &plugin.name,
+                        &plugin.version,
+                    )?
                         .ok_or_else(|| {
                             anyhow!(
                                 "Plugin {}/{} is not available in this environment. Use 'golem plugin list' to see available plugins, or grant the plugin to this environment first.",

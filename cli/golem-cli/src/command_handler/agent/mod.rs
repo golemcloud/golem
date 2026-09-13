@@ -70,14 +70,14 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{AgentFilter, FilterComparator, IdempotencyKey, OplogIndex};
 use golem_common::schema::agent::{AgentTypeSchema, InputSchema};
 use golem_common::schema::graph::TypedSchemaValue;
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
@@ -607,11 +607,13 @@ impl AgentCommandHandler {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
             agent_type_name: agent_id.agent_type.0.clone(),
-            parameters: agent_id.parameters.value().clone(),
+            parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                .map_err(anyhow::Error::msg)?,
             phantom_id: agent_id.phantom_id,
             config: None,
             method_name: method_name.clone(),
-            method_parameters,
+            method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                .map_err(anyhow::Error::msg)?,
             mode,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
@@ -711,10 +713,11 @@ impl AgentCommandHandler {
             bail!("Agent type not found: {}", agent_type_name.0);
         };
 
-        let value: SchemaValue = serde_json::from_value(parameters).map_err(|err| {
+        let value: ExternalSchemaValue = serde_json::from_value(parameters).map_err(|err| {
             anyhow!("Failed to match agent type parameters to the current metadata: {err}")
         })?;
-        let typed_parameters = typed_constructor_parameters(&agent_type.agent_type, value);
+        let typed_parameters =
+            typed_constructor_parameters(&agent_type.agent_type, value.into_inner());
         let agent_id = build_repl_agent_id(
             &agent_type.agent_type,
             typed_parameters,
@@ -782,7 +785,7 @@ impl AgentCommandHandler {
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
         loop {
-            let mut entries = Vec::<(u64, PublicOplogEntry)>::new();
+            let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
             cursor = {
                 let clients = self.ctx.golem_clients().await?;
 
@@ -799,21 +802,18 @@ impl AgentCommandHandler {
                     .await
                     .map_service_error()?;
 
-                entries.extend(
-                    result
-                        .entries
-                        .into_iter()
-                        .map(|entry| (entry.oplog_index.as_u64(), entry.entry)),
-                );
+                entries.extend(result.entries);
                 result.next
             };
 
             if !entries.is_empty() {
                 had_entries = true;
-                for (index, entry) in entries {
-                    self.ctx
-                        .log_handler()
-                        .log_output(AgentOplogEntryView { index, entry })?;
+                for entry in entries {
+                    self.ctx.log_handler().log_output(AgentOplogEntryView {
+                        index: entry.oplog_index.as_u64(),
+                        attribution: entry.attribution,
+                        entry: entry.entry,
+                    })?;
                 }
             }
 

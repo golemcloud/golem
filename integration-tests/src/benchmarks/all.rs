@@ -161,7 +161,7 @@ async fn main() {
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
 
-    match &params.benchmark_config {
+    let failure_count = match &params.benchmark_config {
         BenchmarkConfig::Benchmark {
             name,
             iterations,
@@ -206,6 +206,7 @@ async fn main() {
                 } else {
                     println!("{}", result.view());
                 }
+                result.failure_count()
             } else {
                 print_non_existing_benchmark(&mut benchmarks_by_name, name);
             }
@@ -231,8 +232,6 @@ async fn main() {
             for benchmark in &suite.benchmarks {
                 if !benchmarks_by_name.contains_key(benchmark.name.as_str()) {
                     print_non_existing_benchmark(&mut benchmarks_by_name, &benchmark.name);
-                    // print_non_existing_benchmark calls std::process::exit(1)
-                    unreachable!();
                 }
             }
 
@@ -296,15 +295,30 @@ async fn main() {
             } else {
                 println!("{}", suite_result.view());
             }
+            suite_result.failure_count()
         }
-    }
+    };
 
     if let Some(provider) = tracer_provider {
         let _ = provider.shutdown();
     }
+
+    // The results are already written and printed at this point, so failing
+    // the process loses nothing: it only makes a run with failed attempts
+    // visible to whatever scheduled it (the daily CI workflow goes red).
+    if failure_count > 0 {
+        eprintln!(
+            "Benchmark recorded {failure_count} failed attempts; \
+             see the FAILURES sections above. Exiting with status 1."
+        );
+        std::process::exit(1);
+    }
 }
 
-fn print_non_existing_benchmark(benchmarks_by_name: &mut BTreeMap<&str, RunFn>, name: &String) {
+fn print_non_existing_benchmark(
+    benchmarks_by_name: &mut BTreeMap<&str, RunFn>,
+    name: &String,
+) -> ! {
     eprintln!("Non-existing benchmark: {name}");
     eprintln!(
         "Use one of: {}",

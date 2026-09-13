@@ -11967,7 +11967,12 @@ pub async fn ToolStdinClosed::wait(self : ToolStdinClosed) -> ByteStreamCloseCau
 }
 ///|
 /// Creates caller stdin endpoints. The writer and closure watcher remain
-/// with the caller; the source is moved into one invocation.
+/// with the caller; the source is moved into one invocation. Before passing
+/// the source to `invoke-and-await`, either select a writer terminal or drive
+/// the writer concurrently with the invocation. An open source is valid
+/// while a concurrent producer can make progress; writing only after the
+/// synchronous invocation returns can deadlock. SDK convenience adapters
+/// must start their producer pump before awaiting the invocation terminal.
 pub fn create_stdin() -> (ToolStdinWriter, ToolStdin, ToolStdinClosed) {
 
       let return_area = mbt_ffi_malloc(12)
@@ -12450,7 +12455,9 @@ pub fn ToolRpc::tool_rpc(tool_name : String) -> ToolRpc {
 }
 ///|
 /// Waits for the structured terminal. Callers that supplied stdout must
-/// drive this wait and the already-created reader concurrently.
+/// drive this wait and the already-created reader concurrently. Callers
+/// that manually created an open stdin must likewise drive its writer
+/// concurrently; see `create-stdin`.
 pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[String], input : @types.TypedSchemaValue, stdin : ToolStdin?, stdout : ToolStdout?) -> Result[@common.InvocationResult, RpcError] {
 
       let lower_ptr : Int = mbt_ffi_malloc(60)

@@ -1481,7 +1481,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             .await
             .map_err(|err| err.source)?;
         let response = oplog
-            .upload_payload(&HostResponse::Custom(response))
+            .upload_payload_owned(HostResponse::Custom(response))
             .await
             .map_err(|err| anyhow::anyhow!("Failed to store durable function response: {err}"))?;
         worker
@@ -1648,7 +1648,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let start_invocation_id = invocation_id;
             let start = tokio::spawn(async move {
                 let persisted_request = oplog
-                    .upload_payload(&request)
+                    .upload_payload_owned(request)
                     .await
                     .map_err(|err| format!("Failed to store durable function request: {err}"))?;
                 Ok::<_, String>(
@@ -1863,6 +1863,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
+            self.entity_parent_start_index(),
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,
@@ -2305,6 +2306,8 @@ pub async fn count_oplog_errors_for(
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
     /// The oplog index that error entries reference as their `retry_from` point.
     pub retry_point: OplogIndex,
+    /// Entity invocation that initiated this task, if any.
+    pub entity_parent_start_index: Option<OplogIndex>,
     /// Environment state service for lazy policy fetching
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     /// Environment ID for policy lookup
@@ -2375,6 +2378,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
     ) {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
+            self.entity_parent_start_index,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,

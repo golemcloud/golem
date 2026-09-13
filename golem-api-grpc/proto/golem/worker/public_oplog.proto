@@ -632,4 +632,55 @@ message OplogProcessorCheckpointParameters {
 message OplogEntryWithIndex {
   uint64 oplog_index = 1;
   OplogEntry entry = 2;
+  PublicOplogEntryAttribution attribution = 3;
+}
+
+enum PublicAgentEntityKind {
+  PUBLIC_AGENT_ENTITY_KIND_UNSPECIFIED = 0;
+  PUBLIC_AGENT_ENTITY_KIND_TOOL = 1;
+  PUBLIC_AGENT_ENTITY_KIND_TOOL_MIDDLEWARE = 2;
+}
+
+enum PublicEntityCallMode {
+  PUBLIC_ENTITY_CALL_MODE_UNSPECIFIED = 0;
+  PUBLIC_ENTITY_CALL_MODE_SYNCHRONOUS = 1;
+  PUBLIC_ENTITY_CALL_MODE_ASYNCHRONOUS = 2;
+  PUBLIC_ENTITY_CALL_MODE_FIRE_AND_FORGET = 3;
+}
+
+message PublicAgentEntity {
+  PublicAgentEntityKind kind = 1;
+  string name = 2;
+}
+
+message PublicToolInvocationOperation {
+  repeated string command_path = 1;
+  bool has_stdin = 2;
+  bool has_stdout = 3;
+  bool declares_stdout = 4;
+}
+
+message PublicEntityInvocationOperation {
+  oneof operation {
+    PublicToolInvocationOperation tool = 1;
+  }
+}
+
+message PublicEntityInvocation {
+  PublicAgentEntity entity = 1;
+  optional uint64 start_index = 2;
+  PublicEntityCallMode call_mode = 3;
+  PublicEntityInvocationOperation operation = 4;
+}
+
+message PublicEntityInvocationContext {
+  PublicEntityInvocation invocation = 1;
+  repeated PublicEntityInvocation ancestors = 2;
+}
+
+message PublicOplogEntryAttribution {
+  oneof attribution {
+    golem.common.Empty agent = 1;
+    PublicEntityInvocationContext entity = 2;
+  }
 }

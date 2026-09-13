@@ -21,11 +21,15 @@ mod app;
 mod build_and_deploy_all;
 mod cards;
 mod directory_source_ifs;
+mod moonbit_guest_streams;
 mod moonbit_tool_middleware;
 mod plugins;
 mod remote_releases;
+mod rust_streams;
+mod scala_guest_streams;
 mod scala_tool_middleware;
 mod tool_middleware;
+mod typescript_guest_streams;
 
 inherit_test_dep!(Tracing);
 
@@ -35,16 +39,20 @@ inherit_test_dep!(Tracing);
 // The `agents` module is split further by per-test `#[tag(agents_guest_bridge)]` and
 // `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
-// Everything except `app::agents` and `app::app` runs in the `deploy` shard; the untagged
-// remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+// Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
+// `deploy`. The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(directory_source_ifs, deploy);
+tag_suite!(moonbit_guest_streams, agents_guest_bridge);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);
+tag_suite!(rust_streams, agents_guest_bridge);
+tag_suite!(scala_guest_streams, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(tool_middleware, deploy);
+tag_suite!(typescript_guest_streams, agents_guest_bridge);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;

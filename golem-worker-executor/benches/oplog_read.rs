@@ -113,6 +113,7 @@ fn execution_status() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
 fn entry(value: u64) -> OplogEntry {
     OplogEntry::Error {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
         inside_atomic_region: false,

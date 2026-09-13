@@ -2412,7 +2412,7 @@ fn schema_value_to_json(
     value: &SchemaValue,
 ) -> anyhow::Result<serde_json::Value> {
     if !schema_value_contains_stream(value) {
-        return golem_common::schema::render::to_json_value(graph, ty, value).map_err(Into::into);
+        return golem_schema::schema::render::to_json_value(graph, ty, value).map_err(Into::into);
     }
 
     let ty = graph

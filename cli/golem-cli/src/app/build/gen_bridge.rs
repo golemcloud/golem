@@ -10,7 +10,10 @@ use crate::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
 use crate::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode};
 use crate::bridge_gen::typescript::tool::TypeScriptToolBridgeGenerator;
 use crate::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptBridgeMode};
-use crate::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
+use crate::bridge_gen::{
+    BridgeGenerator, BridgeMode, bridge_client_directory_name,
+    validate_host_managed_agent_bridge_policy,
+};
 use crate::command::GolemCliCommand;
 use crate::error::NonSuccessfulExit;
 use crate::fs;
@@ -80,6 +83,11 @@ async fn gen_bridge_with_manifest_mode_filter_and_additional_collision_targets(
 ) -> anyhow::Result<()> {
     let plan = plan_bridge_generation(ctx, manifest_bridge_mode_filter).await?;
 
+    let mut collision_targets = additional_collision_targets.to_vec();
+    collision_targets.extend(plan.targets.iter().cloned());
+    validate_supported_bridge_targets(&collision_targets)?;
+    validate_host_managed_bridge_targets(&collision_targets)?;
+
     if plan.targets.is_empty() {
         if !additional_collision_targets.is_empty() {
             validate_no_output_dir_collisions(additional_collision_targets)?;
@@ -87,9 +95,6 @@ async fn gen_bridge_with_manifest_mode_filter_and_additional_collision_targets(
         return Ok(());
     }
 
-    let mut collision_targets = additional_collision_targets.to_vec();
-    collision_targets.extend(plan.targets.iter().cloned());
-    validate_supported_bridge_targets(&collision_targets)?;
     validate_no_output_dir_collisions(&collision_targets)?;
 
     write_repl_metadata(ctx, &plan).await?;
@@ -341,8 +346,23 @@ pub(crate) async fn gen_bridge_sdk_targets(
     ctx: &BuildContext<'_>,
     targets: Vec<BridgeSdkTarget>,
 ) -> anyhow::Result<()> {
+    validate_host_managed_bridge_targets(&targets)?;
+
     for target in targets {
         gen_bridge_sdk_target(ctx, target).await?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_host_managed_bridge_targets(
+    targets: &[BridgeSdkTarget],
+) -> anyhow::Result<()> {
+    for target in targets {
+        let BridgeSdkTargetSubject::Agent(agent) = &target.subject else {
+            continue;
+        };
+        validate_host_managed_agent_bridge_policy(agent, target.bridge_mode)?;
     }
 
     Ok(())
@@ -1215,10 +1235,14 @@ mod tests {
     use crate::model::app::{Application, ApplicationPreload, ComponentPresetSelector};
     use crate::model::app_raw;
     use golem_common::model::Empty;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+    use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::component::ComponentName;
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
-    use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
+        NamedField, OutputSchema, SchemaGraph, SchemaType,
+    };
     use indoc::indoc;
     use strum::IntoEnumIterator;
     use tempfile::{TempDir, tempdir};
@@ -1368,6 +1392,162 @@ mod tests {
                 .to_string(),
             "external tool bridge SDKs are not supported yet"
         );
+    }
+
+    #[test]
+    fn external_bridge_rejects_host_managed_method_types_before_touching_output() {
+        let temp_dir = tempdir().unwrap();
+        let output_dir = temp_dir.path().join("bridge/agent-client");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let sentinel = output_dir.join("sentinel");
+        std::fs::write(&sentinel, "keep").unwrap();
+
+        let mut target = bridge_sdk_target_with_mode(
+            "Agent",
+            GuestLanguage::Rust,
+            BridgeMode::External,
+            output_dir,
+        );
+        let agent = match &mut target.subject {
+            BridgeSdkTargetSubject::Agent(agent) => agent,
+            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+        };
+        agent.methods.push(AgentMethodSchema {
+            name: "forward".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([NamedField::user_supplied(
+                "credentials",
+                SchemaType::list(SchemaType::secret(Default::default())),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+
+        let error = validate_host_managed_bridge_targets(&[target])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("method `forward` input parameter `credentials`"));
+        assert!(error.contains("host-managed capability `secret`"));
+        assert!(sentinel.exists(), "preflight must not modify bridge output");
+    }
+
+    #[test]
+    fn guest_bridge_allows_host_managed_method_inputs_and_outputs() {
+        let mut target = bridge_sdk_target_with_mode(
+            "Agent",
+            GuestLanguage::Rust,
+            BridgeMode::Guest,
+            tempdir().unwrap().path().join("bridge/agent-client"),
+        );
+        let agent = match &mut target.subject {
+            BridgeSdkTargetSubject::Agent(agent) => agent,
+            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+        };
+        agent.methods.push(AgentMethodSchema {
+            name: "forward".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([NamedField::user_supplied(
+                "credentials",
+                SchemaType::secret(Default::default()),
+            )]),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::permission_card(
+                Default::default(),
+            ))),
+            http_endpoint: vec![],
+            read_only: None,
+        });
+
+        validate_host_managed_bridge_targets(&[target]).unwrap();
+    }
+
+    #[test]
+    fn guest_bridge_rejects_host_managed_constructor_and_configuration_types() {
+        let mut constructor_target = bridge_sdk_target_with_mode(
+            "Agent",
+            GuestLanguage::Rust,
+            BridgeMode::Guest,
+            tempdir().unwrap().path().join("bridge/constructor-client"),
+        );
+        let constructor_agent = match &mut constructor_target.subject {
+            BridgeSdkTargetSubject::Agent(agent) => agent,
+            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+        };
+        constructor_agent.constructor.input_schema = InputSchema::parameters([
+            NamedField::user_supplied(
+                "authorization",
+                SchemaType::permission_card(Default::default()),
+            ),
+            NamedField::auto_injected(
+                "host-secret",
+                AutoInjectedKind::Principal,
+                SchemaType::secret(Default::default()),
+            ),
+        ]);
+
+        let error = validate_host_managed_bridge_targets(&[constructor_target])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("constructor parameter `authorization`"));
+        assert!(error.contains("host-managed capability `permission-card`"));
+
+        let mut config_target = bridge_sdk_target_with_mode(
+            "Agent",
+            GuestLanguage::Rust,
+            BridgeMode::Guest,
+            tempdir().unwrap().path().join("bridge/config-client"),
+        );
+        let config_agent = match &mut config_target.subject {
+            BridgeSdkTargetSubject::Agent(agent) => agent,
+            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+        };
+        config_agent.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["limits".to_string()],
+            value_type: SchemaType::quota_token(Default::default()),
+        });
+
+        let error = validate_host_managed_bridge_targets(&[config_target])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("configuration `limits`"));
+        assert!(error.contains("host-managed capability `quota-token`"));
+    }
+
+    #[test]
+    fn bridge_preflight_allows_host_supplied_capabilities() {
+        let mut target = bridge_sdk_target_with_mode(
+            "Agent",
+            GuestLanguage::Rust,
+            BridgeMode::External,
+            tempdir().unwrap().path().join("bridge/agent-client"),
+        );
+        let agent = match &mut target.subject {
+            BridgeSdkTargetSubject::Agent(agent) => agent,
+            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+        };
+        agent.config.push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Secret,
+            path: vec!["credentials".to_string()],
+            value_type: SchemaType::secret(Default::default()),
+        });
+        agent.methods.push(AgentMethodSchema {
+            name: "inspect".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([NamedField::auto_injected(
+                "authority",
+                AutoInjectedKind::Principal,
+                SchemaType::permission_card(Default::default()),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        });
+
+        validate_host_managed_bridge_targets(&[target]).unwrap();
     }
 
     #[test]

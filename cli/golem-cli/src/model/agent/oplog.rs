@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agent_id_display::SourceLanguage;
 use crate::log::logln;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::*;
@@ -21,12 +20,15 @@ use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
     MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, StringAttributeValue,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicEntityCallMode,
+    PublicEntityInvocation, PublicEntityInvocationOperation, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::agent_id_display::SourceLanguage;
 #[cfg(test)]
 use crate::model::agent::{AgentMetadataView, AgentsMetadataResponseView, RawAgentId};
 #[cfg(test)]
@@ -40,6 +42,7 @@ use std::collections::HashMap;
 #[serde(rename_all = "camelCase")]
 pub struct AgentOplogEntryView {
     pub index: u64,
+    pub attribution: PublicOplogEntryAttribution,
     pub entry: PublicOplogEntry,
 }
 
@@ -53,8 +56,63 @@ impl TextOutput for AgentOplogEntryView {
             "{}: ",
             format_main_id(&format!("#{:0>5}", self.index))
         ));
+        for line in render_oplog_attribution_lines(&self.attribution) {
+            logln(line);
+        }
         self.entry.log()
     }
+}
+
+fn render_oplog_attribution_lines(attribution: &PublicOplogEntryAttribution) -> Vec<String> {
+    let pad = "          ";
+    match attribution {
+        PublicOplogEntryAttribution::Agent(_) => vec![format!("{pad}owner:             agent")],
+        PublicOplogEntryAttribution::Entity(context) => {
+            let mut lines = vec![
+                format!("{pad}owner:             entity"),
+                format!("{pad}entity chain:"),
+            ];
+            for ancestor in &context.ancestors {
+                lines.push(format_entity_invocation(pad, ancestor, false));
+            }
+            lines.push(format_entity_invocation(pad, &context.invocation, true));
+            if let Some(PublicEntityInvocationOperation::Tool(tool)) = &context.invocation.operation
+            {
+                lines.push(format!(
+                    "{pad}tool command:      {}",
+                    tool.command_path.join(" ")
+                ));
+                lines.push(format!("{pad}stdin requested:   {}", tool.has_stdin));
+                lines.push(format!("{pad}stdout requested:  {}", tool.has_stdout));
+                lines.push(format!("{pad}stdout declared:   {}", tool.declares_stdout));
+                lines.push(format!(
+                    "{pad}stdout recording:  none (live attachment only)"
+                ));
+            }
+            lines
+        }
+    }
+}
+
+fn format_entity_invocation(
+    pad: &str,
+    invocation: &PublicEntityInvocation,
+    current: bool,
+) -> String {
+    let kind = match invocation.entity.kind {
+        golem_common::model::oplog::PublicAgentEntityKind::Tool => "tool",
+        golem_common::model::oplog::PublicAgentEntityKind::ToolMiddleware => "tool middleware",
+    };
+    let call_mode = match invocation.call_mode {
+        PublicEntityCallMode::Synchronous => "synchronous",
+        PublicEntityCallMode::Asynchronous => "asynchronous",
+        PublicEntityCallMode::FireAndForget => "fire and forget",
+    };
+    let current = if current { " [current]" } else { "" };
+    format!(
+        "{pad}  - {kind} {} (start #{}, {call_mode}){current}",
+        invocation.entity.name, invocation.start_index
+    )
 }
 
 impl TextOutput for PublicOplogEntry {
@@ -208,7 +266,7 @@ impl TextOutput for PublicOplogEntry {
                     PublicAgentInvocationResult::AgentInitialization(output)
                     | PublicAgentInvocationResult::AgentMethod(output) => {
                         logln(format!("{pad}output:"));
-                        log_typed_schema_value(pad, &output.output, &SourceLanguage::default());
+                        log_typed_schema_value(pad, &output.output);
                     }
                     PublicAgentInvocationResult::ManualUpdate(_) => {}
                     PublicAgentInvocationResult::LoadSnapshot(fallible) => {
@@ -952,7 +1010,6 @@ fn render_agent_invocation(
             lines.push(render_typed_schema_value_line(
                 pad,
                 &params.constructor_parameters,
-                &SourceLanguage::default(),
             ));
         }
         PublicAgentInvocation::AgentMethodInvocation(params) => {
@@ -961,11 +1018,7 @@ fn render_agent_invocation(
                 format_id(&params.idempotency_key)
             ));
             lines.push(format!("{pad}input:"));
-            lines.push(render_typed_schema_value_line(
-                pad,
-                &params.function_input,
-                &SourceLanguage::default(),
-            ));
+            lines.push(render_typed_schema_value_line(pad, &params.function_input));
         }
         PublicAgentInvocation::SaveSnapshot(_) => {}
         PublicAgentInvocation::LoadSnapshot(params) => {
@@ -1067,20 +1120,20 @@ fn render_agent_invocation_header(
 }
 
 fn typed_schema_value_to_string(value: &TypedSchemaValue) -> String {
-    golem_common::schema::render::value_to_cli_text(value.graph(), value.root_type(), value.value())
-        .unwrap_or_else(|err| format!("<rendering error: {err}>"))
+    golem_common::schema::render::value_to_cli_text_with_secret_metadata(
+        value.graph(),
+        value.root_type(),
+        value.value(),
+    )
+    .unwrap_or_else(|err| format!("<rendering error: {err}>"))
 }
 
-fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue, source_language: &SourceLanguage) {
-    logln(render_typed_schema_value_line(pad, value, source_language));
+fn log_typed_schema_value(pad: &str, value: &TypedSchemaValue) {
+    logln(render_typed_schema_value_line(pad, value));
 }
 
-fn render_typed_schema_value_line(
-    pad: &str,
-    value: &TypedSchemaValue,
-    source_language: &SourceLanguage,
-) -> String {
-    let rendered = crate::agent_id_display::render_typed_schema_value(value, source_language);
+fn render_typed_schema_value_line(pad: &str, value: &TypedSchemaValue) -> String {
+    let rendered = typed_schema_value_to_string(value);
     format!("{pad}  {rendered}")
 }
 
@@ -1140,12 +1193,19 @@ mod tests {
     use comfy_table::{Cell, Table as ComfyTable};
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
     use golem_common::model::oplog::{
-        AgentInitializationParameters, AgentMethodInvocationParameters, LoadSnapshotParameters,
-        ManualUpdateParameters, ProcessOplogEntriesParameters, RawSnapshotData,
+        AgentInitializationParameters, AgentMethodInvocationParameters, HostRequestSecretReveal,
+        HostResponseSecretRevealed, LoadSnapshotParameters, ManualUpdateParameters,
+        ProcessOplogEntriesParameters, PublicAgentEntity, PublicAgentEntityKind,
+        PublicEntityInvocationContext, PublicToolInvocationOperation, RawSnapshotData,
     };
     use golem_common::model::{Empty, IdempotencyKey};
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::{
+        IntoTypedSchemaValue, NamedFieldType, PermissionCardSpec, PermissionCardValuePayload,
+        QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
+        SecretValuePayload,
+    };
     use test_r::test;
 
     fn timestamp() -> Timestamp {
@@ -1314,6 +1374,198 @@ mod tests {
                 "rendered output contains debug-only text {forbidden:?}:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn oplog_attribution_renders_agent_and_nested_entity_ownership() {
+        let agent =
+            render_oplog_attribution_lines(&PublicOplogEntryAttribution::agent()).join("\n");
+        assert_eq!(agent, "          owner:             agent");
+
+        let ancestor = PublicEntityInvocation {
+            entity: PublicAgentEntity {
+                kind: PublicAgentEntityKind::ToolMiddleware,
+                name: "authorize".to_string(),
+            },
+            start_index: golem_common::model::OplogIndex::from_u64(7),
+            call_mode: PublicEntityCallMode::Synchronous,
+            operation: None,
+        };
+        let invocation = PublicEntityInvocation {
+            entity: PublicAgentEntity {
+                kind: PublicAgentEntityKind::Tool,
+                name: "filesystem".to_string(),
+            },
+            start_index: golem_common::model::OplogIndex::from_u64(11),
+            call_mode: PublicEntityCallMode::Asynchronous,
+            operation: Some(PublicEntityInvocationOperation::Tool(
+                PublicToolInvocationOperation {
+                    command_path: vec!["files".to_string(), "lookup".to_string()],
+                    has_stdin: true,
+                    has_stdout: false,
+                    declares_stdout: true,
+                },
+            )),
+        };
+
+        let rendered = render_oplog_attribution_lines(&PublicOplogEntryAttribution::entity(
+            PublicEntityInvocationContext {
+                invocation,
+                ancestors: vec![ancestor],
+            },
+        ))
+        .join("\n");
+
+        assert_contains_all(
+            &rendered,
+            &[
+                "owner:             entity",
+                "entity chain:",
+                "tool middleware authorize (start #7, synchronous)",
+                "tool filesystem (start #11, asynchronous) [current]",
+                "tool command:      files lookup",
+                "stdin requested:   true",
+                "stdout requested:  false",
+                "stdout declared:   true",
+                "stdout recording:  none (live attachment only)",
+            ],
+        );
+        assert!(
+            rendered.find("authorize").unwrap() < rendered.find("filesystem").unwrap(),
+            "ancestor must render before the current invocation:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn oplog_typed_values_show_safe_secret_metadata() {
+        let secret_id = uuid::Uuid::from_u128(1);
+        let permission_card_id = uuid::Uuid::from_u128(2);
+        let schema = SchemaType::record(vec![
+            NamedFieldType {
+                name: "credential".to_string(),
+                body: SchemaType::secret(SecretSpec::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(QuotaTokenSpec::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "permission".to_string(),
+                body: SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
+                metadata: Default::default(),
+            },
+        ]);
+        let value = TypedSchemaValue::new(
+            SchemaGraph::anonymous(schema),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::Secret(SecretValuePayload {
+                        secret_id,
+                        config_key: Some(vec!["database".to_string(), "password".to_string()]),
+                        version: 7,
+                        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                        category: Some("api-key".to_string()),
+                    }),
+                    SchemaValue::QuotaToken(QuotaTokenValuePayload {
+                        environment_id: uuid::Uuid::nil().into(),
+                        resource_name: "private-quota-resource".to_string(),
+                        expected_use: 1,
+                        last_credit: 0,
+                        last_credit_at: chrono::DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+                    }),
+                    SchemaValue::PermissionCard(PermissionCardValuePayload {
+                        card_id: permission_card_id,
+                        parent_ids: vec![],
+                        expires_at: None,
+                        polymorphic: true,
+                    }),
+                ],
+            },
+        );
+
+        let mut invocation = agent_method_invocation();
+        let PublicAgentInvocation::AgentMethodInvocation(parameters) = &mut invocation else {
+            unreachable!()
+        };
+        parameters.function_input = value.clone();
+
+        for rendered in [
+            typed_schema_value_to_string(&value),
+            render_for_test(AgentInvocationRenderKind::Started, &invocation),
+        ] {
+            assert_contains_all(
+                &rendered,
+                &[
+                    "<secret metadata:",
+                    &secret_id.to_string(),
+                    "database",
+                    "password",
+                    "\"version\":7",
+                    "\"resolvedAt\":\"2023-11-14T22:13:20+00:00\"",
+                    "\"category\":\"api-key\"",
+                    "<redacted: quota-token>",
+                    "<redacted: permission-card>",
+                ],
+            );
+            assert!(!rendered.contains("<redacted: secret>"));
+            assert!(!rendered.contains("secretValue"));
+            assert!(!rendered.contains("private-quota-resource"));
+            assert!(!rendered.contains(&permission_card_id.to_string()));
+        }
+    }
+
+    #[test]
+    fn oplog_secret_reveal_payloads_show_audit_metadata_without_secret_values() {
+        let secret_id = uuid::Uuid::from_u128(3);
+        let request = HostRequestSecretReveal {
+            secret_id,
+            expected_type: SchemaGraph::anonymous(SchemaType::string()),
+        }
+        .into_typed_schema_value()
+        .expect("secret reveal request must be schema-encodable");
+        let response = HostResponseSecretRevealed {
+            secret_id,
+            pinned_revision: 11,
+            resolved_at: SerializableDateTime {
+                seconds: 1_700_000_004,
+                nanoseconds: 0,
+            },
+            result: Ok(()),
+            audit: SecretRevealAudit {
+                calling_agent: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                    agent_id: "secret-reveal-auditor".to_string(),
+                },
+                config_key: Some(vec!["database".to_string(), "password".to_string()]),
+                timestamp: SerializableDateTime {
+                    seconds: 1_700_000_005,
+                    nanoseconds: 0,
+                },
+            },
+        }
+        .into_typed_schema_value()
+        .expect("secret reveal response must be schema-encodable");
+
+        let rendered = [
+            typed_schema_value_to_string(&request),
+            typed_schema_value_to_string(&response),
+        ]
+        .join("\n");
+        assert_contains_all(
+            &rendered,
+            &[
+                "low-bits: 3",
+                "secret-reveal-auditor",
+                "database",
+                "password",
+                "1700000004",
+                "1700000005",
+                "11",
+            ],
+        );
+        assert!(!rendered.contains("secretValue"));
     }
 
     #[test]

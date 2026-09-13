@@ -9,13 +9,9 @@
 // returned value.
 
 ///|
-/// Decodes an invocation/constructor input wire value into its ordered
-/// parameter values, validating that it is a record of exactly `arity` fields.
-/// Decode and shape errors are mapped to `AgentError::InvalidInput`.
-#warnings("-unused_async")
-pub async fn decode_invocation_input(
+/// Decodes a wire input record into its ordered fields.
+fn decode_input_record(
   input : @types.SchemaValueTree,
-  arity : Int,
   context : String,
 ) -> Array[@model.SchemaValue] raise @common.AgentError {
   let drops = @model_host.resource_drops()
@@ -33,13 +29,38 @@ pub async fn decode_invocation_input(
       )
     }
   }
+  fields
+}
+
+///|
+/// Decodes an invocation/constructor input wire value into its ordered
+/// parameter values, validating that it is a record of exactly `arity` fields.
+/// Decode and shape errors are mapped to `AgentError::InvalidInput`.
+#warnings("-unused_async")
+pub async fn decode_invocation_input(
+  input : @types.SchemaValueTree,
+  arity : Int,
+  context : String,
+) -> Array[@model.SchemaValue] raise @common.AgentError {
+  let fields = decode_input_record(input, context)
   guard fields.length() == arity else {
-    value.release_resources(drops)
+    @model.SchemaValue::Record(fields).release_resources(
+      @model_host.resource_drops(),
+    )
     raise @common.AgentError::InvalidInput(
       "\{context}: expected \{arity} parameter(s), got \{fields.length()}",
     )
   }
   fields
+}
+
+///|
+/// Decodes the identity record from a parsed agent ID for snapshot restoration.
+#warnings("-unused_async")
+pub async fn decode_snapshot_identity(
+  input : @types.SchemaValueTree,
+) -> Array[@model.SchemaValue] raise @common.AgentError {
+  decode_input_record(input, "snapshot restoration")
 }
 
 ///|

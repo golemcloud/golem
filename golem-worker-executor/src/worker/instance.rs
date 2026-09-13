@@ -122,11 +122,9 @@ pub struct OwnerExecution {
     deferred_tool_admission: Arc<DeferredAdmissionTable>,
     reached_oplog_marker: AtomicU64,
     #[cfg(feature = "test-utils")]
-    monotonic_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
+    monotonic_clock_start_gate: Mutex<Option<Arc<ClockNowGate>>>,
     #[cfg(feature = "test-utils")]
     wall_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
-    #[cfg(feature = "test-utils")]
-    skip_monotonic_clock_now_durability: AtomicBool,
     #[cfg(feature = "test-utils")]
     skip_wall_clock_now_durability: AtomicBool,
 }
@@ -135,6 +133,7 @@ pub struct OwnerExecution {
 struct ClockNowGate {
     entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
+    abort_as_restart: AtomicBool,
 }
 
 #[cfg(feature = "test-utils")]
@@ -153,6 +152,11 @@ impl ClockNowGateHandle {
 
     pub fn release(&self) {
         self.gate.release.add_permits(1);
+    }
+
+    pub fn abort_as_restart(&self) {
+        self.gate.abort_as_restart.store(true, Ordering::Release);
+        self.release();
     }
 }
 
@@ -182,11 +186,9 @@ impl OwnerExecution {
             deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
             reached_oplog_marker: AtomicU64::new(OplogIndex::NONE.into()),
             #[cfg(feature = "test-utils")]
-            monotonic_clock_now_gate: Mutex::new(None),
+            monotonic_clock_start_gate: Mutex::new(None),
             #[cfg(feature = "test-utils")]
             wall_clock_now_gate: Mutex::new(None),
-            #[cfg(feature = "test-utils")]
-            skip_monotonic_clock_now_durability: AtomicBool::new(false),
             #[cfg(feature = "test-utils")]
             skip_wall_clock_now_durability: AtomicBool::new(false),
         }
@@ -337,14 +339,35 @@ impl OwnerExecution {
 
     #[cfg(feature = "test-utils")]
     #[doc(hidden)]
-    pub fn test_gate_next_monotonic_clock_now(&self) -> ClockNowGateHandle {
+    pub fn test_gate_next_monotonic_clock_start(&self) -> ClockNowGateHandle {
         let (entered_tx, entered) = tokio::sync::oneshot::channel();
         let gate = Arc::new(ClockNowGate {
             entered: Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
+            abort_as_restart: AtomicBool::new(false),
         });
-        *self.monotonic_clock_now_gate.lock().unwrap() = Some(gate.clone());
+        *self.monotonic_clock_start_gate.lock().unwrap() = Some(gate.clone());
         ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_after_monotonic_clock_start(&self) -> Result<(), InterruptKind> {
+        let gate = self.monotonic_clock_start_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.oplog.commit(CommitLevel::Always).await;
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("clock Start gate closed")
+                .forget();
+            if gate.abort_as_restart.load(Ordering::Acquire) {
+                return Err(InterruptKind::Restart);
+            }
+        }
+        Ok(())
     }
 
     #[cfg(feature = "test-utils")]
@@ -354,16 +377,10 @@ impl OwnerExecution {
         let gate = Arc::new(ClockNowGate {
             entered: Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
+            abort_as_restart: AtomicBool::new(false),
         });
         *self.wall_clock_now_gate.lock().unwrap() = Some(gate.clone());
         ClockNowGateHandle { entered, gate }
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub fn test_skip_next_monotonic_clock_now_durability(&self) {
-        self.skip_monotonic_clock_now_durability
-            .store(true, Ordering::Release);
     }
 
     #[cfg(feature = "test-utils")]
@@ -374,30 +391,9 @@ impl OwnerExecution {
     }
 
     #[cfg(feature = "test-utils")]
-    pub(crate) fn test_should_skip_monotonic_clock_now_durability(&self) -> bool {
-        self.skip_monotonic_clock_now_durability
-            .swap(false, Ordering::AcqRel)
-    }
-
-    #[cfg(feature = "test-utils")]
     pub(crate) fn test_should_skip_wall_clock_now_durability(&self) -> bool {
         self.skip_wall_clock_now_durability
             .swap(false, Ordering::AcqRel)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn test_before_monotonic_clock_now(&self) {
-        let gate = self.monotonic_clock_now_gate.lock().unwrap().take();
-        if let Some(gate) = gate {
-            if let Some(entered) = gate.entered.lock().unwrap().take() {
-                let _ = entered.send(());
-            }
-            gate.release
-                .acquire()
-                .await
-                .expect("monotonic-clock now gate was closed")
-                .forget();
-        }
     }
 
     #[cfg(feature = "test-utils")]

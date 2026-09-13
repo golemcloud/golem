@@ -20,8 +20,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
+use golem_common::serialization::deserialize;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -70,9 +70,8 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         shard_id: ShardId,
-        action: &ScheduledAction,
+        action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
-        let action = serialize(action)?;
         let due_at_ms = datetime_to_millis(due_at);
         let query = sqlx::query(
             "INSERT OR IGNORE INTO scheduled_actions (schedule_id, due_at_ms, available_at_ms, shard_id, action) VALUES (?, ?, ?, ?, ?);",

@@ -134,7 +134,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else if self.state.is_live() {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::set_retry_policy(named_policy.clone()))
+                .add_and_commit_oplog(OplogEntry::set_retry_policy(
+                    self.entity_parent_start_index(),
+                    named_policy.clone(),
+                ))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::SetRetryPolicy)?;
@@ -152,7 +155,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else if self.state.is_live() {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::remove_retry_policy(name.clone()))
+                .add_and_commit_oplog(OplogEntry::remove_retry_policy(
+                    self.entity_parent_start_index(),
+                    name.clone(),
+                ))
                 .await;
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::RemoveRetryPolicy)?;

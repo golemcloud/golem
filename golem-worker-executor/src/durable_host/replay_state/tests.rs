@@ -210,6 +210,7 @@ async fn test_replay_state(
 fn noop() -> OplogEntry {
     OplogEntry::NoOp {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
     }
 }
 
@@ -1007,7 +1008,25 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
 fn begin_atomic_region() -> OplogEntry {
     OplogEntry::BeginAtomicRegion {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
     }
+}
+
+fn anchored_noop(parent_start_index: u64) -> OplogEntry {
+    OplogEntry::NoOp {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: Some(OplogIndex::from_u64(parent_start_index)),
+    }
+}
+
+fn anchored_error(entity_parent_start_index: u64, retry_from: u64) -> OplogEntry {
+    OplogEntry::error(
+        Some(OplogIndex::from_u64(entity_parent_start_index)),
+        AgentError::TransientError("retry".to_string()),
+        OplogIndex::from_u64(retry_from),
+        false,
+        None,
+    )
 }
 
 fn end_for(start_index: u64, nanos: u64) -> OplogEntry {
@@ -1523,6 +1542,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
         invocation_started(wallet_pin.clone()),
         OplogEntry::CardDerived {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             card: derived_card.clone(),
             wallet_generation: Some(0),
         },
@@ -1576,6 +1596,7 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         noop(),
         OplogEntry::CardInstalled {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             queued_event_index: None,
             card: card.clone(),
             wallet_generation: Some(7),
@@ -1644,6 +1665,7 @@ async fn permission_events_are_recovered_from_skipped_regions() {
         noop(),
         OplogEntry::CardTransferred {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             transfer_id,
             source_card_id: Some(source_card_id),
             installed_card_id: card.card_id(),
@@ -1682,6 +1704,7 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
         noop(),
         OplogEntry::CardInstalled {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             queued_event_index: None,
             card,
             wallet_generation: Some(1),
@@ -2123,6 +2146,7 @@ async fn error_hint_between_start_and_end_resolves() {
         noop(),
         start_now(),
         OplogEntry::error(
+            None,
             AgentError::TransientError("boom".to_string()),
             OplogIndex::from_u64(2),
             false,
@@ -3267,7 +3291,7 @@ async fn await_natural_tail_end_returns_once_tail_drains() {
         .unwrap();
     rs.await_resolution(handle).await.unwrap();
 
-    rs.await_natural_tail_end().await.unwrap();
+    rs.await_natural_tail_end(None).await.unwrap();
     assert!(rs.is_live());
 }
 
@@ -3293,7 +3317,7 @@ async fn await_natural_tail_end_waits_for_positionally_owned_entry() {
         .unwrap();
     rs.await_resolution(handle).await.unwrap();
 
-    let waiter = rs.await_natural_tail_end();
+    let waiter = rs.await_natural_tail_end(None);
     tokio::pin!(waiter);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
@@ -3316,7 +3340,7 @@ async fn await_natural_tail_end_propagates_delivery_failure() {
     // wake and fail a parked tail waiter instead of leaving it parked forever.
     let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
 
-    let waiter = rs.await_natural_tail_end();
+    let waiter = rs.await_natural_tail_end(None);
     tokio::pin!(waiter);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
@@ -3330,6 +3354,91 @@ async fn await_natural_tail_end_propagates_delivery_failure() {
         err.to_string().contains("test poisoning"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+async fn await_natural_tail_end_parks_only_after_owned_cursor_work() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let lock = rs.cursor.state.lock().await;
+    let mut waiter = Box::pin(rs.await_natural_tail_end(Some(&activity)));
+    assert!(futures::poll!(waiter.as_mut()).is_pending());
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "a queued cursor operation stays active"
+    );
+    drop(lock);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "only the passive progress wait parks"
+    );
+
+    // A notification does not authorize delivery, and re-entering the cursor must be active.
+    let lock = rs.cursor.state.lock().await;
+    rs.cursor.progress.notify_waiters();
+    assert!(futures::poll!(waiter.as_mut()).is_pending());
+    assert_eq!(tracker.active_count(), 1);
+    drop(lock);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err()
+    );
+    assert_eq!(tracker.active_count(), 0);
+
+    let (_, entry) = rs.get_oplog_entry().await.unwrap();
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+    waiter.await.unwrap();
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "continuation is active before delivery"
+    );
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+#[test]
+async fn await_natural_tail_end_park_restores_activity_on_error_and_drop() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    for poison in [false, true] {
+        let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
+        let tracker = TailWorkTracker::new();
+        let activity = tracker.activity();
+        let mut waiter = Box::pin(rs.await_natural_tail_end(Some(&activity)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(tracker.active_count(), 0);
+        if poison {
+            rs.fail_tail_delivery(OplogIndex::from_u64(1), "parked failure");
+            assert!(
+                waiter
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("parked failure")
+            );
+        } else {
+            drop(waiter);
+        }
+        assert_eq!(tracker.active_count(), 1);
+        drop(activity);
+        assert_eq!(tracker.active_count(), 0);
+    }
 }
 
 #[test]
@@ -4164,6 +4273,189 @@ async fn completed_entity_body_detects_unconsumed_owned_start_at_cursor_head() {
 }
 
 #[test]
+async fn completed_entity_body_uses_explicit_owner_for_anchored_noop() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        anchored_noop(3),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    drop(child);
+    drop(outer);
+
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "the active nested entity body can still consume its explicitly anchored NoOp"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(4)),
+        "once the owner settles without a live resolver, the anchored NoOp is divergence"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(99)]),
+        )
+        .await
+        .unwrap(),
+        Some(OplogIndex::from_u64(4)),
+        "an unrelated active entity body must not mask the divergence"
+    );
+}
+
+#[test]
+fn scope_entry_owner_prefers_error_entity_anchor_over_retry_group() {
+    let begin = begin_atomic_region();
+    assert!(matches!(begin, OplogEntry::BeginAtomicRegion { .. }));
+    let error = anchored_error(2, 3);
+
+    assert_eq!(
+        cursor::scope_entry_owner(
+            OplogIndex::from_u64(4),
+            &error,
+            Some(OplogIndex::from_u64(3)),
+            None,
+        ),
+        Some(OplogIndex::from_u64(2)),
+        "the explicit entity owner must take precedence over retry_from"
+    );
+}
+
+#[test]
+async fn deferred_anchored_error_is_not_structural_divergence() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        begin_atomic_region(),
+        end_for(2, 42),
+        delivered_for(2),
+        anchored_error(2, 3),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(root).await.unwrap();
+    let (begin_idx, begin) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(begin_idx, OplogIndex::from_u64(3));
+    assert!(matches!(begin, OplogEntry::BeginAtomicRegion { .. }));
+    rs.drain_awaited_terminals().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(5)),
+        "CompletionDelivered remains a non-skippable delivery barrier"
+    );
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(5),
+        "the anchored Error must remain exposed at the head until delivery is acknowledged"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "a deferred auto-skippable Error hint is not structural divergence"
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    barrier.acknowledge();
+}
+
+#[test]
+async fn deferred_root_error_ignores_live_retry_from_descendant() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(2, 42),
+        delivered_for(2),
+        anchored_error(2, 3),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let descendant = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(root).await.unwrap();
+    rs.drain_awaited_terminals().await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        assert!(
+            internal
+                .concurrent_resolver
+                .is_awaited(OplogIndex::from_u64(3)),
+            "the retry_from descendant must still have a live awaiter"
+        );
+    }
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "the deferred Error remains non-divergent after its explicit root owner settles"
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    barrier.acknowledge();
+    drop(descendant);
+}
+
+#[test]
 async fn completed_entity_body_waits_for_active_owner_of_retried_transaction_begin() {
     let rs = replay_state_over(vec![
         noop(),
@@ -4415,6 +4707,7 @@ fn cancelled_with_partial_for(start_index: u64, nanos: u64) -> OplogEntry {
 fn end_atomic_region(begin_index: u64) -> OplogEntry {
     OplogEntry::EndAtomicRegion {
         timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
         begin_index: OplogIndex::from_u64(begin_index),
     }
 }

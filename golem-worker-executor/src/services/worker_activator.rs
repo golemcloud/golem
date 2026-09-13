@@ -24,7 +24,7 @@ use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, Weak};
-use tracing::{error, warn};
+use tracing::warn;
 
 /// Service for activating workers in the background
 #[async_trait]
@@ -35,8 +35,15 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint>;
 
-    /// Makes sure an already existing worker is active in a background task. Returns immediately
-    async fn activate_worker(&self, owned_agent_id: &OwnedAgentId);
+    /// Makes sure an already existing worker is active in a background task. Returns immediately.
+    ///
+    /// `Ok(())` means the worker is running, was already running, or no longer exists. `Err` means
+    /// it could not be activated and still needs to be: callers driving a scheduled action must not
+    /// acknowledge it, or the agent stays suspended with nothing left to wake it.
+    async fn activate_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Gets or creates a worker in suspended state
     async fn get_or_create_suspended(
@@ -107,7 +114,10 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         }
     }
 
-    async fn activate_worker(&self, owned_agent_id: &OwnedAgentId) {
+    async fn activate_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
         let maybe_worker_activator = self
             .worker_activator
             .lock()
@@ -116,7 +126,9 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
             .and_then(|w| w.upgrade());
         match maybe_worker_activator {
             Some(worker_activator) => worker_activator.activate_worker(owned_agent_id).await,
-            None => warn!("WorkerActivator is disabled, not activating instance"),
+            None => Err(WorkerExecutorError::runtime(
+                "WorkerActivator is disabled, not activating instance",
+            )),
         }
     }
 
@@ -223,19 +235,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             .map(|worker| worker.get_initial_worker_metadata().fingerprint)
     }
 
-    async fn activate_worker(&self, owned_agent_id: &OwnedAgentId) {
+    async fn activate_worker(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
         if self
             .active_worker_fingerprint(owned_agent_id)
             .await
             .is_some()
         {
-            return;
+            return Ok(());
         }
 
-        let metadata = self.all.worker_service().get(owned_agent_id).await;
-        match metadata {
+        // A metadata read that *failed* is not evidence that the worker is gone, so it propagates:
+        // only the two outcomes below are conclusive.
+        match self.all.worker_service().get(owned_agent_id).await? {
             Some(_) => {
-                if let Err(err) = Worker::get_or_create_running(
+                Worker::get_or_create_running(
                     &self.all,
                     owned_agent_id,
                     None,
@@ -245,13 +261,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     &InvocationContextStack::fresh(),
                     Principal::anonymous(),
                 )
-                .await
-                {
-                    error!("Failed to activate worker: {err}")
-                }
+                .await?;
+                Ok(())
             }
+            // No oplog: the worker was deleted. There is nothing to activate and no retry that
+            // could bring it back, so this is a success rather than a failure to report upwards.
             None => {
-                error!("WorkerActivator::activate_worker: worker not found")
+                warn!("WorkerActivator::activate_worker: worker not found");
+                Ok(())
             }
         }
     }

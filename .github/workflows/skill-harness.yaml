@@ -53,6 +53,8 @@ jobs:
 
   build-golem-ts:
     runs-on: blacksmith
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v5
         with:

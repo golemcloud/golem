@@ -6,7 +6,7 @@ use golem_rust::agentic::{
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
-    self as tool_host, ByteStreamCloseCause, ByteStreamFailure, RpcError, ToolRpc,
+    self as tool_host, ByteStreamFailure, RpcError, ToolRpc,
 };
 use golem_rust::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
@@ -28,6 +28,13 @@ pub struct StreamingBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
     pub chunks_read: u32,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct ClockedStreamEvidence {
+    pub before_tool_nanos: u64,
+    pub after_tool_nanos: u64,
+    pub stream: StreamEvidence,
 }
 
 #[derive(IntoSchema)]
@@ -106,11 +113,12 @@ pub trait ToolStreamingCaller {
     );
     async fn reject_incomplete_attachment_upgrade_under_pressure(&self) -> Vec<String>;
     async fn hold_completed_reconstruction_before_exclusive_clock(&self);
-    async fn hold_reconstruction_backpressure_before_exclusive_clock(
+    async fn clocked_capable_checkpoint(
         &self,
+        path: String,
         first: Vec<u8>,
         second: Vec<u8>,
-    );
+    ) -> ClockedStreamEvidence;
     async fn hold_completed_reconstruction_before_incomplete_custom(&self);
     async fn principal_context(&self, principal: Principal) -> Vec<String>;
 }
@@ -1644,47 +1652,33 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         (tool, exclusive_clock).join().await;
     }
 
-    async fn hold_reconstruction_backpressure_before_exclusive_clock(
+    async fn clocked_capable_checkpoint(
         &self,
+        path: String,
         first: Vec<u8>,
         second: Vec<u8>,
-    ) {
-        let rpc = ToolRpc::new("streaming");
-        let (stdin_writer, stdin, stdin_closed) = tool_host::create_stdin();
-        stdin_writer
-            .write(first)
+    ) -> ClockedStreamEvidence {
+        let started = std::time::Instant::now();
+        let before_tool_nanos = started.elapsed().as_nanos() as u64;
+        let invocation = CapableStreamingClient::default()
+            .run_capable(path, input_stream(vec![first, second]))
+            .expect("start clocked capable streaming tool");
+        let (summary, output) = invocation
+            .collect()
             .await
-            .expect("prefill backpressured reconstruction stdin");
-        let (stdout_target, stdout) = tool_host::create_stdout();
-        let result = rpc.async_invoke_and_await(
-            &["run".to_string()],
-            raw_input("historical-reconstruction-backpressure"),
-            Some(stdin),
-            Some(stdout_target),
-        );
-        let stdin = async {
-            stdin_writer
-                .write(second)
-                .await
-                .expect("write second backpressured reconstruction stdin chunk");
-        };
-        let stdin_terminal = async {
-            assert!(matches!(
-                stdin_closed.wait().await,
-                ByteStreamCloseCause::ConsumerCancelled
-            ));
-        };
-        let tool = async {
-            assert!(read_all(stdout).await.is_empty());
-            raw_result(&result)
-                .await
-                .expect("backpressured reconstruction result before exclusive clock call");
-        };
-        let exclusive_clock = async {
-            let _ = std::time::Instant::now();
-        };
-        (stdin, stdin_terminal, tool, exclusive_clock).join().await;
-        drop(stdin_writer);
+            .expect("complete clocked capable streaming tool");
+        let after_tool_nanos = started.elapsed().as_nanos() as u64;
+        ClockedStreamEvidence {
+            before_tool_nanos,
+            after_tool_nanos,
+            stream: StreamEvidence {
+                output,
+                chunks_read: summary.chunks_read,
+                bytes_read: summary.bytes_read,
+                output_closed: summary.output_closed,
+                completion: "ok".to_string(),
+            },
+        }
     }
 
     async fn hold_completed_reconstruction_before_incomplete_custom(&self) {
@@ -1692,7 +1686,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
-            raw_input("historical-reconstruction-gate"),
+            raw_input("historical-reconstruction-exclusive"),
             Some(raw_stdin(vec![
                 b"reconstruction-left".to_vec(),
                 b"reconstruction-right".to_vec(),
@@ -1706,7 +1700,6 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .expect("completed reconstruction result before custom effect");
         };
         let incomplete_custom = async {
-            wait_at_crash_checkpoint("before-reconstruction-custom-effect").await;
             Durability::<(), String>::new(
                 "golem-it",
                 "reconstruction-barrier-custom-effect",

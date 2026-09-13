@@ -32,6 +32,140 @@ pub use raw_types::*;
 use crate::model::component::ComponentRevision;
 
 impl OplogEntry {
+    pub fn entity_parent_start_index(&self) -> Option<OplogIndex> {
+        match self {
+            OplogEntry::Error {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::NoOp {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::Jump {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::BeginAtomicRegion {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::EndAtomicRegion {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CreateResource {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::DropResource {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::SetRetryPolicy {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::RemoveRetryPolicy {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardEventQueued {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardInstalled {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardInstallFailed {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardRevoked {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardExpired {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardDerived {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferStarted {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferred {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardRevokedCascade {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferConfirmed {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamRegistered {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamItems {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamEnd {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamCancel {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamSession {
+                entity_parent_start_index,
+                ..
+            } => *entity_parent_start_index,
+            OplogEntry::Create { .. }
+            | OplogEntry::Start { .. }
+            | OplogEntry::End { .. }
+            | OplogEntry::Cancelled { .. }
+            | OplogEntry::CompletionDiscarded { .. }
+            | OplogEntry::CompletionDelivered { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::Log { .. }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::StartSpan { .. }
+            | OplogEntry::FinishSpan { .. }
+            | OplogEntry::SetSpanAttribute { .. }
+            | OplogEntry::BeginRemoteTransaction { .. }
+            | OplogEntry::PreCommitRemoteTransaction { .. }
+            | OplogEntry::PreRollbackRemoteTransaction { .. }
+            | OplogEntry::CommittedRemoteTransaction { .. }
+            | OplogEntry::RolledBackRemoteTransaction { .. }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. }
+            | OplogEntry::HostStreamFrame { .. } => None,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
@@ -356,7 +490,32 @@ impl OplogScopeProjection {
                 parent_start_index: Some(parent_start_index),
                 ..
             } => self.starts.contains(parent_start_index),
-            OplogEntry::Error { retry_from, .. } => self.starts.contains(retry_from),
+            OplogEntry::Error { .. }
+            | OplogEntry::NoOp { .. }
+            | OplogEntry::Jump { .. }
+            | OplogEntry::BeginAtomicRegion { .. }
+            | OplogEntry::EndAtomicRegion { .. }
+            | OplogEntry::CreateResource { .. }
+            | OplogEntry::DropResource { .. }
+            | OplogEntry::SetRetryPolicy { .. }
+            | OplogEntry::RemoveRetryPolicy { .. }
+            | OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. }
+            | OplogEntry::StreamRegistered { .. }
+            | OplogEntry::StreamItems { .. }
+            | OplogEntry::StreamEnd { .. }
+            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamSession { .. } => entry
+                .entity_parent_start_index()
+                .is_some_and(|parent| self.starts.contains(&parent)),
             OplogEntry::BeginRemoteTransaction {
                 original_begin_index: Some(begin),
                 ..
@@ -380,19 +539,13 @@ impl OplogScopeProjection {
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
-            | OplogEntry::NoOp { .. }
-            | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
             | OplogEntry::Exited { .. }
-            | OplogEntry::BeginAtomicRegion { .. }
-            | OplogEntry::EndAtomicRegion { .. }
             | OplogEntry::PendingAgentInvocation { .. }
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::SuccessfulUpdate { .. }
             | OplogEntry::FailedUpdate { .. }
             | OplogEntry::GrowMemory { .. }
-            | OplogEntry::CreateResource { .. }
-            | OplogEntry::DropResource { .. }
             | OplogEntry::Log {
                 parent_start_index: None,
                 ..
@@ -415,24 +568,7 @@ impl OplogScopeProjection {
                 ..
             }
             | OplogEntry::Snapshot { .. }
-            | OplogEntry::OplogProcessorCheckpoint { .. }
-            | OplogEntry::SetRetryPolicy { .. }
-            | OplogEntry::RemoveRetryPolicy { .. }
-            | OplogEntry::CardEventQueued { .. }
-            | OplogEntry::CardInstalled { .. }
-            | OplogEntry::CardInstallFailed { .. }
-            | OplogEntry::CardRevoked { .. }
-            | OplogEntry::CardExpired { .. }
-            | OplogEntry::CardDerived { .. }
-            | OplogEntry::CardTransferStarted { .. }
-            | OplogEntry::CardTransferred { .. }
-            | OplogEntry::CardRevokedCascade { .. }
-            | OplogEntry::CardTransferConfirmed { .. }
-            | OplogEntry::StreamRegistered { .. }
-            | OplogEntry::StreamItems { .. }
-            | OplogEntry::StreamEnd { .. }
-            | OplogEntry::StreamCancel { .. }
-            | OplogEntry::StreamSession { .. } => false,
+            | OplogEntry::OplogProcessorCheckpoint { .. } => false,
         };
         self.previous_index = Some(index);
         self.previous_included_start = included_start.then_some(index);

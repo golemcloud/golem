@@ -428,8 +428,12 @@ where
         };
         match &pending_event.event {
             QueuedCardEvent::Revoke(_) => {
+                let entity_parent_start_index = pending_event.entity_parent_start_index;
                 let card_ids = pending_events
                     .into_iter()
+                    .filter(|pending_event| {
+                        pending_event.entity_parent_start_index == entity_parent_start_index
+                    })
                     .filter_map(|pending_event| match pending_event.event {
                         QueuedCardEvent::Revoke(event) => Some(event.card_id),
                         QueuedCardEvent::Install(_)
@@ -437,7 +441,8 @@ where
                         | QueuedCardEvent::TransferReceived(_) => None,
                     })
                     .collect::<Vec<_>>();
-                apply_card_revocations_access(store, get_ctx, card_ids).await?;
+                apply_card_revocations_access(store, get_ctx, entity_parent_start_index, card_ids)
+                    .await?;
             }
             QueuedCardEvent::Install(event) => {
                 let Some(card) = event.card.clone() else {
@@ -445,7 +450,14 @@ where
                         "queued card install is missing card payload",
                     ));
                 };
-                apply_card_install_access(store, get_ctx, pending_event.oplog_index, card).await?;
+                apply_card_install_access(
+                    store,
+                    get_ctx,
+                    pending_event.entity_parent_start_index,
+                    pending_event.oplog_index,
+                    card,
+                )
+                .await?;
             }
             QueuedCardEvent::TransferReceived(event) => {
                 let Some(card) = event.card.clone() else {
@@ -456,6 +468,7 @@ where
                 apply_received_card_transfer_access(
                     store,
                     get_ctx,
+                    pending_event.entity_parent_start_index,
                     pending_event.oplog_index,
                     event.transfer_id,
                     event.source_card_id,
@@ -477,7 +490,15 @@ where
             chrono::Utc::now(),
         )
     });
-    apply_card_revocations_access(store, get_ctx, expired_scope_root_ids).await
+    let entity_parent_start_index =
+        store.with(|mut access| get_ctx(access.data_mut()).entity_parent_start_index());
+    apply_card_revocations_access(
+        store,
+        get_ctx,
+        entity_parent_start_index,
+        expired_scope_root_ids,
+    )
+    .await
 }
 
 async fn pending_card_events_at_boundary_access<T, D, Ctx>(
@@ -609,6 +630,7 @@ where
 async fn apply_card_install_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    entity_parent_start_index: Option<OplogIndex>,
     queued_event_index: OplogIndex,
     card: golem_common::model::card::StoredCard,
 ) -> Result<(), WorkerExecutorError>
@@ -621,10 +643,18 @@ where
     let result = admit_card_to_wallet_access(store, get_ctx, &card).await?;
     let worker = store.with(|mut access| get_ctx(access.data_mut()).public_state.worker().clone());
     let entry = match result {
-        Ok(wallet_generation) => {
-            OplogEntry::card_installed(Some(queued_event_index), card, Some(wallet_generation))
-        }
-        Err(reason) => OplogEntry::card_install_failed(queued_event_index, card_id, reason),
+        Ok(wallet_generation) => OplogEntry::card_installed(
+            entity_parent_start_index,
+            Some(queued_event_index),
+            card,
+            Some(wallet_generation),
+        ),
+        Err(reason) => OplogEntry::card_install_failed(
+            entity_parent_start_index,
+            queued_event_index,
+            card_id,
+            reason,
+        ),
     };
     worker.add_and_commit_oplog(entry).await;
     Ok(())
@@ -633,6 +663,7 @@ where
 async fn apply_received_card_transfer_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    entity_parent_start_index: Option<OplogIndex>,
     queued_event_index: OplogIndex,
     transfer_id: uuid::Uuid,
     source_card_id: Option<golem_common::model::card::CardId>,
@@ -654,6 +685,7 @@ where
     });
     let entry = match result {
         Ok(wallet_generation) => OplogEntry::card_transferred(
+            entity_parent_start_index,
             transfer_id,
             source_card_id,
             card_id,
@@ -663,7 +695,12 @@ where
             card,
             Some(wallet_generation),
         ),
-        Err(reason) => OplogEntry::card_install_failed(queued_event_index, card_id, reason),
+        Err(reason) => OplogEntry::card_install_failed(
+            entity_parent_start_index,
+            queued_event_index,
+            card_id,
+            reason,
+        ),
     };
     worker.add_and_commit_oplog(entry).await;
     Ok(())
@@ -678,34 +715,41 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (expired_card_generations, owned_agent_id, interested_card_ids, interest_index, worker) =
-        store.with(|mut access| -> Result<_, WorkerExecutorError> {
-            let ctx = get_ctx(access.data_mut());
-            let expired_card_ids = crate::durable_host::expired_wallet_card_ids_at(
-                &ctx.state.agent_wallet_cards,
-                chrono::Utc::now(),
-            );
-            let mut expired_card_generations = Vec::with_capacity(expired_card_ids.len());
-            for card_id in expired_card_ids {
-                if crate::durable_host::remove_wallet_card(
-                    &mut ctx.state.agent_wallet_cards,
-                    &mut ctx.state.wallet_generation,
-                    card_id,
-                )? {
-                    expired_card_generations.push((card_id, ctx.state.wallet_generation));
-                }
+    let (
+        expired_card_generations,
+        owned_agent_id,
+        interested_card_ids,
+        interest_index,
+        worker,
+        entity_parent_start_index,
+    ) = store.with(|mut access| -> Result<_, WorkerExecutorError> {
+        let ctx = get_ctx(access.data_mut());
+        let expired_card_ids = crate::durable_host::expired_wallet_card_ids_at(
+            &ctx.state.agent_wallet_cards,
+            chrono::Utc::now(),
+        );
+        let mut expired_card_generations = Vec::with_capacity(expired_card_ids.len());
+        for card_id in expired_card_ids {
+            if crate::durable_host::remove_wallet_card(
+                &mut ctx.state.agent_wallet_cards,
+                &mut ctx.state.wallet_generation,
+                card_id,
+            )? {
+                expired_card_generations.push((card_id, ctx.state.wallet_generation));
             }
-            if !expired_card_generations.is_empty() {
-                ctx.rederive_agent_effective_surface_from_wallet();
-            }
-            Ok((
-                expired_card_generations,
-                ctx.owned_agent_id.clone(),
-                ctx.interested_card_ids(),
-                ctx.state.card_interest_index.clone(),
-                ctx.public_state.worker().clone(),
-            ))
-        })?;
+        }
+        if !expired_card_generations.is_empty() {
+            ctx.rederive_agent_effective_surface_from_wallet();
+        }
+        Ok((
+            expired_card_generations,
+            ctx.owned_agent_id.clone(),
+            ctx.interested_card_ids(),
+            ctx.state.card_interest_index.clone(),
+            ctx.public_state.worker().clone(),
+            ctx.entity_parent_start_index(),
+        ))
+    })?;
 
     if expired_card_generations.is_empty() {
         return Ok(());
@@ -715,7 +759,11 @@ where
         .await;
     for (card_id, wallet_generation) in expired_card_generations {
         worker
-            .add_and_commit_oplog(OplogEntry::card_expired(card_id, Some(wallet_generation)))
+            .add_and_commit_oplog(OplogEntry::card_expired(
+                entity_parent_start_index,
+                card_id,
+                Some(wallet_generation),
+            ))
             .await;
     }
     Ok(())
@@ -1081,6 +1129,7 @@ where
 
     worker
         .add_and_commit_oplog(OplogEntry::card_transfer_started(
+            retry.entity_parent_start_index(),
             retry.transfer_id,
             retry.source_card_id,
             Some(golem_common::model::card::CardHolder::Agent(
@@ -1167,6 +1216,7 @@ where
     }
     worker
         .add_and_commit_oplog(OplogEntry::card_transfer_confirmed(
+            retry.entity_parent_start_index(),
             retry.transfer_id,
             retry.source_card_id,
             retry.installed_card.card_id(),
@@ -1179,6 +1229,7 @@ where
 async fn apply_card_revocations_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    entity_parent_start_index: Option<OplogIndex>,
     mut card_ids: Vec<golem_common::model::card::CardId>,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -1235,6 +1286,7 @@ where
     worker
         .add_and_commit_oplog(OplogEntry::CardRevokedCascade {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
             local_wallet_generation: Some(wallet_generation),

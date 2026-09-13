@@ -114,19 +114,13 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
             quote! {
                 let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_param_idents),*).await;
                 let agent_instance = Box::new(agent_instance_raw);
-                golem_rust::agentic::register_agent_instance(
-                    golem_rust::agentic::ResolvedAgent::new(agent_instance)
-                );
-                Ok(())
+                Ok(golem_rust::agentic::ResolvedAgent::new(agent_instance))
             }
         }
         Asyncness::Immediate => {
             quote! {
                 let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_param_idents),*));
-                golem_rust::agentic::register_agent_instance(
-                    golem_rust::agentic::ResolvedAgent::new(agent_instance)
-                );
-                Ok(())
+                Ok(golem_rust::agentic::ResolvedAgent::new(agent_instance))
             }
         }
     };
@@ -139,8 +133,13 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let initiator_ident = format_ident!("__{}Initiator", trait_name_ident);
 
-    let base_initiator_impl =
-        generate_initiator_impl(&initiator_ident, &constructor_param_extraction);
+    let base_initiator_impl = generate_initiator_impl(
+        &initiator_ident,
+        &constructor_param_extraction,
+        self_ty,
+        &trait_path,
+        has_custom_snapshot,
+    );
 
     let register_initiator_fn = generate_register_initiator_fn(
         &impl_block.self_ty,
@@ -467,10 +466,6 @@ fn generate_base_agent_impl(
 
     let snapshot_impl = if has_custom_snapshot {
         quote! {
-            async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-                self.load_snapshot(bytes).await
-            }
-
             async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
                 let data = self.save_snapshot().await?;
                 Ok(golem_rust::agentic::SnapshotData {
@@ -481,12 +476,6 @@ fn generate_base_agent_impl(
         }
     } else {
         quote! {
-            async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-                use golem_rust::agentic::snapshot_auto::SnapshotLoadFallback;
-                let mut helper = golem_rust::agentic::snapshot_auto::LoadHelper(self);
-                helper.snapshot_load(&bytes)
-            }
-
             async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
                 use golem_rust::agentic::snapshot_auto::SnapshotSaveFallback;
                 let helper = golem_rust::agentic::snapshot_auto::SaveHelper(self);
@@ -632,15 +621,34 @@ fn generate_constructor_extraction(
 fn generate_initiator_impl(
     initiator_ident: &syn::Ident,
     constructor_param_extraction: &proc_macro2::TokenStream,
+    self_ty: &syn::Type,
+    trait_path: &syn::Path,
+    has_custom_snapshot: bool,
 ) -> proc_macro2::TokenStream {
+    let restore = if has_custom_snapshot {
+        quote! { <#self_ty as #trait_path>::load_snapshot(snapshot, context).await? }
+    } else {
+        quote! {
+            <#self_ty as #trait_path>::__golem_auto_load_snapshot(&snapshot)?
+        }
+    };
     quote! {
         struct #initiator_ident;
 
         #[golem_rust::async_trait::async_trait(?Send)]
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
             async fn initiate(&self, params: golem_rust::SchemaValue, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
-                -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {
+                -> Result<golem_rust::agentic::ResolvedAgent, golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 #constructor_param_extraction
+            }
+
+            async fn restore(
+                &self,
+                snapshot: Vec<u8>,
+                context: golem_rust::agentic::SnapshotRestoreContext,
+            ) -> Result<golem_rust::agentic::ResolvedAgent, String> {
+                let restored = #restore;
+                Ok(golem_rust::agentic::ResolvedAgent::new(Box::new(restored)))
             }
         }
     }

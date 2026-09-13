@@ -42,11 +42,23 @@ import {
   type NumericRestrictions,
   type Role,
 } from '../internal/schema-model';
-import { GuestSecretHandle } from '../internal/schema-model/secretHandle';
+import {
+  adoptGuestSecretHandle,
+  GuestSecretHandle,
+  releaseGuestSecretHandle,
+} from '../internal/schema-model/secretHandle';
 import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
-import { GuestQuotaTokenHandle } from '../internal/schema-model/quotaTokenHandle';
+import {
+  adoptGuestQuotaTokenHandle,
+  GuestQuotaTokenHandle,
+  releaseGuestQuotaTokenHandle,
+} from '../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
-import { GuestPermissionCardHandle } from '../internal/schema-model/permissionCardHandle';
+import {
+  adoptGuestPermissionCardHandle,
+  GuestPermissionCardHandle,
+  releaseGuestPermissionCardHandle,
+} from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import type {
   BinaryRestrictions,
@@ -677,10 +689,10 @@ function secretMarker<Output>(inner: StandardSchemaV1<Output>): SecretMarkerSche
       graph: { ...innerCodec.graph, root: t.secret(innerCodec.graph.root) },
       // Encode: wrap the freshly received owned `secret` resource in a
       // take-once handle. Decode: move the owned handle back out (take once).
-      toValue: (value) => v.secret(GuestSecretHandle.fromRaw(SECRET_INTERNAL, value as RawSecret)),
+      toValue: (value) => v.secret(adoptGuestSecretHandle(SECRET_INTERNAL, value as RawSecret)),
       fromValue: (sv) => {
         const handle = (sv as { tag: 'secret'; handle: GuestSecretHandle }).handle;
-        const raw = handle.take();
+        const raw = releaseGuestSecretHandle(SECRET_INTERNAL, handle);
         if (raw === undefined) {
           throw new Error(
             'secret handle was already consumed; an owned secret can only be decoded once',
@@ -713,10 +725,10 @@ function quotaTokenMarker(): MarkerSchema<RawQuotaToken> {
   const descriptor: MarkerDescriptor = () => ({
     graph: { defs: new Map(), root: t.quotaToken({}) },
     toValue: (value) =>
-      v.quotaToken(GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, value as RawQuotaToken)),
+      v.quotaToken(adoptGuestQuotaTokenHandle(QUOTA_INTERNAL, value as RawQuotaToken)),
     fromValue: (sv) => {
       const handle = (sv as { tag: 'quota-token'; handle: GuestQuotaTokenHandle }).handle;
-      const raw = handle.take();
+      const raw = releaseGuestQuotaTokenHandle(QUOTA_INTERNAL, handle);
       if (raw === undefined) {
         throw new Error(
           'quota-token handle was already consumed; an owned quota-token can only be decoded once',
@@ -771,7 +783,7 @@ function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawP
     graph: { defs: new Map(), root: t.permissionCard(options) },
     toValue: (value) =>
       v.permissionCard(
-        GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
+        adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
       ),
     fromValue: (sv) => {
       const handle = (
@@ -780,7 +792,7 @@ function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawP
           handle: GuestPermissionCardHandle;
         }
       ).handle;
-      const raw = handle.take();
+      const raw = releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle);
       if (raw === undefined) {
         throw new Error(
           'permission-card handle was already consumed; an owned permission-card can only be decoded once',

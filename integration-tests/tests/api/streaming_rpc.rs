@@ -235,20 +235,23 @@ async fn resume_public_input_with_end(
     Ok(())
 }
 
-fn cross_executor_agent_name(
-    component: &ComponentDto,
+fn cross_executor_caller(
+    component_id: ComponentId,
     routing_table: &RoutingTable,
     caller_type: &str,
     target_type: &str,
     name_prefix: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, ParsedAgentId)> {
     for index in 0..10_000 {
         let name = format!("{name_prefix}-{index}");
-        let caller = agent_id!(caller_type, name.clone());
+        let mut caller_id = agent_id!(caller_type, name.clone());
+        // Equal type-prefix shard hashes stay equal under any shared name suffix.
+        // Vary the caller's identity independently of the ordinary target.
+        caller_id.phantom_id = Some(uuid::Uuid::from_u128(index + 1));
         let target = agent_id!(target_type, name.clone());
-        let caller = AgentId::from_agent_id(component.id, &caller)
+        let caller = AgentId::from_agent_id(component_id, &caller_id)
             .map_err(|error| anyhow::anyhow!("invalid caller agent id: {error}"))?;
-        let target = AgentId::from_agent_id(component.id, &target)
+        let target = AgentId::from_agent_id(component_id, &target)
             .map_err(|error| anyhow::anyhow!("invalid target agent id: {error}"))?;
         let caller_pod = routing_table
             .lookup(&caller)
@@ -257,13 +260,61 @@ fn cross_executor_agent_name(
             .lookup(&target)
             .ok_or_else(|| anyhow::anyhow!("target agent has no executor assignment"))?;
         if caller_pod != target_pod {
-            return Ok(name);
+            return Ok((name, caller_id));
         }
     }
 
     anyhow::bail!(
         "could not find {caller_type} and {target_type} agent IDs assigned to different executors"
     )
+}
+
+#[test]
+fn cross_executor_caller_separates_colliding_type_prefixes() {
+    use golem_api_grpc::proto::golem::shardmanager::{
+        RoutingTable as GrpcRoutingTable, RoutingTableEntry,
+    };
+    use golem_common::model::{Pod, ShardId};
+
+    let component_id: ComponentId = "00000000-0000-0000-0000-0000000000ac".parse().unwrap();
+    let routing_table = RoutingTable::try_from(GrpcRoutingTable {
+        number_of_shards: 1024,
+        shard_assignments: (0..1024)
+            .map(|value| RoutingTableEntry {
+                shard_id: Some(ShardId::new(value).into()),
+                pod: Some(
+                    Pod {
+                        ip: "127.0.0.1".parse().unwrap(),
+                        port: 9000 + (value / 342) as u16,
+                    }
+                    .into(),
+                ),
+            })
+            .collect(),
+    })
+    .unwrap();
+    let caller_type = "MoonbitStreamingRpcCaller";
+    let target_type = "MoonbitStreamingRpcCrossTarget";
+    let prefix = "generated-moonbit-streaming-rpc-cross";
+    for index in 0..10_000 {
+        let name = format!("{prefix}-{index}");
+        let caller =
+            AgentId::from_agent_id(component_id, &agent_id!(caller_type, name.clone())).unwrap();
+        let target = AgentId::from_agent_id(component_id, &agent_id!(target_type, name)).unwrap();
+        assert_eq!(routing_table.lookup(&caller), routing_table.lookup(&target));
+    }
+
+    let (name, caller_id) = cross_executor_caller(
+        component_id,
+        &routing_table,
+        caller_type,
+        target_type,
+        prefix,
+    )
+    .unwrap();
+    let caller = AgentId::from_agent_id(component_id, &caller_id).unwrap();
+    let target = AgentId::from_agent_id(component_id, &agent_id!(target_type, name)).unwrap();
+    assert_ne!(routing_table.lookup(&caller), routing_table.lookup(&target));
 }
 
 async fn invoke_agent_session(
@@ -1149,14 +1200,13 @@ async fn generated_rust_client_streaming_rpc_cross_executor(
         .store()
         .await?;
     let routing_table = deps.shard_manager().get_routing_table().await?;
-    let name = cross_executor_agent_name(
-        &component,
+    let (_, caller_agent_id) = cross_executor_caller(
+        component.id,
         &routing_table,
         "StreamingRpcCaller",
         "StreamingRpcTarget",
         "generated-rust-streaming-rpc-cross",
     )?;
-    let caller_agent_id = agent_id!("StreamingRpcCaller", name);
 
     let result = invoke_agent_session(deps, &component, &caller_agent_id, "run", data_value!())
         .await?
@@ -1219,14 +1269,13 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
         .store()
         .await?;
     let routing_table = deps.shard_manager().get_routing_table().await?;
-    let target_name = cross_executor_agent_name(
-        &component,
+    let (target_name, caller_agent_id) = cross_executor_caller(
+        component.id,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-streaming-rpc-cross",
     )?;
-    let caller_agent_id = agent_id!("MoonbitStreamingRpcCaller", target_name.clone());
 
     let report = invoke_agent_session(deps, &component, &caller_agent_id, "run", data_value!())
         .await?
@@ -1244,14 +1293,13 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
     .map_err(|failure| anyhow::Error::msg(failure.message))?;
     assert_eq!(after_reader_drop, SchemaValue::U64(2));
 
-    let failure_name = cross_executor_agent_name(
-        &component,
+    let (_, failure_caller) = cross_executor_caller(
+        component.id,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-producer-failure-cross",
     )?;
-    let failure_caller = agent_id!("MoonbitStreamingRpcCaller", failure_name);
     let failure = invoke_agent_session(
         deps,
         &component,
@@ -1267,14 +1315,13 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
         "remote producer failure must retain an execution diagnostic"
     );
 
-    let control_name = cross_executor_agent_name(
-        &component,
+    let (_, control_caller) = cross_executor_caller(
+        component.id,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-after-failure-cross",
     )?;
-    let control_caller = agent_id!("MoonbitStreamingRpcCaller", control_name);
     for expected in [1, 2] {
         let value = invoke_agent_session(
             deps,
@@ -1288,14 +1335,13 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
         assert_eq!(value, SchemaValue::U64(expected));
     }
 
-    let cancellation_name = cross_executor_agent_name(
-        &component,
+    let (cancellation_name, cancellation_caller) = cross_executor_caller(
+        component.id,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-cancellation-cross",
     )?;
-    let cancellation_caller = agent_id!("MoonbitStreamingRpcCaller", cancellation_name.clone());
     let cancellation_target =
         agent_id!("MoonbitStreamingRpcCrossTarget", cancellation_name.clone());
     let producer_cancellation = invoke_agent_session(
@@ -1322,17 +1368,13 @@ async fn generated_moonbit_client_streaming_rpc_cross_executor(
         .into_typed::<u64>()?;
     assert_eq!(target_after_cancellation, 1);
 
-    let server_cancellation_name = cross_executor_agent_name(
-        &component,
+    let (server_cancellation_name, server_cancellation_caller) = cross_executor_caller(
+        component.id,
         &routing_table,
         "MoonbitStreamingRpcCaller",
         "MoonbitStreamingRpcCrossTarget",
         "generated-moonbit-server-cancellation-cross",
     )?;
-    let server_cancellation_caller = agent_id!(
-        "MoonbitStreamingRpcCaller",
-        server_cancellation_name.clone()
-    );
     let server_cancellation = invoke_agent_session(
         deps,
         &component,

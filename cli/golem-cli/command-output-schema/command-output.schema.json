@@ -1782,6 +1782,7 @@
       "required": [
         "$type",
         "index",
+        "attribution",
         "entry"
       ],
       "properties": {
@@ -1791,6 +1792,9 @@
         "index": {
           "type": "integer",
           "minimum": 0
+        },
+        "attribution": {
+          "$ref": "#/definitions/PublicOplogEntryAttribution"
         },
         "entry": {
           "$ref": "#/definitions/PublicOplogEntry"
@@ -4571,6 +4575,78 @@
         "resourceName": { "type": "string" }
       },
       "additionalProperties": false
+    },
+    "PublicOplogEntryAttribution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "Agent" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "invocation", "ancestors"],
+          "properties": {
+            "type": { "const": "Entity" },
+            "invocation": { "$ref": "#/definitions/PublicEntityInvocation" },
+            "ancestors": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/PublicEntityInvocation" }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PublicEntityInvocation": {
+      "type": "object",
+      "required": ["entity", "startIndex", "callMode", "operation"],
+      "properties": {
+        "entity": { "$ref": "#/definitions/PublicAgentEntity" },
+        "startIndex": { "type": "integer", "minimum": 1 },
+        "callMode": { "type": "string", "enum": ["synchronous", "asynchronous", "fireAndForget"] },
+        "operation": {
+          "oneOf": [
+            { "$ref": "#/definitions/PublicEntityInvocationOperation" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublicAgentEntity": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["tool", "toolMiddleware"] },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PublicEntityInvocationOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout"],
+          "properties": {
+            "type": { "const": "Tool" },
+            "commandPath": { "type": "array", "items": { "type": "string" } },
+            "hasStdin": { "type": "boolean" },
+            "hasStdout": {
+              "type": "boolean",
+              "description": "Whether a live stdout attachment was requested. Stdout bytes are not recorded in the oplog."
+            },
+            "declaresStdout": {
+              "type": "boolean",
+              "description": "Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog."
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "PublicOplogEntry": {
       "oneOf": [
@@ -7799,6 +7875,7 @@
     },
     "SecretValuePayload": {
       "type": "object",
+      "description": "Secret handle identity and resolution metadata. Plaintext secret material is never included.",
       "required": ["secretId", "version", "resolvedAt"],
       "properties": {
         "secretId": { "type": "string" },

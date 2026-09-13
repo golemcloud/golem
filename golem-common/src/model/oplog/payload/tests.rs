@@ -41,7 +41,8 @@ use crate::model::oplog::types::{
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
-    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestGolemApiOplogEnrich,
+    HostRequestEntityInvocation, HostRequestFileSystemPath,
+    HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
     HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
@@ -49,17 +50,18 @@ use crate::model::oplog::{
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
     HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
-    HostResponseGolemApiOplogChunk, HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
-    HostResponseGolemRpcActivate, HostResponseGolemRpcScheduledInvocation,
-    HostResponseGolemRpcScheduledInvocationCompat, HostResponseGolemToolInvokeResult,
-    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
-    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
-    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
-    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
+    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
+    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
+    HostResponseGolemToolInvokeResult, HostResponseGolemToolTool, HostResponseGolemToolTools,
+    HostResponseGolemToolUnitOrFailure, HostResponseKVDelete, HostResponseKVGet,
+    HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
+    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
+    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
+    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsConnect,
+    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
@@ -481,6 +483,16 @@ fn entity_invocation_host_payload_pair_roundtrips() {
         HostResponseEntityInvocation {
             result: Ok(empty_value()),
         },
+    );
+}
+
+#[test]
+fn agent_type_by_agent_id_host_payload_pair_roundtrips() {
+    assert_host_payload_pair_roundtrip::<host_functions::GolemAgentGetAgentTypeByAgentId>(
+        HostRequestGolemAgentGetAgentTypeByAgentId {
+            agent_id: "Counter(main)".to_string(),
+        },
+        HostResponseGolemAgentAgentType { result: Ok(None) },
     );
 }
 
@@ -1207,7 +1219,6 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
     let response = HostResponseGolemToolInvokeResult {
         result: Ok(SerializableToolInvocationResult {
             result: Some("match".to_string().into_typed_schema_value().unwrap()),
-            stdout: Some(b"line one\nline two\n".to_vec()),
         }),
     };
 

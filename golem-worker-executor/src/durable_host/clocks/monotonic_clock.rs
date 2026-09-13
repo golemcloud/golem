@@ -30,7 +30,36 @@ use golem_common::model::oplog::{
 use wasmtime_wasi::clocks::WasiClocksView as _;
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host as WasiMonotonicClockHost;
 
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn now(&mut self) -> anyhow::Result<Instant> {
+        let handle =
+            DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::start(
+                self,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
+        #[cfg(feature = "test-utils")]
+        if handle.is_live()
+            && let Err(interrupt) = self
+                .owner_execution
+                .test_after_monotonic_clock_start()
+                .await
+        {
+            let mut handle = handle;
+            handle.abandon_for_trap();
+            return Err(interrupt.into());
+        }
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let mut view = ctx.as_wasi_view();
+                let nanos = WasiMonotonicClockHost::now(&mut view.clocks()).await?;
+                Ok(HostResponseMonotonicClockTimestamp { nanos })
+            })
+            .await?;
+        Ok(result.nanos)
+    }
+}
 
 fn current_monotonic_time<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
@@ -51,39 +80,6 @@ fn current_monotonic_resolution<U: Send + 'static, Ctx: WorkerCtx>(
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn now(accessor: &Accessor<U, Self>) -> anyhow::Result<Instant> {
-        #[cfg(feature = "test-utils")]
-        let (skip_durability, owner_execution) = accessor.with(|mut access| {
-            let ctx = access.get();
-            (
-                ctx.test_should_skip_monotonic_clock_now_durability(),
-                ctx.owner_execution.clone(),
-            )
-        });
-        #[cfg(feature = "test-utils")]
-        if skip_durability {
-            return Ok(current_monotonic_time(accessor)?);
-        }
-        #[cfg(feature = "test-utils")]
-        owner_execution.test_before_monotonic_clock_now().await;
-
-        let result =
-            DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::invoke_access(
-                accessor,
-                accessor.getter(),
-                HostRequestNoInput {},
-                DurableFunctionType::ReadLocal,
-                async || {
-                    Ok::<_, anyhow::Error>(HostResponseMonotonicClockTimestamp {
-                        nanos: current_monotonic_time(accessor)?,
-                    })
-                },
-            )
-            .await?;
-
-        Ok(result.nanos)
-    }
-
     async fn resolution(accessor: &Accessor<U, Self>) -> anyhow::Result<Duration> {
         let result = DurableCallSession::<
             host_functions::MonotonicClockResolution,

@@ -21,6 +21,7 @@
 
 pub mod agent;
 mod common_impls;
+pub mod external;
 #[cfg(feature = "full")]
 pub mod protobuf;
 pub mod public_json;
@@ -54,10 +55,12 @@ pub use conversion::{
     Quantity, QuantityUnit, SchemaBuilder, merge_agent_graphs, try_into_schema_graph,
     try_into_typed_schema_value,
 };
+pub use external::{ExternalSchemaValue, ExternalTypedSchemaValue};
 pub use golem_schema_derive::{FromSchema, IntoSchema};
 pub use graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 pub use host_managed::{
-    HostManagedKind, RedactedSchemaValue, redact_host_managed_type,
+    HostManagedKind, HostManagedOccurrence, HostManagedTraversalError, RedactedSchemaValue,
+    find_host_managed_type, find_host_managed_value, redact_host_managed_type,
     redact_host_managed_typed_value, redact_host_managed_value, redacted_schema_value_debug,
 };
 pub use metadata::{MetadataEnvelope, Role, TypeId};
