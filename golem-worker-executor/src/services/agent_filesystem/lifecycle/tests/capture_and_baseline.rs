@@ -1788,10 +1788,12 @@ enum StepOutcome {
     Conflict(String),
 }
 
-/// The step results and the final tree that another agent must give.
+/// The step results that another agent must give, and the final trees of the replay and of the
+/// reference model.
 struct Expected<'a> {
     outcomes: &'a [StepOutcome],
     tree: &'a Tree,
+    model_tree: &'a Tree,
 }
 
 fn declared_files() -> impl proptest::strategy::Strategy<Value = Vec<DeclaredFile>> {
@@ -2099,7 +2101,7 @@ async fn run_steps(
         .await
 }
 
-/// Reads the tree under `root` with the write permission bits of each object and without times.
+/// Reads the tree under `root` with the owner write permission bit of each object and without times.
 fn tree_without_times(root: &Path) -> Tree {
     let tree = read_tree(root, |_| false);
     Tree {
@@ -2108,13 +2110,13 @@ fn tree_without_times(root: &Path) -> Tree {
             .into_iter()
             .map(|(path, node)| {
                 let node = match node {
-                    Node::Directory { mode } => Node::Directory { mode: mode & 0o222 },
+                    Node::Directory { mode } => Node::Directory { mode: mode & 0o200 },
                     Node::File {
                         mode,
                         content,
                         modified,
                     } => Node::File {
-                        mode: mode & 0o222,
+                        mode: mode & 0o200,
                         content,
                         modified,
                     },
@@ -2167,7 +2169,534 @@ async fn compare_continuation(
             expected.tree
         ));
     }
+    if &tree != expected.model_tree {
+        problems.push(format!(
+            "agent {name} holds {tree:?}, and the reference model holds {:?}",
+            expected.model_tree
+        ));
+    }
     delete(seal(filesystem)).await.unwrap();
+}
+
+/// The class of a step result. The reference model gives its results in these classes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResultClass {
+    Ok,
+    NotPermitted,
+    NotFound,
+    AlreadyExists,
+    NotEmpty,
+    /// The target is not the object that the operation needs: an object above the path is not a
+    /// directory, a directory is where a file must be, or a move goes into its own subtree.
+    InvalidTarget,
+    /// A failed install, with the first conflicting path in path order.
+    Conflict(String),
+    /// A result that the reference model never gives.
+    Unexpected(String),
+}
+
+/// The start of the error that a conflicting install gives. The conflicting path follows it.
+const CONFLICT_ERROR_START: &str =
+    "failed to install a read-only initial file over other data at filesystem ";
+
+/// Gives the class of a lifecycle step result. This is the only function that maps lifecycle
+/// errors to the classes of the reference model.
+fn result_class(outcome: &StepOutcome) -> ResultClass {
+    match outcome {
+        StepOutcome::Done => ResultClass::Ok,
+        StepOutcome::Access(AccessError::NotPermitted) => ResultClass::NotPermitted,
+        StepOutcome::Sandbox(Some(std::io::ErrorKind::NotFound)) => ResultClass::NotFound,
+        StepOutcome::Sandbox(Some(std::io::ErrorKind::AlreadyExists)) => ResultClass::AlreadyExists,
+        StepOutcome::Sandbox(Some(std::io::ErrorKind::DirectoryNotEmpty)) => ResultClass::NotEmpty,
+        StepOutcome::Sandbox(Some(
+            std::io::ErrorKind::NotADirectory
+            | std::io::ErrorKind::IsADirectory
+            | std::io::ErrorKind::InvalidInput,
+        )) => ResultClass::InvalidTarget,
+        StepOutcome::Conflict(message) => ResultClass::Conflict(
+            message
+                .strip_prefix(CONFLICT_ERROR_START)
+                .unwrap_or(message)
+                .to_string(),
+        ),
+        other => ResultClass::Unexpected(format!("{other:?}")),
+    }
+}
+
+/// One object of the reference model.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ModelObject {
+    File { content: Vec<u8>, writable: bool },
+    Directory,
+    Symlink { target: String },
+}
+
+/// One initial-file declaration of the reference model.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ModelDeclaration {
+    read_only: bool,
+    content: usize,
+}
+
+/// What an install of the reference model does at one path whose declaration changes.
+enum ModelInstall {
+    Keep,
+    Seed(ModelDeclaration),
+    Remove,
+}
+
+/// A reference model of an agent filesystem with initial files. It follows the text of the GOL-577
+/// issue: the initial-file rule, the read-only semantics and the sentence about equal declarations.
+/// It uses no helper of the lifecycle.
+///
+/// `paths` gives the object at each path, and two paths with one object are hard links. `objects`
+/// holds each object that the model made; the index of an object is its id. `installed` gives, for
+/// each read-only declared path, the object that the last install put at the path.
+#[derive(Default)]
+struct ReferenceModel {
+    paths: BTreeMap<String, usize>,
+    objects: Vec<ModelObject>,
+    declarations: BTreeMap<String, ModelDeclaration>,
+    installed: BTreeMap<String, usize>,
+}
+
+impl ReferenceModel {
+    /// Gives the directories above `path`, from the root down.
+    fn ancestors(path: &str) -> Vec<String> {
+        let names = path.split('/').collect::<Vec<_>>();
+        (1..names.len())
+            .map(|count| names[..count].join("/"))
+            .collect()
+    }
+
+    fn object_at(&self, path: &str) -> Option<&ModelObject> {
+        self.paths.get(path).map(|id| &self.objects[*id])
+    }
+
+    /// Refuses a path with a missing directory above it, or with an object above it that is not a
+    /// directory.
+    fn check_ancestors(&self, path: &str) -> Result<(), ResultClass> {
+        Self::ancestors(path)
+            .iter()
+            .try_for_each(|ancestor| match self.object_at(ancestor) {
+                Some(ModelObject::Directory) => Ok(()),
+                Some(_) => Err(ResultClass::InvalidTarget),
+                None => Err(ResultClass::NotFound),
+            })
+    }
+
+    /// Gives the path that `path` names after one symlink at `path`. A symlink target is relative
+    /// to the directory of the symlink.
+    fn follow(&self, path: &str) -> String {
+        match (self.object_at(path), path.rsplit_once('/')) {
+            (Some(ModelObject::Symlink { target }), Some((directory, _))) => {
+                format!("{directory}/{target}")
+            }
+            (Some(ModelObject::Symlink { target }), None) => target.clone(),
+            _ => path.to_string(),
+        }
+    }
+
+    fn make(&mut self, path: &str, object: ModelObject) {
+        self.objects.push(object);
+        self.paths.insert(path.to_string(), self.objects.len() - 1);
+    }
+
+    /// Tells whether an object above `path` is not a directory. An install then counts the path as
+    /// holding other data, because an install never removes data that invocations made.
+    fn blocked(&self, path: &str) -> bool {
+        Self::ancestors(path).iter().any(|ancestor| {
+            self.object_at(ancestor)
+                .is_some_and(|object| *object != ModelObject::Directory)
+        })
+    }
+
+    fn holds_children(&self, directory: &str) -> bool {
+        let prefix = format!("{directory}/");
+        self.paths.keys().any(|path| path.starts_with(&prefix))
+    }
+
+    /// Tells whether `path` holds Golem's file of the old declaration `old`, as the issue defines
+    /// it: for a read-only declaration, the object that the install put there; for a read-write
+    /// declaration, a file whose content equals the declared content.
+    fn holds_golem_file(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
+        match (old, self.paths.get(path)) {
+            (Some(declared), Some(id)) if declared.read_only => {
+                self.installed.get(path) == Some(id)
+            }
+            (Some(declared), Some(id)) => matches!(
+                &self.objects[*id],
+                ModelObject::File { content, .. } if content[..] == *CONTENTS[declared.content]
+            ),
+            _ => false,
+        }
+    }
+
+    /// Writes through a new descriptor that follows a symlink: it makes a missing file, and it
+    /// replaces the content of a writable file. A read-only file refuses the write.
+    fn write(&mut self, path: &str, content: usize) -> ResultClass {
+        let target = self.follow(path);
+        match self
+            .check_ancestors(path)
+            .and_then(|()| self.check_ancestors(&target))
+        {
+            Err(class) => class,
+            Ok(()) => match self.paths.get(&target).copied() {
+                None => {
+                    self.make(
+                        &target,
+                        ModelObject::File {
+                            content: CONTENTS[content].to_vec(),
+                            writable: true,
+                        },
+                    );
+                    ResultClass::Ok
+                }
+                Some(id) => match &mut self.objects[id] {
+                    ModelObject::File {
+                        writable: false, ..
+                    } => ResultClass::NotPermitted,
+                    ModelObject::File {
+                        content: existing,
+                        writable: true,
+                    } => {
+                        *existing = CONTENTS[content].to_vec();
+                        ResultClass::Ok
+                    }
+                    ModelObject::Directory | ModelObject::Symlink { .. } => {
+                        ResultClass::InvalidTarget
+                    }
+                },
+            },
+        }
+    }
+
+    /// Sets the size of an existing file through a new descriptor that follows a symlink. A
+    /// read-only file refuses it.
+    fn truncate(&mut self, path: &str, size: u64) -> ResultClass {
+        let target = self.follow(path);
+        match self
+            .check_ancestors(path)
+            .and_then(|()| self.check_ancestors(&target))
+        {
+            Err(class) => class,
+            Ok(()) => match self.paths.get(&target).copied() {
+                None => ResultClass::NotFound,
+                Some(id) => match &mut self.objects[id] {
+                    ModelObject::File {
+                        writable: false, ..
+                    } => ResultClass::NotPermitted,
+                    ModelObject::File {
+                        content,
+                        writable: true,
+                    } => {
+                        content.resize(usize::try_from(size).unwrap(), 0);
+                        ResultClass::Ok
+                    }
+                    ModelObject::Directory | ModelObject::Symlink { .. } => {
+                        ResultClass::InvalidTarget
+                    }
+                },
+            },
+        }
+    }
+
+    /// Removes the name of a file or a symlink. A read-only file permits it.
+    fn remove_file(&mut self, path: &str) -> ResultClass {
+        match self
+            .check_ancestors(path)
+            .map(|()| self.object_at(path).cloned())
+        {
+            Err(class) => class,
+            Ok(None) => ResultClass::NotFound,
+            Ok(Some(ModelObject::Directory)) => ResultClass::InvalidTarget,
+            Ok(Some(_)) => {
+                self.paths.remove(path);
+                ResultClass::Ok
+            }
+        }
+    }
+
+    /// Renames a file or a symlink. A name of the same object at the destination stays unchanged,
+    /// and another file or symlink there is replaced. A read-only file permits the rename.
+    fn move_file(&mut self, source: &str, destination: &str) -> ResultClass {
+        let checked = self
+            .check_ancestors(source)
+            .and_then(|()| self.check_ancestors(destination));
+        let moved = self.paths.get(source).copied();
+        let replaced = self.paths.get(destination).copied();
+        match (checked, moved, replaced) {
+            (Err(class), _, _) => class,
+            (Ok(()), None, _) => ResultClass::NotFound,
+            (Ok(()), Some(moved), Some(replaced)) if moved == replaced => ResultClass::Ok,
+            (Ok(()), Some(_), Some(replaced))
+                if self.objects[replaced] == ModelObject::Directory =>
+            {
+                ResultClass::InvalidTarget
+            }
+            (Ok(()), Some(moved), _) => {
+                self.paths.remove(source);
+                self.paths.insert(destination.to_string(), moved);
+                ResultClass::Ok
+            }
+        }
+    }
+
+    /// Renames the object at a directory place. A directory moves with all that is in it: an empty
+    /// directory at the destination is replaced, a directory with an object in it refuses the move,
+    /// and a file or a symlink at the destination refuses it. A file or a symlink at the source moves
+    /// as `move_file` moves it. A move of a directory above a read-only file is permitted.
+    fn move_directory(&mut self, source: &str, destination: &str) -> ResultClass {
+        let inside = |path: &str, directory: &str| {
+            path == directory || path.starts_with(&format!("{directory}/"))
+        };
+        match (
+            self.object_at(source).cloned(),
+            self.object_at(destination).cloned(),
+        ) {
+            (None, _) => ResultClass::NotFound,
+            (Some(ModelObject::Directory), _) if source == destination => ResultClass::Ok,
+            (Some(ModelObject::Directory), Some(ModelObject::Directory))
+                if self.holds_children(destination) =>
+            {
+                ResultClass::NotEmpty
+            }
+            (
+                Some(ModelObject::Directory),
+                Some(ModelObject::File { .. } | ModelObject::Symlink { .. }),
+            ) => ResultClass::InvalidTarget,
+            (Some(ModelObject::Directory), _) => {
+                let moved = self
+                    .paths
+                    .iter()
+                    .filter(|(path, _)| inside(path, source))
+                    .map(|(path, id)| (format!("{destination}{}", &path[source.len()..]), *id))
+                    .collect::<Vec<_>>();
+                self.paths
+                    .retain(|path, _| !inside(path, source) && path.as_str() != destination);
+                self.paths.extend(moved);
+                ResultClass::Ok
+            }
+            (Some(_), _) => self.move_file(source, destination),
+        }
+    }
+
+    /// Gives a file or a symlink one more name. A read-only file permits it.
+    fn hard_link(&mut self, source: &str, destination: &str) -> ResultClass {
+        let checked = self
+            .check_ancestors(source)
+            .and_then(|()| self.check_ancestors(destination));
+        match (
+            checked,
+            self.paths.get(source).copied(),
+            self.paths.contains_key(destination),
+        ) {
+            (Err(class), _, _) => class,
+            (Ok(()), None, _) => ResultClass::NotFound,
+            (Ok(()), Some(_), true) => ResultClass::AlreadyExists,
+            (Ok(()), Some(linked), false) => {
+                self.paths.insert(destination.to_string(), linked);
+                ResultClass::Ok
+            }
+        }
+    }
+
+    fn symlink(&mut self, path: &str, target: &str) -> ResultClass {
+        match (self.check_ancestors(path), self.paths.contains_key(path)) {
+            (Err(class), _) => class,
+            (Ok(()), true) => ResultClass::AlreadyExists,
+            (Ok(()), false) => {
+                self.make(
+                    path,
+                    ModelObject::Symlink {
+                        target: target.to_string(),
+                    },
+                );
+                ResultClass::Ok
+            }
+        }
+    }
+
+    fn create_directory(&mut self, path: &str) -> ResultClass {
+        if self.paths.contains_key(path) {
+            ResultClass::AlreadyExists
+        } else {
+            self.make(path, ModelObject::Directory);
+            ResultClass::Ok
+        }
+    }
+
+    fn remove_directory(&mut self, path: &str) -> ResultClass {
+        match self.object_at(path).cloned() {
+            None => ResultClass::NotFound,
+            Some(ModelObject::Directory) if self.holds_children(path) => ResultClass::NotEmpty,
+            Some(ModelObject::Directory) => {
+                self.paths.remove(path);
+                ResultClass::Ok
+            }
+            Some(_) => ResultClass::InvalidTarget,
+        }
+    }
+
+    /// Applies the initial-file rule of the issue from the current declarations to `files`.
+    ///
+    /// The three parts apply at each path where the two declarations differ, in path order, and an
+    /// equal declaration changes nothing. A conflict fails the whole install, changes nothing, and
+    /// names the first conflicting path.
+    fn install(&mut self, files: &[DeclaredFile]) -> ResultClass {
+        let new = files
+            .iter()
+            .map(|file| {
+                (
+                    FILE_PLACES[file.place].to_string(),
+                    ModelDeclaration {
+                        read_only: file.read_only,
+                        content: file.content,
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let old = &self.declarations;
+        let decisions = old
+            .keys()
+            .chain(new.keys())
+            .filter(|path| old.get(*path) != new.get(*path))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|path| {
+                let previous = old.get(path);
+                let replaceable = !self.blocked(path)
+                    && (!self.paths.contains_key(path) || self.holds_golem_file(path, previous));
+                let decision = match (previous, new.get(path)) {
+                    (_, Some(declared)) if declared.read_only && replaceable => {
+                        ModelInstall::Seed(*declared)
+                    }
+                    (_, Some(declared)) if declared.read_only => return Err(path.clone()),
+                    (Some(previous), Some(_)) if !previous.read_only => ModelInstall::Keep,
+                    (_, Some(declared)) if replaceable => ModelInstall::Seed(*declared),
+                    (Some(previous), None)
+                        if previous.read_only && self.holds_golem_file(path, Some(previous)) =>
+                    {
+                        ModelInstall::Remove
+                    }
+                    _ => ModelInstall::Keep,
+                };
+                Ok((path.clone(), decision))
+            })
+            .collect::<Result<Vec<_>, String>>();
+        match decisions {
+            Err(path) => ResultClass::Conflict(path),
+            Ok(decisions) => {
+                decisions
+                    .into_iter()
+                    .for_each(|(path, decision)| self.install_path(&path, decision));
+                self.declarations = new;
+                ResultClass::Ok
+            }
+        }
+    }
+
+    fn install_path(&mut self, path: &str, decision: ModelInstall) {
+        match decision {
+            ModelInstall::Keep => {
+                self.installed.remove(path);
+            }
+            ModelInstall::Remove => {
+                self.paths.remove(path);
+                self.installed.remove(path);
+            }
+            ModelInstall::Seed(declared) => {
+                let missing = Self::ancestors(path)
+                    .into_iter()
+                    .filter(|ancestor| !self.paths.contains_key(ancestor))
+                    .collect::<Vec<_>>();
+                missing
+                    .iter()
+                    .for_each(|ancestor| self.make(ancestor, ModelObject::Directory));
+                self.make(
+                    path,
+                    ModelObject::File {
+                        content: CONTENTS[declared.content].to_vec(),
+                        writable: !declared.read_only,
+                    },
+                );
+                if declared.read_only {
+                    let object = self.paths[path];
+                    self.installed.insert(path.to_string(), object);
+                } else {
+                    self.installed.remove(path);
+                }
+            }
+        }
+    }
+
+    /// Applies one step of a history and gives the class of its result.
+    fn apply(&mut self, step: &HistoryStep) -> ResultClass {
+        match step {
+            HistoryStep::Write { file, content } => self.write(FILE_PLACES[*file], *content),
+            HistoryStep::Truncate { file, size } => self.truncate(FILE_PLACES[*file], *size),
+            HistoryStep::RemoveFile { file } => self.remove_file(FILE_PLACES[*file]),
+            HistoryStep::MoveFile {
+                source,
+                destination,
+            } => self.move_file(FILE_PLACES[*source], FILE_PLACES[*destination]),
+            HistoryStep::MoveDirectory {
+                source,
+                destination,
+            } => self.move_directory(DIRECTORY_PLACES[*source], DIRECTORY_PLACES[*destination]),
+            HistoryStep::HardLink {
+                source,
+                destination,
+            } => self.hard_link(FILE_PLACES[*source], FILE_PLACES[*destination]),
+            HistoryStep::Symlink { file, target } => {
+                self.symlink(FILE_PLACES[*file], SYMLINK_TARGETS[*target])
+            }
+            HistoryStep::CreateDirectory { directory } => {
+                self.create_directory(DIRECTORY_PLACES[*directory])
+            }
+            HistoryStep::RemoveDirectory { directory } => {
+                self.remove_directory(DIRECTORY_PLACES[*directory])
+            }
+            HistoryStep::Update { files } => self.install(files),
+        }
+    }
+
+    /// Gives the tree of the model in the form of `tree_without_times`.
+    fn tree(&self) -> Tree {
+        let nodes = self
+            .paths
+            .iter()
+            .map(|(path, id)| {
+                let node = match &self.objects[*id] {
+                    ModelObject::Directory => Node::Directory { mode: 0o200 },
+                    ModelObject::File { content, writable } => Node::File {
+                        mode: if *writable { 0o200 } else { 0 },
+                        content: content.clone(),
+                        modified: None,
+                    },
+                    ModelObject::Symlink { target } => Node::Symlink {
+                        target: PathBuf::from(target),
+                    },
+                };
+                (path.clone(), node)
+            })
+            .collect();
+        let links = self
+            .paths
+            .iter()
+            .filter(|(_, id)| self.objects[**id] != ModelObject::Directory)
+            .fold(
+                BTreeMap::<usize, BTreeSet<String>>::new(),
+                |mut groups, (path, id)| {
+                    groups.entry(*id).or_default().insert(path.clone());
+                    groups
+                },
+            )
+            .into_values()
+            .filter(|names| names.len() > 1)
+            .collect();
+        Tree { nodes, links }
+    }
 }
 
 /// Checks one history on unmanaged storage.
@@ -2176,7 +2705,9 @@ async fn compare_continuation(
 /// lifecycle captures it. Agent C starts from a restore of that capture with the declarations that
 /// are current at the capture, and runs the other steps. When the step after the capture is an
 /// update, agent D starts from the same restore with the declarations of that update, and runs the
-/// steps after it. A replay step must not make the filesystem invalid.
+/// steps after it. A replay step must not make the filesystem invalid. The reference model gives the
+/// result class of each replay step and the final tree, and the trees of agents A, C and D must
+/// equal the tree of the model.
 async fn check_restore_against_replay(
     history: &History,
 ) -> Result<(), proptest::test_runner::TestCaseError> {
@@ -2209,6 +2740,36 @@ async fn check_restore_against_replay(
             problems.push(format!("step {index} of the replay gave {outcome:?}"));
         });
 
+    let mut model = ReferenceModel::default();
+    let first_install = model.install(&history.initial);
+    if first_install != ResultClass::Ok {
+        problems.push(format!(
+            "the reference model gave {first_install:?} for the first declarations"
+        ));
+    }
+    let model_classes = history
+        .steps
+        .iter()
+        .map(|step| model.apply(step))
+        .collect::<Vec<_>>();
+    replay_outcomes
+        .iter()
+        .map(result_class)
+        .zip(&model_classes)
+        .enumerate()
+        .filter(|(_, (actual, expected))| actual != *expected)
+        .for_each(|(index, (actual, expected))| {
+            problems.push(format!(
+                "step {index} of the replay gave {actual:?}, and the reference model gives {expected:?}"
+            ));
+        });
+    let model_tree = model.tree();
+    if replay_tree != model_tree {
+        problems.push(format!(
+            "the replay holds {replay_tree:?}, and the reference model holds {model_tree:?}"
+        ));
+    }
+
     let captured_agent = agents.agent("captured");
     let captured = agents
         .start(&captured_agent, &initial, NO_RESTORE)
@@ -2236,6 +2797,7 @@ async fn check_restore_against_replay(
                     let expected = Expected {
                         outcomes: &replay_outcomes[capture_at..],
                         tree: &replay_tree,
+                        model_tree: &model_tree,
                     };
                     compare_continuation(
                         &agents,
@@ -2259,6 +2821,7 @@ async fn check_restore_against_replay(
                         let expected = Expected {
                             outcomes: &replay_outcomes[capture_at + 1..],
                             tree: &replay_tree,
+                            model_tree: &model_tree,
                         };
                         compare_continuation(
                             &agents,
