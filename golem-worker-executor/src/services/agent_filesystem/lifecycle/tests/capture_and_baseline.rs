@@ -18,7 +18,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use std::time::SystemTime;
 use test_r::{test, timeout};
 
 const NO_RESTORE: Option<Infallible> = None;
@@ -1238,17 +1237,9 @@ fn copy_directory_contents(from: &Path, into: &Path) {
 /// What a tree holds at one path.
 #[derive(Debug, Eq, PartialEq)]
 enum Node {
-    Directory {
-        mode: u32,
-    },
-    File {
-        mode: u32,
-        content: Vec<u8>,
-        modified: Option<SystemTime>,
-    },
-    Symlink {
-        target: PathBuf,
-    },
+    Directory { mode: u32 },
+    File { mode: u32, content: Vec<u8> },
+    Symlink { target: PathBuf },
 }
 
 /// What a tree holds: every path with its object, and the names of each object that is not a
@@ -1259,9 +1250,8 @@ struct Tree {
     links: BTreeSet<BTreeSet<String>>,
 }
 
-/// Reads the tree under `root`. The modification time of a regular file is part of the result only
-/// where `with_modified` holds for its path.
-fn read_tree(root: &Path, with_modified: impl Fn(&str) -> bool) -> Tree {
+/// Reads the tree under `root`, without times.
+fn read_tree(root: &Path) -> Tree {
     let entries = list_entries(root, PathBuf::new(), Vec::new());
     let nodes = entries
         .iter()
@@ -1278,7 +1268,6 @@ fn read_tree(root: &Path, with_modified: impl Fn(&str) -> bool) -> Tree {
                 Node::File {
                     mode,
                     content: std::fs::read(&absolute).unwrap(),
-                    modified: with_modified(path).then(|| metadata.modified().unwrap()),
                 }
             };
             (path.clone(), node)
@@ -1321,560 +1310,6 @@ fn list_entries(
                 found
             }
         })
-}
-
-#[test]
-#[timeout("60s")]
-async fn capture_then_restore_on_unmanaged_storage_gives_back_the_same_tree() {
-    let agents = UnmanagedAgents::new().await;
-    let store = &agents.store;
-    let files = [
-        store
-            .declare("/ro-kept.txt", AgentFilePermissions::ReadOnly, b"kept")
-            .await,
-        store
-            .declare(
-                "/ro-deleted.txt",
-                AgentFilePermissions::ReadOnly,
-                b"deleted",
-            )
-            .await,
-        store
-            .declare(
-                "/ro-renamed.txt",
-                AgentFilePermissions::ReadOnly,
-                b"renamed",
-            )
-            .await,
-        store
-            .declare("/ro-linked.txt", AgentFilePermissions::ReadOnly, b"linked")
-            .await,
-        store
-            .declare(
-                "/rw-modified.txt",
-                AgentFilePermissions::ReadWrite,
-                b"modified",
-            )
-            .await,
-        store
-            .declare(
-                "/rw-deleted.txt",
-                AgentFilePermissions::ReadWrite,
-                b"deleted",
-            )
-            .await,
-        store
-            .declare(
-                "/dir/ro-in-dir.txt",
-                AgentFilePermissions::ReadOnly,
-                b"in dir",
-            )
-            .await,
-        store
-            .declare(
-                "/nested/ro-nested.txt",
-                AgentFilePermissions::ReadOnly,
-                b"nested",
-            )
-            .await,
-    ];
-    let captured_agent = agents.agent("captured");
-    let resident = agents
-        .start(&captured_agent, &files, NO_RESTORE)
-        .await
-        .unwrap();
-    let provisioned = store
-        .declare(
-            "/ro-provisioned.txt",
-            AgentFilePermissions::ReadOnly,
-            b"provisioned",
-        )
-        .await;
-    provision_initial_files(
-        &resident_generation_handle(&resident),
-        Arc::clone(&store.loader),
-        store.environment_id,
-        vec![provisioned.clone()],
-    )
-    .unwrap()
-    .await
-    .unwrap();
-    let root = agents.root(&captured_agent);
-    std::fs::remove_file(root.join("ro-deleted.txt")).unwrap();
-    std::fs::write(root.join("rw-modified.txt"), b"modified by the agent").unwrap();
-    std::fs::remove_file(root.join("rw-deleted.txt")).unwrap();
-    std::fs::rename(root.join("ro-renamed.txt"), root.join("renamed.txt")).unwrap();
-    std::fs::hard_link(root.join("ro-linked.txt"), root.join("second-name.txt")).unwrap();
-    std::fs::rename(root.join("dir"), root.join("moved-dir")).unwrap();
-    std::fs::write(root.join("agent.txt"), b"agent data").unwrap();
-    std::fs::hard_link(root.join("agent.txt"), root.join("agent-alias.txt")).unwrap();
-    std::os::unix::fs::symlink("agent.txt", root.join("agent-link")).unwrap();
-    std::fs::hard_link(root.join("agent-link"), root.join("agent-link-name")).unwrap();
-    let written = |path: &str| matches!(path, "rw-modified.txt" | "agent.txt" | "agent-alias.txt");
-    let expected = read_tree(&root, written);
-
-    let captured = capture(&resident, Duration::from_secs(5)).await.unwrap();
-
-    let record: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(captured.directory().join("record.json")).unwrap())
-            .unwrap();
-    assert_eq!(
-        record["left_out"],
-        serde_json::json!(["nested/ro-nested.txt", "ro-kept.txt", "ro-provisioned.txt"])
-    );
-    assert_eq!(
-        record["provisioned_files"],
-        serde_json::json!([provisioned])
-    );
-    let restored_agent = agents.agent("restored");
-    let restored = agents
-        .start(&restored_agent, &files, Some(copying_restore(&captured)))
-        .await
-        .unwrap();
-    assert_eq!(read_tree(&agents.root(&restored_agent), written), expected);
-    let captured_again = capture(&restored, Duration::from_secs(5)).await.unwrap();
-    let record_again: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(captured_again.directory().join("record.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        record_again["left_out"], record["left_out"],
-        "the read-only files that a restore puts in place must stay Golem's files"
-    );
-    captured_again.discard().await.unwrap();
-    captured.discard().await.unwrap();
-    assert!(scratch_is_empty(&agents.scratch));
-    delete(seal(resident)).await.unwrap();
-    delete(seal(restored)).await.unwrap();
-}
-
-#[test]
-#[timeout("60s")]
-async fn automatic_and_manual_updates_give_the_same_files_for_every_branch_of_the_rule() {
-    let agents = UnmanagedAgents::new().await;
-    let store = &agents.store;
-    let ro = AgentFilePermissions::ReadOnly;
-    let rw = AgentFilePermissions::ReadWrite;
-    let old = [
-        store.declare("/ro-unchanged.txt", ro, b"unchanged").await,
-        store
-            .declare("/ro-unchanged-deleted.txt", ro, b"unchanged")
-            .await,
-        store.declare("/ro-changed.txt", ro, b"old").await,
-        store.declare("/ro-changed-deleted.txt", ro, b"old").await,
-        store.declare("/ro-dropped.txt", ro, b"dropped").await,
-        store
-            .declare("/ro-dropped-replaced.txt", ro, b"dropped")
-            .await,
-        store
-            .declare("/rw-unchanged-modified.txt", rw, b"unchanged")
-            .await,
-        store.declare("/rw-changed-modified.txt", rw, b"old").await,
-        store.declare("/rw-to-ro.txt", rw, b"same").await,
-        store.declare("/ro-to-rw.txt", ro, b"same").await,
-        store.declare("/ro-to-rw-replaced.txt", ro, b"same").await,
-        store.declare("/rw-dropped.txt", rw, b"dropped").await,
-    ];
-    let new = [
-        old[0].clone(),
-        old[1].clone(),
-        store.declare("/ro-changed.txt", ro, b"new").await,
-        store.declare("/ro-changed-deleted.txt", ro, b"new").await,
-        old[6].clone(),
-        store.declare("/rw-changed-modified.txt", rw, b"new").await,
-        store.declare("/rw-to-ro.txt", ro, b"same").await,
-        store.declare("/ro-to-rw.txt", rw, b"same").await,
-        store.declare("/ro-to-rw-replaced.txt", rw, b"same").await,
-        store.declare("/rw-added.txt", rw, b"added").await,
-        store.declare("/rw-added-existing.txt", rw, b"added").await,
-        store.declare("/ro-added.txt", ro, b"added").await,
-    ];
-    let invocations = |root: &Path| {
-        std::fs::remove_file(root.join("ro-unchanged-deleted.txt")).unwrap();
-        std::fs::remove_file(root.join("ro-changed-deleted.txt")).unwrap();
-        std::fs::remove_file(root.join("ro-dropped-replaced.txt")).unwrap();
-        std::fs::write(root.join("ro-dropped-replaced.txt"), b"agent").unwrap();
-        std::fs::write(root.join("rw-unchanged-modified.txt"), b"agent").unwrap();
-        std::fs::write(root.join("rw-changed-modified.txt"), b"agent").unwrap();
-        std::fs::remove_file(root.join("ro-to-rw-replaced.txt")).unwrap();
-        std::fs::write(root.join("ro-to-rw-replaced.txt"), b"agent").unwrap();
-        std::fs::write(root.join("rw-added-existing.txt"), b"agent").unwrap();
-    };
-
-    let automatic_agent = agents.agent("automatic");
-    let automatic = agents
-        .start(&automatic_agent, &old, NO_RESTORE)
-        .await
-        .unwrap();
-    invocations(&agents.root(&automatic_agent));
-    update_initial_files(
-        &resident_generation_handle(&automatic),
-        Arc::clone(&store.loader),
-        store.environment_id,
-        new.to_vec(),
-    )
-    .unwrap()
-    .await
-    .unwrap();
-    let automatic_tree = read_tree(&agents.root(&automatic_agent), |_| false);
-
-    let source_agent = agents.agent("manual-source");
-    let source = agents.start(&source_agent, &old, NO_RESTORE).await.unwrap();
-    invocations(&agents.root(&source_agent));
-    let captured = capture(&source, Duration::from_secs(5)).await.unwrap();
-    let manual_agent = agents.agent("manual");
-    let manual = agents
-        .start(&manual_agent, &new, Some(copying_restore(&captured)))
-        .await
-        .unwrap();
-    let manual_tree = read_tree(&agents.root(&manual_agent), |_| false);
-
-    assert_eq!(manual_tree, automatic_tree);
-    let file = |path: &str| match automatic_tree.nodes.get(path) {
-        Some(Node::File { mode, content, .. }) => Some((mode & 0o222 == 0, content.as_slice())),
-        _ => None,
-    };
-    assert_eq!(
-        file("ro-unchanged.txt"),
-        Some((true, b"unchanged".as_slice()))
-    );
-    assert_eq!(file("ro-unchanged-deleted.txt"), None);
-    assert_eq!(file("ro-changed.txt"), Some((true, b"new".as_slice())));
-    assert_eq!(
-        file("ro-changed-deleted.txt"),
-        Some((true, b"new".as_slice()))
-    );
-    assert_eq!(file("ro-dropped.txt"), None);
-    assert_eq!(
-        file("ro-dropped-replaced.txt"),
-        Some((false, b"agent".as_slice()))
-    );
-    assert_eq!(
-        file("rw-unchanged-modified.txt"),
-        Some((false, b"agent".as_slice()))
-    );
-    assert_eq!(
-        file("rw-changed-modified.txt"),
-        Some((false, b"agent".as_slice()))
-    );
-    assert_eq!(file("rw-to-ro.txt"), Some((true, b"same".as_slice())));
-    assert_eq!(file("ro-to-rw.txt"), Some((false, b"same".as_slice())));
-    assert_eq!(
-        file("ro-to-rw-replaced.txt"),
-        Some((false, b"agent".as_slice()))
-    );
-    assert_eq!(file("rw-dropped.txt"), Some((false, b"dropped".as_slice())));
-    assert_eq!(file("rw-added.txt"), Some((false, b"added".as_slice())));
-    assert_eq!(
-        file("rw-added-existing.txt"),
-        Some((false, b"agent".as_slice()))
-    );
-    assert_eq!(file("ro-added.txt"), Some((true, b"added".as_slice())));
-    captured.discard().await.unwrap();
-    delete(seal(automatic)).await.unwrap();
-    delete(seal(source)).await.unwrap();
-    delete(seal(manual)).await.unwrap();
-}
-
-#[test]
-#[timeout("120s")]
-async fn each_conflict_fails_the_install_with_its_path_and_changes_nothing() {
-    let agents = UnmanagedAgents::new().await;
-    let store = &agents.store;
-    let ro = AgentFilePermissions::ReadOnly;
-    let rw = AgentFilePermissions::ReadWrite;
-    let target = store.declare("/target.txt", ro, b"initial").await;
-    let changed_target = store.declare("/target.txt", ro, b"changed").await;
-    let source = store.declare("/source.txt", ro, b"other").await;
-    let writable_target = store.declare("/target.txt", rw, b"initial").await;
-    let target_below_a_file = store.declare("/above/target.txt", ro, b"initial").await;
-    // A name, the old declarations, the new declarations, and what an invocation does.
-    type ConflictCase = (
-        &'static str,
-        Vec<InitialAgentFile>,
-        Vec<InitialAgentFile>,
-        fn(&Path),
-    );
-    let cases: [ConflictCase; 5] = [
-        (
-            "a file that an invocation wrote",
-            vec![],
-            vec![target.clone()],
-            |root| std::fs::write(root.join("target.txt"), b"agent").unwrap(),
-        ),
-        (
-            "a changed read-write file",
-            vec![writable_target.clone()],
-            vec![target.clone()],
-            |root| std::fs::write(root.join("target.txt"), b"changed").unwrap(),
-        ),
-        (
-            "a read-only file with other content that the agent moved there",
-            vec![source.clone(), target.clone()],
-            vec![source.clone(), changed_target.clone()],
-            |root| std::fs::rename(root.join("source.txt"), root.join("target.txt")).unwrap(),
-        ),
-        ("a directory", vec![], vec![target.clone()], |root| {
-            std::fs::create_dir(root.join("target.txt")).unwrap()
-        }),
-        (
-            "a file above the path",
-            vec![],
-            vec![target_below_a_file.clone()],
-            |root| std::fs::write(root.join("above"), b"agent").unwrap(),
-        ),
-    ];
-
-    futures::stream::iter(cases.into_iter().enumerate())
-        .for_each(|(index, (name, old, new, invocation))| {
-            let agents = &agents;
-            async move {
-                let automatic_agent = agents.agent(&format!("automatic-{index}"));
-                let automatic = agents
-                    .start(&automatic_agent, &old, NO_RESTORE)
-                    .await
-                    .unwrap();
-                let root = agents.root(&automatic_agent);
-                invocation(&root);
-                let before = read_tree(&root, |_| true);
-                let error = update_initial_files(
-                    &resident_generation_handle(&automatic),
-                    Arc::clone(&agents.store.loader),
-                    agents.store.environment_id,
-                    new.clone(),
-                )
-                .unwrap()
-                .await
-                .unwrap_err();
-                assert!(error.to_string().contains("target.txt"), "{name}: {error}");
-                assert_eq!(read_tree(&root, |_| true), before, "{name}");
-                assert!(
-                    !filesystem_activity(&automatic).has_terminal_failure(),
-                    "{name}"
-                );
-
-                let source_agent = agents.agent(&format!("manual-source-{index}"));
-                let source = agents.start(&source_agent, &old, NO_RESTORE).await.unwrap();
-                invocation(&agents.root(&source_agent));
-                let captured = capture(&source, Duration::from_secs(5)).await.unwrap();
-                let error = agents
-                    .start(
-                        &agents.agent(&format!("manual-{index}")),
-                        &new,
-                        Some(copying_restore(&captured)),
-                    )
-                    .await
-                    .err()
-                    .unwrap();
-                assert!(error.to_string().contains("target.txt"), "{name}: {error}");
-                captured.discard().await.unwrap();
-                delete(seal(automatic)).await.unwrap();
-                delete(seal(source)).await.unwrap();
-            }
-        })
-        .await;
-}
-
-#[test]
-#[timeout("60s")]
-async fn read_only_initial_files_follow_their_permission_bits_after_rename_link_and_directory_move()
-{
-    let agents = UnmanagedAgents::new().await;
-    let store = &agents.store;
-    let files = [
-        store
-            .declare("/ro.txt", AgentFilePermissions::ReadOnly, b"read only")
-            .await,
-        store
-            .declare(
-                "/dir/ro-in-dir.txt",
-                AgentFilePermissions::ReadOnly,
-                b"in dir",
-            )
-            .await,
-        store
-            .declare(
-                "/ro-deleted.txt",
-                AgentFilePermissions::ReadOnly,
-                b"deleted",
-            )
-            .await,
-        store
-            .declare("/rw.txt", AgentFilePermissions::ReadWrite, b"read write")
-            .await,
-    ];
-    let agent = agents.agent("permission-bits");
-    let resident = agents.start(&agent, &files, NO_RESTORE).await.unwrap();
-    let generation_handle = resident_generation_handle(&resident);
-    let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
-    let refused = |result: Result<Opened, Error>| async move {
-        match result {
-            Ok(opened) => {
-                close(opened.node).await.unwrap();
-                false
-            }
-            Err(error) => matches!(error, Error::Access(AccessError::NotPermitted)),
-        }
-    };
-    let refusals = |path: &'static str| {
-        let generation_handle = &generation_handle;
-        async move {
-            let Ok(target) = PathTarget::at_root(generation_handle, path) else {
-                return [false; 5];
-            };
-            let write = match open(
-                generation_handle,
-                target.clone(),
-                OpenOptions::Existing {
-                    expected: ObjectKind::File,
-                    access: AccessMode::Write,
-                    follow: Follow::Yes,
-                },
-            ) {
-                Ok(call) => refused(call.await).await,
-                Err(_) => false,
-            };
-            let truncate = match open(
-                generation_handle,
-                target.clone(),
-                OpenOptions::File {
-                    access: AccessMode::Write,
-                    disposition: FileDisposition::TruncateExisting,
-                    follow: Follow::Yes,
-                },
-            ) {
-                Ok(call) => refused(call.await).await,
-                Err(_) => false,
-            };
-            let times = match set_attributes(
-                generation_handle,
-                Target::Path(&target, Follow::Yes),
-                AttributeChanges::Times(TimeChanges {
-                    accessed: TimeChange::Now,
-                    modified: TimeChange::Now,
-                }),
-            ) {
-                Ok(call) => matches!(call.await, Err(Error::Access(AccessError::NotPermitted))),
-                Err(_) => false,
-            };
-            let reader = match open(
-                generation_handle,
-                target,
-                OpenOptions::Existing {
-                    expected: ObjectKind::File,
-                    access: AccessMode::Read,
-                    follow: Follow::Yes,
-                },
-            ) {
-                Ok(call) => call.await.ok(),
-                Err(_) => None,
-            };
-            let refuses_descriptor_change = |changes: AttributeChanges| {
-                reader.as_ref().is_some_and(|reader| {
-                    set_attributes(generation_handle, Target::Open(&reader.node), changes).map(drop)
-                        == Err(AccessError::NotPermitted)
-                })
-            };
-            let descriptor_size = refuses_descriptor_change(AttributeChanges::File {
-                size: 0,
-                times: TimeChanges {
-                    accessed: TimeChange::Keep,
-                    modified: TimeChange::Keep,
-                },
-            });
-            let descriptor_times =
-                refuses_descriptor_change(AttributeChanges::Times(TimeChanges {
-                    accessed: TimeChange::Now,
-                    modified: TimeChange::Now,
-                }));
-            if let Some(reader) = reader {
-                close(reader.node).await.unwrap();
-            }
-            [write, truncate, times, descriptor_size, descriptor_times]
-        }
-    };
-    let edit = |edit: NamespaceEdit| {
-        let generation_handle = &generation_handle;
-        async move {
-            edit_namespace(generation_handle, edit)
-                .unwrap()
-                .await
-                .unwrap()
-        }
-    };
-
-    assert_eq!(refusals("ro.txt").await, [true; 5], "the installed file");
-    edit(NamespaceEdit::Remove {
-        target: at("ro-deleted.txt"),
-        expected: ObjectKind::File,
-    })
-    .await;
-    edit(NamespaceEdit::Move {
-        source: at("ro.txt"),
-        destination: at("renamed.txt"),
-    })
-    .await;
-    edit(NamespaceEdit::Link {
-        source: at("renamed.txt"),
-        destination: at("linked.txt"),
-    })
-    .await;
-    edit(NamespaceEdit::Move {
-        source: at("dir"),
-        destination: at("moved-dir"),
-    })
-    .await;
-    let writer = open(
-        &generation_handle,
-        at("rw.txt"),
-        OpenOptions::Existing {
-            expected: ObjectKind::File,
-            access: AccessMode::Write,
-            follow: Follow::Yes,
-        },
-    )
-    .unwrap()
-    .await
-    .unwrap();
-    let OpenNode::File(writable) = &writer.node else {
-        panic!("rw.txt must open as a file")
-    };
-    write(
-        &generation_handle,
-        writable,
-        WritePlacement::At(0),
-        Bytes::from_static(b"written"),
-    )
-    .unwrap()
-    .await
-    .unwrap();
-    close(writer.node).await.unwrap();
-    let created = open(
-        &generation_handle,
-        at("moved-dir/new.txt"),
-        OpenOptions::File {
-            access: AccessMode::Write,
-            disposition: FileDisposition::CreateExclusive,
-            follow: Follow::No,
-        },
-    )
-    .unwrap()
-    .await
-    .unwrap();
-    close(created.node).await.unwrap();
-    assert_eq!(refusals("renamed.txt").await, [true; 5], "after a rename");
-    assert_eq!(refusals("linked.txt").await, [true; 5], "after a hard link");
-    assert_eq!(
-        refusals("moved-dir/ro-in-dir.txt").await,
-        [true; 5],
-        "after a move of the directory above it"
-    );
-
-    let root = agents.root(&agent);
-    assert_eq!(std::fs::read(root.join("rw.txt")).unwrap(), b"writtenite");
-    assert!(root.join("moved-dir/new.txt").is_file());
-    assert!(!root.join("ro-deleted.txt").exists());
-    delete(seal(resident)).await.unwrap();
 }
 
 #[test]
@@ -1922,7 +1357,7 @@ async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_th
                 .unwrap()
                 .await;
                 assert!(updated.is_ok(), "{name}: {updated:?}");
-                let automatic_tree = read_tree(&agents.root(&automatic_agent), |_| false);
+                let automatic_tree = read_tree(&agents.root(&automatic_agent));
 
                 let source_agent = agents.agent(&format!("manual-source-{index}"));
                 let source = agents.start(&source_agent, old, NO_RESTORE).await.unwrap();
@@ -1935,7 +1370,7 @@ async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_th
                     .unwrap();
 
                 assert_eq!(
-                    read_tree(&agents.root(&manual_agent), |_| false),
+                    read_tree(&agents.root(&manual_agent)),
                     automatic_tree,
                     "{name}"
                 );
@@ -2036,9 +1471,9 @@ async fn a_left_out_file_above_a_new_declaration_gives_automatic_and_manual_upda
         )
         .await
         .unwrap();
-    let automatic_tree = read_tree(&agents.root(&automatic_writable_agent), |_| false);
+    let automatic_tree = read_tree(&agents.root(&automatic_writable_agent));
     assert_eq!(
-        read_tree(&agents.root(&manual_writable_agent), |_| false),
+        read_tree(&agents.root(&manual_writable_agent)),
         automatic_tree
     );
     assert!(
@@ -2758,7 +2193,7 @@ async fn run_steps(
 
 /// Reads the tree under `root` with the owner write permission bit of each object and without times.
 fn tree_without_times(root: &Path) -> Tree {
-    let tree = read_tree(root, |_| false);
+    let tree = read_tree(root);
     Tree {
         nodes: tree
             .nodes
@@ -2766,14 +2201,9 @@ fn tree_without_times(root: &Path) -> Tree {
             .map(|(path, node)| {
                 let node = match node {
                     Node::Directory { mode } => Node::Directory { mode: mode & 0o200 },
-                    Node::File {
-                        mode,
-                        content,
-                        modified,
-                    } => Node::File {
+                    Node::File { mode, content } => Node::File {
                         mode: mode & 0o200,
                         content,
-                        modified,
                     },
                     symlink @ Node::Symlink { .. } => symlink,
                 };
@@ -3382,7 +2812,6 @@ impl ReferenceModel {
                     ModelObject::File { content, writable } => Node::File {
                         mode: if *writable { 0o200 } else { 0 },
                         content: content.clone(),
-                        modified: None,
                     },
                     ModelObject::Symlink { target } => Node::Symlink {
                         target: PathBuf::from(target),

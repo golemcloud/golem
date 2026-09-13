@@ -302,6 +302,62 @@ mod tests {
         );
     }
 
+    /// Reads the file mode creation mask of the process from the `Umask:` line of
+    /// `/proc/self/status`. The read does not change the mask.
+    #[cfg(target_os = "linux")]
+    fn process_file_creation_mask() -> libc::mode_t {
+        status_umask(&std::fs::read_to_string("/proc/self/status").unwrap())
+            .expect("/proc/self/status must have a Umask: line")
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn agent_filesystems_binding_clears_only_bit_0o200_of_the_file_mode_creation_mask() {
+        let before = process_file_creation_mask();
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+
+        AgentFilesystems::new(&settings).await.unwrap();
+
+        let after = process_file_creation_mask();
+        assert_eq!(
+            after,
+            before & !0o200,
+            "binding must change the mask {before:o} only at bit 0o200, and the mask is {after:o}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_file_mode_creation_mask_probe_sets_0o022_and_gives_the_mask_before_the_call() {
+        let before = process_file_creation_mask();
+        // The call sets the mask 0o022 for all threads of the process. Other tests see no change
+        // only where the mask is 0o022 before the call, so the test makes the call only there.
+        if before != 0o022 {
+            eprintln!("skipped: the file mode creation mask is {before:o}, not 22");
+            return;
+        }
+
+        let replaced = replaced_file_creation_mask();
+        let during = process_file_creation_mask();
+        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+        unsafe {
+            libc::umask(replaced);
+        }
+
+        assert_eq!(
+            replaced, before,
+            "the call must give the mask {before:o} from before the call, and it gave {replaced:o}"
+        );
+        assert_eq!(
+            during, 0o022,
+            "the call must set the mask 0o022, and the mask is {during:o}"
+        );
+    }
+
     struct BindingSpaceObservationGuard(Option<FilesystemSpace>);
 
     impl Drop for BindingSpaceObservationGuard {
