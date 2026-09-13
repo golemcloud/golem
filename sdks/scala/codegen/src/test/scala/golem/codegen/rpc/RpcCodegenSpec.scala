@@ -511,7 +511,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(!content.contains("def getPhantom("), s"ephemeral agent should not have getPhantom:\n$content")
+    assert(content.contains("def getPhantom("), s"ephemeral agent should support known phantoms:\n$content")
     assert(content.contains("def newPhantom("), s"missing newPhantom in:\n$content")
     assert(!content.contains("generateIdempotencyKey"), s"ephemeral proxy should not generate UUID:\n$content")
     assert(content.contains("awaitWithMetadata"), s"await should return metadata:\n$content")
@@ -548,8 +548,8 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      !content.contains("def getPhantomWithConfig("),
-      s"ephemeral agent should not have getPhantomWithConfig:\n$content"
+      content.contains("def getPhantomWithConfig("),
+      s"ephemeral agent should support known phantoms with config:\n$content"
     )
     assert(content.contains("def newPhantomWithConfig("), s"missing newPhantomWithConfig in:\n$content")
     assert(content.contains("key: _root_.scala.Option[String] = _root_.scala.None"), s"missing key param in:\n$content")
@@ -650,7 +650,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
   }
 
-  test("ephemeral agent with constructor params generates only newPhantom with unpacked params") {
+  test("ephemeral agent with constructor params generates fresh and known phantom factories") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -667,8 +667,8 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      !content.contains("def getPhantom("),
-      s"ephemeral agent should not accept an explicit phantom ID:\n$content"
+      content.contains("def getPhantom(name: String, id: Int, phantom: _root_.golem.Uuid)"),
+      s"ephemeral agent should accept an explicit phantom ID:\n$content"
     )
     assert(
       content.contains("def newPhantom(name: String, id: Int): EphAgentRemote"),
@@ -755,12 +755,12 @@ class RpcCodegenSpec extends munit.FunSuite {
       s"newPhantomWithConfig should use resolveWithConfig:\n$content"
     )
     assert(
-      !content.contains("resolveWithPhantom["),
-      s"ephemeral agent should not resolve an explicit phantom ID:\n$content"
+      content.contains("resolveWithPhantom["),
+      s"ephemeral known phantom should use resolveWithPhantom:\n$content"
     )
     assert(
-      !content.contains("resolveWithPhantomAndConfig["),
-      s"ephemeral agent should not resolve an explicit phantom ID with config:\n$content"
+      content.contains("resolveWithPhantomAndConfig["),
+      s"ephemeral known phantom with config should use resolveWithPhantomAndConfig:\n$content"
     )
   }
 

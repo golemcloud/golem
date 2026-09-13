@@ -396,6 +396,9 @@ object RpcCodegen {
     if (mode == "ephemeral") {
       emitConstructor("newPhantom", "", "", phantom = None, config = None)
       if (configFields.nonEmpty) emitWithConfigConstructor("newPhantomWithConfig", "", "", phantom = None)
+      emitConstructor("getPhantom", "", "phantom: _root_.golem.Uuid", phantom = Some("phantom"), config = None)
+      if (configFields.nonEmpty)
+        emitWithConfigConstructor("getPhantomWithConfig", "", "phantom: _root_.golem.Uuid", phantom = Some("phantom"))
       return
     }
 

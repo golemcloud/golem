@@ -9,6 +9,7 @@ export default {
   "golem-annotate-agent-scala": "Annotating Agent Methods (Scala)",
   "golem-atomic-block-scala": "Atomic Blocks and Durability Controls (Scala)",
   "golem-call-from-external-scala": "Calling Agents from External Applications (Scala)",
+  "golem-agent-reflection-scala": "Calling Agents with Runtime Reflection (Scala)",
   "golem-call-another-agent-scala": "Calling Another Agent (Scala)",
   "golem-configure-durability-scala": "Configuring Agent Durability (Scala)",
   "golem-add-cors-scala": "Configuring CORS for Scala HTTP Endpoints",
