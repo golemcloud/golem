@@ -59,13 +59,13 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
   ): CallerCodecMethod[Input, Output] =
     CallerCodecMethod(name, input, output)
 
-  def client(implicit complete: Capability =:= Complete): CallerCodecClientFactory[Constructor, Config] =
+  def client(implicit complete: Capability <:< Complete): CallerCodecClientFactory[Constructor, Config] =
     new CallerCodecClientFactory(this.asInstanceOf[AgentClientDefinition[Complete, Constructor, Config]])
 
   def agentId(
     input: Constructor,
     phantomId: Option[Uuid] = None
-  )(implicit complete: Capability =:= Complete): Either[GolemReflectError, ParsedAgentId] =
+  )(implicit complete: Capability <:< Complete): Either[GolemReflectError, ParsedAgentId] =
     try ParsedAgentId.create(contractName.get, constructorCodec.get.toValue(input), phantomId)
     catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 
