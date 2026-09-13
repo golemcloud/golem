@@ -17,12 +17,22 @@ import golem.{Datetime, Uuid}
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.annotation.targetName
 import scala.util.control.NonFatal
 
 sealed trait AgentClientCapability
-sealed trait BindingOnly extends AgentClientCapability
-sealed trait Complete    extends AgentClientCapability
+sealed trait BindingOnly       extends AgentClientCapability
+sealed trait Complete          extends AgentClientCapability
+sealed trait DurableComplete   extends Complete
+sealed trait EphemeralComplete extends Complete
 sealed trait NoConfig
+
+sealed trait CanBindAgentClient[Capability <: AgentClientCapability]
+
+object CanBindAgentClient {
+  implicit object BindingOnlyCanBind     extends CanBindAgentClient[BindingOnly]
+  implicit object DurableCompleteCanBind extends CanBindAgentClient[DurableComplete]
+}
 
 trait AgentConfigCodec[Config] {
   def overrides(config: Config): List[ConfigOverride]
@@ -59,7 +69,9 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
     try ParsedAgentId.create(contractName.get, constructorCodec.get.toValue(input), phantomId)
     catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 
-  def bind(agentId: ParsedAgentId): Either[GolemReflectError, CallerCodecAgentClient] =
+  def bind(agentId: ParsedAgentId)(implicit
+    canBind: CanBindAgentClient[Capability]
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
     for {
       parts <- agentId.parts
       _     <- contractName match {
@@ -94,17 +106,42 @@ object AgentClientDefinition {
 
   def complete[Constructor](
     name: String,
-    constructor: InputRecordCodec[Constructor],
-    mode: AgentMode = AgentMode.Durable
-  ): AgentClientDefinition[Complete, Constructor, NoConfig] =
+    constructor: InputRecordCodec[Constructor]
+  ): AgentClientDefinition[DurableComplete, Constructor, NoConfig] =
+    new AgentClientDefinition(Some(name), Some(AgentMode.Durable), Some(constructor), None)
+
+  @targetName("completeDurable")
+  def complete[Constructor](
+    name: String,
+    mode: AgentMode.Durable.type,
+    constructor: InputRecordCodec[Constructor]
+  ): AgentClientDefinition[DurableComplete, Constructor, NoConfig] =
     new AgentClientDefinition(Some(name), Some(mode), Some(constructor), None)
 
+  @targetName("completeEphemeral")
+  def complete[Constructor](
+    name: String,
+    mode: AgentMode.Ephemeral.type,
+    constructor: InputRecordCodec[Constructor]
+  ): AgentClientDefinition[EphemeralComplete, Constructor, NoConfig] =
+    new AgentClientDefinition(Some(name), Some(mode), Some(constructor), None)
+
+  @targetName("completeDurableWithConfig")
   def complete[Constructor, Config](
     name: String,
-    mode: AgentMode,
+    mode: AgentMode.Durable.type,
     constructor: InputRecordCodec[Constructor],
     config: AgentConfigCodec[Config]
-  ): AgentClientDefinition[Complete, Constructor, Config] =
+  ): AgentClientDefinition[DurableComplete, Constructor, Config] =
+    new AgentClientDefinition(Some(name), Some(mode), Some(constructor), Some(config))
+
+  @targetName("completeEphemeralWithConfig")
+  def complete[Constructor, Config](
+    name: String,
+    mode: AgentMode.Ephemeral.type,
+    constructor: InputRecordCodec[Constructor],
+    config: AgentConfigCodec[Config]
+  ): AgentClientDefinition[EphemeralComplete, Constructor, Config] =
     new AgentClientDefinition(Some(name), Some(mode), Some(constructor), Some(config))
 }
 
