@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::DropEvent;
+use crate::durable_host::concurrent::{DropEvent, LiveCallPermit};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEventPayloadV1,
@@ -4368,6 +4368,17 @@ type DurableReceiveFuture = Pin<
     >,
 >;
 
+struct ReceiveGuard {
+    source_wait: Option<SuspendableWaitRegistration>,
+    _live_call: LiveCallPermit,
+}
+
+impl ReceiveGuard {
+    fn clear_source_wait(&mut self) {
+        self.source_wait = None;
+    }
+}
+
 pub(crate) struct DurableInputProducer {
     reader: Option<DurableStreamReader>,
     journal: VecDeque<CommittedProducerStreamEventV1>,
@@ -4503,10 +4514,7 @@ impl DurableInputProducer {
         self.begin_receive_with_registration(None);
     }
 
-    fn begin_receive_with_registration(
-        &mut self,
-        source_wait: Option<SuspendableWaitRegistration>,
-    ) {
+    fn begin_receive_with_registration(&mut self, guard: Option<ReceiveGuard>) {
         let mut reader = self.reader.take();
         let queued_event = self.journal.pop_front();
         let streams = self.streams.clone();
@@ -4514,6 +4522,7 @@ impl DurableInputProducer {
         let ordinal = self.consumer_read_ordinal;
         let role = self.role;
         self.pending = Some(Box::pin(async move {
+            let mut guard = guard;
             let mut journaled = queued_event.is_some();
             let event = match queued_event {
                 Some(event) => Some(event),
@@ -4523,7 +4532,9 @@ impl DurableInputProducer {
                         .expect("durable input reader is missing")
                         .next()
                         .await;
-                    drop(source_wait);
+                    if let Some(guard) = &mut guard {
+                        guard.clear_source_wait();
+                    }
                     result.map_err(|error| error.to_string())?
                 }
             };
@@ -4802,6 +4813,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             }
         }
         if self.pending.is_none() {
+            let live_call = LiveCallPermit::new(
+                store
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .live_host_call_counter(),
+            );
             let source_wait = self.journal.is_empty().then(|| {
                 store
                     .data_mut()
@@ -4809,7 +4827,10 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                     .state
                     .register_passive_suspendable_wait()
             });
-            self.begin_receive_with_registration(source_wait);
+            self.begin_receive_with_registration(Some(ReceiveGuard {
+                source_wait,
+                _live_call: live_call,
+            }));
         }
         let (reader, event, mut endpoints, _journaled, queued_events) =
             match self.pending.as_mut().unwrap().as_mut().poll(cx) {
@@ -5110,6 +5131,78 @@ mod tests {
     };
     use test_r::test;
     use uuid::Uuid;
+
+    fn receive_guard_counts(
+        with_source_wait: bool,
+    ) -> (
+        ReceiveGuard,
+        Arc<std::sync::atomic::AtomicUsize>,
+        crate::durable_host::suspendable_wait::SuspendableWaitRegistry,
+    ) {
+        let live_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let waits: crate::durable_host::suspendable_wait::SuspendableWaitRegistry =
+            Default::default();
+        let source_wait =
+            with_source_wait.then(|| SuspendableWaitRegistration::new(1, None, waits.clone()));
+        let guard = ReceiveGuard {
+            source_wait,
+            _live_call: LiveCallPermit::new(live_calls.clone()),
+        };
+        (guard, live_calls, waits)
+    }
+
+    #[test]
+    fn receive_guard_drop_before_poll_releases_wait_and_live_call() {
+        let (guard, live_calls, waits) = receive_guard_counts(true);
+        assert_eq!(live_calls.load(Ordering::Acquire), 1);
+        assert_eq!(waits.lock().unwrap().len(), 1);
+
+        let future = Box::pin(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        });
+        drop(future);
+
+        assert_eq!(live_calls.load(Ordering::Acquire), 0);
+        assert!(waits.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn receive_guard_clears_source_wait_but_covers_post_receive_work() {
+        let (mut guard, live_calls, waits) = receive_guard_counts(true);
+        let (_commit, commit_wait) = tokio::sync::oneshot::channel::<()>();
+        let mut future = Box::pin(async move {
+            guard.clear_source_wait();
+            commit_wait.await.map_err(|error| error.to_string())?;
+            Ok::<(), String>(())
+        });
+
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(future.as_mut().poll(&mut context).is_pending());
+        assert!(waits.lock().unwrap().is_empty());
+        assert_eq!(live_calls.load(Ordering::Acquire), 1);
+
+        drop(future);
+        assert_eq!(live_calls.load(Ordering::Acquire), 0);
+
+        let (mut guard, live_calls, waits) = receive_guard_counts(true);
+        let mut failed = Box::pin(async move {
+            guard.clear_source_wait();
+            Err::<(), _>("journal commit failed")
+        });
+        assert!(failed.as_mut().poll(&mut context).is_ready());
+        assert!(waits.lock().unwrap().is_empty());
+        assert_eq!(live_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn replay_receive_guard_has_live_call_without_source_wait() {
+        let (guard, live_calls, waits) = receive_guard_counts(false);
+        assert_eq!(live_calls.load(Ordering::Acquire), 1);
+        assert!(waits.lock().unwrap().is_empty());
+        drop(guard);
+        assert_eq!(live_calls.load(Ordering::Acquire), 0);
+    }
 
     #[test]
     fn system_durable_stream_cancellation_is_a_permanent_stream_error() {

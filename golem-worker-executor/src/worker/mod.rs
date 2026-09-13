@@ -106,7 +106,7 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::QueuedCardEvent;
-use golem_common::cache::SimpleCache;
+use golem_common::cache::PendingOrFinal;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
@@ -303,7 +303,7 @@ fn startup_component_requirement(
 async fn populate_read_only_cache(
     cache: &golem_common::cache::Cache<
         read_only_cache::ReadOnlyCacheKey,
-        (),
+        read_only_cache::PendingReadOnlyCacheEntry,
         Arc<read_only_cache::ReadOnlyCacheEntry>,
         WorkerExecutorError,
     >,
@@ -336,7 +336,11 @@ async fn populate_read_only_cache(
     let entry = build_read_only_cache_entry(ro, output);
     // First-writer-wins.
     let _ = cache
-        .get_or_insert_simple(&key, async move || Ok::<_, WorkerExecutorError>(entry))
+        .get_or_insert(
+            &key,
+            || read_only_cache::PendingReadOnlyCacheEntry::Immediate,
+            async move |_| Ok::<_, WorkerExecutorError>(entry),
+        )
         .await;
 }
 
@@ -505,7 +509,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// [`crate::worker::read_only_cache`] for the design notes.
     read_only_cache: golem_common::cache::Cache<
         read_only_cache::ReadOnlyCacheKey,
-        (),
+        read_only_cache::PendingReadOnlyCacheEntry,
         Arc<read_only_cache::ReadOnlyCacheEntry>,
         WorkerExecutorError,
     >,
@@ -2159,6 +2163,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        self.invoke_and_await_with_notifier(invocation, None).await
+    }
+
+    pub(crate) async fn invoke_and_await_with_notifier(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        mut admission: Option<tokio::sync::oneshot::Sender<read_only_cache::AdmissionSignal>>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Fast path: read-only Await coalescing.
@@ -2197,8 +2209,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         match lookup_for_coalesce {
-            Some((_, LookupResult::Complete(Ok(output)))) => return Ok(output),
-            Some((_, LookupResult::Complete(Err(err)))) => return Err(err),
+            Some((_, LookupResult::Complete(Ok(output)))) => {
+                if let Some(tx) = admission.take() {
+                    let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
+                }
+                return Ok(output);
+            }
+            Some((_, LookupResult::Complete(Err(err)))) => {
+                if let Some(tx) = admission.take() {
+                    let _ = tx.send(read_only_cache::AdmissionSignal::Failure(err.clone()));
+                }
+                return Err(err);
+            }
             Some((_, LookupResult::Interrupted)) => {
                 return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
             }
@@ -2210,6 +2232,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // read-only cache here.
                 let subscription = self.events().subscribe();
                 Worker::start_if_needed(self.clone()).await?;
+                if let Some(tx) = admission.take() {
+                    let _ = tx.send(read_only_cache::AdmissionSignal::Queued);
+                }
                 let result = self
                     .wait_for_invocation_result(&idempotency_key, subscription)
                     .await;
@@ -2267,6 +2292,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         return Err(err.clone());
                     }
                     drop(instance_guard);
+                    if let Some(tx) = admission.take() {
+                        let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
+                    }
                     return Ok(entry.output.clone());
                 } else {
                     let me = entry.clone();
@@ -2312,9 +2340,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let owner_agent_id = self.owned_agent_id.agent_id.clone();
             let owner_idempotency_key = idempotency_key.clone();
 
-            let entry_result = async {
+            let pending_or_final = async {
                 self.read_only_cache
-                    .get_or_insert_simple_spawned(&key, move || {
+                    .get_or_insert_pending(
+                        &key,
+                        move || {
+                            read_only_cache::PendingReadOnlyCacheEntry::Invocation(
+                                read_only_cache::PendingReadOnlyInvocation::new(),
+                            )
+                        },
+                        move |pending| {
+                            let read_only_cache::PendingReadOnlyCacheEntry::Invocation(pending) = pending.clone() else {
+                                unreachable!("coalesced invocation created an immediate pending entry")
+                            };
                         let span = related_span!(
                             origin,
                             Level::INFO,
@@ -2322,13 +2360,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             agent_id = %owner_agent_id,
                             idempotency_key = %owner_idempotency_key,
                         );
-                        async move {
-                            let output = Worker::invoke_and_await_uncoalesced(
+                            Box::pin(async move {
+                            let output = Worker::invoke_and_await_uncoalesced_admitted(
                                 worker,
                                 invocation_for_closure,
                                 idem_for_closure,
+                                Some(pending.clone()),
                             )
-                            .await?;
+                            .await.inspect_err(|error| {
+                                pending.publish(read_only_cache::AdmissionSignal::Failure(error.clone()));
+                            })?;
                             if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
                                 // Defensive: only `AgentMethod` outputs are cacheable.
                                 return Err(WorkerExecutorError::unknown(
@@ -2336,9 +2377,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 ));
                             }
                             Ok(build_read_only_cache_entry(&ro_for_closure, output))
-                        }
-                        .instrument(span)
-                    })
+                            }.instrument(span))
+                        },
+                    )
                     .await
             }
             // The caller's own share: however long it waits for the coalesced
@@ -2350,6 +2391,45 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 idempotency_key = %idempotency_key,
             ))
             .await;
+            let entry_result = match pending_or_final {
+                Ok(entry) => match entry {
+                    PendingOrFinal::Final(entry) => {
+                        if let Some(tx) = admission.take() {
+                            let _ = tx.send(read_only_cache::AdmissionSignal::Immediate);
+                        }
+                        Ok(entry)
+                    }
+                    PendingOrFinal::Pending(mut pending) => {
+                        let pending_invocation = match &pending.value {
+                            read_only_cache::PendingReadOnlyCacheEntry::Immediate => None,
+                            read_only_cache::PendingReadOnlyCacheEntry::Invocation(value) => {
+                                Some(value.clone())
+                            }
+                        };
+                        let signal = match &pending_invocation {
+                            Some(value) => value.admission().await,
+                            None => read_only_cache::AdmissionSignal::Immediate,
+                        };
+                        if let Some(tx) = admission.take() {
+                            let _ = tx.send(signal.clone());
+                        }
+                        if let read_only_cache::AdmissionSignal::Failure(error) = signal {
+                            return Err(error);
+                        }
+
+                        pending
+                            .completion
+                            .wait_for(|value| value.is_some())
+                            .await
+                            .map_err(|_| {
+                                WorkerExecutorError::runtime("read-only owner disappeared")
+                            })?
+                            .clone()
+                            .expect("completion watch was observed as Some")
+                    }
+                },
+                Err(error) => Err(error),
+            };
 
             // Stale-populate guard: if the epoch bumped while the owner ran,
             // the entry we just inserted is keyed on the old epoch and is
@@ -2370,18 +2450,86 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // Non-cacheable path: `NoCache` read-only methods and all
         // non-read-only invocations skip coalescing entirely.
-        Worker::invoke_and_await_uncoalesced(self, invocation, idempotency_key).await
+        let pending = admission
+            .as_ref()
+            .map(|_| read_only_cache::PendingReadOnlyInvocation::new());
+        let admission_wait = pending.clone();
+        let result = self
+            .clone()
+            .invoke_owned_prefix(invocation, pending)
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
+        if let Some(tx) = admission.take() {
+            let signal = admission_wait
+                .expect("admission pending exists when notifier exists")
+                .admission()
+                .await;
+            let _ = tx.send(signal);
+        }
+        self.await_invocation_result(idempotency_key, result).await
+    }
+
+    pub(crate) async fn invoke_and_start(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+    ) -> Result<ResultOrSubscription, WorkerExecutorError> {
+        self.invoke_owned_prefix(invocation, None)
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+    }
+
+    fn invoke_owned_prefix(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        admission: Option<read_only_cache::PendingReadOnlyInvocation>,
+    ) -> tokio::task::JoinHandle<Result<ResultOrSubscription, WorkerExecutorError>> {
+        tokio::spawn(async move {
+            let result = match self.clone().invoke(invocation).await {
+                Ok(result) => result,
+                Err(error) => {
+                    if let Some(admission) = &admission {
+                        admission.publish(read_only_cache::AdmissionSignal::Failure(error.clone()));
+                    }
+                    return Err(error);
+                }
+            };
+            if matches!(result, ResultOrSubscription::Pending(_)) {
+                if let Err(error) = Worker::start_if_needed(self).await {
+                    if let Some(admission) = &admission {
+                        admission.publish(read_only_cache::AdmissionSignal::Failure(error.clone()));
+                    }
+                    return Err(error);
+                }
+                if let Some(admission) = &admission {
+                    admission.publish(read_only_cache::AdmissionSignal::Queued);
+                }
+            } else if let Some(admission) = &admission {
+                let signal = match &result {
+                    ResultOrSubscription::Finished(Err(error)) => {
+                        read_only_cache::AdmissionSignal::Failure(error.clone())
+                    }
+                    _ => read_only_cache::AdmissionSignal::Immediate,
+                };
+                admission.publish(signal);
+            }
+            Ok(result)
+        })
     }
 
     /// Underlying `invoke_and_await` implementation without read-only
     /// coalescing. Used directly for non-cacheable invocations and as the
     /// per-key owner future inside the coalesced path above.
-    async fn invoke_and_await_uncoalesced(
+    async fn invoke_and_await_uncoalesced_admitted(
         self: Arc<Self>,
         invocation: AgentInvocation,
         idempotency_key: IdempotencyKey,
+        admission: Option<read_only_cache::PendingReadOnlyInvocation>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
-        let result = self.clone().invoke(invocation).await?;
+        let result = self
+            .clone()
+            .invoke_owned_prefix(invocation, admission)
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
         self.await_invocation_result(idempotency_key, result).await
     }
 
@@ -3655,9 +3803,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
-        let result = self
-            .accept_durable_streaming_invocation_unmetered(request)
-            .await;
+        let worker = self.clone();
+        let result = tokio::spawn(async move {
+            worker
+                .accept_durable_streaming_invocation_unmetered(request)
+                .await
+        })
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         match &result {
             Ok(acceptance) => crate::metrics::durable_stream::record_attempt(
                 "start",
@@ -3984,6 +4137,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         }
         drop(instance_guard);
+        if matches!(
+            self.lookup_invocation_result(&prepared.attempt.session_key.idempotency_key)
+                .await,
+            LookupResult::Pending
+        ) {
+            Worker::start_if_needed(self.clone()).await?;
+        }
         Ok(DurableStreamingInvocationAcceptance {
             prepared,
             streams,

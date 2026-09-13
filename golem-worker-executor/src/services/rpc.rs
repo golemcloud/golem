@@ -434,7 +434,7 @@ impl Rpc for RemoteInvocationRpc {
 
         let fingerprint = self
             .worker_proxy
-            .start(
+            .prepare(
                 owned_agent_id,
                 method_name,
                 self_agent_id,
@@ -1267,7 +1267,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            let worker = Worker::get_or_create_running(
+            let worker = Worker::get_or_create_suspended(
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
@@ -1805,13 +1805,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 scope_card: None,
             };
 
-            match worker.clone().invoke(invocation).await? {
+            match worker.invoke_and_start(invocation).await? {
                 crate::worker::ResultOrSubscription::Finished(Err(err)) => Err(err.into()),
                 crate::worker::ResultOrSubscription::Finished(Ok(_)) => Ok(()),
-                crate::worker::ResultOrSubscription::Pending(_) => {
-                    Worker::start_if_needed(worker).await?;
-                    Ok(())
-                }
+                crate::worker::ResultOrSubscription::Pending(_) => Ok(()),
             }
         } else {
             self.remote_rpc

@@ -172,7 +172,7 @@ use golem_service_base::model::{
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
 use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -9962,8 +9962,8 @@ struct PrivateDurableWorkerState {
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
-    /// Number of live durable host calls currently in flight. Used by suspendable P3 waits to
-    /// detect when all in-flight work is parked in waits that can safely suspend the worker.
+    /// Number of live durable host calls currently in flight. Shared wait scheduling uses this
+    /// to defer voluntary suspension while work outside registered waits is progressing.
     live_host_calls: Arc<AtomicUsize>,
 
     /// Activity tracking for Golem-spawned store background tasks. The invocation completion
@@ -9971,10 +9971,10 @@ struct PrivateDurableWorkerState {
     /// [`tail_work::TailWorkTracker`]) before `AgentInvocationFinished` is written.
     tail_work: tail_work::TailWorkTracker,
 
-    /// Suspend-capable waits currently parked by P3 sleep / promise APIs. The value is the wall
-    /// clock deadline for a scheduled wake, if the wait has one; pure promise waits have no
-    /// deadline and are woken by promise completion.
-    suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
+    /// Suspend-capable waits currently parked by sleep, promise, and RPC APIs. Deadline waits use
+    /// their wall-clock deadline (if any); RPC waits use a bounded resume delay so their transport
+    /// can be checked again after the worker resumes.
+    suspendable_waits: suspendable_wait::SuspendableWaitRegistry,
     next_suspendable_wait_id: AtomicU64,
 
     /// Latched when the current invocation's wall-clock deadline
@@ -9994,6 +9994,7 @@ struct PrivateDurableWorkerState {
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
     ),
+    dropped_call_event_backlog: VecDeque<concurrent::DropEvent>,
     completion_marker_recorder: concurrent::CompletionMarkerRecorder,
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
@@ -10281,6 +10282,7 @@ impl PrivateDurableWorkerState {
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
+            dropped_call_event_backlog: VecDeque::new(),
             completion_marker_recorder,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
@@ -10484,11 +10486,11 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    fn suspendable_waits(&self) -> Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>> {
+    pub(crate) fn suspendable_waits(&self) -> suspendable_wait::SuspendableWaitRegistry {
         self.suspendable_waits.clone()
     }
 
-    fn next_suspendable_wait_id(&self) -> u64 {
+    pub(crate) fn next_suspendable_wait_id(&self) -> u64 {
         self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
     }
 
@@ -10500,19 +10502,21 @@ impl PrivateDurableWorkerState {
         )
     }
 
-    fn safe_to_suspend(&self) -> bool {
-        Self::suspend_admissible(
-            self.live_host_calls.load(Ordering::Acquire),
-            self.suspendable_waits.lock().unwrap().len(),
-            !self.active_durable_scopes.is_empty(),
-            !self.pending_p3_http_request_transmissions.is_empty(),
-        )
+    fn safe_to_suspend(&mut self) -> bool {
+        let markers_settled = self.settle_completed_marker_events();
+        markers_settled
+            && Self::suspend_admissible(
+                self.live_host_calls.load(Ordering::Acquire),
+                self.suspendable_waits.lock().unwrap().len(),
+                !self.active_durable_scopes.is_empty(),
+                !self.pending_p3_http_request_transmissions.is_empty(),
+            )
     }
 
-    /// Pure form of [`Self::safe_to_suspend`], factored out so its truth table can be tested
-    /// without constructing worker state: the worker may suspend when every live durable host
-    /// call in flight is parked in a suspendable wait, no durable scope is open, and no P3 HTTP
-    /// request transmission is pending.
+    /// Shared scheduling heuristic for voluntary suspension, not a recoverability boundary.
+    /// Explicit interruption and arbitrary Store loss still reconstruct from durable history.
+    /// Defer automatic yielding until every live call is in a registered wait, no durable
+    /// scope is open, and no P3 HTTP request transmission is pending.
     fn suspend_admissible(
         live_host_calls: usize,
         suspendable_waits: usize,
@@ -10533,11 +10537,26 @@ impl PrivateDurableWorkerState {
     }
 
     fn take_dropped_call_events(&mut self) -> Vec<concurrent::DropEvent> {
-        let mut events = Vec::new();
+        let mut events: Vec<_> = self.dropped_call_event_backlog.drain(..).collect();
         while let Ok(event) = self.dropped_call_events.1.try_recv() {
             events.push(event);
         }
         events
+    }
+
+    fn take_next_dropped_call_event(&mut self) -> Option<concurrent::DropEvent> {
+        self.dropped_call_event_backlog
+            .pop_front()
+            .or_else(|| self.dropped_call_events.1.try_recv().ok())
+    }
+
+    /// Releases only marker events known to have completed successfully. Every other event stays
+    /// worker-owned and in its original order for the next ordinary asynchronous drain.
+    fn settle_completed_marker_events(&mut self) -> bool {
+        while let Ok(event) = self.dropped_call_events.1.try_recv() {
+            self.dropped_call_event_backlog.push_back(event);
+        }
+        concurrent::settle_completed_marker_events(&mut self.dropped_call_event_backlog)
     }
 
     fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {

@@ -247,6 +247,31 @@ struct RecordingWorkerProxy {
 
 #[async_trait]
 impl WorkerProxy for RecordingWorkerProxy {
+    async fn prepare(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        caller_agent_id: &AgentId,
+        caller_env: HashMap<String, String>,
+        caller_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        self.inner
+            .prepare(
+                owned_agent_id,
+                method_name,
+                caller_agent_id,
+                caller_env,
+                caller_stack,
+                config,
+                principal,
+                auth_ctx,
+            )
+            .await
+    }
+
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,

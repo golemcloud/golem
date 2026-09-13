@@ -65,7 +65,19 @@ ordering without discarding execution-relevant configuration.
 `InvocationFreshnessDisposition::MayExist` is the default; `KnownFresh` is allowed only for live,
 ephemeral, non-`assume_idempotence` dispatch and must commit `DurableOnly` first
 (`wasm_rpc/mod.rs`). Same-key retry attaches to the existing target invocation; it is never new
-work. Ephemeral targets are fail-stop; do not build resumption for them.
+work. RPC preparation does not acquire target execution capacity. An execution-needing target
+invocation durably enqueues its acceptance prefix before reporting acceptance, and caller
+cancellation must not split that prefix. Settled read-only cache hits and coalesced followers do
+not persist a separate invocation, result, or alias; only the miss owner follows normal durable
+admission. Ephemeral targets are fail-stop; do not build resumption for them.
+
+Pending durable RPC operations register suspendable waits when the operation starts. After
+`rpc_suspend_after`, their await uses the shared voluntary-suspension predicate; if HTTP or other
+live work makes the Store ineligible, it retries after `wait_suspend_check_interval`. Before
+suspending it durably schedules a wakeup `rpc_resume_after` later (or the earliest wakeup among
+mixed waits), then uses ordinary reconstruction with the same logical RPC key. This is proactive
+scheduling only: never gate explicit interruption or arbitrary Store loss on this predicate, and
+do not add a feature-specific recovery path or immediate restart.
 
 ## Durable streams
 
@@ -130,6 +142,8 @@ Failure to load a manual-update snapshot is terminal and retains the underlying 
 
 ## Spawned store tasks
 
-Tasks spawned on the store (`tail_work.rs`) must be parked only at guest-driven waits when an
-invocation finishes; any durable `Start`/`End` they can still produce must land before
-`AgentInvocationFinished`. Work that must survive a restart belongs in the oplog, not in a task.
+Tasks spawned on the store (`tail_work.rs`) may park across invocation settlement at guest-driven
+waits or passive markerless-completion replay-tail waits after durable finalization. Cursor
+operations and recorded-marker waits remain active. Any durable `Start`/`End` they can still
+produce must land before `AgentInvocationFinished`. Work that must survive a restart belongs in
+the oplog, not in a task.

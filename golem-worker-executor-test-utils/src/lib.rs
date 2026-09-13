@@ -584,10 +584,32 @@ pub struct TestWorkerExecutor {
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
     /// cache) alive, and to read per-agent instance load counts.
     additional_test_deps: AdditionalTestDeps,
+    production_active_agents:
+        Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
+    concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     leak_detector: std::sync::Weak<()>,
 }
 
 impl TestWorkerExecutor {
+    pub async fn acquire_account_concurrent_agent_permit(
+        &self,
+        agent_id: AgentId,
+    ) -> golem_worker_executor::services::active_agents::ConcurrentAgentPermit {
+        let active_agents = self
+            .production_active_agents
+            .as_ref()
+            .expect("executor was not started with production active agents");
+        let resource_entry = self
+            .concurrent_resource_entry
+            .as_ref()
+            .expect("executor has no concurrent resource entry");
+        active_agents
+            .register_account_concurrency(self.context.account_id, resource_entry.clone())
+            .await
+            .acquire(agent_id)
+            .await
+    }
+
     /// Returns a weak reference that can be used to verify that the
     /// service graph (`All`) was properly deallocated after the executor
     /// is dropped. If `upgrade()` returns `Some`, services have leaked.
@@ -831,6 +853,11 @@ impl TestWorkerExecutor {
     ///
     /// Used by the read-only cache eviction-survival test (#3393 T5).
     pub async fn worker_is_loaded(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        if let Some(active_agents) = &self.production_active_agents {
+            return active_agents
+                .worker_is_loaded_for_test(owned_agent_id)
+                .await;
+        }
         match self
             .additional_test_deps
             .try_get_worker(owned_agent_id)
@@ -839,6 +866,14 @@ impl TestWorkerExecutor {
             Some(worker) => worker.is_loaded().await,
             None => false,
         }
+    }
+
+    pub async fn worker_has_pending_startup(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.production_active_agents
+            .as_ref()
+            .expect("executor was not started with production active agents")
+            .worker_has_pending_startup_for_test(owned_agent_id)
+            .await
     }
 
     /// Returns whether a Worker shell is currently in `ActiveAgents` without
@@ -1677,6 +1712,8 @@ async fn start_executor_with_config(
                 client,
                 context: context.clone(),
                 additional_test_deps,
+                production_active_agents: None,
+                concurrent_resource_entry: None,
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -2721,12 +2758,32 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
+    wrap_rpc: Option<Arc<WrapRpcFn>>,
+    active_agents: Arc<
+        std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
+    >,
 }
 
 #[async_trait]
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn create_active_agents(
+        &self,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>> {
+        let active_agents = Arc::new(ActiveAgents::new(
+            &golem_config.active_agents,
+            &golem_config.memory,
+            &golem_config.filesystem_storage,
+            &golem_config.agent_status_flush,
+            shutdown_token,
+        )?);
+        let _ = self.active_agents.set(active_agents.clone());
+        Ok(active_agents)
+    }
+
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -2779,6 +2836,14 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn ResourceLimits> {
         self.resource_limits.clone()
+    }
+
+    fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
+        if let Some(wrap) = &self.wrap_rpc {
+            wrap(rpc)
+        } else {
+            rpc
+        }
     }
 
     fn create_additional_deps(
@@ -2930,28 +2995,30 @@ fn make_production_context_config(
     config
 }
 
-type ProductionContextConfigOverride = Arc<dyn Fn(&mut GolemConfig) + Send + Sync>;
-
 async fn run_production_context_bootstrap(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     resource_limits: Arc<dyn ResourceLimits>,
-    configure: Option<ProductionContextConfigOverride>,
+    overrides: TestExecutorOverrides,
+    concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     timeout_msg: &'static str,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let prometheus = golem_worker_executor::metrics::register_all();
     let mut config = make_production_context_config(deps, context);
-    if let Some(configure) = configure {
+    if let Some(configure) = &overrides.configure {
         configure(&mut config);
     }
 
     let handle = tokio::runtime::Handle::current();
     let mut join_set = tokio::task::JoinSet::new();
 
+    let active_agents = Arc::new(std::sync::OnceLock::new());
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
+            wrap_rpc: overrides.wrap_rpc,
+            active_agents: active_agents.clone(),
         },
         config,
         prometheus.clone(),
@@ -2987,13 +3054,17 @@ async fn run_production_context_bootstrap(
                 client,
                 context: context.clone(),
                 // Production-context bootstrap path uses the real `NoAdditionalDeps`
-                // worker context, not `TestWorkerCtx`, so the worker-inspection
-                // helpers do not apply here. We hand the executor a fresh, empty
-                // `AdditionalTestDeps` purely to satisfy the field; calling
-                // `worker_is_loaded` / `worker_eviction_class` / `worker_memory_requirement`
-                // on this path will report "no worker" because no `ActiveAgents`
-                // handle was ever captured.
+                // worker context, not `TestWorkerCtx`. Supported inspection helpers
+                // use `production_active_agents`; the remaining test-context-only
+                // helpers see empty additional dependencies.
                 additional_test_deps: AdditionalTestDeps::new(),
+                production_active_agents: Some(
+                    active_agents
+                        .get()
+                        .expect("active agents initialized")
+                        .clone(),
+                ),
+                concurrent_resource_entry,
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
@@ -3026,6 +3097,7 @@ pub async fn start_with_resource_limits(
         deps,
         context,
         resource_limits,
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for custom-resource-limits server to start",
     )
@@ -3046,6 +3118,7 @@ pub async fn start_with_table_limit(
         deps,
         context,
         Arc::new(FixedTableLimitResourceLimits { max_table_elements }),
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for table-limit server to start",
     )
@@ -3088,13 +3161,36 @@ pub async fn start_with_concurrent_agent_limit(
     context: &TestContext,
     max_concurrent_agents: u64,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_concurrent_agent_limit_and_overrides(
+        deps,
+        context,
+        max_concurrent_agents,
+        TestExecutorOverrides::default(),
+    )
+    .await
+}
+
+pub async fn start_with_concurrent_agent_limit_and_overrides(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_concurrent_agents: u64,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let resource_entry = Arc::new(AtomicResourceEntry::new(
+        u64::MAX,
+        usize::MAX,
+        usize::MAX,
+        u64::MAX,
+        max_concurrent_agents,
+    ));
     run_production_context_bootstrap(
         deps,
         context,
         Arc::new(FixedConcurrentAgentLimitResourceLimits {
             max_concurrent_agents_per_executor: max_concurrent_agents,
         }),
-        None,
+        overrides,
+        Some(resource_entry),
         "Timeout waiting for concurrent-agent-limit server to start",
     )
     .await
@@ -3177,6 +3273,7 @@ pub async fn start_with_agent_storage_quota(
         Arc::new(FixedFilesystemStorageQuotaResourceLimits {
             max_disk_space_bytes,
         }),
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for agent-storage-quota server to start",
     )
@@ -3271,13 +3368,17 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
         Arc::new(FixedFilesystemStorageQuotaResourceLimits {
             max_disk_space_bytes,
         }),
-        Some(Arc::new(move |config| {
-            config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
-            config.filesystem_storage.pressure = pressure.clone();
-            config.resource_usage_metering = metering;
-            config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
-            config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
-        })),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_storage.pressure = pressure.clone();
+                config.resource_usage_metering = metering;
+                config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
         "Timeout waiting for managed agent-storage-quota server to start",
     )
     .await
@@ -3338,12 +3439,16 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         Arc::new(MutableFilesystemStorageQuotaResourceLimits {
             entry: Arc::clone(&entry),
         }),
-        Some(Arc::new(move |config| {
-            config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
-            config.resource_usage_metering = metering;
-            config.filesystem_storage.filesystem_object_limit_policy =
-                FilesystemObjectLimitPolicyConfig::new(262_144, 1, 1024).unwrap();
-        })),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.resource_usage_metering = metering;
+                config.filesystem_storage.filesystem_object_limit_policy =
+                    FilesystemObjectLimitPolicyConfig::new(262_144, 1, 1024).unwrap();
+            })),
+            ..Default::default()
+        },
+        None,
         "Timeout waiting for mutable managed agent-storage-quota server to start",
     )
     .await?;
@@ -3395,6 +3500,7 @@ pub async fn start_with_invocation_limits(
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
         }),
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for invocation-limit server to start",
     )
@@ -3451,6 +3557,7 @@ pub async fn start_with_monthly_call_limits(
             monthly_http_calls,
             monthly_rpc_calls,
         }),
+        TestExecutorOverrides::default(),
         None,
         "Timeout waiting for monthly-call-limit server to start",
     )
@@ -5565,12 +5672,127 @@ pub struct FailingRpc {
     remaining_failures: AtomicU32,
 }
 
+pub struct RecordingRpc {
+    inner: Arc<dyn Rpc>,
+    method_name: String,
+    attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+}
+
+impl RecordingRpc {
+    pub fn new(
+        inner: Arc<dyn Rpc>,
+        method_name: impl Into<String>,
+        attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+    ) -> Self {
+        Self {
+            inner,
+            method_name: method_name.into(),
+            attempts,
+        }
+    }
+}
+
 impl FailingRpc {
     pub fn new(inner: Arc<dyn Rpc>, failure_count: u32) -> Self {
         Self {
             inner,
             remaining_failures: AtomicU32::new(failure_count),
         }
+    }
+}
+
+#[async_trait]
+impl Rpc for RecordingRpc {
+    async fn create_demand(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.inner
+            .create_demand(
+                owned_agent_id,
+                method_name,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn invoke_and_await(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        method_name: String,
+        method_parameters: SchemaValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<SchemaValue, ServiceRpcError> {
+        if method_name == self.method_name {
+            self.attempts.lock().unwrap().push(idempotency_key.clone());
+        }
+        self.inner
+            .invoke_and_await(
+                owned_agent_id,
+                idempotency_key,
+                freshness_disposition,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+                scope_card,
+            )
+            .await
+    }
+
+    async fn invoke(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        method_name: String,
+        method_parameters: SchemaValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), ServiceRpcError> {
+        self.inner
+            .invoke(
+                owned_agent_id,
+                idempotency_key,
+                freshness_disposition,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                config,
+                auth_ctx,
+            )
+            .await
     }
 }
 

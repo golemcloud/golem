@@ -129,6 +129,45 @@ fn publish_acceptance(
         .map_err(|_| WorkerExecutorError::runtime("invocation session ended before acceptance"))
 }
 
+async fn await_scalar_invocation<T>(
+    invocation: impl std::future::Future<Output = Result<T, WorkerExecutorError>>,
+    mut admission: tokio::sync::oneshot::Receiver<crate::worker::read_only_cache::AdmissionSignal>,
+    on_admitted: impl FnOnce() -> Result<(), WorkerExecutorError>,
+) -> Result<T, WorkerExecutorError> {
+    use crate::worker::read_only_cache::AdmissionSignal;
+
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => {
+            // Polling the invocation can both publish admission and complete. Preserve
+            // that admission even if its completed result is an execution failure.
+            let admitted = matches!(
+                admission.try_recv(),
+                Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate)
+            );
+            if admitted || result.is_ok() {
+                on_admitted()?;
+            }
+            result
+        }
+        signal = &mut admission => match signal {
+            Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate) => {
+                on_admitted()?;
+                invocation.await
+            }
+            Ok(AdmissionSignal::Failure(error)) => Err(error),
+            Ok(AdmissionSignal::Waiting) => unreachable!("waiting admission is never published"),
+            Err(_) => {
+                let result = invocation.await;
+                if result.is_ok() {
+                    on_admitted()?;
+                }
+                result
+            }
+        }
+    }
+}
+
 struct AcceptedInvocation {
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<DurableSessionStreams>,
@@ -530,8 +569,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .map_err(WorkerExecutorError::runtime)?;
                     worker.await_enqueued_invocation(ik.clone()).await?
                 } else {
-                    publish_acceptance(acceptance_committed, accepted, accepted_revision)?;
-                    worker.invoke_and_await(invocation).await?
+                    let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
+                    let invocation =
+                        worker.invoke_and_await_with_notifier(invocation, Some(admission_tx));
+                    await_scalar_invocation(invocation, admission_rx, || {
+                        publish_acceptance(acceptance_committed, accepted, accepted_revision)
+                    })
+                    .await?
                 };
                 invocation_output.agent_id = Some(final_agent_id);
                 invocation_output.idempotency_key = Some(ik);
@@ -647,7 +691,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let worker = self
                             .get_or_create_pending_with_freshness(request, freshness_disposition)
                             .await?;
-                        let result = worker.clone().invoke(invocation).await?;
+                        let result = worker.invoke_and_start(invocation).await?;
                         if let crate::worker::ResultOrSubscription::Finished(Err(err)) = &result {
                             return Err(err.clone());
                         }
@@ -663,9 +707,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 );
                             }
                             crate::worker::ResultOrSubscription::Finished(Ok(_)) => {}
-                            crate::worker::ResultOrSubscription::Pending(_) => {
-                                Worker::start_if_needed(worker).await?;
-                            }
+                            crate::worker::ResultOrSubscription::Pending(_) => {}
                         }
                         Ok(AgentInvocationOutput {
                             result: AgentInvocationResult::AgentInitialization,
@@ -2884,6 +2926,64 @@ mod freshness_tests {
     use std::collections::BTreeMap;
     use std::task::Poll;
     use test_r::test;
+
+    #[test]
+    async fn scalar_admission_precedes_execution_failure_in_same_poll() {
+        use crate::worker::read_only_cache::AdmissionSignal;
+
+        for queued_before_poll in [false, true] {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let tx = if queued_before_poll {
+                tx.send(AdmissionSignal::Queued).unwrap();
+                None
+            } else {
+                Some(tx)
+            };
+            let error = WorkerExecutorError::runtime("execution failed after admission");
+            let expected = error.clone();
+            let invocation = async move {
+                if let Some(tx) = tx {
+                    tx.send(AdmissionSignal::Queued).unwrap();
+                }
+                Err::<(), _>(error)
+            };
+            let mut accepted = false;
+            let result = super::await_scalar_invocation(invocation, rx, || {
+                accepted = true;
+                Ok(())
+            })
+            .await;
+            assert!(accepted);
+            assert_eq!(result, Err(expected));
+        }
+    }
+
+    #[test]
+    async fn scalar_pre_admission_failure_preserves_error_without_acceptance() {
+        use crate::worker::read_only_cache::AdmissionSignal;
+
+        for notify_failure in [false, true] {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let error = WorkerExecutorError::invalid_request("invalid invocation input");
+            let expected = error.clone();
+            let invocation = async move {
+                if notify_failure {
+                    tx.send(AdmissionSignal::Failure(error.clone())).unwrap();
+                } else {
+                    drop(tx);
+                }
+                Err::<(), _>(error)
+            };
+            let mut accepted = false;
+            let result = super::await_scalar_invocation(invocation, rx, || {
+                accepted = true;
+                Ok(())
+            })
+            .await;
+            assert!(!accepted);
+            assert_eq!(result, Err(expected));
+        }
+    }
 
     #[test]
     fn invocation_input_decode_moves_binary_payload() {

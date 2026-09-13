@@ -25,6 +25,9 @@ use crate::durable_host::durable_session::{
 };
 use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::secrets::secret_hold_targets_for_value;
+use crate::durable_host::suspendable_wait::{
+    ParkOutcome, SuspendableWaitContext, SuspendableWaitRegistration, park_registered_wait,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::common::AgentError as WitAgentError;
 use crate::preview2::golem::agent::host::{
@@ -93,7 +96,7 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 
 /// Host-side resource table entry backing the `golem:agent/host.wasm-rpc` resource.
@@ -662,14 +665,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             };
             let mut auth_ctx = handle.is_live().then(|| handle.agent_auth_ctx().clone());
-            let (target_fingerprint, _demand) = streaming_target_fingerprint(
+            let (target_fingerprint, _demand) = match streaming_target_fingerprint(
                 self,
                 &self_,
                 &prepared,
                 &remote_agent_id,
                 auth_ctx.as_ref(),
             )
-            .await?;
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(handle.trap(error));
+                }
+            };
             let stream_auth_ctx = auth_ctx.clone().unwrap_or_else(|| self.agent_auth_ctx());
             let streams = caller_durable_rpc_streams(
                 self,
@@ -718,16 +727,30 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             }
             let auth_ctx = auth_ctx.expect("a live durable RPC call has captured agent authority");
-            if !prepared.is_ephemeral() {
-                ensure_rpc_target_activated(self, &self_, &auth_ctx, &prepared.method_name).await?;
+            if !prepared.is_ephemeral()
+                && let Err(error) =
+                    ensure_rpc_target_activated(self, &self_, &auth_ctx, &prepared.method_name)
+                        .await
+            {
+                return Err(handle.trap(error));
             }
             let attempt_id = streams
                 .caller_attempt_id()
                 .await
                 .map_err(anyhow::Error::msg)?;
-            let remote_result = self
-                .rpc()
-                .invoke_and_await_streaming(
+            let interrupt_signal = self.create_interrupt_signal();
+            let remote_result = {
+                let _wait = register_rpc_wait(self);
+                let rpc = self.rpc();
+                let agent_id = self.agent_id().clone();
+                let created_by = self.created_by();
+                let stack = self.clone_as_inherited_stack(span.span_id());
+                let interrupt_signal = Box::pin(wait_for_rpc_suspend(
+                    rpc_wait_context(self),
+                    interrupt_signal,
+                    || self.state.safe_to_suspend(),
+                ));
+                let call = rpc.invoke_and_await_streaming(
                     &remote_agent_id,
                     idempotency_key,
                     prepared.method_name.clone(),
@@ -738,15 +761,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .collect(),
                     target_fingerprint,
                     attempt_id.0,
-                    self.created_by(),
-                    &self.agent_id().clone(),
+                    created_by,
+                    &agent_id,
                     &prepared.env,
-                    self.clone_as_inherited_stack(span.span_id()),
+                    stack,
                     prepared.config,
                     &auth_ctx,
                     scope_card,
-                )
-                .await;
+                );
+                match futures::future::select(call, interrupt_signal).await {
+                    Either::Left((result, _)) => result,
+                    Either::Right((error, _)) => {
+                        return Err(handle.trap(error));
+                    }
+                }
+            };
             let result = match remote_result {
                 Ok(remote_result) => {
                     let output_mappings = remote_result
@@ -755,15 +784,27 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .map(durable_stream_mapping_from_proto)
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(anyhow::Error::msg)?;
-                    let value = streams
-                        .materialize_remote_result(
+                    let value = {
+                        let _wait = register_rpc_wait(self);
+                        let interrupt_signal = Box::pin(wait_for_rpc_suspend(
+                            rpc_wait_context(self),
+                            self.create_interrupt_signal(),
+                            || self.state.safe_to_suspend(),
+                        ));
+                        let materialize = streams.materialize_remote_result(
                             remote_result.value,
                             output_mappings,
                             &prepared.remote_agent_type.schema,
                             &output_root,
-                        )
-                        .await
-                        .map_err(anyhow::Error::msg)?;
+                        );
+                        tokio::pin!(materialize);
+                        match futures::future::select(materialize, interrupt_signal).await {
+                            Either::Left((result, _)) => result.map_err(anyhow::Error::msg)?,
+                            Either::Right((error, _)) => {
+                                return Err(handle.trap(error));
+                            }
+                        }
+                    };
                     if self.secret_holds_allowed_for_value(&value).await? {
                         Ok(value)
                     } else {
@@ -1205,14 +1246,18 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_type: remote_agent_type.clone(),
             };
             let auth_ctx = handle.is_live().then(|| handle.take_agent_auth_ctx());
-            let (target_fingerprint, _demand) = streaming_target_fingerprint(
+            let (target_fingerprint, _demand) = match streaming_target_fingerprint(
                 self,
                 &this,
                 &prepared,
                 &remote_agent_id,
                 auth_ctx.as_ref(),
             )
-            .await?;
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => return Err(handle.trap(error)),
+            };
             let stream_auth_ctx = auth_ctx.clone().unwrap_or_else(|| self.agent_auth_ctx());
             let streams = caller_durable_rpc_streams(
                 self,
@@ -1731,24 +1776,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (env.clone(), config.clone(), payload.span_id.clone())
         };
         let stack = self.clone_as_inherited_stack(&span_id);
-        let demand = match activate_rpc_target(
-            self.rpc().as_ref(),
-            remote_agent_id,
-            method_name,
-            self.created_by(),
-            self.agent_id(),
-            &env,
-            stack,
-            config.clone(),
-            handle.agent_auth_ctx(),
-            None,
-        )
-        .await
-        {
+        let demand = {
+            let _wait = register_rpc_wait(self);
+            let rpc = self.rpc();
+            let created_by = self.created_by();
+            let agent_id = self.agent_id().clone();
+            let interrupt_signal = Box::pin(wait_for_rpc_suspend(
+                rpc_wait_context(self),
+                self.create_interrupt_signal(),
+                || self.state.safe_to_suspend(),
+            ));
+            let activation = activate_rpc_target(
+                rpc.as_ref(),
+                remote_agent_id,
+                method_name,
+                created_by,
+                &agent_id,
+                &env,
+                stack,
+                config.clone(),
+                handle.agent_auth_ctx(),
+                None,
+            );
+            tokio::pin!(activation);
+            match futures::future::select(activation, interrupt_signal).await {
+                Either::Left((result, _)) => result,
+                Either::Right((interrupt_kind, _)) => Err(interrupt_kind),
+            }
+        };
+        let demand = match demand {
             Ok(demand) => demand,
             Err(error) => {
-                handle.abandon_for_trap();
-                return Err(error);
+                return Err(handle.trap(error));
             }
         };
         let target_fingerprint = demand.fingerprint();
@@ -2027,8 +2086,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             {
                 Ok(fingerprint) => fingerprint,
                 Err(err) => {
-                    handle.abandon_for_trap();
-                    return Err(err);
+                    return Err(handle.trap(err));
                 }
             };
             ScheduledAction::Invoke {
@@ -2553,6 +2611,58 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     }))
 }
 
+fn register_rpc_wait<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> Option<SuspendableWaitRegistration> {
+    (ctx.agent_mode() == AgentMode::Durable).then(|| {
+        SuspendableWaitRegistration::rpc(
+            ctx.state.next_suspendable_wait_id(),
+            ctx.state.config.suspend.rpc_resume_after,
+            ctx.state.suspendable_waits(),
+        )
+    })
+}
+
+fn rpc_wait_context<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> SuspendableWaitContext {
+    let mut suspend = ctx.state.config.suspend.clone();
+    suspend.wait_suspend_grace = suspend.rpc_suspend_after;
+    SuspendableWaitContext {
+        wait_id: ctx.state.next_suspendable_wait_id(),
+        agent_mode: ctx.agent_mode(),
+        suspend,
+        wait_deadline: None,
+        suspendable_waits: ctx.state.suspendable_waits(),
+        wakeup_scheduler: ctx.state.wakeup_scheduler(),
+    }
+}
+
+async fn wait_for_rpc_suspend(
+    context: SuspendableWaitContext,
+    interrupt: std::pin::Pin<Box<dyn std::future::Future<Output = InterruptKind> + Send>>,
+    safe_to_suspend: impl FnMut() -> bool,
+) -> anyhow::Error {
+    if context.agent_mode == AgentMode::Ephemeral {
+        return interrupt.await.into();
+    }
+    // The caller races this with the actual operation and owns its registration. Async RPCs
+    // keep that registration in their task, including before the guest consumes the result.
+    match park_registered_wait(
+        context,
+        interrupt,
+        std::future::pending::<()>,
+        || false,
+        safe_to_suspend,
+        || None,
+    )
+    .await
+    {
+        Ok(ParkOutcome::SuspendWorker(timestamp)) => InterruptKind::Suspend(timestamp).into(),
+        Ok(ParkOutcome::Interrupted(kind)) => kind.into(),
+        Err(error) => error.into(),
+        Ok(ParkOutcome::Ready | ParkOutcome::EphemeralTooLong { .. }) => unreachable!(),
+    }
+}
+
 async fn run_invoke_and_await<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: Resource<WasmRpcEntry>,
@@ -2589,8 +2699,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
             && let Err(err) =
                 ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name).await
         {
-            handle.abandon_for_trap();
-            return Err(err);
+            return Err(handle.trap(err));
         }
 
         let retry_properties =
@@ -2615,30 +2724,36 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
                     .await;
             }
 
-            let either_result = futures::future::select(
-                rpc.invoke_and_await(
-                    &remote_agent_id,
-                    Some(idempotency_key.clone()),
-                    dispatch_freshness,
-                    prepared.method_name.clone(),
-                    prepared.input_value.clone(),
-                    created_by,
-                    &agent_id,
-                    &prepared.env,
-                    stack,
-                    prepared.config.clone(),
-                    &auth_ctx,
-                    scope_card.clone(),
-                ),
-                interrupt_signal,
-            )
-            .await;
-            let result: Result<SchemaValue, InternalRpcError> = match either_result {
-                Either::Left((result, _)) => result,
-                Either::Right((interrupt_kind, _)) => {
-                    tracing::info!("Interrupted while waiting for RPC result");
-                    handle.abandon_for_trap();
-                    return Err(interrupt_kind.into());
+            let result = {
+                let _wait = register_rpc_wait(ctx);
+                let interrupt_signal = Box::pin(wait_for_rpc_suspend(
+                    rpc_wait_context(ctx),
+                    interrupt_signal,
+                    || ctx.state.safe_to_suspend(),
+                ));
+                let either_result = futures::future::select(
+                    rpc.invoke_and_await(
+                        &remote_agent_id,
+                        Some(idempotency_key.clone()),
+                        dispatch_freshness,
+                        prepared.method_name.clone(),
+                        prepared.input_value.clone(),
+                        created_by,
+                        &agent_id,
+                        &prepared.env,
+                        stack,
+                        prepared.config.clone(),
+                        &auth_ctx,
+                        scope_card.clone(),
+                    ),
+                    interrupt_signal,
+                )
+                .await;
+                match either_result {
+                    Either::Left((result, _)) => result,
+                    Either::Right((error, _)) => {
+                        return Err(handle.trap(error));
+                    }
                 }
             };
             match handle
@@ -2719,8 +2834,7 @@ async fn run_invoke<Ctx: WorkerCtx>(
             && let Err(err) =
                 ensure_rpc_target_activated(ctx, &resource, &auth_ctx, &prepared.method_name).await
         {
-            handle.abandon_for_trap();
-            return Err(err);
+            return Err(handle.trap(err));
         }
 
         let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &prepared.method_name);
@@ -2786,8 +2900,34 @@ async fn run_invoke<Ctx: WorkerCtx>(
 }
 
 type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
-type FutureInvokeTaskHandle =
-    Arc<tokio::sync::Mutex<AbortOnDropJoinHandle<FutureInvokeTaskResult>>>;
+type FutureInvokeTaskHandle = Arc<tokio::sync::Mutex<RpcTask>>;
+
+#[derive(Clone)]
+struct RpcWaitRegistration(Arc<std::sync::Mutex<Option<SuspendableWaitRegistration>>>);
+
+impl Drop for RpcWaitRegistration {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().take();
+    }
+}
+
+struct RpcTask {
+    task: AbortOnDropJoinHandle<FutureInvokeTaskResult>,
+    // Revoked synchronously when the owner is dropped; aborting the Tokio task alone
+    // does not drop its registration before the durable call can finish cancellation.
+    _registration: RpcWaitRegistration,
+}
+
+impl std::future::Future for RpcTask {
+    type Output = FutureInvokeTaskResult;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.task).poll(cx)
+    }
+}
 type FutureInvokeGetResult = Result<Result<SchemaValue, RpcError>, Error>;
 type FutureInvokeCallHandle = DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>;
 
@@ -3125,8 +3265,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         task.expect("a live future-invoke-result must own its background task");
                     let interrupt_signal = accessor.with(|mut access| {
                         let ctx = access.get();
-                        ctx.create_interrupt_signal()
+                        (rpc_wait_context(ctx), ctx.create_interrupt_signal())
                     });
+                    let interrupt_signal =
+                        wait_for_rpc_suspend(interrupt_signal.0, interrupt_signal.1, || {
+                            accessor.with(|mut access| access.get().state.safe_to_suspend())
+                        });
                     let task_result = {
                         let mut guard = task.lock().await;
                         tokio::select! {
@@ -3233,9 +3377,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             });
                             let interrupt_signal = accessor.with(|mut access| {
                                 let ctx = access.get();
-                                ctx.create_interrupt_signal()
+                                (rpc_wait_context(ctx), ctx.create_interrupt_signal())
                             });
-                            let task_result = tokio::select! {
+                            let interrupt_signal = wait_for_rpc_suspend(
+                                interrupt_signal.0,
+                                interrupt_signal.1,
+                                || accessor.with(|mut access| access.get().state.safe_to_suspend()),
+                            );
+                            let task_result = {
+                                tokio::select! {
                                 biased;
                                 _ = cancel_token.cancelled() => None,
                                 interrupt_kind = interrupt_signal => {
@@ -3243,6 +3393,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     return Err(live.trap(interrupt_kind));
                                 }
                                 result = &mut task => Some(result),
+                                }
                             };
                             match task_result {
                                 None => {
@@ -3419,12 +3570,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 .unwrap();
             Ok::<_, anyhow::Error>(match state {
                 FutureInvokeResultState::Active {
-                    handle, span_id, ..
+                    handle,
+                    task,
+                    span_id,
+                    ..
                 } => match handle.take() {
-                    Some(handle) => DropPlan::Cancel {
-                        handle,
-                        span_id: span_id.clone(),
-                    },
+                    Some(handle) => {
+                        drop(task.take());
+                        DropPlan::Cancel {
+                            handle,
+                            span_id: span_id.clone(),
+                        }
+                    }
                     None => DropPlan::Nothing,
                 },
                 FutureInvokeResultState::Baked { span_id, .. } => DropPlan::FinishSpan {
@@ -3879,19 +4036,33 @@ async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
 
     let stack = ctx.clone_as_inherited_stack(&span_id);
     let rpc = ctx.rpc();
-    let demand = activate_rpc_target(
-        rpc.as_ref(),
-        &remote_agent_id,
-        method_name,
-        ctx.created_by(),
-        ctx.agent_id(),
-        &env,
-        stack,
-        config.clone(),
-        auth_ctx,
-        expected_fingerprint,
-    )
-    .await?;
+    let demand = {
+        let _wait = register_rpc_wait(ctx);
+        let created_by = ctx.created_by();
+        let agent_id = ctx.agent_id().clone();
+        let interrupt_signal = Box::pin(wait_for_rpc_suspend(
+            rpc_wait_context(ctx),
+            ctx.create_interrupt_signal(),
+            || ctx.state.safe_to_suspend(),
+        ));
+        let activation = activate_rpc_target(
+            rpc.as_ref(),
+            &remote_agent_id,
+            method_name,
+            created_by,
+            &agent_id,
+            &env,
+            stack,
+            config.clone(),
+            auth_ctx,
+            expected_fingerprint,
+        );
+        tokio::pin!(activation);
+        match futures::future::select(activation, interrupt_signal).await {
+            Either::Left((result, _)) => result?,
+            Either::Right((interrupt_kind, _)) => return Err(interrupt_kind),
+        }
+    };
     let target_fingerprint = demand.fingerprint();
 
     let entry = ctx.table().get_mut(this)?;
@@ -3967,6 +4138,7 @@ fn known_fresh_dispatch_allowed(
 }
 
 fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
+    registration: Option<SuspendableWaitRegistration>,
     rpc: Arc<dyn Rpc>,
     remote_agent_id: OwnedAgentId,
     idempotency_key: IdempotencyKey,
@@ -3982,7 +4154,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     target_activation: Option<RpcTargetActivation>,
     initial_freshness_disposition: InvocationFreshnessDisposition,
     scope_card: Option<ScopeCard>,
-) -> AbortOnDropJoinHandle<Result<Result<SchemaValue, InternalRpcError>, Error>> {
+) -> RpcTask {
     let first_dispatch = Arc::new(std::sync::atomic::AtomicBool::new(
         initial_freshness_disposition == InvocationFreshnessDisposition::KnownFresh,
     ));
@@ -4064,8 +4236,11 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         }
     };
 
-    wasmtime_wasi::runtime::spawn(
+    let registration = RpcWaitRegistration(Arc::new(std::sync::Mutex::new(registration)));
+    let task_registration = registration.clone();
+    let task = wasmtime_wasi::runtime::spawn(
         async move {
+            let _registration = task_registration;
             let result = if let Some(retry_params) = retry_params {
                 let execution_status = retry_params.execution_status;
                 let current_retry_policy_state = retry_params
@@ -4110,7 +4285,11 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
             }
         }
         .instrument(retry_span),
-    )
+    );
+    RpcTask {
+        task,
+        _registration: registration,
+    }
 }
 
 fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
@@ -4127,7 +4306,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     initial_freshness_disposition: InvocationFreshnessDisposition,
     scope_card: Option<ScopeCard>,
     auth_ctx: AuthCtx,
-) -> AbortOnDropJoinHandle<FutureInvokeTaskResult> {
+) -> RpcTask {
     let retry_params = if ctx.in_atomic_region() {
         None
     } else {
@@ -4149,6 +4328,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
         })
     };
     spawn_rpc_task_with_retry(
+        register_rpc_wait(ctx),
         ctx.rpc(),
         remote_agent_id.clone(),
         idempotency_key,
@@ -4190,12 +4370,15 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     span_id: &SpanId,
     scope_card: Option<ScopeCard>,
     auth_ctx: AuthCtx,
-) -> AbortOnDropJoinHandle<FutureInvokeTaskResult> {
+) -> RpcTask {
     let rpc = ctx.rpc();
     let created_by = ctx.created_by();
     let agent_id = ctx.agent_id().clone();
     let stack = ctx.clone_as_inherited_stack(span_id);
-    wasmtime_wasi::runtime::spawn(async move {
+    let registration = RpcWaitRegistration(Arc::new(std::sync::Mutex::new(register_rpc_wait(ctx))));
+    let task_registration = registration.clone();
+    let task = wasmtime_wasi::runtime::spawn(async move {
+        let _registration = task_registration;
         let _demand = if let Some(target_activation) = deferred_activation {
             Some(
                 activate_rpc_target(
@@ -4258,7 +4441,11 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
             Err(error) => Err(error),
         };
         Ok(result)
-    })
+    });
+    RpcTask {
+        task,
+        _registration: registration,
+    }
 }
 
 pub struct WasmRpcEntryPayload {
@@ -4611,6 +4798,35 @@ mod tests {
     use uuid::Uuid;
     use wasmtime::component::ResourceTable;
 
+    #[test]
+    async fn dropping_rpc_task_revokes_wait_before_task_cleanup() {
+        let waits = Arc::new(Mutex::new(BTreeMap::new()));
+        let _sleep = SuspendableWaitRegistration::new(1, None, waits.clone());
+        let registration = RpcWaitRegistration(Arc::new(Mutex::new(Some(
+            SuspendableWaitRegistration::rpc(2, Duration::from_secs(5), waits.clone()),
+        ))));
+        // Keep the task's cleanup guard alive to model an abort not yet processed by Tokio.
+        let delayed_cleanup = registration.clone();
+        let task = RpcTask {
+            task: wasmtime_wasi::runtime::spawn(std::future::pending()),
+            _registration: registration,
+        };
+        assert_eq!(waits.lock().unwrap().len(), 2);
+        drop(task);
+        // After the RPC's durable terminal, only a sleep and an active HTTP call remain live.
+        assert!(
+            !crate::durable_host::PrivateDurableWorkerState::suspend_admissible(
+                2,
+                waits.lock().unwrap().len(),
+                false,
+                false,
+            )
+        );
+        assert_eq!(waits.lock().unwrap().len(), 1);
+        drop(delayed_cleanup);
+        assert_eq!(waits.lock().unwrap().len(), 1);
+    }
+
     struct FixedDemand {
         fingerprint: AgentFingerprint,
     }
@@ -4875,6 +5091,7 @@ mod tests {
         });
 
         let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            None,
             rpc.clone(),
             OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
             IdempotencyKey::new("deferred-activation-mismatch".to_string()),
@@ -4914,7 +5131,13 @@ mod tests {
             invoke_called: AtomicBool::new(false),
         });
 
+        let waits = Arc::new(Mutex::new(BTreeMap::new()));
         let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            Some(SuspendableWaitRegistration::rpc(
+                1,
+                Duration::from_secs(5),
+                waits.clone(),
+            )),
             rpc.clone(),
             OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
             IdempotencyKey::new("first-authorized-activation".to_string()),
@@ -4939,6 +5162,7 @@ mod tests {
 
         result.unwrap().unwrap();
         assert!(rpc.invoke_called.load(Ordering::SeqCst));
+        assert!(waits.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -4948,6 +5172,7 @@ mod tests {
         });
 
         let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            None,
             rpc.clone(),
             OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
             IdempotencyKey::new("deferred-activation-failure".to_string()),
@@ -4990,6 +5215,7 @@ mod tests {
         });
 
         let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            None,
             rpc.clone(),
             OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
             IdempotencyKey::new("deferred-activation-mismatch-classification".to_string()),
@@ -5040,6 +5266,7 @@ mod tests {
         };
 
         let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            None,
             rpc.clone(),
             OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
             IdempotencyKey::new("deferred-activation-env".to_string()),
@@ -5085,6 +5312,7 @@ mod tests {
         });
 
         let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
+            None,
             rpc.clone(),
             OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
             IdempotencyKey::new("scope-card-dispatch".to_string()),

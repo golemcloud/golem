@@ -84,14 +84,15 @@ use wasmtime::component::Instance;
 
 /// Capability proving that per-account concurrent-agent state has been registered
 /// in this executor and can be used for subsequent permit acquires.
+#[doc(hidden)]
 #[derive(Clone)]
-pub(crate) struct RegisteredConcurrentAccount {
+pub struct RegisteredConcurrentAccount {
     scheduler: Arc<ConcurrentAgentsScheduler>,
     account_id: AccountId,
 }
 
 impl RegisteredConcurrentAccount {
-    pub(crate) async fn acquire(&self, agent_id: AgentId) -> ConcurrentAgentPermit {
+    pub async fn acquire(&self, agent_id: AgentId) -> ConcurrentAgentPermit {
         self.scheduler.acquire(self.account_id, agent_id).await
     }
 }
@@ -575,6 +576,21 @@ type ComponentChargeKey = (ComponentId, ComponentRevision);
 pub type WorkerComponentCharge = ComponentChargeGuard<ComponentChargeKey, GateChargeSource>;
 
 impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
+    #[doc(hidden)]
+    pub async fn worker_is_loaded_for_test(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        match self.try_get(owned_agent_id).await {
+            Some(worker) => worker.is_loaded().await,
+            None => false,
+        }
+    }
+
+    #[doc(hidden)]
+    pub async fn worker_has_pending_startup_for_test(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.try_get(owned_agent_id)
+            .await
+            .is_some_and(|worker| worker.pending_startup_attempt().is_some())
+    }
+
     pub fn new(
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
@@ -980,7 +996,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     ///
     /// Must be called (from `Worker::new`) before any concurrent-agent permit
     /// acquire for the account. Idempotent — safe to call multiple times.
-    pub(crate) async fn register_account_concurrency(
+    #[doc(hidden)]
+    pub async fn register_account_concurrency(
         &self,
         account_id: AccountId,
         resource_entry: Arc<AtomicResourceEntry>,
