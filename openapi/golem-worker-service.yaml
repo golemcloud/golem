@@ -5278,6 +5278,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
@@ -5338,6 +5339,7 @@ components:
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
           Restart: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+          Resumed: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
@@ -5937,6 +5939,18 @@ components:
             - Restart
             example: Restart
       - $ref: '#/components/schemas/r#RestartParams'
+    PublicOplogEntry_r#ResumedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Resumed
+            example: Resumed
+      - $ref: '#/components/schemas/r#ResumedParams'
     PublicOplogEntry_r#RevertParams:
       allOf:
       - type: object
@@ -9047,6 +9061,15 @@ components:
     r#RestartParams:
       type: object
       title: r#RestartParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#ResumedParams:
+      type: object
+      title: r#ResumedParams
       required:
       - timestamp
       properties:

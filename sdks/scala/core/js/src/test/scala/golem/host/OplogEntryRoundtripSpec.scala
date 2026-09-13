@@ -88,6 +88,14 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(parsed.isInstanceOf[OplogEntry.Restart])
     },
+    test("Resumed from dynamic") {
+      val raw    = wrapEntry("resumed", js.Dynamic.literal(timestamp = ts()))
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.Resumed],
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
     // --- Single-field parameter entries ---
 
     test("Error from dynamic") {

@@ -1,0 +1,152 @@
+---
+name: golem-custom-snapshot-ts
+description: "Enabling snapshot-based recovery and implementing custom snapshot save/load functions for TypeScript agents. Use when adding manual update support, custom state serialization, or — equally importantly — when a long-running agent's oplog is growing large and recovery/replay is becoming slow (heartbeats, polling loops, recurring tasks, frequent state changes). Snapshotting compacts the oplog and lets recovery start from the latest snapshot instead of replaying full history."
+---
+
+# Custom Snapshots in TypeScript
+
+Golem agents can opt into snapshotting to support manual (snapshot-based) updates and snapshot-based recovery. In the TypeScript SDK this is configured declaratively with the `snapshotting` option on `defineAgent(...)`, and — when you need full control over the bytes — with a `snapshot: { save, load }` block on `.implement(...)`.
+
+## When to Use Snapshotting
+
+Snapshotting solves two distinct problems:
+
+1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions.
+2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, agents with frequent state changes). Without snapshotting, every recovery replays the full oplog from the beginning, which becomes increasingly expensive. With periodic snapshotting, recovery starts from the latest snapshot and replays only the entries after it.
+
+> **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
+
+## Enabling Snapshotting
+
+Set the `snapshotting` option on `defineAgent(...)`. Without it, snapshotting is disabled:
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+
+export const CounterAgent = defineAgent({
+    name: 'CounterAgent',
+    id: { name: z.string() },
+    http: http.mount('/counters/{name}'),
+    // Typed state schema + a policy for WHEN to snapshot.
+    snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 1 } },
+    methods: {
+        increment: method({ input: {}, returns: z.number(), http: http.post('/increment') }),
+    },
+});
+```
+
+### Snapshotting Policies
+
+The policy controls **when** a snapshot is taken. It can be given directly (`snapshotting: 'default'`) or inside `{ policy, state }`:
+
+| Policy | Example | Description |
+|------|---------|-------------|
+| `'disabled'` | (default when omitted) | No snapshotting |
+| `'default'` | `snapshotting: 'default'` | Enable snapshot support with the server's default policy. **The server default may be `disabled`**, so use `{ everyNInvocations }` or `{ periodicSeconds }` to guarantee snapshotting is active. |
+| `{ everyNInvocations: number }` | `{ everyNInvocations: 1 }` | Snapshot every N successful invocations (use `1` for every invocation) |
+| `{ periodicSeconds: number }` | `{ periodicSeconds: 30 }` | Snapshot at most once per N-second interval |
+
+## Typed State Snapshotting (recommended)
+
+Give `snapshotting` a `state` schema that describes every ordinary field needed to restore the complete state. Saving rejects undeclared ordinary fields rather than silently dropping them; SDK helpers and configuration are attached separately and are not part of the snapshot. On recovery the executor restores the validated state from the last snapshot and replays the oplog tail. This is the declarative replacement for a custom `snapshot.save`/`snapshot.load` pair.
+
+```typescript
+export const CounterAgentImpl = CounterAgent.implement({
+    // Every ordinary state field returned here must be declared by the schema.
+    init: () => ({ count: 0 }),
+    methods: {
+        increment() {
+            this.count += 1;
+            return this.count;
+        },
+    },
+});
+```
+
+A bare enabled policy without a `state` schema (e.g. `snapshotting: 'default'` or `snapshotting: { everyNInvocations: 5 }`) requires a custom `snapshot: { save, load }` implementation. Automatic loading is generated only when a `state` schema provides a JSON-deserializable state contract.
+
+## Custom Snapshotting
+
+For state the default JSON path can't represent (a compact binary format, cross-version migration logic), supply a `snapshot: { save, load }` block on `.implement(...)`. `save()` runs on the live agent state and returns raw snapshot bytes. `load(bytes, context)` is a separate restoration factory: it has no `this`, does not call `init`, and must return a complete fresh state object.
+
+```typescript
+import { z } from 'zod';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+
+export const CounterWithSnapshot = defineAgent({
+    name: 'CounterWithSnapshot',
+    id: { name: z.string() },
+    http: http.mount('/snapshot-counters/{name}'),
+    snapshotting: { everyNInvocations: 1 },
+    methods: {
+        increment: method({
+            input: {},
+            returns: z.number(),
+            promptHint: 'Increase the count by one',
+            description: 'Increases the count by one and returns the new value',
+            http: http.post('/increment'),
+        }),
+    },
+});
+
+export const CounterWithSnapshotImpl = CounterWithSnapshot.implement({
+    init: () => ({ value: 0 }),
+    methods: {
+        increment() {
+            this.value += 1;
+            return this.value;
+        },
+    },
+    snapshot: {
+        save() {
+            const snapshot = new Uint8Array(4);
+            new DataView(snapshot.buffer).setUint32(0, this.value);
+            return snapshot;
+        },
+        load(bytes, _context) {
+            const value = new DataView(
+                bytes.buffer,
+                bytes.byteOffset,
+                bytes.byteLength,
+            ).getUint32(0);
+            return { value };
+        },
+    },
+});
+```
+
+### Signatures
+
+```typescript
+// save: serialize the agent's state into raw snapshot bytes.
+save(): Uint8Array | Promise<Uint8Array>
+
+// load: construct complete state from snapshot bytes and restore context.
+load(bytes: Uint8Array, context: SnapshotRestoreContext): State | Promise<State>
+```
+
+A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view.
+
+## Restoration Is Read-Only
+
+Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. Golem runs `load` in read-only mode and does not write anything it does to the oplog. Decoding, local computation, fresh randomness, config reads, and other permitted reads can be used to build the returned state. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
+
+The SDK installs the returned state only after `load` succeeds. If it throws or rejects, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does not try an older automatic snapshot.
+
+## Best Practices
+
+1. **Prefer the typed `state` schema** unless you need a compact binary format or cross-version migration logic.
+2. **Keep snapshots small** — large snapshots impact recovery and update time.
+3. **Version your snapshot format** — include a version byte or marker so `load` can handle snapshots from older versions.
+4. **Test round-trips** — verify that `save` → `load` produces equivalent state without calling `init`.
+5. **Handle migration** — when the state schema changes between versions, `load` in the new version should be able to parse snapshots from the old version.
+6. **Define both or neither** — always provide `save` and `load` together to keep serialization consistent.
+
+## Project Template
+
+A ready-made project with snapshotting can be created using:
+
+```shell
+golem new --yes --language ts --template snapshotting my-project
+```

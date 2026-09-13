@@ -9,28 +9,40 @@ steps:
 
   - id: "invoke-1"
     invoke:
-      agent: 'CounterAgent("c1")'
+      agent: &counter-agent
+        effect: 'Counter("c1")'
+        rust: &non-effect-counter-agent 'CounterAgent("c1")'
+        ts: *non-effect-counter-agent
+        scala: *non-effect-counter-agent
+        moonbit: *non-effect-counter-agent
       method: "increment"
     expect:
       stdout_contains: "1"
 
   - id: "invoke-2"
     invoke:
-      agent: 'CounterAgent("c1")'
+      agent: *counter-agent
       method: "increment"
     expect:
       stdout_contains: "2"
 
   - id: "revert-last"
-    prompt: >
-      Revert the last invocation of CounterAgent "c1" so the counter goes back to its state
-      after just one increment.
+    prompt:
+      effect: >
+        Revert the last invocation of Counter "c1" so the counter goes back to its state
+        after just one increment.
+      rust: &revert-counter-prompt >
+        Revert the last invocation of CounterAgent "c1" so the counter goes back to its state
+        after just one increment.
+      ts: *revert-counter-prompt
+      scala: *revert-counter-prompt
+      moonbit: *revert-counter-prompt
     expectedSkills:
       - "golem-undo-agent-state"
 
   - id: "verify-reverted"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent: *counter-agent
       method: "increment"
     expect:
       result_json:

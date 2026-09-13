@@ -41,8 +41,9 @@ use golem_worker_executor::services::direct_invocation_auth::{
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_with_overrides,
+    FireAndForgetRpcCheckpoint, LastUniqueId, PrecompiledComponent, TestContext,
+    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
+    start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,6 +66,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -2215,6 +2220,153 @@ async fn typescript_client_streaming_rpc_e2e(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn typescript_early_output_drop_releases_streaming_cleanup_before_next_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let name = "early-output-drop-cleanup";
+    let caller_agent_id = agent_id!("TsStreamingRpcCaller", name);
+    executor
+        .start_agent(&component.id, caller_agent_id.clone())
+        .await?;
+    let target_agent_id = agent_id!("TsStreamingRpcTarget", name);
+    let target = executor
+        .start_agent(&component.id, target_agent_id.clone())
+        .await?;
+    wait_for_agent_initialization(&executor, &target).await?;
+    let mut transform_success = executor.gate_next_agent_invocation_success(&target);
+
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_agent_id = caller_agent_id.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &caller_agent_id,
+                    "earlyOutputDropThenPing",
+                    data_value!(),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(30), transform_success.entered())
+        .await
+        .map_err(|_| anyhow::anyhow!("transform did not reach its success barrier"))?;
+    transform_success.release();
+
+    let result = invocation.await??.into_typed::<(u32, u32)>()?;
+    assert_eq!(result, (0, 42));
+
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let (transform_started, transform_key) = oplog
+        .iter()
+        .enumerate()
+        .find_map(|(position, entry)| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "transform" =>
+                {
+                    Some((position, method.idempotency_key.clone()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("target transform has no Started entry"))?;
+    let transform_finished = oplog
+        .iter()
+        .enumerate()
+        .skip(transform_started + 1)
+        .find_map(|(position, entry)| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("transform")
+            )
+            .then_some(position)
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("target transform {transform_key} has no matching Finished entry")
+        })?;
+    let ping_started = oplog
+        .iter()
+        .enumerate()
+        .skip(transform_finished + 1)
+        .find_map(|(position, entry)| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "ping"
+                    )
+            )
+            .then_some(position)
+        })
+        .ok_or_else(|| anyhow::anyhow!("target ping has no Started entry"))?;
+    assert!(
+        oplog[transform_finished + 1..ping_started]
+            .iter()
+            .all(|entry| !matches!(
+                entry.entry,
+                PublicOplogEntry::Start(_) | PublicOplogEntry::End(_)
+            )),
+        "stream cleanup appended positional durable calls after the streaming invocation finished: {:#?}",
+        &oplog[transform_finished..=ping_started]
+    );
+    assert!(
+        oplog[transform_finished + 1..ping_started]
+            .iter()
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::StreamSession(session)
+                    if matches!(
+                        StreamSessionRecordV1::from_value(session.record.value()),
+                        Ok(StreamSessionRecordV1::Finished(_))
+                    )
+            )),
+        "streaming session was not durably finished before the next invocation started: {:#?}",
+        &oplog[transform_finished..=ping_started]
+    );
+
+    let ping_finished = oplog
+        .iter()
+        .enumerate()
+        .skip(ping_started + 1)
+        .find_map(|(position, entry)| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("ping")
+            )
+            .then_some(position)
+        })
+        .ok_or_else(|| anyhow::anyhow!("subsequent invocation has no Finished entry"))?;
+    assert!(
+        oplog[ping_finished + 1..].iter().all(|entry| !matches!(
+            entry.entry,
+            PublicOplogEntry::Start(_) | PublicOplogEntry::End(_)
+        )),
+        "positional durable calls were appended after the final Finished entry: {:#?}",
+        &oplog[ping_finished..]
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn streaming_rpc_identity_survives_atomic_rollback(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2951,6 +3103,239 @@ async fn counter_resource_test_2_with_restart(
     assert_eq!(result_value2, 2);
 
     Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn completed_fire_and_forget_rpc_replays_span_before_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "fire-and-forget-replay-caller");
+    let counter = agent_id!("Counter", "fire-and-forget-replay-target");
+
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+    let invoked = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "outbound_agent_rpc_invoke_result",
+            data_value!("Counter", "fire-and-forget-replay-target", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(invoked, Ok(()));
+
+    let after_delivery = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(after_delivery, 2);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    executor
+        .invoke_and_await_agent(&caller_component, &caller, "get_self_uri", data_value!())
+        .await?;
+
+    let after_replay = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(after_replay, 3);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+#[tracing::instrument]
+async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (checkpoint, suffix) in [
+        (FireAndForgetRpcCheckpoint::Start, "start"),
+        (FireAndForgetRpcCheckpoint::StartSpan, "start-span"),
+        (FireAndForgetRpcCheckpoint::End, "end"),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let caller_component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .store()
+            .await?;
+        let counter_component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let caller_id = agent_id!("GolemHostApi", format!("fire-and-forget-{suffix}-caller"));
+        let caller = executor
+            .start_agent(&caller_component.id, caller_id.clone())
+            .await?;
+        let counter_name = format!("fire-and-forget-{suffix}-target");
+        let counter_id = agent_id!("Counter", counter_name.clone());
+        let invocation_key = IdempotencyKey::fresh();
+        let mut gate = executor
+            .gate_next_fire_and_forget_rpc_commit(&caller, checkpoint)
+            .await;
+
+        let invocation = {
+            let executor = executor.clone();
+            let caller_component = caller_component.clone();
+            let caller_id = caller_id.clone();
+            let invocation_key = invocation_key.clone();
+            let counter_name = counter_name.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &caller_component,
+                        &caller_id,
+                        &invocation_key,
+                        "outbound_agent_rpc_invoke_result",
+                        data_value!("Counter", counter_name, "increment"),
+                    )
+                    .await
+            })
+        };
+        gate.committed().await;
+
+        let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let rpc_starts = rpc_start_indices(&prefix);
+        assert_eq!(rpc_starts.len(), 1, "checkpoint {checkpoint:?}");
+        let prefix_span_count = prefix
+            .iter()
+            .filter(|entry| {
+                entry.oplog_index > rpc_starts[0]
+                    && matches!(&entry.entry, PublicOplogEntry::StartSpan(_))
+            })
+            .count();
+        let prefix_end_count = prefix
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == rpc_starts[0]))
+            .count();
+        assert_eq!(
+            prefix_span_count,
+            usize::from(checkpoint != FireAndForgetRpcCheckpoint::Start),
+            "wrong span prefix at {checkpoint:?}: {prefix:#?}"
+        );
+        assert_eq!(
+            prefix_end_count,
+            usize::from(checkpoint == FireAndForgetRpcCheckpoint::End),
+            "wrong terminal prefix at {checkpoint:?}: {prefix:#?}"
+        );
+        assert_eq!(
+            prefix
+                .iter()
+                .filter(|entry| {
+                    entry.oplog_index > rpc_starts[0]
+                        && matches!(&entry.entry, PublicOplogEntry::FinishSpan(_))
+                })
+                .count(),
+            0,
+            "checkpoint {checkpoint:?} must precede FinishSpan: {prefix:#?}"
+        );
+
+        gate.abort_return();
+        invocation.abort();
+        drop(gate);
+        drop(executor);
+
+        let executor = start(deps, &context).await?;
+
+        let reused = executor
+            .invoke_and_await_agent_with_key(
+                &caller_component,
+                &caller_id,
+                &invocation_key,
+                "outbound_agent_rpc_invoke_result",
+                data_value!("Counter", counter_name, "increment"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(reused, Ok(()), "checkpoint {checkpoint:?}");
+
+        let next_counter_value = executor
+            .invoke_and_await_agent(&counter_component, &counter_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(
+            next_counter_value, 2,
+            "recovery must execute one callee effect at {checkpoint:?}"
+        );
+
+        let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            rpc_start_indices(&recovered),
+            rpc_starts,
+            "recovery must retain the original RPC identity at {checkpoint:?}"
+        );
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == rpc_starts[0]))
+                .count(),
+            1,
+            "recovery must attach one terminal to the original RPC Start at {checkpoint:?}"
+        );
+        let span_ids = recovered
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StartSpan(span) if entry.oplog_index > rpc_starts[0] => {
+                    Some(span.span_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(span_ids.len(), 1, "checkpoint {checkpoint:?}");
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::FinishSpan(span) if span.span_id == span_ids[0]))
+                .count(),
+            1,
+            "recovery must repair the original invocation span at {checkpoint:?}"
+        );
+    }
+
+    Ok(())
+}
+
+fn rpc_start_indices(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) -> Vec<OplogIndex> {
+    oplog
+        .iter()
+        .filter_map(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::rpc::wasm-rpc::invoke"
+            )
+            .then_some(entry.oplog_index)
+        })
+        .collect()
 }
 
 #[test]

@@ -294,6 +294,10 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "RESTART");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
         }
+        PublicOplogEntry::Resumed(params) => {
+            let _ = writeln!(result, "RESUMED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+        }
         PublicOplogEntry::ActivatePlugin(params) => {
             let _ = writeln!(result, "ACTIVATE PLUGIN");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

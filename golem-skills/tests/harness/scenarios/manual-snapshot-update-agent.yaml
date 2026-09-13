@@ -7,15 +7,29 @@ steps:
 
   # 2. Add snapshot support BEFORE any agent is created, then deploy
   - id: "add-snapshot-support"
-    prompt: >
-      In the test-app project, add custom save/load snapshot functions to the
-      CounterAgent that serialize the counter value as 4 big-endian bytes. Do not change
-      any existing methods or behavior. Build and deploy the project.
+    prompt:
+      rust: &non-effect-add-manual-snapshot-support >
+        In the test-app project, add custom save/load snapshot functions to the
+        CounterAgent that serialize the counter value as 4 big-endian bytes. Do not change
+        any existing methods or behavior. Build and deploy the project.
+      ts: *non-effect-add-manual-snapshot-support
+      effect: >
+        In the Effect-based test-app project, configure the existing counter for
+        schema-driven snapshot-based updates. Use `Snapshot.define` with a `Schema.Struct`
+        containing the counter value and bind it exactly once with `snapshot.init(...)`; keep
+        the returned `Ref` as the counter's state. Do not add custom byte or JSON save/load
+        code. Rename the `defineAgent` name from `Counter` to exactly `CounterAgent` if
+        necessary, and update the matching agent key in `golem.yaml`. Do not change any
+        existing methods or behavior. Build and deploy the project.
+      scala: *non-effect-add-manual-snapshot-support
+      moonbit: *non-effect-add-manual-snapshot-support
     expectedSkills:
       rust:
         - "golem-custom-snapshot-rust"
       ts:
         - "golem-custom-snapshot-ts"
+      effect:
+        - "golem-custom-snapshot-effect"
       scala:
         - "golem-custom-snapshot-scala"
       moonbit:
@@ -58,6 +72,14 @@ steps:
         the current counter value multiplied by 2. Keep the save/load snapshot
         functions unchanged so the counter value is still preserved across updates. Build
         and deploy, but do not update existing running agents.
+      effect: >
+        In the Effect-based test-app project, make a breaking change to CounterAgent: remove
+        the `increment` method entirely, and add a new Effect method called `getDouble` that
+        reads the schema-driven snapshot `Ref` and returns the current counter value multiplied
+        by 2. Keep the `Snapshot.define` schema and the single `snapshot.init(...)` binding
+        compatible so the counter value is preserved across the manual update. Do not replace
+        them with custom byte or JSON save/load code. Build and deploy, but do not update
+        existing running agents.
       scala: >
         In the test-app project, make a breaking change to CounterAgent: remove the
         `increment` method entirely, and add a new method called `getDouble` that returns
@@ -88,6 +110,7 @@ steps:
       method:
         rust: "get_double"
         ts: "getDouble"
+        effect: "getDouble"
         scala: "getDouble"
         moonbit: "get_double"
     expect:

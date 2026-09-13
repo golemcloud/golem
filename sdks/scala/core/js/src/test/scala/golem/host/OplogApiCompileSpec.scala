@@ -110,6 +110,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.DropResource(p)                 => s"drop-res(${p.name})"
     case OplogEntry.Log(p)                          => s"log(${p.level},${p.message})"
     case OplogEntry.Restart(t)                      => s"restart(${t.seconds})"
+    case OplogEntry.Resumed(t)                      => s"resumed(${t.seconds})"
     case OplogEntry.ActivatePlugin(p)               => s"activate(${p.plugin.name})"
     case OplogEntry.DeactivatePlugin(p)             => s"deactivate(${p.plugin.name})"
     case OplogEntry.Revert(p)                       => s"revert(${p.start})"
@@ -153,6 +154,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.BeginAtomicRegion(ts),
       OplogEntry.BeginRemoteWrite(ts),
       OplogEntry.Restart(ts),
+      OplogEntry.Resumed(ts),
       OplogEntry.Error(ErrorParameters(ts, "boom", BigInt(5))),
       OplogEntry.Jump(JumpParameters(ts, oplogRegion)),
       OplogEntry.SetRetryPolicy(

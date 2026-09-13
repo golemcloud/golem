@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod effect_external;
+pub mod effect_guest;
+pub mod effect_tool;
 mod javascript;
 mod schema_graph;
 pub mod tool;
@@ -1853,7 +1856,7 @@ impl TypeScriptBridgeGenerator {
         };
         writer.write_doc(&method.description);
         writer.write_line(format!(
-            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod(() => this.__getConfig().server, () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.publicParameters, phantomId: this.phantomId, config: this.publicConfig, method: {:?} }}), {}, (value: any, stream: any) => {decode_expr});",
+            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod<[{args}], {result}>(() => this.__getConfig().server, () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.publicParameters, phantomId: this.phantomId, config: this.publicConfig, method: {:?} }}), {}, (value: any, stream: any) => {decode_expr});",
             self.agent_type.type_name.0, method.name, encode.build().trim()
         ));
         Ok(())
@@ -2237,20 +2240,27 @@ impl TypeScriptBridgeGenerator {
             SchemaType::F32 { .. } | SchemaType::F64 { .. } => format!(
                 "((v: any): number => typeof v === 'number' ? v : v.$float === 'nan' ? Number.NaN : v.$float === 'positive-infinity' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)({value})"
             ),
-            SchemaType::Bool { .. }
-            | SchemaType::S8 { .. }
+            SchemaType::Bool { .. } => format!("({value} as boolean)"),
+            SchemaType::S8 { .. }
             | SchemaType::S16 { .. }
             | SchemaType::S32 { .. }
             | SchemaType::U8 { .. }
             | SchemaType::U16 { .. }
-            | SchemaType::U32 { .. }
-            | SchemaType::Char { .. }
+            | SchemaType::U32 { .. } => format!("({value} as number)"),
+            SchemaType::Char { .. }
             | SchemaType::String { .. }
-            | SchemaType::Text { .. }
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
-            | SchemaType::Datetime { .. }
-            | SchemaType::Enum { .. } => value.to_string(),
+            | SchemaType::Datetime { .. } => format!("({value} as string)"),
+            SchemaType::Text { .. } => format!("({value} as base.AgentText)"),
+            SchemaType::Enum { cases, .. } => format!(
+                "((v: any) => {{ {} throw new Error('unknown enum'); }})({value})",
+                cases
+                    .iter()
+                    .map(|case| format!("if(v === {case:?}) return {case:?} as const;"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
             SchemaType::Ref { id, .. } => {
                 let definition = self
                     .type_naming
@@ -2956,10 +2966,11 @@ impl TypeScriptBridgeGenerator {
             SchemaType::String { .. } | SchemaType::Char { .. } => {
                 format!("((n: any) => n.value as string)({value})")
             }
+            SchemaType::U64 { .. } | SchemaType::S64 { .. } => {
+                format!("((n: any) => n.value as bigint)({value})")
+            }
             SchemaType::F64 { .. }
             | SchemaType::F32 { .. }
-            | SchemaType::U64 { .. }
-            | SchemaType::S64 { .. }
             | SchemaType::U32 { .. }
             | SchemaType::S32 { .. }
             | SchemaType::U16 { .. }
@@ -4045,13 +4056,7 @@ impl TypeScriptBridgeGenerator {
                     SchemaType::Char { .. } => Ok("string".to_string()),
                     SchemaType::F64 { .. } => Ok("number".to_string()),
                     SchemaType::F32 { .. } => Ok("number".to_string()),
-                    SchemaType::U64 { .. } | SchemaType::S64 { .. }
-                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
-                    {
-                        Ok("bigint".to_string())
-                    }
-                    SchemaType::U64 { .. } => Ok("number".to_string()),
-                    SchemaType::S64 { .. } => Ok("number".to_string()),
+                    SchemaType::U64 { .. } | SchemaType::S64 { .. } => Ok("bigint".to_string()),
                     SchemaType::U32 { .. } => Ok("number".to_string()),
                     SchemaType::S32 { .. } => Ok("number".to_string()),
                     SchemaType::U16 { .. } => Ok("number".to_string()),
@@ -4285,13 +4290,7 @@ impl TypeScriptBridgeGenerator {
             SchemaType::Char { .. } => Ok("string".to_string()),
             SchemaType::F64 { .. } => Ok("number".to_string()),
             SchemaType::F32 { .. } => Ok("number".to_string()),
-            SchemaType::U64 { .. } | SchemaType::S64 { .. }
-                if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
-            {
-                Ok("bigint".to_string())
-            }
-            SchemaType::U64 { .. } => Ok("number".to_string()),
-            SchemaType::S64 { .. } => Ok("number".to_string()),
+            SchemaType::U64 { .. } | SchemaType::S64 { .. } => Ok("bigint".to_string()),
             SchemaType::U32 { .. } => Ok("number".to_string()),
             SchemaType::S32 { .. } => Ok("number".to_string()),
             SchemaType::U16 { .. } => Ok("number".to_string()),

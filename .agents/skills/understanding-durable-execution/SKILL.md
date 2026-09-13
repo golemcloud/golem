@@ -93,6 +93,13 @@ says how strict that commit is: `Always` waits for durable storage; `DurableOnly
 for durable agents (`PrimaryOplog::commit` flushes everything; `EphemeralOplog` honours the
 level). Guarantees such as "accepted only after commit" refer to the commit, not the append.
 
+A primary oplog can also commit automatically when its append buffer reaches the configured
+threshold. Those entries are durable, but the status reducer still has to see them: the primary
+oplog retains every committed-but-unreported entry and returns it with the next explicit commit,
+whose caller delivers the complete range to the reducer. Archiving may transfer and remove only
+entries already reported this way; otherwise a durable entry could disappear from the primary
+before status ever folded it.
+
 ## Component map
 
 | Area | Files | Responsibility |
@@ -137,6 +144,16 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+Resuming an interrupted **active durable invocation** appends and commits the timestamp-only
+`Resumed` hint while the instance lock still proves the worker is unloaded. This happens only
+after reading the worker's memory requirement succeeds and before changing the resident state to
+`WaitingForPermit`. The status fold therefore changes `Interrupted` back to `Running` immediately,
+even if permit admission is still blocked (for example while the interrupted invocation is parked
+in a pending p3 wait). `Resumed` does not enqueue an invocation: the existing
+`current_idempotency_key` identifies the invocation that reconstruction continues. A `Restart`
+does not use this marker and retains its normal `Idle`/automatic-recovery semantics; ephemeral
+agents retain their clean fail-stop lifecycle and never append it.
+
 ## Oplog model
 
 Entries are positional or hints (`OplogEntry::is_hint()`). Replay consumes positional entries in
@@ -159,7 +176,7 @@ order and skips hints. Key kinds:
   recordings need no closing entry.
 - `BeginAtomicRegion` / `EndAtomicRegion`, `Jump`, `Revert`, `NoOp`.
 - `PendingUpdate`, `SuccessfulUpdate`, `FailedUpdate`, `Snapshot` (hint).
-- Lifecycle hints: `Suspend`, `Error`, `Interrupted`, `Exited`, `Restart`.
+- Lifecycle hints: `Suspend`, `Error`, `Interrupted`, `Resumed`, `Exited`, `Restart`.
 
 Hints are skipped by `skip_forward` (the physical cursor moves past them, but
 `last_replayed_non_hint_index` does not), take part in no `Start`/terminal pairing, and never

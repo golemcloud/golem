@@ -1,0 +1,74 @@
+manifestVersion: 1.6.0
+
+app: effect-cross-sdk
+
+localServer:
+  routerPort: 9892
+  customRequestPort: 9018
+  mcpPort: 9019
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+
+components:
+  effect-cross-sdk:effect-provider:
+    dir: effect-provider
+    templates: effect
+  effect-cross-sdk:ts-peer:
+    dir: ts-peer
+    templates: ts
+    dependencies:
+      agents:
+        - effect-cross-sdk:effect-provider/EffectFixture
+        - effect-cross-sdk:effect-provider/EffectRichFixture
+        - effect-cross-sdk:effect-provider/EffectSnapshotFixture
+      tools:
+        - effect-cross-sdk:effect-provider/effect-cross-streaming
+  effect-cross-sdk:rust-peer:
+    dir: rust-peer
+    templates: rust
+    dependencies:
+      agents:
+        - effect-cross-sdk:effect-provider/EffectFixture
+  effect-cross-sdk:effect-consumer:
+    dir: effect-consumer
+    templates: effect
+    dependencies:
+      agents:
+        - effect-cross-sdk:ts-peer/TsPeer
+        - effect-cross-sdk:ts-peer/TsEphemeralPeer
+        - effect-cross-sdk:rust-peer/RustPeer
+      tools:
+        - effect-cross-sdk:ts-peer/ts-cross-streaming
+
+tools:
+  effect-cross-streaming: {}
+  ts-cross-streaming: {}
+
+agents:
+  EffectFixture:
+    config:
+      prefix: manifest
+    tools:
+      effect-cross-streaming: {}
+  TsPeer:
+    tools:
+      effect-cross-streaming: {}
+      ts-cross-streaming: {}
+  EffectConsumer:
+    tools:
+      ts-cross-streaming: {}
+
+resourceDefaults:
+  local:
+    cross-sdk-quota:
+      limit:
+        type: Capacity
+        value: 20
+      enforcementAction: reject
+      unit: token
+      units: tokens
+
+version: v0.0.0

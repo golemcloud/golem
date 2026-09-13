@@ -9,13 +9,25 @@ steps:
 
   - id: "create-agent"
     invoke:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: &counter-agent 'CounterAgent("c1")'
+        ts: *counter-agent
+        scala: *counter-agent
+        moonbit: *counter-agent
       method: "increment"
 
   - id: "get-metadata"
-    prompt: >
-      Use the CLI to get the metadata for CounterAgent "c1" and save the full output to a
-      file called metadata.txt in the test-app directory.
+    prompt:
+      effect: >
+        Use the CLI to get the metadata for Counter "c1" and save the full output to a
+        file called metadata.txt in the test-app directory.
+      rust: &get-metadata-prompt >
+        Use the CLI to get the metadata for CounterAgent "c1" and save the full output to a
+        file called metadata.txt in the test-app directory.
+      ts: *get-metadata-prompt
+      scala: *get-metadata-prompt
+      moonbit: *get-metadata-prompt
     expectedSkills:
       - "golem-get-agent-metadata"
 

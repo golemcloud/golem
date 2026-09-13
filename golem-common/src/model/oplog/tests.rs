@@ -34,8 +34,8 @@ use crate::model::oplog::public_oplog_entry::{
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
     FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
     SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
@@ -1003,6 +1003,33 @@ fn restart_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn resumed_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Resumed(ResumedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn resumed_raw_and_public_protobuf_roundtrip() {
+    let timestamp = Timestamp::now_utc().rounded();
+
+    let raw = OplogEntry::Resumed { timestamp };
+    let raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        raw.clone().try_into().unwrap();
+    let raw_roundtrip: OplogEntry = raw_proto.try_into().unwrap();
+    assert_eq!(raw, raw_roundtrip);
+
+    let public = PublicOplogEntry::Resumed(ResumedParams { timestamp });
+    let public_proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public.clone().try_into().unwrap();
+    let public_roundtrip: PublicOplogEntry = public_proto.try_into().unwrap();
+    assert_eq!(public, public_roundtrip);
 }
 
 #[test]

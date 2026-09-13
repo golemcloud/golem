@@ -645,6 +645,10 @@ export const TsStreamingRpcCaller = defineAgent({
   id: { name: z.string() },
   methods: {
     run: method({ input: {}, returns: StreamingRpcReport }),
+    earlyOutputDropThenPing: method({
+      input: {},
+      returns: z.tuple([U32, U32]),
+    }),
     callProducerError: method({ input: {}, returns: U32List }),
     callStreamFree: method({ input: {}, returns: s.u32() }),
   },
@@ -716,6 +720,23 @@ export const TsStreamingRpcCallerImpl = TsStreamingRpcCaller.implement({
         outputFirst: outputFirstResult.value,
         afterConsumerReturn: await target.ping(),
       };
+    },
+    async earlyOutputDropThenPing() {
+      const target = TsStreamingRpcTarget.client.get({ name: this.name });
+      const input = AgentStream.from(
+        (async function* () {
+          for (let value = 0; value < 100_000; value++) {
+            yield value;
+          }
+        })(),
+      );
+      const output = await target.transform({ input });
+      const first = await output.next();
+      if (first.done) {
+        throw new Error("expected transformed output");
+      }
+      await output.return();
+      return [first.value, await target.ping()];
     },
     async callProducerError() {
       return collect(

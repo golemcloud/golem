@@ -4,12 +4,337 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  extractInvokeJsonResult,
+  resolveGolemCommandEnv,
   ScenarioExecutor,
   type ScenarioExecutorOptions,
   type ScenarioSpec,
 } from "../src/executor.js";
 import { SkillWatcher, type WatcherEvent } from "../src/watcher.js";
 import type { AgentDriver, AgentResult, DriverTimeoutOptions } from "../src/driver/base.js";
+
+describe("extractInvokeJsonResult", () => {
+  it("decodes nested records and schema composites", () => {
+    const result = extractInvokeJsonResult(
+      JSON.stringify({
+        $type: "agent.invoke",
+        resultJson: {
+          graph: {
+            root: {
+              kind: "record",
+              value: {
+                fields: [
+                  {
+                    name: "items",
+                    body: {
+                      kind: "list",
+                      value: {
+                        element: {
+                          kind: "record",
+                          value: {
+                            fields: [
+                              { name: "name", body: { kind: "string", value: {} } },
+                              {
+                                name: "score",
+                                body: {
+                                  kind: "option",
+                                  value: { inner: { kind: "f64", value: {} } },
+                                },
+                              },
+                            ],
+                          },
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          value: {
+            kind: "record",
+            value: {
+              fields: [
+                {
+                  kind: "list",
+                  value: {
+                    elements: [
+                      {
+                        kind: "record",
+                        value: {
+                          fields: [
+                            { kind: "string", value: "first" },
+                            { kind: "option", value: { inner: { kind: "f64", value: 2.5 } } },
+                          ],
+                        },
+                      },
+                      {
+                        kind: "record",
+                        value: {
+                          fields: [
+                            { kind: "string", value: "second" },
+                            { kind: "option", value: { inner: null } },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    assert.deepEqual(result, {
+      items: [
+        { name: "first", score: 2.5 },
+        { name: "second", score: null },
+      ],
+    });
+  });
+
+  it("preserves scalar edge values and resolves enum and flags names", () => {
+    const result = extractInvokeJsonResult(
+      JSON.stringify({
+        $type: "agent.invoke",
+        resultJson: {
+          graph: {
+            root: {
+              kind: "tuple",
+              value: {
+                elements: [
+                  { kind: "bool", value: {} },
+                  { kind: "s64", value: {} },
+                  { kind: "string", value: {} },
+                  { kind: "char", value: {} },
+                  { kind: "enum", value: { cases: ["idle", "ready"] } },
+                  { kind: "flags", value: { flags: ["read", "write", "admin"] } },
+                ],
+              },
+            },
+          },
+          value: {
+            kind: "tuple",
+            value: {
+              elements: [
+                { kind: "bool", value: false },
+                { kind: "s64", value: 0 },
+                { kind: "string", value: "" },
+                { kind: "char", value: "🦀" },
+                { kind: "enum", value: { case: 1 } },
+                { kind: "flags", value: { bits: [true, false, true] } },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    assert.deepEqual(result, [false, 0, "", "🦀", "ready", ["read", "admin"]]);
+  });
+
+  it("decodes binary, duration, and quantity values from the current schema JSON", () => {
+    const result = extractInvokeJsonResult(
+      JSON.stringify({
+        $type: "agent.invoke",
+        resultJson: {
+          graph: {
+            root: {
+              kind: "tuple",
+              value: {
+                elements: [
+                  { kind: "binary", value: {} },
+                  { kind: "duration", value: {} },
+                  { kind: "quantity", value: { spec: { baseUnit: "kg" } } },
+                ],
+              },
+            },
+          },
+          value: {
+            kind: "tuple",
+            value: {
+              elements: [
+                {
+                  kind: "binary",
+                  value: { bytes: [0, 127, 255, 251], mimeType: "application/octet-stream" },
+                },
+                { kind: "duration", value: { nanoseconds: -93_784_000_000_123 } },
+                { kind: "quantity", value: { mantissa: 15, scale: 1, unit: "kg" } },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    assert.deepEqual(result, [
+      { bytes: "AH__-w", mimeType: "application/octet-stream" },
+      "-P1DT2H3M4.000000123S",
+      { mantissa: 15, scale: 1, unit: "kg" },
+    ]);
+  });
+
+  it("renders zero, whole-day and fractional-second durations canonically", () => {
+    for (const [nanoseconds, expected] of [
+      [0, "PT0S"],
+      [86_400_000_000_000, "P1D"],
+      [1_250_000_000, "PT1.25S"],
+    ]) {
+      assert.equal(
+        extractInvokeJsonResult(
+          JSON.stringify({
+            $type: "agent.invoke",
+            resultJson: {
+              graph: { root: { kind: "duration", value: {} } },
+              value: { kind: "duration", value: { nanoseconds } },
+            },
+          }),
+        ),
+        expected,
+      );
+    }
+  });
+
+  it("preserves raw i64 duration tokens beyond JavaScript number precision", () => {
+    for (const [token, expected] of [
+      ["9007199254740993", "P104DT5H59M59.254740993S"],
+      ["-9007199254740993", "-P104DT5H59M59.254740993S"],
+      ["-9223372036854775808", "-P106751DT23H47M16.854775808S"],
+    ]) {
+      assert.equal(
+        extractInvokeJsonResult(
+          `{"$type":"agent.invoke","resultJson":{"graph":{"root":{"kind":"duration","value":{}}},"value":{"kind":"duration","value":{"nanoseconds":${token}}}}}`,
+        ),
+        expected,
+      );
+    }
+    const value = { kind: "duration", value: { nanoseconds: 12 } };
+    assert.deepEqual(
+      extractInvokeJsonResult(
+        JSON.stringify({
+          $type: "agent.invoke-session",
+          kind: "result",
+          value,
+        }),
+      ),
+      value,
+    );
+  });
+
+  it("allows finite recursive values while rejecting ref-only cycles", () => {
+    const ref = { kind: "ref", value: { id: "node" } };
+    const graph = {
+      root: ref,
+      defs: [
+        {
+          id: "node",
+          body: {
+            kind: "record",
+            value: {
+              fields: [
+                { name: "label", body: { kind: "string", value: {} } },
+                { name: "next", body: { kind: "option", value: { inner: ref } } },
+              ],
+            },
+          },
+        },
+      ],
+    };
+    const value = {
+      kind: "record",
+      value: {
+        fields: [
+          { kind: "string", value: "first" },
+          {
+            kind: "option",
+            value: {
+              inner: {
+                kind: "record",
+                value: {
+                  fields: [
+                    { kind: "string", value: "second" },
+                    { kind: "option", value: { inner: null } },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+    assert.deepEqual(
+      extractInvokeJsonResult(
+        JSON.stringify({
+          $type: "agent.invoke",
+          resultJson: { graph, value },
+        }),
+      ),
+      { label: "first", next: { label: "second", next: null } },
+    );
+    assert.equal(
+      extractInvokeJsonResult(
+        JSON.stringify({
+          $type: "agent.invoke",
+          resultJson: { graph: { root: ref, defs: [{ id: "node", body: ref }] }, value },
+        }),
+      ),
+      undefined,
+    );
+  });
+
+  it("keeps current invocation-session result documents unchanged", () => {
+    const value = { count: 2, active: true };
+    assert.deepEqual(
+      extractInvokeJsonResult(
+        [
+          { $type: "agent.invoke-session", kind: "accepted" },
+          { $type: "agent.invoke-session", kind: "result", value },
+          { $type: "agent.invoke-session", kind: "finished", outcome: "success" },
+        ]
+          .map((document) => JSON.stringify(document))
+          .join("\n"),
+      ),
+      value,
+    );
+  });
+});
+
+describe("resolveGolemCommandEnv", () => {
+  it("uses scenario ports when there is no run override", () => {
+    const env = resolveGolemCommandEnv(
+      {
+        name: "ports",
+        settings: { golem_server: { router_port: 9890, custom_request_port: 9020 } },
+        steps: [{ tag: "sleep", sleep: 0 }],
+      },
+      {},
+    );
+    assert.equal(env.GOLEM_ROUTER_PORT, "9890");
+    assert.equal(env.GOLEM_CUSTOM_REQUEST_PORT, "9020");
+    assert.equal(env.GOLEM_BUILTIN_LOCAL_URL, "http://localhost:9890");
+  });
+
+  it("propagates run-level router, custom request, and MCP ports", () => {
+    const env = resolveGolemCommandEnv(
+      {
+        name: "ports",
+        settings: { golem_server: { router_port: 9890, custom_request_port: 9020 } },
+        steps: [{ tag: "sleep", sleep: 0 }],
+      },
+      {
+        GOLEM_ROUTER_PORT: "9893",
+        GOLEM_CUSTOM_REQUEST_PORT: "9028",
+        GOLEM_MCP_PORT: "9029",
+      },
+    );
+    assert.equal(env.GOLEM_ROUTER_PORT, "9893");
+    assert.equal(env.GOLEM_CUSTOM_REQUEST_PORT, "9028");
+    assert.equal(env.GOLEM_MCP_PORT, "9029");
+    assert.equal(env.GOLEM_BUILTIN_LOCAL_URL, "http://localhost:9893");
+  });
+});
 
 type StepLike = {
   expectedSkills?: string[];

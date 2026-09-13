@@ -9,7 +9,7 @@ The harness in `golem-skills/tests/harness/` runs coding agents against current-
 
 ## Skills and generated documentation
 
-Catalog skills live in `golem-skills/skills/{common,rust,ts,scala,moonbit}/<skill>/SKILL.md`. Golem templates install common plus language-specific skills in the canonical `.agents/skills/` tree. Harness drivers also seed bootstrap skills there; Claude receives a `.claude -> .agents` symlink rather than a second catalog copy.
+Catalog skills live in `golem-skills/skills/{common,rust,ts,effect,scala,moonbit}/<skill>/SKILL.md`. Golem templates install common plus language-specific skills in the canonical `.agents/skills/` tree. Harness drivers also seed bootstrap skills there; Claude receives a `.claude -> .agents` symlink rather than a second catalog copy.
 
 After changing catalog skills:
 
@@ -24,11 +24,12 @@ The CLI embeds the catalog. The docs command updates the generated How-To index 
 
 - Node.js/npm and one requested agent runtime: Amp SDK credentials, `claude`, `opencode`, `codex`, or `gemini`.
 - `GOLEM_PATH` must identify the workspace root. If absent, detection walks upward from the **process current directory** looking for both `sdks/rust/golem-rust` and `sdks/ts/packages`.
-- A built executable must exist at literal `<GOLEM_PATH>/target/release/golem` or `<GOLEM_PATH>/target/debug/golem`. `resolveGolemTargetDir` does not honor `CARGO_TARGET_DIR` or Cargo target-dir configuration.
-- The harness prepends the selected target directory to `PATH`, starts its own clean Golem server, and requires port **9881** to be free. The runner always starts on 9881. Although the scenario schema exposes `settings.golem_server.router_port`, changing it does not change server startup and is therefore not a usable alternate-port mechanism.
+- Set `GOLEM_TARGET_DIR` to the directory containing the built `golem` executable when Cargo uses a redirected target directory. Otherwise the harness searches `<GOLEM_PATH>/target/release` then `target/debug`.
+- The harness prepends that directory to `PATH` and starts a clean server. `GOLEM_ROUTER_PORT` overrides scenario router ports (default **9881**); conflicting scenario ports require an explicit override. The CLI and agent drivers inherit the matching `GOLEM_BUILTIN_LOCAL_URL`. Set `GOLEM_CUSTOM_REQUEST_PORT` and `GOLEM_MCP_PORT` to isolate HTTP/MCP ports too. Use `{{custom_request_port}}` and `{{mcp_port}}` in scenario prompts and URLs.
 - Docker is required for scenario prerequisite services (`postgres`, `mysql`, `ignite`, `openai-mock`).
 - Linux skill activation fallback uses `inotifywait` when available. macOS deliberately starts no `fswatch` process. Both platforms can use atime snapshots; filesystems or mounts that do not update atime reliably can miss reads. Amp, Claude, OpenCode, and Gemini primarily report native skill-tool events; Codex falls back to filesystem tracking.
 - Language toolchains must match the scenario. Rust commonly needs `wasm32-wasip2`; TypeScript needs pnpm and built SDK/template artifacts; MoonBit needs `moon` and `wasm-tools`.
+- Effect needs its built SDK and all three template WASMs under `sdks/effect`; use the co-located package, not the published 1.5 SDK.
 - Scala runs need Java 17, sbt, synchronized WIT, the three generated guest-runtime role WASMs
   under `sdks/scala/{sbt/src/main/resources,mill/resources}/golem/wasm/`, and the Scala SDK
   published locally for the versions used by templates. The Scala plugin/template build combines
@@ -62,7 +63,7 @@ Current options:
 | Option                      | Meaning                                                                     | Default                     |
 | --------------------------- | --------------------------------------------------------------------------- | --------------------------- |
 | `--agent <name>`            | `amp`, `claude-code`, `opencode`, `codex`, or `gemini`; `all` runs all      | `all`                       |
-| `--language <lang>`         | `ts`, `rust`, `scala`, or `moonbit`; `all` runs all                         | `all`                       |
+| `--language <lang>`         | `ts`, `effect`, `rust`, `scala`, or `moonbit`; `all` runs all               | `all`                       |
 | `--scenario <name>`         | Select one scenario                                                         | all                         |
 | `--model <id>`              | Model selection (currently sets `OPENCODE_MODEL`; also recorded in reports) | agent default               |
 | `--scenarios <dir>`         | Scenario directory, relative to cwd                                         | `./scenarios`               |
@@ -79,7 +80,7 @@ Current options:
 
 `--workspace` is a root override, not an exact reusable scenario directory. Workspaces are `<root>/<run-uuid>/<scenario>/<language>/` (retries add subdirectories) and are retained. `--resume-from` still creates a new run hierarchy; it skips earlier scenario steps rather than reopening an old workspace.
 
-The server is restarted between scenarios and retries with the same clean data directory. The harness refuses a pre-existing healthy server on 9881.
+The server is restarted between scenarios and retries with the same clean data directory. The harness refuses a pre-existing healthy server on the selected router port.
 
 ## Current scenario schema
 
@@ -89,7 +90,7 @@ languageAgnostic: false # optional; once per agent on first selected language
 settings:
   timeout_per_subprompt: 1800
   golem_server:
-    router_port: 9881 # keep 9881; startup is fixed there
+    router_port: 9881 # overridden by GOLEM_ROUTER_PORT
     custom_request_port: 9006 # exported to scenario commands
   cleanup: true # accepted; unique workspaces make cleanup unnecessary
 prerequisites:
@@ -111,7 +112,7 @@ Every step has exactly one action:
 - `prompt`: string or language map. Supports `expectedSkills`, `allowedExtraSkills`, `strictSkillMatch`, and `continueSession`.
 - `create_project`: `{ name, presets? }`; presets may be language-specific.
 - `shell`: `{ command, args?, cwd? }`, with args optionally language-specific. It executes directly, not through a shell.
-- `invoke` / `invoke_json`: `{ agent, method, args? }`; method and args may be language-specific.
+- `invoke` / `invoke_json`: `{ agent, method, args? }`; all three fields may be language-specific.
 - `trigger`: fire-and-forget form of invocation.
 - `create_agent`: `{ name, env?, config? }`; `delete_agent`: `{ name }`.
 - `http`: `{ url, method?, headers?, body? }`; methods include GET, POST, PUT, DELETE, PATCH, OPTIONS.
@@ -122,7 +123,7 @@ Every step has exactly one action:
 
 Common optional step fields are `id`, `timeout`, `expect`, `retry: { attempts, delay }`, `only_if`, `skip_if`, and `verify: { build?, deploy?, expectedFiles? }`. `allowedExtraSkills` or `strictSkillMatch` requires `expectedSkills`. Without an explicit extra-skill restriction, additional activations do not fail the step.
 
-Language-conditional values use `{ ts, rust, scala, moonbit }` maps. Supported conditional fields include prompts, skill lists, `verify`, `expect`, project presets, shell args, HTTP body, and invocation/trigger method and args. A missing selected-language entry resolves to absent and may fail later validation/execution; include every language the scenario runs.
+Language-conditional values use `{ ts, effect, rust, scala, moonbit }` maps. Supported conditional fields include prompts, skill lists, `verify`, `expect`, project presets, shell args, HTTP body, and invocation/trigger agent, method and args. A missing selected-language entry resolves to absent and may fail later validation/execution; include every language the scenario runs. The default Effect agent is `Counter`, not `CounterAgent`.
 
 Use source-language method names: snake_case for Rust/MoonBit and camelCase for TypeScript/Scala. Use language-specific argument syntax where composite values differ.
 
@@ -139,7 +140,7 @@ Use source-language method names: snake_case for Rust/MoonBit and camelCase for 
 
 ## Variables and paths
 
-Text substitution recognizes `{{workspace}}`, `{{scenario}}`, `{{agent}}`, `{{language}}`, plus service variables `{{postgres_url}}`, `{{mysql_url}}`, `{{ignite_url}}`, and `{{openai_mock_url}}` when started. Substitution applies only to fields implemented in `substituteStepVariables`; do not assume arbitrary YAML strings are expanded.
+Text substitution recognizes `{{workspace}}`, `{{scenario}}`, `{{agent}}`, `{{language}}`, `{{custom_request_port}}`, `{{mcp_port}}`, plus service variables `{{postgres_url}}`, `{{mysql_url}}`, `{{ignite_url}}`, and `{{openai_mock_url}}` when started. Substitution applies only to fields implemented in `substituteStepVariables`; do not assume arbitrary YAML strings are expanded.
 
 `shell.cwd` is relative to the scenario workspace. Most Golem actions discover `golem.yaml` at the workspace root or one immediate child and run from that app directory. `check_file.path` is app-relative. `expectedFiles` verification is workspace-relative, matching existing scenarios (which normally include the project directory).
 
@@ -162,5 +163,5 @@ Normal runs write per-scenario JSON (`<agent>-<language>-<scenario>.json`), `sum
 3. Distinguish step timeout from idle timeout. Whole-scenario retry occurs only for idle timeout; per-step `retry` handles any step failure.
 4. For missed activation, check native tool events first, then `.agents/skills`, atime behavior, and Linux `inotifywait`. Do not restore stale `.claude/skills` duplication.
 5. For stale skill behavior, confirm which release/debug `golem` was selected and rebuild it.
-6. For Golem failures, verify port 9881 is free and inspect server output. For service failures, inspect Docker availability/container logs.
+6. For Golem failures, verify the selected ports are free and inspect server output. For service failures, inspect Docker availability/container logs.
 7. For Scala, reproduce the composite action's Java/sbt/WIT/base-image/local-publish preparation before blaming the scenario.

@@ -30,6 +30,18 @@ steps:
         updated `Item`. `deleteItem` must take an item id string and return `true` when
         the item was removed. `listItems` must return all stored items. Store the items
         in agent state keyed by id. Make sure the project builds and deploys successfully.
+      effect: >
+        In the Effect-based test-app project, add a new durable agent type named
+        `ItemRepositoryAgent` with a single constructor or identity parameter for the
+        repository name. It must represent a simple item repository and expose externally
+        invokable CRUD methods named `createItem`, `getItem`, `updateItem`, `deleteItem`,
+        and `listItems`. Use an `Item` schema with exactly two fields: `id` and `name`.
+        `createItem` must take an `Item` and return the stored `Item`. `getItem` must take
+        an item id string and return the stored `Item`. `updateItem` must take an `Item`,
+        replace the stored value with the same id, and return the updated `Item`.
+        `deleteItem` must take an item id string and return `true` when the item was
+        removed. `listItems` must return all stored items. Store the items in durable agent
+        state keyed by id. Make sure the project builds and deploys successfully.
       scala: >
         In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
         with a single constructor or identity parameter for the repository name. It must
@@ -59,6 +71,8 @@ steps:
         - "golem-add-agent-rust"
       ts:
         - "golem-add-agent-ts"
+      effect:
+        - "golem-add-agent-effect"
       scala:
         - "golem-add-agent-scala"
       moonbit:
@@ -73,11 +87,13 @@ steps:
       method:
         rust: "create_item"
         ts: "createItem"
+        effect: "createItem"
         scala: "createItem"
         moonbit: "create_item"
       args:
         rust: '{ id: "item-1", name: "Hammer" }'
         ts: '{ id: "item-1", name: "Hammer" }'
+        effect: '{ id: "item-1", name: "Hammer" }'
         scala: 'Item(id = "item-1", name = "Hammer")'
         moonbit: '{ id: "item-1", name: "Hammer" }'
     expect:
@@ -93,6 +109,7 @@ steps:
       method:
         rust: "get_item"
         ts: "getItem"
+        effect: "getItem"
         scala: "getItem"
         moonbit: "get_item"
       args: '"item-1"'
@@ -109,11 +126,13 @@ steps:
       method:
         rust: "update_item"
         ts: "updateItem"
+        effect: "updateItem"
         scala: "updateItem"
         moonbit: "update_item"
       args:
         rust: '{ id: "item-1", name: "Updated Hammer" }'
         ts: '{ id: "item-1", name: "Updated Hammer" }'
+        effect: '{ id: "item-1", name: "Updated Hammer" }'
         scala: 'Item(id = "item-1", name = "Updated Hammer")'
         moonbit: '{ id: "item-1", name: "Updated Hammer" }'
     expect:
@@ -129,6 +148,7 @@ steps:
       method:
         rust: "list_items"
         ts: "listItems"
+        effect: "listItems"
         scala: "listItems"
         moonbit: "list_items"
     expect:
@@ -144,6 +164,7 @@ steps:
       method:
         rust: "delete_item"
         ts: "deleteItem"
+        effect: "deleteItem"
         scala: "deleteItem"
         moonbit: "delete_item"
       args: '"item-1"'
@@ -158,6 +179,7 @@ steps:
       method:
         rust: "list_items"
         ts: "listItems"
+        effect: "listItems"
         scala: "listItems"
         moonbit: "list_items"
     expect:

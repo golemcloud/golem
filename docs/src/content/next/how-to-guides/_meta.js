@@ -8,6 +8,9 @@ export default {
   ts: {
     title: "TypeScript",
   },
+  effect: {
+    title: "Effect",
+  },
   scala: {
     title: "Scala",
   },

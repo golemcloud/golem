@@ -16,6 +16,8 @@ steps:
       - Component presets: activate the `release` preset.
       - CLI options: set the default output format to `json` and enable auto-confirm.
 
+      Define the `release` component preset if it does not exist, inheriting the existing
+      optimized production build settings (`optimized` in the Effect template).
       Do not change any source code files. Only modify `golem.yaml`.
     expectedSkills:
       - "golem-edit-manifest"

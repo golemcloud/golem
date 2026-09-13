@@ -30,6 +30,9 @@ pub const NEW: &str = "Examples:
   # Scaffold a new TypeScript application in the current directory
   golem-cli new --template ts --yes .
 
+  # Scaffold a new Effect application in ./my-effect-app
+  golem-cli new --template effect --yes my-effect-app
+
   # Add a new component to an existing application (run from app root)
   golem-cli new --template rust --component-name myapp:billing-service --yes .
 

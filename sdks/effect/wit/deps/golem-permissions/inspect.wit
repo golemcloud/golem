@@ -1,0 +1,14 @@
+package golem:permissions@0.1.0;
+
+/// Read-only inspection of a permission card's full grant lattice.
+///
+/// Returns the four quadrants of the card's bound lattice
+/// (lower/upper × positive/negative) as a `card-view`. Importing this
+/// interface grants no authority to mutate or derive cards.
+interface inspect {
+    use golem:core/types@2.0.0.{permission-card};
+    use types.{card-view, permission-error};
+
+    /// Return the card's complete grant lattice.
+    inspect-card: func(c: borrow<permission-card>) -> result<card-view, permission-error>;
+}
