@@ -1004,8 +1004,6 @@ impl RpcTransport {
         phantom_id: Option<Uuid>,
         config: Vec<AgentConfigValue>,
     ) -> Result<Self, GolemReflectError> {
-        let constructor = crate::encode_schema_value(&constructor)
-            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
         let config = config
             .into_iter()
             .map(|value| {
@@ -1016,6 +1014,17 @@ impl RpcTransport {
                 })
             })
             .collect::<Result<Vec<_>, GolemReflectError>>()?;
+        Self::create_with_typed_config(type_name, constructor, phantom_id, config)
+    }
+
+    fn create_with_typed_config(
+        type_name: String,
+        constructor: SchemaValue,
+        phantom_id: Option<Uuid>,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+    ) -> Result<Self, GolemReflectError> {
+        let constructor = crate::encode_schema_value(&constructor)
+            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
         let raw = host::WasmRpc::create(
             &type_name,
             constructor,
@@ -1299,10 +1308,10 @@ mod tests {
             .expect("unit method schema")
             .build();
 
-        assert!(definition.type_name.is_none());
-        assert_eq!(definition.methods.len(), 2);
-        assert_eq!(definition.methods[0].name, "lookup");
-        assert_eq!(definition.methods[1].name, "invalidate");
+        assert!(definition.data.type_name.is_none());
+        assert_eq!(definition.data.methods.len(), 2);
+        assert_eq!(definition.data.methods[0].name, "lookup");
+        assert_eq!(definition.data.methods[1].name, "invalidate");
     }
 
     #[test]
@@ -1311,6 +1320,7 @@ mod tests {
             .durable::<String>("Counter")
             .build();
         let constructor = definition
+            .data
             .constructor
             .as_ref()
             .expect("complete contract constructor schema");
@@ -1333,7 +1343,6 @@ pub struct AgentClientMethodDefinition {
 #[derive(Clone, Debug)]
 pub struct AgentClientDefinitionBuilder<State> {
     type_name: Option<String>,
-    mode: Option<AgentMode>,
     constructor: Option<SchemaRef>,
     methods: Vec<AgentClientMethodDefinition>,
     state: PhantomData<State>,
@@ -1346,13 +1355,21 @@ pub struct UnselectedAgentClientContract;
 pub struct BindingOnlyAgentClientContract;
 
 #[derive(Clone, Debug)]
-pub struct CompleteAgentClientContract;
+pub struct NoAgentClientConfig;
+
+#[derive(Clone, Debug)]
+pub struct DurableAgentClientContract;
+
+#[derive(Clone, Debug)]
+pub struct EphemeralAgentClientContract;
+
+#[derive(Clone, Debug)]
+pub struct CompleteAgentClientContract<Id, Config, Mode>(PhantomData<(Id, Config, Mode)>);
 
 impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
     fn new() -> Self {
         Self {
             type_name: None,
-            mode: None,
             constructor: None,
             methods: Vec::new(),
             state: PhantomData,
@@ -1362,7 +1379,6 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
     pub fn binding_only(self) -> AgentClientDefinitionBuilder<BindingOnlyAgentClientContract> {
         AgentClientDefinitionBuilder {
             type_name: None,
-            mode: None,
             constructor: None,
             methods: self.methods,
             state: PhantomData,
@@ -1372,13 +1388,14 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
     pub fn durable<Id>(
         self,
         type_name: impl Into<String>,
-    ) -> AgentClientDefinitionBuilder<CompleteAgentClientContract>
+    ) -> AgentClientDefinitionBuilder<
+        CompleteAgentClientContract<Id, NoAgentClientConfig, DurableAgentClientContract>,
+    >
     where
         Id: crate::IntoSchema,
     {
         AgentClientDefinitionBuilder {
             type_name: Some(type_name.into()),
-            mode: Some(AgentMode::Durable),
             constructor: Some(SchemaRef::new(
                 crate::schema::try_into_schema_graph::<Id>()
                     .expect("complete agent client identity must have a valid schema"),
@@ -1391,13 +1408,14 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
     pub fn ephemeral<Id>(
         self,
         type_name: impl Into<String>,
-    ) -> AgentClientDefinitionBuilder<CompleteAgentClientContract>
+    ) -> AgentClientDefinitionBuilder<
+        CompleteAgentClientContract<Id, NoAgentClientConfig, EphemeralAgentClientContract>,
+    >
     where
         Id: crate::IntoSchema,
     {
         AgentClientDefinitionBuilder {
             type_name: Some(type_name.into()),
-            mode: Some(AgentMode::Ephemeral),
             constructor: Some(SchemaRef::new(
                 crate::schema::try_into_schema_graph::<Id>()
                     .expect("complete agent client identity must have a valid schema"),
@@ -1408,12 +1426,19 @@ impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
     }
 }
 
-impl AgentClientDefinitionBuilder<CompleteAgentClientContract> {
-    pub fn config<C>(self) -> Self
+impl<Id, Mode>
+    AgentClientDefinitionBuilder<CompleteAgentClientContract<Id, NoAgentClientConfig, Mode>>
+{
+    pub fn config<C>(self) -> AgentClientDefinitionBuilder<CompleteAgentClientContract<Id, C, Mode>>
     where
         C: super::ConfigSchema,
     {
-        self
+        AgentClientDefinitionBuilder {
+            type_name: self.type_name,
+            constructor: self.constructor,
+            methods: self.methods,
+            state: PhantomData,
+        }
     }
 }
 
@@ -1449,10 +1474,9 @@ impl<State> AgentClientDefinitionBuilder<State> {
         Ok(self)
     }
 
-    fn finish(self) -> AgentClientDefinition {
-        AgentClientDefinition {
+    fn finish(self) -> AgentClientDefinitionData {
+        AgentClientDefinitionData {
             type_name: self.type_name,
-            mode: self.mode,
             constructor: self.constructor,
             methods: self.methods.into(),
         }
@@ -1461,20 +1485,29 @@ impl<State> AgentClientDefinitionBuilder<State> {
 
 impl AgentClientDefinitionBuilder<BindingOnlyAgentClientContract> {
     pub fn build(self) -> AgentClientDefinition {
-        self.finish()
+        AgentClientDefinition {
+            data: self.finish(),
+        }
     }
 }
 
-impl AgentClientDefinitionBuilder<CompleteAgentClientContract> {
-    pub fn build(self) -> AgentClientDefinition {
-        self.finish()
+impl<Id, Config, Mode> AgentClientDefinitionBuilder<CompleteAgentClientContract<Id, Config, Mode>> {
+    pub fn build(self) -> CompleteAgentClientDefinition<Id, Config, Mode> {
+        CompleteAgentClientDefinition {
+            data: self.finish(),
+            state: PhantomData,
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct AgentClientDefinition {
+    data: AgentClientDefinitionData,
+}
+
+#[derive(Clone, Debug)]
+struct AgentClientDefinitionData {
     type_name: Option<String>,
-    mode: Option<AgentMode>,
     constructor: Option<SchemaRef>,
     methods: Arc<[AgentClientMethodDefinition]>,
 }
@@ -1486,22 +1519,6 @@ impl AgentClientDefinition {
 
     pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
         let parts = agent_id.parts()?;
-        if self.mode == Some(AgentMode::Ephemeral) {
-            return Err(GolemReflectError::KnownEphemeralBinding(
-                self.type_name.clone().unwrap_or_default(),
-            ));
-        }
-        if let Some(expected) = &self.type_name
-            && expected != &parts.type_name
-        {
-            return Err(GolemReflectError::InvalidType(format!(
-                "client contract expects `{expected}`, identity is `{}`",
-                parts.type_name
-            )));
-        }
-        if let Some(constructor) = &self.constructor {
-            constructor.validate_value(&parts.constructor_value)?;
-        }
         let transport = RpcTransport::create(
             parts.type_name,
             parts.constructor_value,
@@ -1509,19 +1526,218 @@ impl AgentClientDefinition {
             Vec::new(),
         )?;
         Ok(TypedAgentClient {
-            definition: self.clone(),
+            definition: self.data.clone(),
             transport: Rc::new(transport),
+            reusable_identity: Some(agent_id.clone()),
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CompleteAgentClientDefinition<Id, Config, Mode> {
+    data: AgentClientDefinitionData,
+    state: PhantomData<(Id, Config, Mode)>,
+}
+
+fn encode_rpc_config<Config>(
+    config: <Config as super::ConfigSchema>::RpcType,
+) -> Vec<wire_common::TypedAgentConfigValue>
+where
+    Config: super::ConfigSchema,
+{
+    super::IntoRpcConfigParam::into_rpc_param(config, &[])
+        .into_iter()
+        .map(|value| wire_common::TypedAgentConfigValue {
+            path: value.path,
+            value: value.value,
+        })
+        .collect()
+}
+
+impl<Id, Config, Mode> CompleteAgentClientDefinition<Id, Config, Mode>
+where
+    Id: crate::IntoSchema,
+{
+    pub fn agent_id(
+        &self,
+        constructor: &Id,
+        phantom_id: Option<Uuid>,
+    ) -> Result<ParsedAgentId, GolemReflectError> {
+        make_agent_id_value(self.type_name(), constructor.to_value(), phantom_id)
+    }
+
+    pub fn get_phantom(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, Some(phantom_id), Vec::new(), true)
+    }
+
+    fn type_name(&self) -> &str {
+        self.data
+            .type_name
+            .as_deref()
+            .expect("complete client contract has a type name")
+    }
+
+    fn create(
+        &self,
+        constructor: &Id,
+        phantom_id: Option<Uuid>,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+        reusable: bool,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        let constructor = constructor.to_value();
+        self.data
+            .constructor
+            .as_ref()
+            .expect("complete client contract has a constructor schema")
+            .validate_value(&constructor)?;
+        let reusable_identity = reusable
+            .then(|| make_agent_id_value(self.type_name(), constructor.clone(), phantom_id))
+            .transpose()?;
+        let transport = RpcTransport::create_with_typed_config(
+            self.type_name().to_string(),
+            constructor,
+            phantom_id,
+            config,
+        )?;
+        Ok(TypedAgentClient {
+            definition: self.data.clone(),
+            transport: Rc::new(transport),
+            reusable_identity,
+        })
+    }
+}
+
+impl<Id, Config> CompleteAgentClientDefinition<Id, Config, DurableAgentClientContract>
+where
+    Id: crate::IntoSchema,
+{
+    pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
+        let parts = agent_id.parts()?;
+        if parts.type_name != self.type_name() {
+            return Err(GolemReflectError::InvalidType(format!(
+                "client contract expects `{}`, identity is `{}`",
+                self.type_name(),
+                parts.type_name
+            )));
+        }
+        self.data
+            .constructor
+            .as_ref()
+            .expect("complete client contract has a constructor schema")
+            .validate_value(&parts.constructor_value)?;
+        let transport = RpcTransport::create_with_typed_config(
+            parts.type_name,
+            parts.constructor_value,
+            parts.phantom_id,
+            Vec::new(),
+        )?;
+        Ok(TypedAgentClient {
+            definition: self.data.clone(),
+            transport: Rc::new(transport),
+            reusable_identity: Some(agent_id.clone()),
+        })
+    }
+
+    pub fn get(&self, constructor: &Id) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, None, Vec::new(), true)
+    }
+
+    pub fn new_phantom(&self, constructor: &Id) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, Some(Uuid::new_v4()), Vec::new(), true)
+    }
+}
+
+impl<Id, Config> CompleteAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
+where
+    Id: crate::IntoSchema,
+{
+    pub fn new_phantom(&self, constructor: &Id) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, None, Vec::new(), false)
+    }
+}
+
+impl<Id, Config, Mode> CompleteAgentClientDefinition<Id, Config, Mode>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn get_phantom_with_config(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(phantom_id),
+            encode_rpc_config::<Config>(config),
+            true,
+        )
+    }
+}
+
+impl<Id, Config> CompleteAgentClientDefinition<Id, Config, DurableAgentClientContract>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn get_with_config(
+        &self,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, None, encode_rpc_config::<Config>(config), true)
+    }
+
+    pub fn new_phantom_with_config(
+        &self,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(Uuid::new_v4()),
+            encode_rpc_config::<Config>(config),
+            true,
+        )
+    }
+}
+
+impl<Id, Config> CompleteAgentClientDefinition<Id, Config, EphemeralAgentClientContract>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn new_phantom_with_config(
+        &self,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            None,
+            encode_rpc_config::<Config>(config),
+            false,
+        )
     }
 }
 
 #[derive(Clone)]
 pub struct TypedAgentClient {
-    definition: AgentClientDefinition,
+    definition: AgentClientDefinitionData,
     transport: Rc<RpcTransport>,
+    reusable_identity: Option<ParsedAgentId>,
 }
 
 impl TypedAgentClient {
+    pub fn agent_id(&self) -> Option<&ParsedAgentId> {
+        self.reusable_identity.as_ref()
+    }
+
     pub fn method<I, O>(&self, name: &str) -> Result<TypedAgentMethod<I, O>, GolemReflectError>
     where
         I: crate::IntoSchema,

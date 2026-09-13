@@ -1,0 +1,8 @@
+error[E0599]: no method named `bind` found for struct `CompleteAgentClientDefinition<std::string::String, NoAgentClientConfig, EphemeralAgentClientContract>` in the current scope
+ --> tests/ui/fail/programmatic_ephemeral_bind.rs:8:24
+  |
+8 |     let _ = definition.bind(&id);
+  |                        ^^^^ method not found in `CompleteAgentClientDefinition<std::string::String, NoAgentClientConfig, EphemeralAgentClientContract>`
+  |
+  = note: the method was found for
+          - `CompleteAgentClientDefinition<Id, Config, DurableAgentClientContract>`
