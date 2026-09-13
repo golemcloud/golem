@@ -137,16 +137,14 @@ impl RetryPolicyCommandHandler {
 
             let clients = self.ctx.golem_clients().await?;
 
-            let Some(result) = clients
+            let result = clients
                 .retry_policies
-                .list_environment_retry_policies(&environment.environment_id.0)
+                .get_environment_retry_policy(&environment.environment_id.0, &name)
                 .await
-                .map_service_error()?
-                .values
-                .into_iter()
-                .find(|p| p.name == name)
-            else {
-                log_error(format!("Retry policy '{}' not found in environment", name));
+                .map_service_error_not_found_as_opt()?;
+
+            let Some(result) = result else {
+                log_error(format!("Retry policy '{name}' not found in environment"));
                 bail!(NonSuccessfulExit);
             };
 

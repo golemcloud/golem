@@ -14,9 +14,13 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateSecuritySchemeError,
-    RegistryServiceGetSecuritySchemeError, RegistryServiceListEnvironmentSecuritySchemesError,
+    RegistryServiceGetEnvironmentSecuritySchemeError, RegistryServiceGetSecuritySchemeError,
+    RegistryServiceListEnvironmentSecuritySchemesError,
 };
 use golem_common::model::Empty;
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::security_scheme::{
     Provider, SecuritySchemeCreation, SecuritySchemeName, SecuritySchemeUpdate,
 };
@@ -56,9 +60,84 @@ async fn create_and_fetch_security_scheme(deps: &EnvBasedTestDependencies) -> an
     }
 
     {
+        let fetched_security_scheme = client
+            .get_environment_security_scheme(&env.id.0, &security_scheme.name.0)
+            .await?;
+        assert_eq!(fetched_security_scheme, security_scheme);
+    }
+
+    {
         let result = client.list_environment_security_schemes(&env.id.0).await?;
         assert_eq!(result.values, vec![security_scheme]);
     }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn granted_security_scheme_view_works_without_environment_view(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let owner_client = deps.registry_service().client(&owner.token).await;
+    let (app, env) = owner.app_and_env().await?;
+
+    let security_scheme_creation = SecuritySchemeCreation {
+        name: SecuritySchemeName("test-scheme".to_string()),
+        provider_type: Provider::Google(Empty {}),
+        client_id: "client_id".to_string(),
+        client_secret: "client_secret".to_string(),
+        redirect_url: "http://localhost:9006/auth/callback".to_string(),
+        scopes: vec!["user".to_string(), "admin".to_string()],
+    };
+    let security_scheme = owner_client
+        .create_security_scheme(&env.id.0, &security_scheme_creation)
+        .await?;
+
+    let grantee = deps.user().await?;
+    let grantee_client = deps.registry_service().client(&grantee.token).await;
+
+    // Before any grant the by-name lookup is not visible to the grantee.
+    let before = grantee_client
+        .get_environment_security_scheme(&env.id.0, &security_scheme.name.0)
+        .await;
+    assert!(matches!(
+        before,
+        Err(golem_client::Error::Item(
+            RegistryServiceGetEnvironmentSecuritySchemeError::Error404(_)
+        ))
+    ));
+
+    // Grant view on this ONE security scheme only — no environment-view permission.
+    owner_client
+        .create_permission_share(
+            &owner.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: grantee.account_email.clone(),
+                name: PermissionShareName("security-scheme-view".to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![format!(
+                        "environment.security-scheme({}/{}/{}) @ {} : view : {}",
+                        owner.account_email.as_str(),
+                        app.name.0,
+                        env.name.0,
+                        grantee.account_email.as_str(),
+                        security_scheme.name.0,
+                    )],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
+        .await?;
+
+    // With only the resource grant the by-name lookup now succeeds, matching the by-id lookup.
+    let fetched = grantee_client
+        .get_environment_security_scheme(&env.id.0, &security_scheme.name.0)
+        .await?;
+    assert_eq!(fetched, security_scheme);
 
     Ok(())
 }
@@ -170,6 +249,18 @@ async fn other_users_cannot_see_security_scheme(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceGetSecuritySchemeError::Error404(_)
+            ))
+        ));
+    }
+
+    {
+        let result = client_2
+            .get_environment_security_scheme(&env.id.0, &security_scheme.name.0)
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentSecuritySchemeError::Error404(_)
             ))
         ));
     }

@@ -60,6 +60,12 @@ pub trait AgentSecretRepo: Send + Sync {
         environment_id: Uuid,
     ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 
+    async fn get_for_environment_and_path(
+        &self,
+        environment_id: Uuid,
+        path: Vec<String>,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
+
     /// Gets a stored revision by identity. When `include_deleted` is true, soft-deleted
     /// secrets and parent environment/application/account records are still considered;
     /// deleted revision records themselves are never returned.
@@ -138,6 +144,17 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     ) -> Result<Vec<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         self.repo
             .get_for_environment(environment_id)
+            .instrument(Self::span_environment_id(environment_id))
+            .await
+    }
+
+    async fn get_for_environment_and_path(
+        &self,
+        environment_id: Uuid,
+        path: Vec<String>,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        self.repo
+            .get_for_environment_and_path(environment_id, path)
             .instrument(Self::span_environment_id(environment_id))
             .await
     }
@@ -408,6 +425,19 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
             .await?;
 
         Ok(results)
+    }
+
+    async fn get_for_environment_and_path(
+        &self,
+        environment_id: Uuid,
+        path: Vec<String>,
+    ) -> Result<Option<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
+        Ok(self.with_ro("get_for_environment_and_path").fetch_optional_as(sqlx::query_as(indoc! {r#"
+            SELECT sec.environment_id, sec.path, sec.agent_secret_data, sec.created_at AS entity_created_at, secr.agent_secret_id, secr.revision_id, secr.agent_secret_revision_data, secr.created_at, secr.created_by, secr.deleted
+            FROM agent_secrets sec
+            JOIN agent_secret_revisions secr ON secr.agent_secret_id = sec.agent_secret_id AND secr.revision_id = sec.current_revision_id
+            WHERE sec.environment_id = $1 AND sec.path = $2 AND sec.deleted_at IS NULL
+        "#}).bind(environment_id).bind(sqlx::types::Json(path))).await?)
     }
 
     async fn get_revision(

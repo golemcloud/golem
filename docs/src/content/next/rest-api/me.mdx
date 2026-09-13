@@ -2,15 +2,10 @@
 
 ## Gets information about the current token.
 The JSON is the same as the data object in the oauth2 endpoint's response.
+
 Path|Method|Protected
 ---|---|---
 `/v1/me/token`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -24,11 +19,10 @@ Path|Method|Protected
 ```
 
 ## List all environments that are visible to the current user, either directly or through shares.
+
 Path|Method|Protected
 ---|---|---
 `/v1/me/visible-environments`|GET|Yes
-
-
 
 **Query Parameters**
 
@@ -37,8 +31,6 @@ Name|Type|Required|Description
 account_email|string|No|-
 app_name|string|No|-
 env_name|string|No|-
-
-
 
 **Example Response JSON**
 

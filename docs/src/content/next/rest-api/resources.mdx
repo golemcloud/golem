@@ -1,15 +1,10 @@
 # Resources API
 
 ## Get all resources defined in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/resources`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -36,13 +31,10 @@ Path|Method|Protected
 ```
 
 ## Create a new resource in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/resources`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -81,15 +73,10 @@ Path|Method|Protected
 ```
 
 ## Get a resource in the environment by name
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/resources/{resource_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -112,15 +99,10 @@ Path|Method|Protected
 ```
 
 ## Get a resource by id
+
 Path|Method|Protected
 ---|---|---
 `/v1/resources/{resource_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -143,11 +125,10 @@ Path|Method|Protected
 ```
 
 ## Delete a resource
+
 Path|Method|Protected
 ---|---|---
 `/v1/resources/{resource_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
@@ -155,18 +136,11 @@ Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
 
-
-
-
-
 ## Update a resource
+
 Path|Method|Protected
 ---|---|---
 `/v1/resources/{resource_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -205,15 +179,10 @@ Path|Method|Protected
 ```
 
 ## Get specific revision of a resource
+
 Path|Method|Protected
 ---|---|---
 `/v1/resources/{resource_id}/revisions/{revision}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

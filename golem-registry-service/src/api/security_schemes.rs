@@ -18,8 +18,8 @@ use crate::services::security_scheme::SecuritySchemeService;
 use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
-    SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeRevision,
-    SecuritySchemeUpdate,
+    SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeName,
+    SecuritySchemeRevision, SecuritySchemeUpdate,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -134,6 +134,50 @@ impl SecuritySchemesApi {
         Ok(Json(Page {
             values: result.into_iter().map(|ss| ss.into()).collect(),
         }))
+    }
+
+    /// Get a security scheme in an environment by name.
+    #[oai(
+        path = "/envs/:environment_id/security-schemes/:security_scheme_name",
+        method = "get",
+        operation_id = "get_environment_security_scheme",
+        tag = ApiTags::Environment
+    )]
+    async fn get_environment_security_scheme(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        security_scheme_name: Path<SecuritySchemeName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<SecuritySchemeDto>> {
+        let record = recorded_http_api_request!(
+            "get_environment_security_scheme",
+            environment_id = environment_id.0.to_string(),
+            security_scheme_name = security_scheme_name.0.to_string()
+        );
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let response = self
+            .get_environment_security_scheme_internal(
+                environment_id.0,
+                security_scheme_name.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn get_environment_security_scheme_internal(
+        &self,
+        environment_id: EnvironmentId,
+        security_scheme_name: SecuritySchemeName,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<SecuritySchemeDto>> {
+        Ok(Json(
+            self.security_scheme_service
+                .get_in_environment(environment_id, &security_scheme_name, &auth)
+                .await?
+                .into(),
+        ))
     }
 
     /// Get security scheme

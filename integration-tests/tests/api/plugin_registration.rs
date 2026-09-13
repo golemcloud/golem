@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
+    RegistryServiceClient, RegistryServiceCreatePluginError,
+    RegistryServiceGetAccountPluginByEmailError, RegistryServiceGetAccountPluginError,
+    RegistryServiceGetPluginByIdError,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::permission_share::{
@@ -65,6 +67,13 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
         assert_eq!(fetched_plugin, plugin);
     }
 
+    {
+        let fetched_plugin = client
+            .get_account_plugin(&user.account_id.0, &plugin.name, &plugin.version)
+            .await?;
+        assert_eq!(fetched_plugin, plugin);
+    }
+
     // check other user cannot fetch plugin
     {
         let user_2 = deps.user().await?;
@@ -76,6 +85,65 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
                 RegistryServiceGetPluginByIdError::Error404(_)
             ))
         ));
+
+        let result = client_2
+            .get_account_plugin(&user.account_id.0, &plugin.name, &plugin.version)
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetAccountPluginError::Error404(_)
+            ))
+        ));
+
+        // The by-email scope form (as used by the CLI `--account <email>`) is likewise not
+        // visible before the grant.
+        let result = client_2
+            .get_account_plugin_by_email(user.account_email.as_str(), &plugin.name, &plugin.version)
+            .await;
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetAccountPluginByEmailError::Error404(_)
+            ))
+        ));
+
+        client
+            .create_permission_share(
+                &user.account_id.0,
+                &PermissionShareCreation {
+                    target_account_email: user_2.account_email.clone(),
+                    name: PermissionShareName("plugin-view".to_string()),
+                    data: PermissionShareData {
+                        lower_positive: vec![format!(
+                            "account.plugin({}) @ {} : view : {}",
+                            user.account_email.as_str(),
+                            user_2.account_email.as_str(),
+                            plugin.name,
+                        )],
+                        lower_negative: Vec::new(),
+                        upper_positive: Vec::new(),
+                        upper_negative: Vec::new(),
+                    },
+                },
+            )
+            .await?;
+
+        let fetched_plugin = client_2.get_plugin_by_id(&plugin.id.0).await?;
+        assert_eq!(fetched_plugin, plugin);
+
+        let fetched_plugin = client_2
+            .get_account_plugin(&user.account_id.0, &plugin.name, &plugin.version)
+            .await?;
+        assert_eq!(fetched_plugin, plugin);
+
+        // With only the plugin grant (no account-view), the by-email scope form now behaves
+        // like the account-id form — the CLI `--account <email>` path no longer needs
+        // `AccountVerb::View`.
+        let fetched_plugin = client_2
+            .get_account_plugin_by_email(user.account_email.as_str(), &plugin.name, &plugin.version)
+            .await?;
+        assert_eq!(fetched_plugin, plugin);
     }
 
     // delete plugin
