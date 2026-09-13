@@ -3190,6 +3190,19 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
+        // A sandbox refuses a hard link of a directory with a permission error: EPERM on Linux and
+        // macOS, and ERROR_ACCESS_DENIED on Windows. The refused link has no effect, so the guest
+        // gets `not-permitted` and the filesystem stays valid, as on 1.5.x. Every other permission
+        // error of a hard link stays a terminal failure.
+        if error.io_kind() == Some(std::io::ErrorKind::PermissionDenied)
+            && matches!(
+                namespace_path_state(&generation, source.clone()).await,
+                Ok(NamespacePathState::Present(attributes))
+                    if attributes.kind == SandboxObjectKind::Directory
+            )
+        {
+            return Err(Error::Access(AccessError::NotPermitted));
+        }
         let evidence = if error_proves_no_effect(&error) {
             EffectEvidence::NoEffect
         } else {

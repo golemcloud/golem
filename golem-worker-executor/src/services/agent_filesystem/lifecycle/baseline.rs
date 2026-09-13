@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::initial_files::{
-    Declarations, InstalledFile, PathLookup, PathReader, PathState, declarations_of, install,
-    merged_declarations, observe, seed_with_retry, validate_compatible,
+    Declarations, InitialFileSources, PathLookup, PathReader, declarations_of, holds_golem_file,
+    install, merged_declarations, observe, seed_with_retry, validate_compatible,
 };
 use super::*;
 use crate::sandbox_filesystem::HostPath;
@@ -116,20 +116,11 @@ struct CaptureRecord {
     initial_files: Box<[InitialAgentFile]>,
     /// The entity-provisioned file declarations, in path order.
     provisioned_files: Box<[InitialAgentFile]>,
-    /// The read-only files that were still the files that the lifecycle installed at their
-    /// paths, in path order.
-    read_only_files: Box<[RecordedReadOnlyFile]>,
+    /// The paths of the read-only files whose bytes the tree leaves out, in path order. A
+    /// read-only declaration of the record is at each of these paths and gives the content.
+    left_out: Box<[Box<Path>]>,
     /// The files with more than one name, as the copy found them.
     link_groups: Box<[LinkGroup]>,
-}
-
-/// A read-only file that was still the file that the lifecycle installed at its path.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct RecordedReadOnlyFile {
-    path: Box<Path>,
-    content_hash: AgentFileContentHash,
-    /// Whether the tree leaves out the bytes of the file, because the file had a single name.
-    left_out: bool,
 }
 
 impl CaptureRecord {
@@ -160,10 +151,9 @@ fn record_error(source: anyhow::Error) -> Error {
 /// waits for the calls that are open (`wait_for_calls`), copies the tree, and opens the filesystem
 /// again (`finish_transition`). The capture directory holds `tree/` and `record.json`. The tree is
 /// the whole filesystem minus each read-only initial or entity-provisioned file that has a single
-/// name and is still the file that the lifecycle installed at its declared path. The tree holds a
-/// file with more than one name once. The record gives the read-only files that are still the
-/// files that the lifecycle installed at their paths, with their content hashes and whether the
-/// tree leaves out their bytes. It also gives the hard-link groups and the declarations.
+/// name and is Golem's file at its declared path: a regular file with the declared content and
+/// without write permission. The tree holds a file with more than one name once. The record gives
+/// the paths whose bytes the tree leaves out, the hard-link groups and the declarations.
 ///
 /// The wait for open calls ends at `wait`. A call that is still open then gives `Busy`, and the
 /// filesystem opens again at once. A guest that keeps such a call can never be captured, but the
@@ -241,7 +231,7 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
         .cloned()
         .ok_or(CaptureError::Invalidated)?;
     let state = generation.initial_files.lock().unwrap().clone();
-    let read_only_files = golem_read_only_files(sandbox.as_ref(), &state)
+    let left_out = left_out_files(sandbox.as_ref(), &state)
         .await
         .map_err(CaptureError::Sandbox)?;
     let directory = HostDirectory::create_in(
@@ -250,7 +240,7 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     )
     .await
     .map_err(CaptureError::Sandbox)?;
-    match write_capture(sandbox.as_ref(), &state, read_only_files, directory.path()).await {
+    match write_capture(sandbox.as_ref(), &state, left_out, directory.path()).await {
         Ok(()) => Ok(FilesystemCapture { directory }),
         Err(error) => {
             if let Err(cleanup) = directory.discard().await {
@@ -261,50 +251,50 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-/// Finds the read-only files of the declarations that are still the files that the lifecycle
-/// installed at their paths. The result is in path order.
-async fn golem_read_only_files<Adapter: SandboxFilesystemAdapter>(
+/// Finds the read-only declared paths that hold Golem's file with a single name. A capture leaves
+/// out the bytes of these files. The result is in path order.
+async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     state: &InitialFileState,
-) -> Result<Box<[RecordedReadOnlyFile]>, FilesystemStorageError> {
+) -> Result<Box<[Box<Path>]>, FilesystemStorageError> {
     let declarations = state.declarations();
-    let candidates = state
-        .installed
+    let read_only = declarations
         .iter()
-        .filter_map(|(path, installed)| {
-            declarations
-                .get(path)
-                .filter(|file| file.permissions == AgentFilePermissions::ReadOnly)
-                .map(|file| (path.as_ref(), (installed, file.content_hash)))
-        })
-        .collect::<BTreeMap<&Path, (&InstalledFile, AgentFileContentHash)>>();
-    futures::stream::iter(candidates)
+        .filter(|(_, file)| file.permissions == AgentFilePermissions::ReadOnly)
+        .map(|(path, file)| (path.as_ref(), file))
+        .collect::<BTreeMap<&Path, &InitialAgentFile>>();
+    futures::stream::iter(read_only)
         .map(Ok)
         .try_fold(
             (PathReader::default(), Vec::new()),
-            |(reader, mut files), (path, (installed, content_hash))| async move {
+            |(reader, mut paths), (path, declared)| async move {
                 let (reader, lookup) = reader.read(sandbox, path).await?;
                 if let PathLookup::Found(attributes) = lookup
-                    && installed.matches(&attributes)
+                    && attributes.link_count == 1
+                    && holds_golem_file(
+                        sandbox,
+                        path,
+                        declared,
+                        state.installed.get(path),
+                        &attributes,
+                    )
+                    .await?
                 {
-                    files.push(RecordedReadOnlyFile {
-                        path: Box::from(path),
-                        content_hash,
-                        left_out: attributes.link_count == 1,
-                    });
+                    paths.push(Box::from(path));
                 }
-                Ok((reader, files))
+                Ok((reader, paths))
             },
         )
         .await
-        .map(|(_, files)| files.into_boxed_slice())
+        .map(|(_, paths)| paths.into_boxed_slice())
 }
 
-/// Copies the tree into `directory` and writes the record next to it.
+/// Copies the tree into `directory`, without the bytes of the files at the paths `left_out`, and
+/// writes the record next to it.
 async fn write_capture<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     state: &InitialFileState,
-    read_only_files: Box<[RecordedReadOnlyFile]>,
+    left_out: Box<[Box<Path>]>,
     directory: &HostPath,
 ) -> Result<(), FilesystemStorageError> {
     let tree = directory.child(OsStr::new(TREE_DIRECTORY))?;
@@ -314,10 +304,7 @@ async fn write_capture<Adapter: SandboxFilesystemAdapter>(
             FilesystemStorageError::io("create filesystem capture tree", tree.as_path(), error)
         })?;
     let excluded = Arc::new(TreeExclusions::new(
-        read_only_files
-            .iter()
-            .filter(|file| file.left_out)
-            .map(|file| file.path.to_path_buf()),
+        left_out.iter().map(|path| path.to_path_buf()),
     ));
     let link_groups = sandbox
         .copy_contents(SandboxPath::at_root(""), excluded, &tree)
@@ -325,7 +312,7 @@ async fn write_capture<Adapter: SandboxFilesystemAdapter>(
     let record = CaptureRecord {
         initial_files: sorted_declarations(&state.initial),
         provisioned_files: sorted_declarations(&state.provisioned),
-        read_only_files,
+        left_out,
         link_groups,
     };
     let record_path = directory.child(OsStr::new(RECORD_FILE))?;
@@ -358,14 +345,15 @@ fn sorted_declarations(declarations: &Declarations) -> Box<[InitialAgentFile]> {
 
 /// Puts the baseline of a `Reconstructing` filesystem in place. Reconstructing -> Reconstructing.
 ///
-/// Without a restore, the initial files of `prepared` are seeded on the empty tree. With a
-/// restore, the restored tree is seeded, the other names of each hard-link group of its record are
-/// made, and the initial-file rule runs from the declarations of the record to the declarations
-/// of `prepared` and the provisioned declarations of the record. The rule seeds the left-out
-/// read-only files that it keeps. With equal declarations, it seeds all of them and changes
-/// nothing else. The restore goes into its own directory in the scratch directory, which is
-/// discarded at the end. Callers run this once, before replay access is requested. Success enables
-/// replay access. Any failure seals the returned filesystem for cleanup.
+/// Without a restore, the function seeds the initial files of `prepared` on the empty tree. With a
+/// restore, it seeds the restored tree, makes the other names of each hard-link group of its
+/// record, and seeds each left-out file of the record as a read-only file with the content of its
+/// recorded declaration. The tree then equals the tree at the capture. Then the initial-file rule
+/// runs from the declarations of the record to the declarations of `prepared` and the provisioned
+/// declarations of the record. With equal declarations, the rule changes nothing. The restore goes
+/// into its own directory in the scratch directory, which is discarded at the end. Callers run this
+/// once, before replay access is requested. Success enables replay access. Any failure seals the
+/// returned filesystem for cleanup.
 pub(crate) fn materialize_baseline<
     Adapter: SandboxFilesystemAdapter,
     Restore: RestoreTree + 'static,
@@ -477,6 +465,13 @@ async fn restore_baseline<Adapter: SandboxFilesystemAdapter, Restore: RestoreTre
     restored
 }
 
+/// Restores into `directory` and puts the baseline in place.
+///
+/// The order is: the restore, the seed of the restored tree, the other names of each hard-link
+/// group, and a seed of each left-out file with the content of its recorded declaration. The tree
+/// then equals the tree at the capture. Then the initial-file rule runs from the declarations of
+/// the record to the declarations of `prepared` and the provisioned declarations of the record, as
+/// an automatic update runs it.
 async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     generation: &FilesystemGeneration<Adapter>,
     sandbox: &Adapter,
@@ -491,9 +486,25 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     let CaptureRecord {
         initial_files,
         provisioned_files,
-        read_only_files,
+        left_out,
         link_groups,
     } = CaptureRecord::read(directory).await?;
+    let provisioned = declarations_of(
+        provisioned_files.into_vec(),
+        "restore unique entity-provisioned file declaration",
+    )?;
+    let old = merged_declarations(
+        &declarations_of(
+            initial_files.into_vec(),
+            "restore unique initial-file declaration",
+        )?,
+        &provisioned,
+    );
+    let captured = captured_declarations(&old, &left_out)?;
+    let left_out_sources =
+        InitialFileSources::new(Arc::clone(&prepared.loader), prepared.environment_id);
+    let (initial, sources) = prepared.into_parts();
+    validate_compatible(&provisioned, &initial)?;
     let tree = directory
         .child(OsStr::new(TREE_DIRECTORY))
         .map_err(Error::Sandbox)?;
@@ -509,49 +520,55 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     )
     .await?;
     link_other_names(sandbox, &link_groups).await?;
-    let old = InitialFileState {
-        initial: declarations_of(
-            initial_files.into_vec(),
-            "restore unique initial-file declaration",
-        )?,
-        provisioned: declarations_of(
-            provisioned_files.into_vec(),
-            "restore unique entity-provisioned file declaration",
-        )?,
-        installed: restored_installed_files(sandbox, &read_only_files)
-            .await
-            .map_err(|source| classify_query_error(generation, source))?,
-    };
-    let (initial, sources) = prepared.into_parts();
-    validate_compatible(&old.provisioned, &initial)?;
-    let new = merged_declarations(&initial, &old.provisioned);
-    let old_declarations = old.declarations();
-    let states = observe(sandbox, &old_declarations, &new, &old.installed)
-        .await
-        .map_err(|source| classify_query_error(generation, source))?
-        .into_iter()
-        .chain(
-            read_only_files
-                .iter()
-                .filter(|file| file.left_out)
-                .map(|file| (file.path.clone(), PathState::LeftOut)),
-        )
-        .collect();
-    let installed = install(
+    // The captured declarations describe the restored tree, in which each left-out path is empty.
+    // An install from them to the declarations of the record seeds each left-out file there.
+    let seeded = install(
         generation,
         sandbox,
-        sources,
-        &old_declarations,
-        &old.installed,
-        &new,
-        &states,
+        left_out_sources,
+        &captured,
+        &HashMap::new(),
+        &old,
+        &HashMap::new(),
     )
     .await?;
+    let new = merged_declarations(&initial, &provisioned);
+    let states = observe(sandbox, &old, &new, &seeded)
+        .await
+        .map_err(|source| classify_query_error(generation, source))?;
+    let installed = install(generation, sandbox, sources, &old, &seeded, &new, &states).await?;
     Ok(InitialFileState {
         initial,
-        provisioned: old.provisioned,
+        provisioned,
         installed,
     })
+}
+
+/// Gives `declarations` without the paths `left_out`. Refuses a left-out path that has no read-only
+/// declaration, because a restore cannot seed a file at it.
+fn captured_declarations(
+    declarations: &Declarations,
+    left_out: &[Box<Path>],
+) -> Result<Declarations, Error> {
+    let left_out = left_out
+        .iter()
+        .map(AsRef::as_ref)
+        .collect::<HashSet<&Path>>();
+    match left_out.iter().find(|path| {
+        !declarations
+            .get(**path)
+            .is_some_and(|file| file.permissions == AgentFilePermissions::ReadOnly)
+    }) {
+        Some(path) => Err(record_error(anyhow::anyhow!(
+            "the filesystem capture record leaves out {} without a read-only declaration",
+            path.display()
+        ))),
+        None => Ok(declarations
+            .iter()
+            .filter(|(path, _)| !left_out.contains(path.as_ref()))
+            .map(|(path, file)| (path.clone(), file.clone()))
+            .collect()),
+    }
 }
 
 /// Makes the other names of each group into hard links to its first name.
@@ -577,32 +594,4 @@ async fn link_other_names<Adapter: SandboxFilesystemAdapter>(
                 .map_err(Error::Sandbox)
         })
         .await
-}
-
-/// Records the read-only files of a record whose bytes are in the restored tree as the files that
-/// the lifecycle installed at their paths.
-async fn restored_installed_files<Adapter: SandboxFilesystemAdapter>(
-    sandbox: &Adapter,
-    files: &[RecordedReadOnlyFile],
-) -> Result<HashMap<Box<Path>, InstalledFile>, FilesystemStorageError> {
-    let with_bytes = files
-        .iter()
-        .filter(|file| !file.left_out)
-        .collect::<Vec<&RecordedReadOnlyFile>>();
-    futures::stream::iter(with_bytes)
-        .map(Ok)
-        .try_fold(
-            (PathReader::default(), HashMap::new()),
-            |(reader, mut installed), file| async move {
-                let (reader, lookup) = reader.read(sandbox, &file.path).await?;
-                if let PathLookup::Found(attributes) = lookup
-                    && attributes.kind == SandboxObjectKind::File
-                {
-                    installed.insert(file.path.clone(), InstalledFile::of(&attributes));
-                }
-                Ok((reader, installed))
-            },
-        )
-        .await
-        .map(|(_, installed)| installed)
 }

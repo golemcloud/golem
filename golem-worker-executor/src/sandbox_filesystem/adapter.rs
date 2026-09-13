@@ -717,8 +717,6 @@ pub(crate) struct SandboxAttributes {
     pub size: u64,
     pub accessed: Option<SystemTime>,
     pub modified: Option<SystemTime>,
-    /// The creation time of the object, where the filesystem records it.
-    pub created: Option<SystemTime>,
     /// Whether the object has no write permission.
     pub read_only: bool,
     /// The identity of the object. All names of one object have the same identity.
@@ -2205,7 +2203,6 @@ fn attributes(metadata: cap_std::fs::Metadata) -> std::io::Result<SandboxAttribu
         size: metadata.len(),
         accessed: metadata.accessed().ok().map(|time| time.into_std()),
         modified: metadata.modified().ok().map(|time| time.into_std()),
-        created: metadata.created().ok().map(|time| time.into_std()),
         read_only: metadata.permissions().readonly(),
         object: SandboxObjectId(native_file_identity(&metadata)?),
     })
@@ -3394,7 +3391,6 @@ mod tests {
             size: 12,
             accessed: None,
             modified: None,
-            created: None,
             read_only: false,
             object: SandboxObjectId::scripted(12),
         };
@@ -4025,7 +4021,6 @@ mod tests {
         assert_eq!(file.link_count, 2);
         assert_eq!(file.object, alias.object);
         assert_ne!(file.object, other.object);
-        assert_eq!(file.created, alias.created);
         SandboxFilesystem::delete_and_verify(&filesystem)
             .await
             .unwrap();

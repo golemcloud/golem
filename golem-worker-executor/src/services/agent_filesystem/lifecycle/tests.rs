@@ -207,7 +207,6 @@ fn sandbox_attributes(kind: SandboxObjectKind) -> SandboxAttributes {
         size: 0,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }
@@ -1654,7 +1653,6 @@ async fn delete_barrier_covers_directory_attribute_and_symlink_queries() {
         size: 4,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -2480,7 +2478,6 @@ async fn unknown_hard_link_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -2511,6 +2508,123 @@ async fn unknown_hard_link_effect_invalidates_without_retry() {
         .unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_hard_link_of_a_directory_that_the_sandbox_refuses_gives_not_permitted_and_keeps_the_generation()
+ {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
+    control.push_get_attributes(Err(missing("destination before the link")));
+    control.push_hard_link(Err(sandbox_error(
+        "hard link a directory",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::Directory)));
+
+    let linked = edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: at("directory"),
+            destination: at("alias"),
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+        "{linked:?}"
+    );
+    assert_eq!(call_count(&control, "hard_link("), 1);
+    let source_read = control
+        .calls()
+        .into_iter()
+        .rfind(|call| call.starts_with("get_path_attributes("));
+    assert!(
+        source_read.as_deref().is_some_and(|call| {
+            call.contains(r#"path: "directory" }"#) && call.ends_with("follow=No)")
+        }),
+        "the lifecycle must read the source of the refused link without following a symlink: \
+         {source_read:?}"
+    );
+    assert!(!filesystem_activity(&filesystem).has_terminal_failure());
+    control.push_get_attributes(Err(missing("directory before the insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: at("after-refused-link"),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+async fn a_hard_link_of_a_file_that_the_sandbox_refuses_with_a_permission_error_invalidates_the_generation()
+ {
+    use futures::StreamExt as _;
+
+    futures::stream::iter([libc::EPERM, libc::EACCES])
+        .for_each(|errno| async move {
+            let (filesystem, control, window) = metered_resident().await;
+            let generation_handle = resident_generation_handle(&filesystem);
+            let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
+            control.push_get_attributes(Err(missing("destination before the link")));
+            control.push_hard_link(Err(FilesystemStorageError::io(
+                "hard link a file",
+                Path::new("<scripted>"),
+                std::io::Error::from_raw_os_error(errno),
+            )));
+            control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+            control.push_get_attributes(Err(missing("destination after the refused link")));
+
+            let linked = edit_namespace(
+                &generation_handle,
+                NamespaceEdit::Link {
+                    source: at("source"),
+                    destination: at("alias"),
+                },
+            )
+            .unwrap()
+            .await;
+
+            assert!(
+                matches!(linked, Err(Error::RuntimeInvalidated)),
+                "errno {errno}: {linked:?}"
+            );
+            assert!(
+                matches!(
+                    edit_namespace(
+                        &generation_handle,
+                        NamespaceEdit::Insert {
+                            destination: at("after-terminal-link"),
+                            object: NewObject::Directory,
+                        },
+                    ),
+                    Err(AccessError::Revoked)
+                ),
+                "errno {errno}"
+            );
+
+            close_window(window, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            control.push_delete_and_verify(Ok(()));
+            delete(seal(filesystem)).await.unwrap();
+        })
+        .await;
 }
 
 #[cfg(target_os = "linux")]
@@ -2607,7 +2721,6 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
         size: 0,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -2618,7 +2731,6 @@ async fn rename_guest_failure_and_time_postcondition_keep_generation_handle_vali
         size: 0,
         accessed: Some(accessed),
         modified: Some(modified),
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -2705,7 +2817,6 @@ async fn unknown_attribute_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -2759,7 +2870,6 @@ async fn unknown_namespace_effect_invalidates_without_retry() {
         size: 0,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -6850,7 +6960,6 @@ async fn successful_set_size_does_not_observe_allocation() {
         size: 4,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -6897,7 +7006,6 @@ async fn resize_postconditions_accept_desired_retry_no_effect_and_invalidate_unk
         size,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     };
@@ -6992,7 +7100,6 @@ async fn replay_time_restoration_accepts_a_read_only_descriptor() {
         size: 0,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -7033,7 +7140,6 @@ async fn timestamp_postconditions_preserve_keep_and_retry_only_proven_no_effect(
         size: 0,
         accessed,
         modified,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     };
@@ -7099,7 +7205,6 @@ async fn successful_set_times_never_observes_allocation() {
         size: 0,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     };
@@ -7183,7 +7288,6 @@ async fn successful_resize_ignores_unrelated_observer_failure() {
         size: 4,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -7234,7 +7338,6 @@ async fn resize_quota_precedes_pressure_and_growth_can_use_proven_recovery() {
         size,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     };
@@ -7397,7 +7500,6 @@ async fn dropped_attribute_and_flush_observers_need_no_billing_close_coupling() 
         size: 1,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(0),
     }));
@@ -7659,7 +7761,6 @@ proptest! {
             size: 0,
             accessed: time(before_accessed),
             modified: time(before_modified),
-            created: None,
             read_only: false,
             object: SandboxObjectId::scripted(0),
         };

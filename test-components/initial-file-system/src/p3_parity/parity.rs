@@ -717,6 +717,71 @@ pub(crate) async fn inspect_file(path: &str) -> Vec<String> {
     ]
 }
 
+/// Makes a directory and hard links it through P2 and P3. The kernel refuses a hard link of a
+/// directory, so each link gives `not-permitted`. A directory made in the linked directory after
+/// the refusal shows that the filesystem stays usable.
+pub(crate) async fn run_directory_link() -> Vec<String> {
+    let (root_p2, _) = p2_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P2 preopened directory");
+    let (root_p3, _) = p3_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P3 preopened directory");
+    let p2 = [
+        format!(
+            "directory_create_p2={}",
+            p2_result(root_p2.create_directory_at("linked-directory-p2"))
+        ),
+        format!(
+            "directory_link_p2={}",
+            p2_result(root_p2.link_at(
+                p2_types::PathFlags::empty(),
+                "linked-directory-p2",
+                &root_p2,
+                "directory-alias-p2",
+            ))
+        ),
+        format!(
+            "create_after_directory_link_p2={}",
+            p2_result(root_p2.create_directory_at("linked-directory-p2/after"))
+        ),
+    ];
+    let p3 = [
+        format!(
+            "directory_create_p3={}",
+            p3_result(
+                root_p3
+                    .create_directory_at("linked-directory-p3".to_string())
+                    .await
+            )
+        ),
+        format!(
+            "directory_link_p3={}",
+            p3_result(
+                root_p3
+                    .link_at(
+                        p3_types::PathFlags::empty(),
+                        "linked-directory-p3".to_string(),
+                        &root_p3,
+                        "directory-alias-p3".to_string(),
+                    )
+                    .await
+            )
+        ),
+        format!(
+            "create_after_directory_link_p3={}",
+            p3_result(
+                root_p3
+                    .create_directory_at("linked-directory-p3/after".to_string())
+                    .await
+            )
+        ),
+    ];
+    p2.into_iter().chain(p3).collect()
+}
+
 pub(crate) async fn inspect_run() -> Vec<String> {
     inspect_file("bar/baz.txt").await
 }

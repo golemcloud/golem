@@ -52,19 +52,13 @@ async fn holds_within(limit: Duration, condition: impl Fn() -> bool) -> bool {
     .is_ok()
 }
 
-fn file_attributes(
-    object: u64,
-    created: Option<SystemTime>,
-    link_count: u64,
-    read_only: bool,
-) -> SandboxAttributes {
+fn file_attributes(object: u64, size: u64, link_count: u64, read_only: bool) -> SandboxAttributes {
     SandboxAttributes {
         kind: SandboxObjectKind::File,
         link_count,
-        size: 0,
+        size,
         accessed: None,
         modified: None,
-        created,
         read_only,
         object: SandboxObjectId::scripted(object),
     }
@@ -148,13 +142,13 @@ fn write_capture_directory(into: &Path, files: &[(&str, &[u8])], record: &serde_
 
 fn record(
     initial: &[&InitialAgentFile],
-    read_only: serde_json::Value,
+    left_out: serde_json::Value,
     link_groups: serde_json::Value,
 ) -> serde_json::Value {
     serde_json::json!({
         "initial_files": initial,
         "provisioned_files": [],
-        "read_only_files": read_only,
+        "left_out": left_out,
         "link_groups": link_groups,
     })
 }
@@ -324,7 +318,7 @@ async fn capture_waits_for_a_dropped_call_that_still_runs() {
 }
 
 #[test]
-async fn capture_records_golem_read_only_files_and_leaves_out_those_with_a_single_name() {
+async fn capture_leaves_out_the_read_only_files_that_hold_golem_s_file_with_a_single_name() {
     let store = InitialFileStore::new().await;
     let read_only = |path: &'static str| {
         let store = &store;
@@ -335,46 +329,67 @@ async fn capture_records_golem_read_only_files_and_leaves_out_those_with_a_singl
         }
     };
     let files = [
+        read_only("/directory").await,
+        read_only("/installed").await,
         read_only("/linked").await,
-        read_only("/no-time").await,
-        read_only("/no-time-writable").await,
-        read_only("/renamed").await,
-        read_only("/replaced").await,
-        read_only("/reused").await,
-        read_only("/single").await,
+        read_only("/missing").await,
+        read_only("/other-content").await,
+        read_only("/other-object").await,
         store
-            .declare("/writable", AgentFilePermissions::ReadWrite, b"writable")
+            .declare(
+                "/read-write",
+                AgentFilePermissions::ReadWrite,
+                b"/read-write",
+            )
             .await,
+        read_only("/resized").await,
+        read_only("/writable").await,
     ];
-    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-    let later = time + Duration::from_secs(1);
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     files.iter().for_each(|_| control.push_seed(Ok(())));
-    [
-        file_attributes(2, Some(time), 1, true),
-        file_attributes(7, None, 1, true),
-        file_attributes(8, None, 1, true),
-        file_attributes(3, Some(time), 1, true),
-        file_attributes(4, Some(time), 1, true),
-        file_attributes(6, Some(time), 1, true),
-        file_attributes(1, Some(time), 1, true),
-    ]
-    .into_iter()
-    .for_each(|attributes| control.push_get_attributes(Ok(attributes)));
+    files
+        .iter()
+        .filter(|file| file.permissions == AgentFilePermissions::ReadOnly)
+        .zip(1..)
+        .for_each(|(file, object)| {
+            control.push_get_attributes(Ok(file_attributes(object, file.size, 1, true)))
+        });
     let prepared = store.prepare(&files).await;
     let resident = scripted_resident(&control, filesystem, prepared).await;
+    let size_of = |path: &str| {
+        files
+            .iter()
+            .find(|file| file.path.to_rel_string() == path)
+            .unwrap()
+            .size
+    };
     [
-        Ok(file_attributes(2, Some(time), 2, true)),
-        Ok(file_attributes(7, None, 1, true)),
-        Ok(file_attributes(8, None, 1, false)),
-        Err(missing("read renamed initial file")),
-        Ok(file_attributes(5, Some(time), 1, false)),
-        Ok(file_attributes(6, Some(later), 1, true)),
-        Ok(file_attributes(1, Some(time), 1, true)),
+        Ok(SandboxAttributes {
+            kind: SandboxObjectKind::Directory,
+            ..file_attributes(1, size_of("directory"), 1, true)
+        }),
+        Ok(file_attributes(2, size_of("installed"), 1, true)),
+        Ok(file_attributes(3, size_of("linked"), 2, true)),
+        Err(missing("read a missing initial file")),
+        Ok(file_attributes(50, size_of("other-content"), 1, true)),
+        Ok(file_attributes(60, size_of("other-object"), 1, true)),
+        Ok(file_attributes(7, 1, 1, true)),
+        Ok(file_attributes(8, size_of("writable"), 1, false)),
     ]
     .into_iter()
     .for_each(|attributes| control.push_get_attributes(attributes));
+    [
+        (50, b"/OTHER-content".as_slice()),
+        (60, b"/other-object".as_slice()),
+    ]
+    .into_iter()
+    .for_each(|(object, content)| {
+        control.push_open(Ok(SandboxOpened::scripted_file(object)));
+        control.push_read(Ok(Bytes::from_static(content)));
+        control.push_read(Ok(Bytes::new()));
+        control.push_close(Ok(()));
+    });
     control.push_copy_contents(Ok(Box::new([LinkGroup {
         first: Path::new("linked").into(),
         others: Box::new([Box::from(Path::new("elsewhere"))]),
@@ -388,37 +403,26 @@ async fn capture_records_golem_read_only_files_and_leaves_out_those_with_a_singl
         .find(|call| call.starts_with("copy_contents("))
         .unwrap();
     assert!(
-        copy_call.contains(r#"excluded=["no-time", "single"]"#),
+        copy_call.contains(r#"excluded=["installed", "other-object"]"#),
         "{copy_call}"
+    );
+    assert_eq!(
+        call_count(&control, "open("),
+        2,
+        "the capture reads the content of a file only when the recorded object does not match"
     );
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(captured.directory().join("record.json")).unwrap())
             .unwrap();
-    let recorded = |path: &str, left_out: bool| {
-        let file = files
-            .iter()
-            .find(|file| file.path.to_rel_string() == path)
-            .unwrap();
+    assert_eq!(
+        record,
         serde_json::json!({
-            "path": path,
-            "content_hash": file.content_hash,
-            "left_out": left_out,
+            "initial_files": files,
+            "provisioned_files": [],
+            "left_out": ["installed", "other-object"],
+            "link_groups": [{ "first": "linked", "others": ["elsewhere"] }],
         })
-    };
-    assert_eq!(
-        record["read_only_files"],
-        serde_json::json!([
-            recorded("linked", false),
-            recorded("no-time", true),
-            recorded("single", true),
-        ])
     );
-    assert_eq!(
-        record["link_groups"],
-        serde_json::json!([{ "first": "linked", "others": ["elsewhere"] }])
-    );
-    assert_eq!(record["initial_files"], serde_json::json!(files));
-    assert_eq!(record["provisioned_files"], serde_json::json!([]));
     captured.discard().await.unwrap();
     delete_scripted_resident(&control, resident).await;
 }
@@ -434,7 +438,7 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
         .await;
     let capture_record = record(
         &[&kept, &notes],
-        serde_json::json!([{ "path": "kept", "content_hash": kept.content_hash, "left_out": true }]),
+        serde_json::json!(["kept"]),
         serde_json::json!([{ "first": "data/a", "others": ["data/b"] }]),
     );
     let (filesystem, control, _) =
@@ -442,7 +446,7 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
     control.push_seed(Ok(()));
     control.push_hard_link(Ok(()));
     control.push_seed(Ok(()));
-    control.push_get_attributes(Ok(file_attributes(1, None, 1, true)));
+    control.push_get_attributes(Ok(file_attributes(1, 0, 1, true)));
     let restored_into = Arc::new(Mutex::new(None));
     let restore = FixtureRestore({
         let control = control.clone();
@@ -505,6 +509,85 @@ async fn baseline_with_a_restore_restores_seeds_the_tree_makes_the_links_then_ap
     );
     assert!(!into.exists(), "the restore directory must be discarded");
     assert!(scratch_is_empty(&scratch));
+    control.push_delete_and_verify(Ok(()));
+    delete(abort_reconstruction(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_manual_update_from_a_restore_seeds_the_old_left_out_file_before_the_rule_replaces_it() {
+    let store = InitialFileStore::new().await;
+    let old = store
+        .declare("/config", AgentFilePermissions::ReadOnly, b"old")
+        .await;
+    let new = store
+        .declare("/config", AgentFilePermissions::ReadOnly, b"new")
+        .await;
+    let old_source = store
+        .loader
+        .get_source(store.environment_id, old.content_hash, old.size)
+        .await
+        .unwrap();
+    let new_source = store
+        .loader
+        .get_source(store.environment_id, new.content_hash, new.size)
+        .await
+        .unwrap();
+    let capture_record = serde_json::json!({
+        "initial_files": [&old],
+        "provisioned_files": [],
+        "left_out": ["config"],
+        "link_groups": [],
+    });
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Ok(()));
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(file_attributes(1, 0, 1, true)));
+    control.push_get_attributes(Ok(file_attributes(1, old.size, 1, true)));
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(file_attributes(2, 0, 1, true)));
+    let prepared = store.prepare(std::slice::from_ref(&new)).await;
+
+    let filesystem = materialize_baseline(
+        filesystem,
+        prepared,
+        Some(FixtureRestore(move |into: &Path| {
+            write_capture_directory(into, &[], &capture_record);
+            Ok(())
+        })),
+    )
+    .await
+    .unwrap();
+
+    let seeds = control
+        .calls()
+        .into_iter()
+        .filter(|call| call.starts_with("seed("))
+        .collect::<Box<[_]>>();
+    let source_of = |call: &str| {
+        call.split_once("source=")
+            .and_then(|(_, rest)| rest.split_once(", target="))
+            .map(|(source, _)| source.to_string())
+    };
+    assert_eq!(seeds.len(), 3, "{seeds:#?}");
+    assert!(
+        seeds[1].contains(r#"path: "config" }, access=ReadOnly, existing=Fail"#),
+        "{}",
+        seeds[1]
+    );
+    assert_eq!(
+        source_of(&seeds[1]),
+        Some(old_source.path().as_path().display().to_string())
+    );
+    assert!(
+        seeds[2].contains(r#"path: "config" }, access=ReadOnly, existing=Replace"#),
+        "{}",
+        seeds[2]
+    );
+    assert_eq!(
+        source_of(&seeds[2]),
+        Some(new_source.path().as_path().display().to_string())
+    );
     control.push_delete_and_verify(Ok(()));
     delete(abort_reconstruction(filesystem)).await.unwrap();
 }
@@ -616,7 +699,6 @@ async fn an_update_reads_only_what_the_initial_file_rule_needs() {
         size,
         accessed: None,
         modified: None,
-        created: None,
         read_only: false,
         object: SandboxObjectId::scripted(5),
     };
@@ -905,7 +987,7 @@ async fn an_update_that_fails_after_the_plan_invalidates_the_generation_and_a_co
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
     control.push_seed(Ok(()));
-    control.push_get_attributes(Ok(file_attributes(1, None, 1, true)));
+    control.push_get_attributes(Ok(file_attributes(1, 0, 1, true)));
     let resident = scripted_resident(
         &control,
         filesystem,
@@ -913,7 +995,7 @@ async fn an_update_that_fails_after_the_plan_invalidates_the_generation_and_a_co
     )
     .await;
     let generation_handle = resident_generation_handle(&resident);
-    control.push_get_attributes(Ok(file_attributes(9, None, 1, false)));
+    control.push_get_attributes(Ok(file_attributes(9, 0, 1, false)));
 
     let conflict = update_initial_files(
         &generation_handle,
@@ -929,7 +1011,7 @@ async fn an_update_that_fails_after_the_plan_invalidates_the_generation_and_a_co
     assert_eq!(call_count(&control, "seed("), 1);
     assert!(!filesystem_activity(&resident).has_terminal_failure());
 
-    control.push_get_attributes(Ok(file_attributes(1, None, 1, true)));
+    control.push_get_attributes(Ok(file_attributes(1, old.size, 1, true)));
     control.push_seed(Err(sandbox_error(
         "replace initial file",
         std::io::ErrorKind::InvalidInput,
@@ -947,6 +1029,88 @@ async fn an_update_that_fails_after_the_plan_invalidates_the_generation_and_a_co
     assert!(matches!(failure, Error::Sandbox(_)), "{failure}");
     assert!(filesystem_activity(&resident).has_terminal_failure());
     delete_scripted_resident(&control, resident).await;
+}
+
+#[test]
+async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_file() {
+    let store = InitialFileStore::new().await;
+    let installed = store
+        .declare("/config", AgentFilePermissions::ReadOnly, b"installed")
+        .await;
+    let changed = store
+        .declare("/config", AgentFilePermissions::ReadOnly, b"changed")
+        .await;
+    let writable = store
+        .declare("/config", AgentFilePermissions::ReadWrite, b"installed")
+        .await;
+    // A name, the files of the update, and whether the update must fail with a conflict.
+    type AgentFileCase = (&'static str, Vec<InitialAgentFile>, bool);
+    let cases: [AgentFileCase; 3] = [
+        ("a read-only update", vec![changed], true),
+        ("a read-write update", vec![writable], false),
+        ("an update that drops the path", vec![], false),
+    ];
+
+    futures::stream::iter(cases)
+        .for_each(|(name, files, conflict)| {
+            let store = &store;
+            let installed = installed.clone();
+            async move {
+                let size = installed.size;
+                let (filesystem, control, _) =
+                    bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None)
+                        .await;
+                control.push_seed(Ok(()));
+                control.push_get_attributes(Ok(file_attributes(7, size, 1, true)));
+                let resident =
+                    scripted_resident(&control, filesystem, store.prepare(&[installed]).await)
+                        .await;
+                // The agent removed Golem's file and wrote a new file with the declared size at
+                // the path. The new file got the recorded object, and it has write bits. So only
+                // the write bits can show that it is not Golem's file.
+                control.push_get_attributes(Ok(file_attributes(7, size, 1, false)));
+                let changes_before =
+                    call_count(&control, "seed(") + call_count(&control, "unlink_file(");
+                let opens_before = call_count(&control, "open(");
+
+                let updated = update_initial_files(
+                    &resident_generation_handle(&resident),
+                    Arc::clone(&store.loader),
+                    store.environment_id,
+                    files,
+                )
+                .unwrap()
+                .await;
+
+                match (conflict, &updated) {
+                    (true, Err(error)) => assert!(
+                        error.to_string().contains(
+                            "install a read-only initial file over other data at filesystem \
+                             config"
+                        ),
+                        "{name}: {error}"
+                    ),
+                    (true, Ok(())) => panic!("{name}: the update must fail with a conflict"),
+                    (false, result) => assert!(result.is_ok(), "{name}: {result:?}"),
+                }
+                assert_eq!(
+                    call_count(&control, "seed(") + call_count(&control, "unlink_file("),
+                    changes_before,
+                    "{name}: the update must not change the file of the agent"
+                );
+                assert_eq!(
+                    call_count(&control, "open("),
+                    opens_before,
+                    "{name}: the write bits alone must show that the file is not Golem's file"
+                );
+                assert!(
+                    !filesystem_activity(&resident).has_terminal_failure(),
+                    "{name}"
+                );
+                delete_scripted_resident(&control, resident).await;
+            }
+        })
+        .await;
 }
 
 /// Filesystems on unmanaged storage in a temporary directory, with one initial-file store.
@@ -1254,25 +1418,9 @@ async fn capture_then_restore_on_unmanaged_storage_gives_back_the_same_tree() {
     let record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(captured.directory().join("record.json")).unwrap())
             .unwrap();
-    let recorded = record["read_only_files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|file| {
-            (
-                file["path"].as_str().unwrap().to_string(),
-                file["left_out"].as_bool().unwrap(),
-            )
-        })
-        .collect::<Vec<_>>();
     assert_eq!(
-        recorded,
-        [
-            ("nested/ro-nested.txt".to_string(), true),
-            ("ro-kept.txt".to_string(), true),
-            ("ro-linked.txt".to_string(), false),
-            ("ro-provisioned.txt".to_string(), true),
-        ]
+        record["left_out"],
+        serde_json::json!(["nested/ro-nested.txt", "ro-kept.txt", "ro-provisioned.txt"])
     );
     assert_eq!(
         record["provisioned_files"],
@@ -1290,7 +1438,7 @@ async fn capture_then_restore_on_unmanaged_storage_gives_back_the_same_tree() {
     )
     .unwrap();
     assert_eq!(
-        record_again["read_only_files"], record["read_only_files"],
+        record_again["left_out"], record["left_out"],
         "the read-only files that a restore puts in place must stay Golem's files"
     );
     captured_again.discard().await.unwrap();
@@ -1436,8 +1584,10 @@ async fn each_conflict_fails_the_install_with_its_path_and_changes_nothing() {
     let ro = AgentFilePermissions::ReadOnly;
     let rw = AgentFilePermissions::ReadWrite;
     let target = store.declare("/target.txt", ro, b"initial").await;
-    let source = store.declare("/source.txt", ro, b"initial").await;
+    let changed_target = store.declare("/target.txt", ro, b"changed").await;
+    let source = store.declare("/source.txt", ro, b"other").await;
     let writable_target = store.declare("/target.txt", rw, b"initial").await;
+    let target_below_a_file = store.declare("/above/target.txt", ro, b"initial").await;
     // A name, the old declarations, the new declarations, and what an invocation does.
     type ConflictCase = (
         &'static str,
@@ -1445,7 +1595,7 @@ async fn each_conflict_fails_the_install_with_its_path_and_changes_nothing() {
         Vec<InitialAgentFile>,
         fn(&Path),
     );
-    let cases: [ConflictCase; 4] = [
+    let cases: [ConflictCase; 5] = [
         (
             "a file that an invocation wrote",
             vec![],
@@ -1459,14 +1609,20 @@ async fn each_conflict_fails_the_install_with_its_path_and_changes_nothing() {
             |root| std::fs::write(root.join("target.txt"), b"changed").unwrap(),
         ),
         (
-            "a read-only file that the agent moved there",
-            vec![source.clone()],
+            "a read-only file with other content that the agent moved there",
             vec![source.clone(), target.clone()],
+            vec![source.clone(), changed_target.clone()],
             |root| std::fs::rename(root.join("source.txt"), root.join("target.txt")).unwrap(),
         ),
         ("a directory", vec![], vec![target.clone()], |root| {
             std::fs::create_dir(root.join("target.txt")).unwrap()
         }),
+        (
+            "a file above the path",
+            vec![],
+            vec![target_below_a_file.clone()],
+            |root| std::fs::write(root.join("above"), b"agent").unwrap(),
+        ),
     ];
 
     futures::stream::iter(cases.into_iter().enumerate())
@@ -1721,14 +1877,307 @@ async fn read_only_initial_files_follow_their_permission_bits_after_rename_link_
     delete(seal(resident)).await.unwrap();
 }
 
-/// The directory places of the path space of the restore property. A directory is the only object
-/// at these places.
+#[test]
+#[timeout("60s")]
+async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_the_path_is_golem_s_file()
+ {
+    let agents = UnmanagedAgents::new().await;
+    let store = &agents.store;
+    let ro = AgentFilePermissions::ReadOnly;
+    let old = [
+        store.declare("/h.txt", ro, b"two").await,
+        store.declare("/e/f.txt", ro, b"two").await,
+    ];
+    let changed = store.declare("/h.txt", ro, b"three").await;
+    // A name, the new declarations, and the content that the update leaves at h.txt.
+    type MovedFileCase = (&'static str, Vec<InitialAgentFile>, Option<&'static [u8]>);
+    let cases: [MovedFileCase; 2] = [
+        ("an update that drops h.txt", vec![old[1].clone()], None),
+        (
+            "an update that changes h.txt",
+            vec![changed, old[1].clone()],
+            Some(b"three".as_slice()),
+        ),
+    ];
+    let move_onto_the_path =
+        |root: &Path| std::fs::rename(root.join("e/f.txt"), root.join("h.txt")).unwrap();
+
+    futures::stream::iter(cases.into_iter().enumerate())
+        .for_each(|(index, (name, new, expected))| {
+            let agents = &agents;
+            let old = &old;
+            async move {
+                let automatic_agent = agents.agent(&format!("automatic-{index}"));
+                let automatic = agents
+                    .start(&automatic_agent, old, NO_RESTORE)
+                    .await
+                    .unwrap();
+                move_onto_the_path(&agents.root(&automatic_agent));
+                let updated = update_initial_files(
+                    &resident_generation_handle(&automatic),
+                    Arc::clone(&agents.store.loader),
+                    agents.store.environment_id,
+                    new.clone(),
+                )
+                .unwrap()
+                .await;
+                assert!(updated.is_ok(), "{name}: {updated:?}");
+                let automatic_tree = read_tree(&agents.root(&automatic_agent), |_| false);
+
+                let source_agent = agents.agent(&format!("manual-source-{index}"));
+                let source = agents.start(&source_agent, old, NO_RESTORE).await.unwrap();
+                move_onto_the_path(&agents.root(&source_agent));
+                let captured = capture(&source, Duration::from_secs(5)).await.unwrap();
+                let manual_agent = agents.agent(&format!("manual-{index}"));
+                let manual = agents
+                    .start(&manual_agent, &new, Some(copying_restore(&captured)))
+                    .await
+                    .unwrap();
+
+                assert_eq!(
+                    read_tree(&agents.root(&manual_agent), |_| false),
+                    automatic_tree,
+                    "{name}"
+                );
+                let at_path = match automatic_tree.nodes.get("h.txt") {
+                    Some(Node::File { mode, content, .. }) => {
+                        Some((mode & 0o222 == 0, content.as_slice()))
+                    }
+                    _ => None,
+                };
+                assert_eq!(at_path, expected.map(|content| (true, content)), "{name}");
+                assert!(!automatic_tree.nodes.contains_key("e/f.txt"), "{name}");
+                captured.discard().await.unwrap();
+                delete(seal(automatic)).await.unwrap();
+                delete(seal(source)).await.unwrap();
+                delete(seal(manual)).await.unwrap();
+            }
+        })
+        .await;
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_left_out_file_above_a_new_declaration_gives_automatic_and_manual_updates_the_same_result()
+ {
+    let agents = UnmanagedAgents::new().await;
+    let store = &agents.store;
+    let config = [store
+        .declare("/config", AgentFilePermissions::ReadOnly, b"config")
+        .await];
+    let read_only_app = [store
+        .declare("/config/app.toml", AgentFilePermissions::ReadOnly, b"app")
+        .await];
+    let writable_app = [store
+        .declare("/config/app.toml", AgentFilePermissions::ReadWrite, b"app")
+        .await];
+    let update = |filesystem: &ResidentFilesystem, files: &[InitialAgentFile]| {
+        update_initial_files(
+            &resident_generation_handle(filesystem),
+            Arc::clone(&agents.store.loader),
+            agents.store.environment_id,
+            files.to_vec(),
+        )
+        .unwrap()
+    };
+    let source = agents
+        .start(&agents.agent("source"), &config, NO_RESTORE)
+        .await
+        .unwrap();
+    let captured = capture(&source, Duration::from_secs(5)).await.unwrap();
+    assert!(
+        !captured.directory().join("tree").join("config").exists(),
+        "the capture must leave out the bytes of config"
+    );
+
+    let automatic_read_only = agents
+        .start(&agents.agent("automatic-read-only"), &config, NO_RESTORE)
+        .await
+        .unwrap();
+    let automatic_error = update(&automatic_read_only, &read_only_app)
+        .await
+        .unwrap_err();
+    let manual_error = match agents
+        .start(
+            &agents.agent("manual-read-only"),
+            &read_only_app,
+            Some(copying_restore(&captured)),
+        )
+        .await
+    {
+        Ok(manual) => {
+            delete(seal(manual)).await.unwrap();
+            panic!("the manual update must fail as the automatic update fails: {automatic_error}");
+        }
+        Err(error) => error,
+    };
+    let conflict = "install a read-only initial file over other data at filesystem config/app.toml";
+    assert!(
+        automatic_error.to_string().contains(conflict),
+        "{automatic_error}"
+    );
+    assert!(
+        manual_error.to_string().contains(conflict),
+        "{manual_error}"
+    );
+
+    let automatic_writable_agent = agents.agent("automatic-read-write");
+    let automatic_writable = agents
+        .start(&automatic_writable_agent, &config, NO_RESTORE)
+        .await
+        .unwrap();
+    update(&automatic_writable, &writable_app).await.unwrap();
+    let manual_writable_agent = agents.agent("manual-read-write");
+    let manual_writable = agents
+        .start(
+            &manual_writable_agent,
+            &writable_app,
+            Some(copying_restore(&captured)),
+        )
+        .await
+        .unwrap();
+    let automatic_tree = read_tree(&agents.root(&automatic_writable_agent), |_| false);
+    assert_eq!(
+        read_tree(&agents.root(&manual_writable_agent), |_| false),
+        automatic_tree
+    );
+    assert!(
+        automatic_tree.nodes.is_empty(),
+        "the update removes config and keeps config/app.toml out: {automatic_tree:?}"
+    );
+    captured.discard().await.unwrap();
+    delete(seal(source)).await.unwrap();
+    delete(seal(automatic_read_only)).await.unwrap();
+    delete(seal(automatic_writable)).await.unwrap();
+    delete(seal(manual_writable)).await.unwrap();
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_hard_link_of_a_directory_gives_not_permitted_and_later_calls_still_work() {
+    let agents = UnmanagedAgents::new().await;
+    let agent = agents.agent("directory-link");
+    let resident = agents.start(&agent, &[], NO_RESTORE).await.unwrap();
+    let generation_handle = resident_generation_handle(&resident);
+    let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: at("directory"),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    let linked = edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Link {
+            source: at("directory"),
+            destination: at("alias"),
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(linked, Err(Error::Access(AccessError::NotPermitted))),
+        "{linked:?}"
+    );
+    assert!(!filesystem_activity(&resident).has_terminal_failure());
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: at("directory/after"),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    let root = agents.root(&agent);
+    assert!(root.join("directory/after").is_dir());
+    assert!(!root.join("alias").exists());
+    delete(seal(resident)).await.unwrap();
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_file_that_an_agent_creates_through_the_lifecycle_has_write_bits() {
+    let agents = UnmanagedAgents::new().await;
+    let agent = agents.agent("created-file");
+    let resident = agents.start(&agent, &[], NO_RESTORE).await.unwrap();
+    let generation_handle = resident_generation_handle(&resident);
+
+    let created = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "created.txt").unwrap(),
+        OpenOptions::File {
+            access: AccessMode::Write,
+            disposition: FileDisposition::CreateExclusive,
+            follow: Follow::No,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close(created.node).await.unwrap();
+
+    let permissions = std::fs::metadata(agents.root(&agent).join("created.txt"))
+        .unwrap()
+        .permissions();
+    assert!(
+        !permissions.readonly(),
+        "a file that an agent creates must have write bits, and its mode is {:o}",
+        permissions.mode()
+    );
+    delete(seal(resident)).await.unwrap();
+}
+
+/// The directory places of the path space of the restore property. A directory move renames only
+/// between these places. An install or a write through a symlink can also put a file at one of them.
 const DIRECTORY_PLACES: [&str; 2] = ["d", "e"];
 
 /// The file places of the path space: three names at the root and the three names in each directory.
-/// Regular files and symlinks are the only objects at these places. So no step makes a hard link to a
-/// directory.
+/// Regular files and symlinks are at these places, and a step can make a directory at the places
+/// named `h`. A file move renames the object at its source, so it can also move such a directory.
 const FILE_PLACES: [&str; 9] = ["f", "g", "h", "d/f", "d/g", "d/h", "e/f", "e/g", "e/h"];
+
+/// The places that a hard link takes its source from: the file places, then the directory places.
+/// So a step can make a hard link of a directory.
+const LINKED_PLACES: [&str; 11] = [
+    "f", "g", "h", "d/f", "d/g", "d/h", "e/f", "e/g", "e/h", "d", "e",
+];
+
+/// The places where a step makes or removes a directory: the directory places and the file places
+/// named `h`. So a directory can be at the path of a declaration.
+const NEW_DIRECTORY_PLACES: [&str; 5] = ["d", "e", "h", "d/h", "e/h"];
+
+/// The paths of component declarations. The directory place `d` is also a declared path, so a
+/// revision can declare a path under a path that an earlier revision declared. Entity provisioning
+/// never uses these paths.
+const DECLARED_PLACES: [&str; 7] = ["d", "f", "h", "d/f", "d/h", "e/f", "e/h"];
+
+/// The entity-provisioned files that a history can provision. Each path has one declaration, so two
+/// provisionings never declare one path in two ways.
+const PROVISIONED_FILES: [DeclaredFile; 3] = [
+    DeclaredFile {
+        path: "g",
+        read_only: true,
+        content: 0,
+    },
+    DeclaredFile {
+        path: "d/g",
+        read_only: true,
+        content: 2,
+    },
+    DeclaredFile {
+        path: "e/g",
+        read_only: false,
+        content: 1,
+    },
+];
 
 /// The contents of declarations and writes. Two of them have the same size.
 const CONTENTS: [&[u8]; 3] = [b"one", b"two", b"three"];
@@ -1743,20 +2192,24 @@ const RESTORE_PROPERTY_CASES: u32 = 2048;
 /// The seed of the restore property. Each run checks the same histories.
 const RESTORE_PROPERTY_SEED: [u8; 32] = *b"golem-577-restore-equals-replay!";
 
-/// One initial file that a history declares. `place` is an index into `FILE_PLACES`.
+/// One initial file that a history declares, at a path relative to the root.
 #[derive(Clone, Debug)]
 struct DeclaredFile {
-    place: usize,
+    path: &'static str,
     read_only: bool,
     content: usize,
 }
 
-/// One step of a history: a filesystem operation of the agent, or a component update. A file place
-/// is an index into `FILE_PLACES`, and a directory place is an index into `DIRECTORY_PLACES`.
+/// One step of a history: a filesystem operation of the agent, a component update, or an entity
+/// provisioning. A file place is an index into `FILE_PLACES`, and the source of a hard link is an
+/// index into `LINKED_PLACES`. A moved directory is an index into `DIRECTORY_PLACES`, and a made or
+/// removed directory is an index into `NEW_DIRECTORY_PLACES`. A provisioning gives indices into
+/// `PROVISIONED_FILES`.
 #[derive(Clone, Debug)]
 enum HistoryStep {
     Write { file: usize, content: usize },
     Truncate { file: usize, size: u64 },
+    SetTimes { file: usize },
     RemoveFile { file: usize },
     MoveFile { source: usize, destination: usize },
     MoveDirectory { source: usize, destination: usize },
@@ -1764,15 +2217,128 @@ enum HistoryStep {
     Symlink { file: usize, target: usize },
     CreateDirectory { directory: usize },
     RemoveDirectory { directory: usize },
-    Update { files: Vec<DeclaredFile> },
+    Update { files: Box<[DeclaredFile]> },
+    Provision { files: Box<[usize]> },
 }
 
-/// A history of one agent: its first declarations, its steps, and the position of one capture.
+/// A history of one agent: its first declarations, its steps, and the number of steps before the
+/// capture.
 #[derive(Clone, Debug)]
 struct History {
-    initial: Vec<DeclaredFile>,
-    steps: Vec<HistoryStep>,
-    capture: proptest::sample::Index,
+    initial: Box<[DeclaredFile]>,
+    steps: Box<[HistoryStep]>,
+    capture: usize,
+}
+
+/// A move of a read-only file of the first declarations away before the capture, and back after
+/// it. `file` selects the file among the read-only files that the move can take, and `destination`
+/// is an index into `FILE_PLACES`.
+#[derive(Clone, Debug)]
+enum RoundTrip {
+    /// Renames the file to the place `destination`, and back.
+    File {
+        file: proptest::sample::Index,
+        destination: usize,
+    },
+    /// Renames the directory place above the file to the other directory place, and back.
+    Directory { file: proptest::sample::Index },
+    /// Links the file to the place `destination` and removes its first name. After the capture,
+    /// links the file back to its first name.
+    Link {
+        file: proptest::sample::Index,
+        destination: usize,
+    },
+}
+
+impl RoundTrip {
+    /// Gives the steps before the capture and the step after it. Gives `None` when `initial` has no
+    /// read-only file that the round trip can move.
+    fn steps(&self, initial: &[DeclaredFile]) -> Option<(Box<[HistoryStep]>, HistoryStep)> {
+        match self {
+            Self::File { file, destination } => {
+                let (source, destination) =
+                    Self::file_and_destination(initial, file, *destination)?;
+                let away: Box<[HistoryStep]> = Box::new([HistoryStep::MoveFile {
+                    source,
+                    destination,
+                }]);
+                let back = HistoryStep::MoveFile {
+                    source: destination,
+                    destination: source,
+                };
+                Some((away, back))
+            }
+            Self::Link { file, destination } => {
+                let (source, destination) =
+                    Self::file_and_destination(initial, file, *destination)?;
+                let away: Box<[HistoryStep]> = Box::new([
+                    HistoryStep::HardLink {
+                        source,
+                        destination,
+                    },
+                    HistoryStep::RemoveFile { file: source },
+                ]);
+                let back = HistoryStep::HardLink {
+                    source: destination,
+                    destination: source,
+                };
+                Some((away, back))
+            }
+            Self::Directory { file } => {
+                let directories = initial
+                    .iter()
+                    .filter(|declared| declared.read_only)
+                    .filter_map(|declared| declared.path.split_once('/'))
+                    .filter_map(|(directory, _)| {
+                        DIRECTORY_PLACES
+                            .iter()
+                            .position(|place| *place == directory)
+                    })
+                    .collect::<Box<[usize]>>();
+                let source = (!directories.is_empty()).then(|| *file.get(&directories))?;
+                let destination = (source + 1) % DIRECTORY_PLACES.len();
+                let away: Box<[HistoryStep]> = Box::new([HistoryStep::MoveDirectory {
+                    source,
+                    destination,
+                }]);
+                let back = HistoryStep::MoveDirectory {
+                    source: destination,
+                    destination: source,
+                };
+                Some((away, back))
+            }
+        }
+    }
+
+    /// Gives the file place of the read-only file of `initial` that `file` selects, and another
+    /// file place: `destination`, or the next file place when `destination` is the place of the
+    /// file.
+    fn file_and_destination(
+        initial: &[DeclaredFile],
+        file: &proptest::sample::Index,
+        destination: usize,
+    ) -> Option<(usize, usize)> {
+        let places = initial
+            .iter()
+            .filter(|declared| declared.read_only)
+            .filter_map(|declared| FILE_PLACES.iter().position(|place| *place == declared.path))
+            .collect::<Box<[usize]>>();
+        let source = (!places.is_empty()).then(|| *file.get(&places))?;
+        let destination = if destination == source {
+            (destination + 1) % FILE_PLACES.len()
+        } else {
+            destination
+        };
+        Some((source, destination))
+    }
+}
+
+/// The step results that another agent must give, and the final trees of the replay and of the
+/// reference model.
+struct Expected<'a> {
+    outcomes: &'a [StepOutcome],
+    tree: &'a Tree,
+    model_tree: &'a Tree,
 }
 
 /// What a step gave. An error keeps only the facts that do not name a host path.
@@ -1788,28 +2354,28 @@ enum StepOutcome {
     Conflict(String),
 }
 
-/// The step results that another agent must give, and the final trees of the replay and of the
-/// reference model.
-struct Expected<'a> {
-    outcomes: &'a [StepOutcome],
-    tree: &'a Tree,
-    model_tree: &'a Tree,
-}
-
-fn declared_files() -> impl proptest::strategy::Strategy<Value = Vec<DeclaredFile>> {
+/// Generates the declarations of one revision. A revision never declares a path under another path
+/// that it declares.
+fn declared_files() -> impl proptest::strategy::Strategy<Value = Box<[DeclaredFile]>> {
     use proptest::strategy::Strategy as _;
+    let places: &'static [&'static str] = &DECLARED_PLACES;
     proptest::collection::btree_map(
-        0..FILE_PLACES.len(),
+        proptest::sample::select(places),
         (proptest::arbitrary::any::<bool>(), 0..CONTENTS.len()),
-        0..4,
+        0..6,
     )
     .prop_map(|files| {
         files
-            .into_iter()
-            .map(|(place, (read_only, content))| DeclaredFile {
-                place,
-                read_only,
-                content,
+            .iter()
+            .filter(|(path, _)| {
+                !files
+                    .keys()
+                    .any(|other| path.starts_with(&format!("{other}/")))
+            })
+            .map(|(path, (read_only, content))| DeclaredFile {
+                path,
+                read_only: *read_only,
+                content: *content,
             })
             .collect()
     })
@@ -1819,67 +2385,116 @@ fn history_step() -> impl proptest::strategy::Strategy<Value = HistoryStep> {
     use proptest::strategy::Strategy as _;
     let file = || 0..FILE_PLACES.len();
     let directory = || 0..DIRECTORY_PLACES.len();
+    let new_directory = || 0..NEW_DIRECTORY_PLACES.len();
     proptest::prop_oneof![
         3 => (file(), 0..CONTENTS.len())
             .prop_map(|(file, content)| HistoryStep::Write { file, content }),
         1 => (file(), 0_u64..3).prop_map(|(file, size)| HistoryStep::Truncate { file, size }),
+        1 => file().prop_map(|file| HistoryStep::SetTimes { file }),
         2 => file().prop_map(|file| HistoryStep::RemoveFile { file }),
         2 => (file(), file())
             .prop_map(|(source, destination)| HistoryStep::MoveFile { source, destination }),
-        1 => (directory(), directory())
+        2 => (directory(), directory())
             .prop_map(|(source, destination)| HistoryStep::MoveDirectory { source, destination }),
-        2 => (file(), file())
+        2 => (0..LINKED_PLACES.len(), file())
             .prop_map(|(source, destination)| HistoryStep::HardLink { source, destination }),
         2 => (file(), 0..SYMLINK_TARGETS.len())
             .prop_map(|(file, target)| HistoryStep::Symlink { file, target }),
-        1 => directory().prop_map(|directory| HistoryStep::CreateDirectory { directory }),
-        1 => directory().prop_map(|directory| HistoryStep::RemoveDirectory { directory }),
-        2 => declared_files().prop_map(|files| HistoryStep::Update { files }),
+        2 => new_directory().prop_map(|directory| HistoryStep::CreateDirectory { directory }),
+        1 => new_directory().prop_map(|directory| HistoryStep::RemoveDirectory { directory }),
+        3 => declared_files().prop_map(|files| HistoryStep::Update { files }),
+        1 => proptest::collection::btree_set(0..PROVISIONED_FILES.len(), 1..=PROVISIONED_FILES.len())
+            .prop_map(|files| HistoryStep::Provision { files: files.into_iter().collect() }),
     ]
 }
 
+fn round_trip() -> impl proptest::strategy::Strategy<Value = RoundTrip> {
+    use proptest::strategy::Strategy as _;
+    let file = || proptest::arbitrary::any::<proptest::sample::Index>();
+    proptest::prop_oneof![
+        (file(), 0..FILE_PLACES.len())
+            .prop_map(|(file, destination)| RoundTrip::File { file, destination }),
+        file().prop_map(|file| RoundTrip::Directory { file }),
+        (file(), 0..FILE_PLACES.len())
+            .prop_map(|(file, destination)| RoundTrip::Link { file, destination }),
+    ]
+}
+
+/// Generates histories. About half of them move a read-only file of the first declarations, or the
+/// directory above one, away just before the capture and back just after it.
 fn histories() -> impl proptest::strategy::Strategy<Value = History> {
     use proptest::strategy::Strategy as _;
     (
         declared_files(),
-        proptest::collection::vec(history_step(), 0..10),
+        proptest::collection::vec(history_step(), 0..12),
         proptest::arbitrary::any::<proptest::sample::Index>(),
+        proptest::option::of(round_trip()),
     )
-        .prop_map(|(initial, steps, capture)| History {
-            initial,
-            steps,
-            capture,
+        .prop_map(|(initial, steps, capture, round_trip)| {
+            let capture = capture.index(steps.len() + 1);
+            match round_trip.and_then(|round_trip| round_trip.steps(&initial)) {
+                None => History {
+                    initial,
+                    steps: steps.into_boxed_slice(),
+                    capture,
+                },
+                Some((away, back)) => {
+                    let (before, after) = steps.split_at(capture);
+                    History {
+                        capture: capture + away.len(),
+                        steps: before
+                            .iter()
+                            .cloned()
+                            .chain(away.into_vec())
+                            .chain(std::iter::once(back))
+                            .chain(after.iter().cloned())
+                            .collect(),
+                        initial,
+                    }
+                }
+            }
         })
 }
 
 async fn declare_files(store: &InitialFileStore, files: &[DeclaredFile]) -> Vec<InitialAgentFile> {
     futures::stream::iter(files)
         .then(|file| async move {
-            let path = format!("/{}", FILE_PLACES[file.place]);
             let permissions = if file.read_only {
                 AgentFilePermissions::ReadOnly
             } else {
                 AgentFilePermissions::ReadWrite
             };
             store
-                .declare(&path, permissions, CONTENTS[file.content])
+                .declare(
+                    &format!("/{}", file.path),
+                    permissions,
+                    CONTENTS[file.content],
+                )
                 .await
         })
         .collect()
         .await
 }
 
-/// Gives the declarations that are current after `steps`: the files of the last update that was
-/// done, or `initial`.
+/// Gives the entity-provisioned files at the indices `files` of `PROVISIONED_FILES`.
+fn provisioned_files(files: &[usize]) -> Box<[DeclaredFile]> {
+    files
+        .iter()
+        .map(|index| PROVISIONED_FILES[*index].clone())
+        .collect()
+}
+
+/// Gives the component declarations that are current after `steps`: the files of the last update
+/// that was done, or `initial`.
 fn declarations_at(
     initial: &[DeclaredFile],
     steps: &[HistoryStep],
     outcomes: &[StepOutcome],
-) -> Vec<DeclaredFile> {
+) -> Box<[DeclaredFile]> {
     steps
         .iter()
         .zip(outcomes)
-        .fold(initial.to_vec(), |current, step| match step {
+        .fold(Box::from(initial), |current, step| match step {
             (HistoryStep::Update { files }, StepOutcome::Done) => files.clone(),
             _ => current,
         })
@@ -1976,6 +2591,29 @@ async fn truncate_file(
     outcome_of(resized.and(closed))
 }
 
+/// Sets the access and modification times of the object at `target` to now, as a guest set-times
+/// through a path that follows a symlink does.
+async fn set_times_now(
+    generation_handle: &FilesystemGenerationHandle,
+    target: Result<PathTarget, AccessError>,
+) -> StepOutcome {
+    let changes = AttributeChanges::Times(TimeChanges {
+        accessed: TimeChange::Now,
+        modified: TimeChange::Now,
+    });
+    let call = target.and_then(|target| {
+        set_attributes(
+            generation_handle,
+            Target::Path(&target, Follow::Yes),
+            changes,
+        )
+    });
+    match call {
+        Ok(call) => outcome_of(call.await),
+        Err(error) => StepOutcome::Access(error),
+    }
+}
+
 async fn namespace_edit(
     generation_handle: &FilesystemGenerationHandle,
     edit: Result<NamespaceEdit, AccessError>,
@@ -1993,22 +2631,28 @@ async fn run_step(
     step: &HistoryStep,
 ) -> StepOutcome {
     let generation_handle = resident_generation_handle(filesystem);
-    let file = |place: usize| PathTarget::at_root(&generation_handle, FILE_PLACES[place]);
-    let directory = |place: usize| PathTarget::at_root(&generation_handle, DIRECTORY_PLACES[place]);
+    let at = |path: &str| PathTarget::at_root(&generation_handle, path);
     let pair = |source: Result<PathTarget, AccessError>,
                 destination: Result<PathTarget, AccessError>| {
         source.and_then(|source| destination.map(|destination| (source, destination)))
     };
     match step {
-        HistoryStep::Write {
-            file: place,
-            content,
-        } => write_file(&generation_handle, file(*place), CONTENTS[*content]).await,
-        HistoryStep::Truncate { file: place, size } => {
-            truncate_file(&generation_handle, file(*place), *size).await
+        HistoryStep::Write { file, content } => {
+            write_file(
+                &generation_handle,
+                at(FILE_PLACES[*file]),
+                CONTENTS[*content],
+            )
+            .await
         }
-        HistoryStep::RemoveFile { file: place } => {
-            let edit = file(*place).map(|target| NamespaceEdit::Remove {
+        HistoryStep::Truncate { file, size } => {
+            truncate_file(&generation_handle, at(FILE_PLACES[*file]), *size).await
+        }
+        HistoryStep::SetTimes { file } => {
+            set_times_now(&generation_handle, at(FILE_PLACES[*file])).await
+        }
+        HistoryStep::RemoveFile { file } => {
+            let edit = at(FILE_PLACES[*file]).map(|target| NamespaceEdit::Remove {
                 target,
                 expected: ObjectKind::File,
             });
@@ -2018,58 +2662,57 @@ async fn run_step(
             source,
             destination,
         } => {
-            let edit = pair(file(*source), file(*destination)).map(|(source, destination)| {
-                NamespaceEdit::Move {
+            let edit = pair(at(FILE_PLACES[*source]), at(FILE_PLACES[*destination])).map(
+                |(source, destination)| NamespaceEdit::Move {
                     source,
                     destination,
-                }
-            });
+                },
+            );
             namespace_edit(&generation_handle, edit).await
         }
         HistoryStep::MoveDirectory {
             source,
             destination,
         } => {
-            let edit =
-                pair(directory(*source), directory(*destination)).map(|(source, destination)| {
-                    NamespaceEdit::Move {
-                        source,
-                        destination,
-                    }
-                });
+            let edit = pair(
+                at(DIRECTORY_PLACES[*source]),
+                at(DIRECTORY_PLACES[*destination]),
+            )
+            .map(|(source, destination)| NamespaceEdit::Move {
+                source,
+                destination,
+            });
             namespace_edit(&generation_handle, edit).await
         }
         HistoryStep::HardLink {
             source,
             destination,
         } => {
-            let edit = pair(file(*source), file(*destination)).map(|(source, destination)| {
-                NamespaceEdit::Link {
+            let edit = pair(at(LINKED_PLACES[*source]), at(FILE_PLACES[*destination])).map(
+                |(source, destination)| NamespaceEdit::Link {
                     source,
                     destination,
-                }
-            });
+                },
+            );
             namespace_edit(&generation_handle, edit).await
         }
-        HistoryStep::Symlink {
-            file: place,
-            target,
-        } => {
-            let edit = file(*place).map(|destination| NamespaceEdit::Insert {
+        HistoryStep::Symlink { file, target } => {
+            let edit = at(FILE_PLACES[*file]).map(|destination| NamespaceEdit::Insert {
                 destination,
                 object: NewObject::Symlink(SymlinkTarget(PathBuf::from(SYMLINK_TARGETS[*target]))),
             });
             namespace_edit(&generation_handle, edit).await
         }
-        HistoryStep::CreateDirectory { directory: place } => {
-            let edit = directory(*place).map(|destination| NamespaceEdit::Insert {
-                destination,
-                object: NewObject::Directory,
-            });
+        HistoryStep::CreateDirectory { directory } => {
+            let edit =
+                at(NEW_DIRECTORY_PLACES[*directory]).map(|destination| NamespaceEdit::Insert {
+                    destination,
+                    object: NewObject::Directory,
+                });
             namespace_edit(&generation_handle, edit).await
         }
-        HistoryStep::RemoveDirectory { directory: place } => {
-            let edit = directory(*place).map(|target| NamespaceEdit::Remove {
+        HistoryStep::RemoveDirectory { directory } => {
+            let edit = at(NEW_DIRECTORY_PLACES[*directory]).map(|target| NamespaceEdit::Remove {
                 target,
                 expected: ObjectKind::Directory,
             });
@@ -2078,6 +2721,18 @@ async fn run_step(
         HistoryStep::Update { files } => {
             let files = declare_files(&agents.store, files).await;
             match update_initial_files(
+                &generation_handle,
+                Arc::clone(&agents.store.loader),
+                agents.store.environment_id,
+                files,
+            ) {
+                Ok(call) => outcome_of(call.await),
+                Err(error) => error_outcome(error),
+            }
+        }
+        HistoryStep::Provision { files } => {
+            let files = declare_files(&agents.store, &provisioned_files(files)).await;
+            match provision_initial_files(
                 &generation_handle,
                 Arc::clone(&agents.store.loader),
                 agents.store.environment_id,
@@ -2129,7 +2784,7 @@ fn tree_without_times(root: &Path) -> Tree {
     }
 }
 
-/// Starts an agent from a restore of `snapshot` with the declarations `files`.
+/// Starts an agent from a restore of `snapshot` with the component declarations `files`.
 async fn start_restored(
     agents: &UnmanagedAgents,
     name: &str,
@@ -2247,17 +2902,18 @@ enum ModelInstall {
 
 /// A reference model of an agent filesystem with initial files. It follows the text of the GOL-577
 /// issue: the initial-file rule, the read-only semantics and the sentence about equal declarations.
-/// It uses no helper of the lifecycle.
+/// It uses no helper of the lifecycle, and it records no object that an install puts in place.
 ///
 /// `paths` gives the object at each path, and two paths with one object are hard links. `objects`
-/// holds each object that the model made; the index of an object is its id. `installed` gives, for
-/// each read-only declared path, the object that the last install put at the path.
+/// holds each object that the model made; the index of an object is its id. `component` holds the
+/// component declarations and `provisioned` the entity-provisioned declarations. The declarations
+/// of the filesystem are both together.
 #[derive(Default)]
 struct ReferenceModel {
     paths: BTreeMap<String, usize>,
     objects: Vec<ModelObject>,
-    declarations: BTreeMap<String, ModelDeclaration>,
-    installed: BTreeMap<String, usize>,
+    component: BTreeMap<String, ModelDeclaration>,
+    provisioned: BTreeMap<String, ModelDeclaration>,
 }
 
 impl ReferenceModel {
@@ -2317,17 +2973,13 @@ impl ReferenceModel {
     }
 
     /// Tells whether `path` holds Golem's file of the old declaration `old`, as the issue defines
-    /// it: for a read-only declaration, the object that the install put there; for a read-write
-    /// declaration, a file whose content equals the declared content.
+    /// it: a regular file whose content equals the declared content and that, where the declaration
+    /// is read-only, has no write permission.
     fn holds_golem_file(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
-        match (old, self.paths.get(path)) {
-            (Some(declared), Some(id)) if declared.read_only => {
-                self.installed.get(path) == Some(id)
+        match (old, self.object_at(path)) {
+            (Some(declared), Some(ModelObject::File { content, writable })) => {
+                content[..] == *CONTENTS[declared.content] && !(declared.read_only && *writable)
             }
-            (Some(declared), Some(id)) => matches!(
-                &self.objects[*id],
-                ModelObject::File { content, .. } if content[..] == *CONTENTS[declared.content]
-            ),
             _ => false,
         }
     }
@@ -2401,6 +3053,25 @@ impl ReferenceModel {
         }
     }
 
+    /// Sets the times of an object through a path that follows a symlink. A read-only file refuses
+    /// it, as it refuses a change to its contents.
+    fn set_times(&self, path: &str) -> ResultClass {
+        let target = self.follow(path);
+        match self
+            .check_ancestors(path)
+            .and_then(|()| self.check_ancestors(&target))
+        {
+            Err(class) => class,
+            Ok(()) => match self.object_at(&target) {
+                None => ResultClass::NotFound,
+                Some(ModelObject::File {
+                    writable: false, ..
+                }) => ResultClass::NotPermitted,
+                Some(_) => ResultClass::Ok,
+            },
+        }
+    }
+
     /// Removes the name of a file or a symlink. A read-only file permits it.
     fn remove_file(&mut self, path: &str) -> ResultClass {
         match self
@@ -2417,9 +3088,19 @@ impl ReferenceModel {
         }
     }
 
-    /// Renames a file or a symlink. A name of the same object at the destination stays unchanged,
-    /// and another file or symlink there is replaced. A read-only file permits the rename.
-    fn move_file(&mut self, source: &str, destination: &str) -> ResultClass {
+    /// Renames the object at `source`, as the one rename of the lifecycle does for both kinds of
+    /// object. A missing directory above either path, or an object above it that is not a
+    /// directory, refuses the rename. A rename to a name of the same object changes nothing.
+    ///
+    /// A directory moves with all that is in it. A destination in its own subtree refuses the
+    /// move, an empty directory at the destination is replaced, a directory with an object in it
+    /// refuses the move, and a file or a symlink at the destination refuses it. A file or a symlink
+    /// replaces another file or symlink at the destination, and a directory at the destination
+    /// refuses it. A move of a read-only file, or of a directory above one, is permitted.
+    fn rename(&mut self, source: &str, destination: &str) -> ResultClass {
+        let inside = |path: &str, directory: &str| {
+            path == directory || path.starts_with(&format!("{directory}/"))
+        };
         let checked = self
             .check_ancestors(source)
             .and_then(|()| self.check_ancestors(destination));
@@ -2429,6 +3110,32 @@ impl ReferenceModel {
             (Err(class), _, _) => class,
             (Ok(()), None, _) => ResultClass::NotFound,
             (Ok(()), Some(moved), Some(replaced)) if moved == replaced => ResultClass::Ok,
+            (Ok(()), Some(moved), replaced) if self.objects[moved] == ModelObject::Directory => {
+                match replaced.map(|id| self.objects[id].clone()) {
+                    _ if inside(destination, source) => ResultClass::InvalidTarget,
+                    Some(ModelObject::Directory) if self.holds_children(destination) => {
+                        ResultClass::NotEmpty
+                    }
+                    Some(ModelObject::File { .. } | ModelObject::Symlink { .. }) => {
+                        ResultClass::InvalidTarget
+                    }
+                    Some(ModelObject::Directory) | None => {
+                        let moved_paths = self
+                            .paths
+                            .iter()
+                            .filter(|(path, _)| inside(path, source))
+                            .map(|(path, id)| {
+                                (format!("{destination}{}", &path[source.len()..]), *id)
+                            })
+                            .collect::<Vec<_>>();
+                        self.paths.retain(|path, _| {
+                            !inside(path, source) && path.as_str() != destination
+                        });
+                        self.paths.extend(moved_paths);
+                        ResultClass::Ok
+                    }
+                }
+            }
             (Ok(()), Some(_), Some(replaced))
                 if self.objects[replaced] == ModelObject::Directory =>
             {
@@ -2442,46 +3149,8 @@ impl ReferenceModel {
         }
     }
 
-    /// Renames the object at a directory place. A directory moves with all that is in it: an empty
-    /// directory at the destination is replaced, a directory with an object in it refuses the move,
-    /// and a file or a symlink at the destination refuses it. A file or a symlink at the source moves
-    /// as `move_file` moves it. A move of a directory above a read-only file is permitted.
-    fn move_directory(&mut self, source: &str, destination: &str) -> ResultClass {
-        let inside = |path: &str, directory: &str| {
-            path == directory || path.starts_with(&format!("{directory}/"))
-        };
-        match (
-            self.object_at(source).cloned(),
-            self.object_at(destination).cloned(),
-        ) {
-            (None, _) => ResultClass::NotFound,
-            (Some(ModelObject::Directory), _) if source == destination => ResultClass::Ok,
-            (Some(ModelObject::Directory), Some(ModelObject::Directory))
-                if self.holds_children(destination) =>
-            {
-                ResultClass::NotEmpty
-            }
-            (
-                Some(ModelObject::Directory),
-                Some(ModelObject::File { .. } | ModelObject::Symlink { .. }),
-            ) => ResultClass::InvalidTarget,
-            (Some(ModelObject::Directory), _) => {
-                let moved = self
-                    .paths
-                    .iter()
-                    .filter(|(path, _)| inside(path, source))
-                    .map(|(path, id)| (format!("{destination}{}", &path[source.len()..]), *id))
-                    .collect::<Vec<_>>();
-                self.paths
-                    .retain(|path, _| !inside(path, source) && path.as_str() != destination);
-                self.paths.extend(moved);
-                ResultClass::Ok
-            }
-            (Some(_), _) => self.move_file(source, destination),
-        }
-    }
-
-    /// Gives a file or a symlink one more name. A read-only file permits it.
+    /// Gives a file or a symlink one more name. A read-only file permits it. A directory refuses it
+    /// when the source exists and the destination does not.
     fn hard_link(&mut self, source: &str, destination: &str) -> ResultClass {
         let checked = self
             .check_ancestors(source)
@@ -2494,6 +3163,9 @@ impl ReferenceModel {
             (Err(class), _, _) => class,
             (Ok(()), None, _) => ResultClass::NotFound,
             (Ok(()), Some(_), true) => ResultClass::AlreadyExists,
+            (Ok(()), Some(linked), false) if self.objects[linked] == ModelObject::Directory => {
+                ResultClass::NotPermitted
+            }
             (Ok(()), Some(linked), false) => {
                 self.paths.insert(destination.to_string(), linked);
                 ResultClass::Ok
@@ -2518,45 +3190,89 @@ impl ReferenceModel {
     }
 
     fn create_directory(&mut self, path: &str) -> ResultClass {
-        if self.paths.contains_key(path) {
-            ResultClass::AlreadyExists
-        } else {
-            self.make(path, ModelObject::Directory);
-            ResultClass::Ok
+        match (self.check_ancestors(path), self.paths.contains_key(path)) {
+            (Err(class), _) => class,
+            (Ok(()), true) => ResultClass::AlreadyExists,
+            (Ok(()), false) => {
+                self.make(path, ModelObject::Directory);
+                ResultClass::Ok
+            }
         }
     }
 
     fn remove_directory(&mut self, path: &str) -> ResultClass {
-        match self.object_at(path).cloned() {
-            None => ResultClass::NotFound,
-            Some(ModelObject::Directory) if self.holds_children(path) => ResultClass::NotEmpty,
-            Some(ModelObject::Directory) => {
+        match self
+            .check_ancestors(path)
+            .map(|()| self.object_at(path).cloned())
+        {
+            Err(class) => class,
+            Ok(None) => ResultClass::NotFound,
+            Ok(Some(ModelObject::Directory)) if self.holds_children(path) => ResultClass::NotEmpty,
+            Ok(Some(ModelObject::Directory)) => {
                 self.paths.remove(path);
                 ResultClass::Ok
             }
-            Some(_) => ResultClass::InvalidTarget,
+            Ok(Some(_)) => ResultClass::InvalidTarget,
         }
     }
 
-    /// Applies the initial-file rule of the issue from the current declarations to `files`.
-    ///
-    /// The three parts apply at each path where the two declarations differ, in path order, and an
-    /// equal declaration changes nothing. A conflict fails the whole install, changes nothing, and
-    /// names the first conflicting path.
-    fn install(&mut self, files: &[DeclaredFile]) -> ResultClass {
-        let new = files
+    /// Gives the declarations of `files` by path.
+    fn declarations_of(files: &[DeclaredFile]) -> BTreeMap<String, ModelDeclaration> {
+        files
             .iter()
             .map(|file| {
                 (
-                    FILE_PLACES[file.place].to_string(),
+                    file.path.to_string(),
                     ModelDeclaration {
                         read_only: file.read_only,
                         content: file.content,
                     },
                 )
             })
-            .collect::<BTreeMap<_, _>>();
-        let old = &self.declarations;
+            .collect()
+    }
+
+    /// Installs the component declarations of `files` with the entity-provisioned declarations that
+    /// the filesystem has.
+    fn install(&mut self, files: &[DeclaredFile]) -> ResultClass {
+        let provisioned = self.provisioned.clone();
+        self.install_declarations(Self::declarations_of(files), provisioned)
+    }
+
+    /// Adds the entity-provisioned declarations of `files`, and installs them with the component
+    /// declarations that the filesystem has.
+    fn provision(&mut self, files: &[DeclaredFile]) -> ResultClass {
+        let provisioned = self
+            .provisioned
+            .iter()
+            .map(|(path, declared)| (path.clone(), *declared))
+            .chain(Self::declarations_of(files))
+            .collect();
+        let component = self.component.clone();
+        self.install_declarations(component, provisioned)
+    }
+
+    /// Applies the initial-file rule of the issue from the current declarations to the declarations
+    /// of `component` and `provisioned` together.
+    ///
+    /// The three parts apply at each path where the two declarations differ, in path order, and an
+    /// equal declaration changes nothing. Each part reads the tree as it is before the install. A
+    /// conflict fails the whole install, changes nothing, and names the first conflicting path.
+    fn install_declarations(
+        &mut self,
+        component: BTreeMap<String, ModelDeclaration>,
+        provisioned: BTreeMap<String, ModelDeclaration>,
+    ) -> ResultClass {
+        let together = |first: &BTreeMap<String, ModelDeclaration>,
+                        second: &BTreeMap<String, ModelDeclaration>| {
+            first
+                .iter()
+                .chain(second)
+                .map(|(path, declared)| (path.clone(), *declared))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let old = together(&self.component, &self.provisioned);
+        let new = together(&component, &provisioned);
         let decisions = old
             .keys()
             .chain(new.keys())
@@ -2590,7 +3306,8 @@ impl ReferenceModel {
                 decisions
                     .into_iter()
                     .for_each(|(path, decision)| self.install_path(&path, decision));
-                self.declarations = new;
+                self.component = component;
+                self.provisioned = provisioned;
                 ResultClass::Ok
             }
         }
@@ -2598,12 +3315,9 @@ impl ReferenceModel {
 
     fn install_path(&mut self, path: &str, decision: ModelInstall) {
         match decision {
-            ModelInstall::Keep => {
-                self.installed.remove(path);
-            }
+            ModelInstall::Keep => {}
             ModelInstall::Remove => {
                 self.paths.remove(path);
-                self.installed.remove(path);
             }
             ModelInstall::Seed(declared) => {
                 let missing = Self::ancestors(path)
@@ -2620,12 +3334,6 @@ impl ReferenceModel {
                         writable: !declared.read_only,
                     },
                 );
-                if declared.read_only {
-                    let object = self.paths[path];
-                    self.installed.insert(path.to_string(), object);
-                } else {
-                    self.installed.remove(path);
-                }
             }
         }
     }
@@ -2635,29 +3343,31 @@ impl ReferenceModel {
         match step {
             HistoryStep::Write { file, content } => self.write(FILE_PLACES[*file], *content),
             HistoryStep::Truncate { file, size } => self.truncate(FILE_PLACES[*file], *size),
+            HistoryStep::SetTimes { file } => self.set_times(FILE_PLACES[*file]),
             HistoryStep::RemoveFile { file } => self.remove_file(FILE_PLACES[*file]),
             HistoryStep::MoveFile {
                 source,
                 destination,
-            } => self.move_file(FILE_PLACES[*source], FILE_PLACES[*destination]),
+            } => self.rename(FILE_PLACES[*source], FILE_PLACES[*destination]),
             HistoryStep::MoveDirectory {
                 source,
                 destination,
-            } => self.move_directory(DIRECTORY_PLACES[*source], DIRECTORY_PLACES[*destination]),
+            } => self.rename(DIRECTORY_PLACES[*source], DIRECTORY_PLACES[*destination]),
             HistoryStep::HardLink {
                 source,
                 destination,
-            } => self.hard_link(FILE_PLACES[*source], FILE_PLACES[*destination]),
+            } => self.hard_link(LINKED_PLACES[*source], FILE_PLACES[*destination]),
             HistoryStep::Symlink { file, target } => {
                 self.symlink(FILE_PLACES[*file], SYMLINK_TARGETS[*target])
             }
             HistoryStep::CreateDirectory { directory } => {
-                self.create_directory(DIRECTORY_PLACES[*directory])
+                self.create_directory(NEW_DIRECTORY_PLACES[*directory])
             }
             HistoryStep::RemoveDirectory { directory } => {
-                self.remove_directory(DIRECTORY_PLACES[*directory])
+                self.remove_directory(NEW_DIRECTORY_PLACES[*directory])
             }
             HistoryStep::Update { files } => self.install(files),
+            HistoryStep::Provision { files } => self.provision(&provisioned_files(files)),
         }
     }
 
@@ -2702,17 +3412,17 @@ impl ReferenceModel {
 /// Checks one history on unmanaged storage.
 ///
 /// Agent A replays every step. Agent B runs the steps before the capture position, and the
-/// lifecycle captures it. Agent C starts from a restore of that capture with the declarations that
-/// are current at the capture, and runs the other steps. When the step after the capture is an
-/// update, agent D starts from the same restore with the declarations of that update, and runs the
-/// steps after it. A replay step must not make the filesystem invalid. The reference model gives the
-/// result class of each replay step and the final tree, and the trees of agents A, C and D must
-/// equal the tree of the model.
+/// lifecycle captures it. Agent C starts from a restore of that capture with the component
+/// declarations that are current at the capture, and runs the other steps. When the step after the
+/// capture is an update, agent D starts from the same restore with the declarations of that update,
+/// and runs the steps after it. A replay step must not make the filesystem invalid. The reference
+/// model gives the result class of each replay step and the final tree, and the trees of agents A,
+/// C and D must equal the tree of the model.
 async fn check_restore_against_replay(
     history: &History,
 ) -> Result<(), proptest::test_runner::TestCaseError> {
     let agents = UnmanagedAgents::new().await;
-    let capture_at = history.capture.index(history.steps.len() + 1);
+    let capture_at = history.capture;
     let (before, after) = history.steps.split_at(capture_at);
     let initial = declare_files(&agents.store, &history.initial).await;
     let mut problems = Vec::new();
@@ -2897,4 +3607,114 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
     if let Err(error) = result {
         panic!("{error}");
     }
+}
+
+/// Checks one written history as the restore property checks a generated one.
+fn check_history(initial: &[DeclaredFile], steps: &[HistoryStep], capture: usize) {
+    let history = History {
+        initial: Box::from(initial),
+        steps: Box::from(steps),
+        capture,
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    if let Err(error) = runtime.block_on(check_restore_against_replay(&history)) {
+        panic!("{error}");
+    }
+}
+
+fn read_only_declaration(path: &'static str, content: usize) -> DeclaredFile {
+    DeclaredFile {
+        path,
+        read_only: true,
+        content,
+    }
+}
+
+#[test]
+fn a_read_only_file_moved_away_over_a_capture_and_back_gets_a_read_only_update() {
+    check_history(
+        &[read_only_declaration("f", 0)],
+        &[
+            HistoryStep::MoveFile {
+                source: 0,
+                destination: 1,
+            },
+            HistoryStep::MoveFile {
+                source: 1,
+                destination: 0,
+            },
+            HistoryStep::Update {
+                files: Box::new([read_only_declaration("f", 1)]),
+            },
+        ],
+        1,
+    );
+}
+
+#[test]
+fn a_read_only_file_moved_away_over_a_capture_and_back_is_removed_by_an_update_that_drops_it() {
+    check_history(
+        &[read_only_declaration("f", 0)],
+        &[
+            HistoryStep::MoveFile {
+                source: 0,
+                destination: 1,
+            },
+            HistoryStep::MoveFile {
+                source: 1,
+                destination: 0,
+            },
+            HistoryStep::Update {
+                files: Box::new([]),
+            },
+        ],
+        1,
+    );
+}
+
+#[test]
+fn a_directory_moved_away_over_a_capture_and_back_keeps_golem_s_read_only_file_in_it() {
+    check_history(
+        &[read_only_declaration("d/f", 0)],
+        &[
+            HistoryStep::MoveDirectory {
+                source: 0,
+                destination: 1,
+            },
+            HistoryStep::MoveDirectory {
+                source: 1,
+                destination: 0,
+            },
+            HistoryStep::Update {
+                files: Box::new([read_only_declaration("d/f", 1)]),
+            },
+        ],
+        1,
+    );
+}
+
+#[test]
+fn a_read_only_file_linked_and_unlinked_before_a_capture_and_linked_back_after_gets_an_update() {
+    check_history(
+        &[read_only_declaration("f", 0)],
+        &[
+            HistoryStep::HardLink {
+                source: 0,
+                destination: 1,
+            },
+            HistoryStep::RemoveFile { file: 0 },
+            HistoryStep::HardLink {
+                source: 1,
+                destination: 0,
+            },
+            HistoryStep::Update {
+                files: Box::new([read_only_declaration("f", 1)]),
+            },
+        ],
+        2,
+    );
 }

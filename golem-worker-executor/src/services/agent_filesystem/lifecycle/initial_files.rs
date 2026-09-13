@@ -17,7 +17,6 @@ use crate::sandbox_filesystem::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
-use std::time::SystemTime;
 
 /// The declarations of initial files, at their paths relative to the filesystem root.
 pub(super) type Declarations = HashMap<Box<Path>, InitialAgentFile>;
@@ -44,11 +43,14 @@ impl InitialFileState {
     }
 }
 
-/// A file that the lifecycle installed at a path.
+/// A read-only file that the lifecycle installed at a path.
+///
+/// The identity of the object lets a check of Golem's file skip the read of the content. An agent
+/// cannot make a file without write permission, so an object without write permission that has
+/// this identity is the file that the install put at the path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct InstalledFile {
     object: SandboxObjectId,
-    created: Option<SystemTime>,
 }
 
 impl InstalledFile {
@@ -56,24 +58,15 @@ impl InstalledFile {
     pub(super) fn of(attributes: &SandboxAttributes) -> Self {
         Self {
             object: attributes.object.clone(),
-            created: attributes.created,
         }
     }
 
-    /// Tells whether `attributes` describe this file.
-    ///
-    /// The object must be a regular file with the same identity. Where the filesystem records
-    /// creation times, the creation times must also be equal, so that a new file that got the
-    /// identity of a deleted file does not match. Where the filesystem does not record them, the
-    /// object must have no write permission.
+    /// Tells whether `attributes` describe this file: a regular file with the same identity and
+    /// without write permission.
     pub(super) fn matches(&self, attributes: &SandboxAttributes) -> bool {
         attributes.kind == SandboxObjectKind::File
+            && attributes.read_only
             && self.object == attributes.object
-            && match (self.created, attributes.created) {
-                (Some(recorded), Some(observed)) => recorded == observed,
-                (None, None) => attributes.read_only,
-                (Some(_), None) | (None, Some(_)) => false,
-            }
     }
 }
 
@@ -82,11 +75,10 @@ impl InstalledFile {
 pub(super) enum PathState {
     /// Nothing is at the path.
     Absent,
-    /// The path holds Golem's file: the file of the old declaration, as the lifecycle installed it.
+    /// The path holds Golem's file: a regular file with the content of the old declaration, and
+    /// without write permission where the old declaration is read-only.
     Golem,
-    /// The path is empty because a capture left out the bytes of Golem's file there.
-    LeftOut,
-    /// Another object is at the path.
+    /// Another object is at the path, or an object above the path is not a directory.
     Other,
 }
 
@@ -118,8 +110,8 @@ impl<'a> Step<'a> {
 /// gives what is at a path.
 ///
 /// A path whose declarations in `old` and `new` are equal keeps what is at it. Two declarations
-/// are equal when their content hash, path, permissions and size are equal. A left-out file at
-/// such a path is seeded again. Every other path follows one of three rules:
+/// are equal when their content hash, path, permissions and size are equal. Every other path
+/// follows one of three rules:
 ///
 /// 1. A path that is read-only in `new` gets the new file if it holds nothing or Golem's file.
 ///    Anything else at the path is a conflict.
@@ -172,12 +164,9 @@ fn rule<'a>(
     state: PathState,
 ) -> Decision<'a> {
     match (old, new) {
-        (Some(old), Some(new)) if old == new => match state {
-            PathState::LeftOut => Decision::Seed(new, OnExisting::Fail),
-            PathState::Absent | PathState::Golem | PathState::Other => Decision::Keep,
-        },
+        (Some(old), Some(new)) if old == new => Decision::Keep,
         (_, Some(new)) if new.permissions == AgentFilePermissions::ReadOnly => match state {
-            PathState::Absent | PathState::LeftOut => Decision::Seed(new, OnExisting::Fail),
+            PathState::Absent => Decision::Seed(new, OnExisting::Fail),
             PathState::Golem => Decision::Seed(new, OnExisting::Replace),
             PathState::Other => Decision::Conflict,
         },
@@ -185,7 +174,7 @@ fn rule<'a>(
             Decision::Keep
         }
         (_, Some(new)) => match state {
-            PathState::Absent | PathState::LeftOut => Decision::Seed(new, OnExisting::Fail),
+            PathState::Absent => Decision::Seed(new, OnExisting::Fail),
             PathState::Golem => Decision::Seed(new, OnExisting::Replace),
             PathState::Other => Decision::Keep,
         },
@@ -466,9 +455,9 @@ impl PreparedInitialFiles {
 
 /// Finds what is at each path whose declaration differs between `old` and `new`.
 ///
-/// `installed` holds the files that the lifecycle installed for `old`. The function reads the
-/// content of a read-write file only where `new` makes the path read-only, because no other rule
-/// depends on it.
+/// `installed` holds the files that the lifecycle installed for `old`. The function checks for
+/// Golem's file only where a rule depends on it: where `old` declares the path read-only, and where
+/// `old` declares it read-write and `new` makes it read-only.
 pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     old: &Declarations,
@@ -487,15 +476,19 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
             (PathReader::default(), HashMap::new()),
             |(reader, mut states), path| async move {
                 let (reader, lookup) = reader.read(sandbox, path).await?;
-                let state = match lookup {
-                    PathLookup::Absent => PathState::Absent,
-                    PathLookup::Blocked => PathState::Other,
-                    PathLookup::Found(attributes) => {
+                let state = match (lookup, old.get(path)) {
+                    (PathLookup::Absent, _) => PathState::Absent,
+                    (PathLookup::Blocked, _) => PathState::Other,
+                    (PathLookup::Found(attributes), Some(declared))
+                        if declared.permissions == AgentFilePermissions::ReadOnly
+                            || new.get(path).is_some_and(|new| {
+                                new.permissions == AgentFilePermissions::ReadOnly
+                            }) =>
+                    {
                         if holds_golem_file(
                             sandbox,
                             path,
-                            old.get(path),
-                            new.get(path),
+                            declared,
                             installed.get(path),
                             &attributes,
                         )
@@ -506,6 +499,7 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
                             PathState::Other
                         }
                     }
+                    (PathLookup::Found(_), _) => PathState::Other,
                 };
                 states.insert(Box::from(path), state);
                 Ok((reader, states))
@@ -515,30 +509,31 @@ pub(super) async fn observe<Adapter: SandboxFilesystemAdapter>(
         .map(|(_, states)| states)
 }
 
-/// Tells whether the object at `path` is the file of the old declaration, as the lifecycle
-/// installed it.
-async fn holds_golem_file<Adapter: SandboxFilesystemAdapter>(
+/// Tells whether the object at `path`, which `attributes` describe, is Golem's file of the
+/// declaration `declared`: a regular file with the declared content and, where the declaration is
+/// read-only, without write permission.
+///
+/// `installed` is the file that the lifecycle installed at the path, where it recorded one. An
+/// object that matches it needs no read of its content.
+pub(super) async fn holds_golem_file<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
-    old: Option<&InitialAgentFile>,
-    new: Option<&InitialAgentFile>,
+    declared: &InitialAgentFile,
     installed: Option<&InstalledFile>,
     attributes: &SandboxAttributes,
 ) -> Result<bool, FilesystemStorageError> {
-    match old {
-        Some(old) if old.permissions == AgentFilePermissions::ReadOnly => {
-            Ok(installed.is_some_and(|installed| installed.matches(attributes)))
-        }
-        Some(old)
-            if new.is_some_and(|new| new.permissions == AgentFilePermissions::ReadOnly)
-                && attributes.kind == SandboxObjectKind::File
-                && attributes.size == old.size =>
-        {
-            content_hash(sandbox, path)
-                .await
-                .map(|hash| hash == *old.content_hash.0.as_blake3_hash())
-        }
-        Some(_) | None => Ok(false),
+    let read_only = declared.permissions == AgentFilePermissions::ReadOnly;
+    if attributes.kind != SandboxObjectKind::File
+        || (read_only && !attributes.read_only)
+        || attributes.size != declared.size
+    {
+        Ok(false)
+    } else if installed.is_some_and(|installed| installed.matches(attributes)) {
+        Ok(true)
+    } else {
+        content_hash(sandbox, path)
+            .await
+            .map(|hash| hash == *declared.content_hash.0.as_blake3_hash())
     }
 }
 
@@ -810,18 +805,13 @@ mod tests {
         declaration(AgentFilePermissions::ReadWrite, size)
     }
 
-    const STATES: [PathState; 4] = [
-        PathState::Absent,
-        PathState::Golem,
-        PathState::LeftOut,
-        PathState::Other,
-    ];
+    const STATES: [PathState; 3] = [PathState::Absent, PathState::Golem, PathState::Other];
 
     #[test]
     fn rule_decides_each_branch_of_the_initial_file_rule() {
         use Decision::{Conflict, Keep, Unlink};
         use OnExisting::{Fail, Replace};
-        use PathState::{Absent, Golem, LeftOut, Other};
+        use PathState::{Absent, Golem, Other};
 
         let (ro, ro_changed, rw, rw_changed) =
             (read_only(1), read_only(2), read_write(1), read_write(2));
@@ -842,13 +832,6 @@ mod tests {
                 Keep,
             ),
             ("equal read-only, golem", Some(&ro), Some(&ro), Golem, Keep),
-            (
-                "equal read-only, left out",
-                Some(&ro),
-                Some(&ro),
-                LeftOut,
-                Decision::Seed(&ro, Fail),
-            ),
             ("equal read-only, other", Some(&ro), Some(&ro), Other, Keep),
             (
                 "equal read-write, absent",
@@ -871,13 +854,6 @@ mod tests {
                 Some(&ro),
                 Some(&ro_changed),
                 Absent,
-                Decision::Seed(&ro_changed, Fail),
-            ),
-            (
-                "changed read-only, left out",
-                Some(&ro),
-                Some(&ro_changed),
-                LeftOut,
                 Decision::Seed(&ro_changed, Fail),
             ),
             (
@@ -952,13 +928,6 @@ mod tests {
                 Decision::Seed(&rw, Fail),
             ),
             (
-                "read-only to read-write, left out",
-                Some(&ro),
-                Some(&rw),
-                LeftOut,
-                Decision::Seed(&rw, Fail),
-            ),
-            (
                 "read-only to read-write, golem",
                 Some(&ro),
                 Some(&rw),
@@ -974,13 +943,6 @@ mod tests {
             ),
             ("dropped read-only, golem", Some(&ro), None, Golem, Unlink),
             ("dropped read-only, absent", Some(&ro), None, Absent, Keep),
-            (
-                "dropped read-only, left out",
-                Some(&ro),
-                None,
-                LeftOut,
-                Keep,
-            ),
             ("dropped read-only, other", Some(&ro), None, Other, Keep),
             ("dropped read-write, golem", Some(&rw), None, Golem, Keep),
             ("dropped read-write, other", Some(&rw), None, Other, Keep),
@@ -1007,9 +969,7 @@ mod tests {
                         Decision::Seed(_, OnExisting::Replace) | Decision::Unlink => {
                             state == PathState::Golem
                         }
-                        Decision::Seed(_, OnExisting::Fail) => {
-                            matches!(state, PathState::Absent | PathState::LeftOut)
-                        }
+                        Decision::Seed(_, OnExisting::Fail) => state == PathState::Absent,
                         Decision::Keep | Decision::Conflict => true,
                     };
                     assert!(allowed, "{old:?} -> {new:?} at {state:?} gave {decision:?}");
@@ -1077,7 +1037,6 @@ mod tests {
     fn installed_after_keeps_unchanged_read_only_paths_and_drops_an_older_path_of_one_object() {
         let file = |object| InstalledFile {
             object: SandboxObjectId::scripted(object),
-            created: None,
         };
         let previous = HashMap::from([
             (Box::<Path>::from(Path::new("kept")), file(1)),
@@ -1115,32 +1074,24 @@ mod tests {
     }
 
     #[test]
-    fn an_installed_file_matches_its_object_and_creation_time_or_no_write_permission() {
-        let attributes = |object, created, read_only| SandboxAttributes {
+    fn an_installed_file_matches_a_regular_file_with_its_object_and_without_write_permission() {
+        let attributes = |object, read_only| SandboxAttributes {
             kind: SandboxObjectKind::File,
             link_count: 1,
             size: 0,
             accessed: None,
             modified: None,
-            created,
             read_only,
             object: SandboxObjectId::scripted(object),
         };
-        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
-        let later = time + std::time::Duration::from_secs(1);
-        let with_time = InstalledFile::of(&attributes(1, Some(time), false));
-        let without_time = InstalledFile::of(&attributes(1, None, true));
+        let installed = InstalledFile::of(&attributes(1, true));
 
-        assert!(with_time.matches(&attributes(1, Some(time), false)));
-        assert!(!with_time.matches(&attributes(1, Some(later), false)));
-        assert!(!with_time.matches(&attributes(2, Some(time), false)));
-        assert!(!with_time.matches(&attributes(1, None, true)));
-        assert!(without_time.matches(&attributes(1, None, true)));
-        assert!(!without_time.matches(&attributes(1, None, false)));
-        assert!(!without_time.matches(&attributes(1, Some(time), true)));
-        assert!(!with_time.matches(&SandboxAttributes {
+        assert!(installed.matches(&attributes(1, true)));
+        assert!(!installed.matches(&attributes(1, false)));
+        assert!(!installed.matches(&attributes(2, true)));
+        assert!(!installed.matches(&SandboxAttributes {
             kind: SandboxObjectKind::Directory,
-            ..attributes(1, Some(time), false)
+            ..attributes(1, true)
         }));
     }
 }

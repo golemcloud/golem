@@ -2429,17 +2429,6 @@ mod tests {
                 );
             });
         assert!(tree.as_path().join("data/large").is_file());
-        let seeded = <SandboxFilesystem as SandboxFilesystemAdapter>::get_path_attributes(
-            &filesystem,
-            SandboxPath::at_root("data/large"),
-            SandboxFollow::No,
-        )
-        .await
-        .unwrap();
-        assert!(
-            seeded.created.is_some(),
-            "managed XFS must report the creation time of a seeded file"
-        );
 
         let existing = <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,

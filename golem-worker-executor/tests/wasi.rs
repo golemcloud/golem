@@ -518,6 +518,75 @@ async fn initial_file_p3_parity(
     initial_file_p3_parity_impl(last_unique_id, deps, initial_file_system).await
 }
 
+#[test]
+#[tracing::instrument]
+async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "directory-hard-link");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let linked = executor
+        .invoke_and_await_agent(&component, &agent_id, "run_directory_link", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_replay_target",
+            data_value!("written after the refused links".to_string()),
+        )
+        .await?;
+    let inspected = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_path",
+            data_value!("replay-target.txt".to_string()),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        schema_string_list(linked),
+        [
+            "directory_create_p2=ok",
+            "directory_link_p2=err:not-permitted",
+            "create_after_directory_link_p2=ok",
+            "directory_create_p3=ok",
+            "directory_link_p3=err:not-permitted",
+            "create_after_directory_link_p3=ok",
+        ]
+        .map(String::from)
+    );
+    assert_eq!(
+        schema_string_list(inspected),
+        [
+            "p2_read=written after the refused links",
+            "p3_read=written after the refused links",
+        ]
+        .map(String::from)
+    );
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]

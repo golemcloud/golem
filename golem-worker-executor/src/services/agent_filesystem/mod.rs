@@ -81,6 +81,77 @@ impl FilesystemObjectLimitPolicyConfig {
     }
 }
 
+/// The owner write bit of a file mode creation mask.
+#[cfg(unix)]
+const OWNER_WRITE_BIT: libc::mode_t = 0o200;
+
+/// Clears bit 0o200 of the file mode creation mask of the process, and keeps the other bits.
+///
+/// Each file that an agent creates then has write permission for its owner. The initial-file rule
+/// counts a file without write permission at a read-only declared path as Golem's file when its
+/// content equals the declaration, so a file of an agent must always have this permission. The
+/// call is idempotent, and it changes only the owner write bit of the mask.
+///
+/// On Linux the function reads the current mask from the `Umask:` line of `/proc/self/status`.
+/// That read does not change the mask. On other Unix platforms, and on Linux when the line is not
+/// available, the function sets the mask two times: to 0o022, which gives the current mask, and
+/// then to that mask without the owner write bit. Between the two calls, a file that another thread
+/// creates gets the usual permissions of the mask 0o022.
+///
+/// Windows has no file mode creation mask. There, a file is read-only only when its read-only
+/// attribute is set, and an agent cannot set that attribute, so the service changes nothing.
+#[cfg(unix)]
+fn keep_owner_write_permission() {
+    let mask = current_file_creation_mask();
+    // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+    unsafe {
+        libc::umask(mask_without_owner_write(mask));
+    }
+}
+
+/// Gives the current file mode creation mask of the process. Where `/proc/self/status` has no
+/// `Umask:` line, the mask is 0o022 after the call.
+#[cfg(target_os = "linux")]
+fn current_file_creation_mask() -> libc::mode_t {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .as_deref()
+        .and_then(status_umask)
+        .unwrap_or_else(replaced_file_creation_mask)
+}
+
+/// Gives the current file mode creation mask of the process. The mask is 0o022 after the call.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn current_file_creation_mask() -> libc::mode_t {
+    replaced_file_creation_mask()
+}
+
+/// Sets the file mode creation mask of the process to 0o022, and gives the mask before the call.
+///
+/// The probe mask is 0o022, not 0o777. Other services of the process can create files at the same
+/// time, such as a database file or a log file. With 0o777 such a file gets mode 000 and fails at
+/// random. With 0o022 it gets the usual permissions for that moment.
+#[cfg(unix)]
+fn replaced_file_creation_mask() -> libc::mode_t {
+    // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+    unsafe { libc::umask(0o022) }
+}
+
+/// Gives `mask` without the owner write bit. Every other bit stays as it is.
+#[cfg(unix)]
+fn mask_without_owner_write(mask: libc::mode_t) -> libc::mode_t {
+    mask & !OWNER_WRITE_BIT
+}
+
+/// Gives the file mode creation mask on the `Umask:` line of a `/proc/<pid>/status` text.
+#[cfg(target_os = "linux")]
+fn status_umask(status: &str) -> Option<libc::mode_t> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Umask:"))
+        .and_then(|value| libc::mode_t::from_str_radix(value.trim(), 8).ok())
+}
+
 #[derive(Clone)]
 pub(crate) struct AgentFilesystems {
     provisioning: SandboxFilesystemProvisioning,
@@ -94,12 +165,17 @@ impl AgentFilesystems {
     /// `.scratch` host directory for captures and restores.
     ///
     /// Callers create this service during executor startup, before any agent filesystem exists.
-    /// Making `.scratch` removes what an earlier process left under the name. Returns an error for
-    /// invalid provisioning settings, failed volume observation, a pressure target larger than the
-    /// observed managed volume, or a `.scratch` directory that cannot be made.
+    /// Every embedder of the executor starts the service here. On Unix platforms the service clears
+    /// bit 0o200 of the process umask and keeps the other bits, so each file that an agent creates
+    /// has write permission for its owner. Making `.scratch` removes what an earlier process left
+    /// under the name. Returns an error for invalid provisioning settings, failed volume observation, a
+    /// pressure target larger than the observed managed volume, or a `.scratch` directory that
+    /// cannot be made.
     pub(crate) async fn new(
         settings: &FilesystemStorageConfig,
     ) -> Result<Self, FilesystemStorageError> {
+        #[cfg(unix)]
+        keep_owner_write_permission();
         let provisioning = SandboxFilesystemProvisioning::new(
             settings.deterministic_root_dir.clone(),
             settings.managed_xfs_root_dir.clone(),
@@ -193,6 +269,38 @@ impl AgentFilesystems {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_mode_creation_mask_loses_only_the_owner_write_bit() {
+        [
+            (0o022, 0o022),
+            (0o077, 0o077),
+            (0o222, 0o022),
+            (0o277, 0o077),
+        ]
+        .into_iter()
+        .for_each(|(mask, expected)| {
+            assert_eq!(
+                mask_without_owner_write(mask),
+                expected,
+                "the mask {mask:o} must become {expected:o}"
+            );
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_file_mode_creation_mask_comes_from_the_umask_line_of_a_status_text() {
+        assert_eq!(
+            status_umask("Name:\tworker-executor\nUmask:\t0277\nState:\tR (running)\n"),
+            Some(0o277)
+        );
+        assert_eq!(
+            status_umask("Name:\tworker-executor\nState:\tR (running)\n"),
+            None
+        );
+    }
 
     struct BindingSpaceObservationGuard(Option<FilesystemSpace>);
 
