@@ -56,9 +56,9 @@ object ComponentId {
 final case class ParsedAgentId(value: String) {
   def parts: Either[GolemReflectError, ParsedAgentIdParts]         = ParsedAgentId.parse(this)
   def dynamicClient: Either[GolemReflectError, DynamicAgentClient] = DynamicAgentClient.fromAgentId(this)
-  def client[Constructor](
-    definition: AgentClientDefinition[Constructor]
-  ): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] = definition.bind(this)
+  def client[Capability <: AgentClientCapability, Constructor, Config](
+    definition: AgentClientDefinition[Capability, Constructor, Config]
+  ): Either[GolemReflectError, CallerCodecAgentClient] = definition.bind(this)
 }
 
 final case class ParsedAgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[Uuid])
@@ -422,11 +422,21 @@ private[reflection] object Transport {
     constructor: SchemaValue,
     phantom: Option[Uuid]
   ): Either[GolemReflectError, Transport] =
+    create(typeName, constructor, phantom, Nil)
+
+  def create(
+    typeName: String,
+    constructor: SchemaValue,
+    phantom: Option[Uuid],
+    config: List[golem.config.ConfigOverride]
+  ): Either[GolemReflectError, Transport] =
     encode(constructor).map { payload =>
       val phantomArg = phantom.fold[js.UndefOr[JsSchemaUuid]](js.undefined)(uuid =>
         JsSchemaUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString))
       )
-      new Transport(WasmRpcApi.newClient(typeName, payload, phantomArg, js.Array()))
+      new Transport(
+        WasmRpcApi.newClient(typeName, payload, phantomArg, golem.config.ConfigOverrideEncoder.encode(config))
+      )
     }
 }
 

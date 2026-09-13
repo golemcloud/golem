@@ -10,6 +10,7 @@
 
 package golem.reflection
 
+import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.runtime.{InputRecordCodec, OutputCodec, OutputMetadata}
 import golem.schema.SchemaValue
 import golem.{Datetime, Uuid}
@@ -18,14 +19,29 @@ import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.util.control.NonFatal
 
-/** A discovery-free, caller-authored typed agent contract. */
-final class AgentClientDefinition[Constructor] private (
-  val name: String,
-  val mode: AgentMode,
-  val constructor: InputRecordCodec[Constructor]
-) {
-  val client: CallerCodecClientFactory[Constructor] = new CallerCodecClientFactory(this)
+sealed trait AgentClientCapability
+sealed trait BindingOnly extends AgentClientCapability
+sealed trait Complete    extends AgentClientCapability
+sealed trait NoConfig
 
+trait AgentConfigCodec[Config] {
+  def overrides(config: Config): List[ConfigOverride]
+}
+
+object AgentConfigCodec {
+  def apply[Config](encode: Config => List[ConfigOverride]): AgentConfigCodec[Config] =
+    new AgentConfigCodec[Config] {
+      def overrides(config: Config): List[ConfigOverride] = encode(config)
+    }
+}
+
+/** A discovery-free, caller-authored typed agent contract. */
+final class AgentClientDefinition[Capability <: AgentClientCapability, Constructor, Config] private (
+  private[reflection] val contractName: Option[String],
+  private[reflection] val contractMode: Option[AgentMode],
+  private[reflection] val constructorCodec: Option[InputRecordCodec[Constructor]],
+  private[reflection] val configCodec: Option[AgentConfigCodec[Config]]
+) {
   def method[Input, Output](
     name: String,
     input: InputRecordCodec[Input],
@@ -33,30 +49,63 @@ final class AgentClientDefinition[Constructor] private (
   ): CallerCodecMethod[Input, Output] =
     CallerCodecMethod(name, input, output)
 
-  def bind(agentId: ParsedAgentId): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
+  def client(implicit complete: Capability =:= Complete): CallerCodecClientFactory[Constructor, Config] =
+    new CallerCodecClientFactory(this.asInstanceOf[AgentClientDefinition[Complete, Constructor, Config]])
+
+  def agentId(
+    input: Constructor,
+    phantomId: Option[Uuid] = None
+  )(implicit complete: Capability =:= Complete): Either[GolemReflectError, ParsedAgentId] =
+    try ParsedAgentId.create(contractName.get, constructorCodec.get.toValue(input), phantomId)
+    catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
+
+  def bind(agentId: ParsedAgentId): Either[GolemReflectError, CallerCodecAgentClient] =
     for {
       parts <- agentId.parts
-      _     <- Either.cond(
-             parts.typeName == name,
-             (),
-             GolemReflectError.Identity(s"Agent client contract '$name' cannot bind '${parts.typeName}'")
-           )
-      _ <- Either.cond(
-             mode == AgentMode.Durable,
-             (),
-             GolemReflectError.Identity(s"Cannot bind an existing identity to ephemeral agent type '$name'")
-           )
-      transport <- Transport.create(name, parts.constructorValue, parts.phantomId)
-    } yield new CallerCodecAgentClient(this, transport)
+      _     <- contractName match {
+             case None       => Right(())
+             case Some(name) =>
+               Either.cond(
+                 parts.typeName == name,
+                 (),
+                 GolemReflectError.Identity(s"Agent client contract '$name' cannot bind '${parts.typeName}'")
+               )
+           }
+      _ <- contractMode match {
+             case Some(AgentMode.Ephemeral) =>
+               Left(
+                 GolemReflectError.Identity(
+                   s"Cannot bind an existing identity to ephemeral agent type '${contractName.get}'"
+                 )
+               )
+             case _ => Right(())
+           }
+      _ <- constructorCodec match {
+             case None        => Right(())
+             case Some(codec) => ReflectionInternals.validate(SchemaRef(codec.graph), parts.constructorValue)
+           }
+      transport <- Transport.create(parts.typeName, parts.constructorValue, parts.phantomId)
+    } yield new CallerCodecAgentClient(transport)
 }
 
 object AgentClientDefinition {
-  def apply[Constructor](
+  def bindingOnly: AgentClientDefinition[BindingOnly, Unit, NoConfig] =
+    new AgentClientDefinition(None, None, None, None)
+
+  def complete[Constructor](
     name: String,
     constructor: InputRecordCodec[Constructor],
     mode: AgentMode = AgentMode.Durable
-  ): AgentClientDefinition[Constructor] =
-    new AgentClientDefinition(name, mode, constructor)
+  ): AgentClientDefinition[Complete, Constructor, NoConfig] =
+    new AgentClientDefinition(Some(name), Some(mode), Some(constructor), None)
+
+  def complete[Constructor, Config](
+    name: String,
+    mode: AgentMode,
+    constructor: InputRecordCodec[Constructor],
+    config: AgentConfigCodec[Config]
+  ): AgentClientDefinition[Complete, Constructor, Config] =
+    new AgentClientDefinition(Some(name), Some(mode), Some(constructor), Some(config))
 }
 
 final case class CallerCodecMethod[Input, Output](
@@ -65,65 +114,98 @@ final case class CallerCodecMethod[Input, Output](
   output: OutputCodec[Output]
 )
 
-final case class CallerCodecPhantomClient[Constructor](
+final case class CallerCodecPhantomClient(
   agentId: ParsedAgentId,
   phantomId: Uuid,
-  client: CallerCodecAgentClient[Constructor]
+  client: CallerCodecAgentClient
 )
 
-final class CallerCodecClientFactory[Constructor] private[reflection] (
-  definition: AgentClientDefinition[Constructor]
+final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
+  definition: AgentClientDefinition[Complete, Constructor, Config]
 ) {
-  def get(input: Constructor): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
-    requireDurable("get").flatMap(_ => create(input, None))
+  def get(input: Constructor)(implicit
+    noConfig: Config =:= NoConfig
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
+    getWithOverrides(input, Nil)
 
-  def getPhantom(input: Constructor, phantomId: Uuid): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
-    create(input, Some(phantomId))
+  def get(input: Constructor, config: Config): Either[GolemReflectError, CallerCodecAgentClient] =
+    getWithOverrides(input, encodeConfig(config))
+
+  def getPhantom(input: Constructor, phantomId: Uuid)(implicit
+    noConfig: Config =:= NoConfig
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
+    create(input, Some(phantomId), Nil)
+
+  def getPhantom(
+    input: Constructor,
+    phantomId: Uuid,
+    config: Config
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
+    create(input, Some(phantomId), encodeConfig(config))
 
   def newPhantom(
     input: Constructor
-  ): Either[GolemReflectError, Either[CallerCodecAgentClient[Constructor], CallerCodecPhantomClient[Constructor]]] =
-    if (definition.mode == AgentMode.Ephemeral) create(input, None).map(Left(_))
+  )(implicit
+    noConfig: Config =:= NoConfig
+  ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
+    newPhantomWithOverrides(input, Nil)
+
+  def newPhantom(
+    input: Constructor,
+    config: Config
+  ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
+    newPhantomWithOverrides(input, encodeConfig(config))
+
+  private def newPhantomWithOverrides(
+    input: Constructor,
+    overrides: List[ConfigOverride]
+  ): Either[GolemReflectError, Either[CallerCodecAgentClient, CallerCodecPhantomClient]] =
+    if (definition.contractMode.contains(AgentMode.Ephemeral)) create(input, None, overrides).map(Left(_))
     else {
       val phantom = Uuid.random()
       for {
         constructor <- encodeConstructor(input)
-        id          <- ParsedAgentId.create(definition.name, constructor, Some(phantom))
-        transport   <- Transport.create(definition.name, constructor, Some(phantom))
-        client       = new CallerCodecAgentClient(definition, transport)
+        id          <- ParsedAgentId.create(definition.contractName.get, constructor, Some(phantom))
+        transport   <- Transport.create(definition.contractName.get, constructor, Some(phantom), overrides)
+        client       = new CallerCodecAgentClient(transport)
       } yield Right(CallerCodecPhantomClient(id, phantom, client))
     }
 
+  private def getWithOverrides(input: Constructor, overrides: List[ConfigOverride]) =
+    requireDurable("get").flatMap(_ => create(input, None, overrides))
+
   private def create(
     input: Constructor,
-    phantomId: Option[Uuid]
-  ): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
-    encodeConstructor(input).flatMap(createValue(_, phantomId))
+    phantomId: Option[Uuid],
+    overrides: List[ConfigOverride]
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
+    encodeConstructor(input).flatMap(createValue(_, phantomId, overrides))
 
   private def createValue(
     constructor: SchemaValue,
-    phantomId: Option[Uuid]
-  ): Either[GolemReflectError, CallerCodecAgentClient[Constructor]] =
+    phantomId: Option[Uuid],
+    overrides: List[ConfigOverride]
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
     Transport
-      .create(definition.name, constructor, phantomId)
-      .map(new CallerCodecAgentClient(definition, _))
+      .create(definition.contractName.get, constructor, phantomId, overrides)
+      .map(new CallerCodecAgentClient(_))
 
   private def encodeConstructor(input: Constructor): Either[GolemReflectError, SchemaValue] =
-    try Right(definition.constructor.toValue(input))
+    try Right(definition.constructorCodec.get.toValue(input))
     catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 
   private def requireDurable(operation: String): Either[GolemReflectError, Unit] =
     Either.cond(
-      definition.mode == AgentMode.Durable,
+      definition.contractMode.contains(AgentMode.Durable),
       (),
       GolemReflectError.Identity(s"$operation is not available for ephemeral agent types")
     )
+
+  private def encodeConfig(config: Config): List[ConfigOverride] =
+    definition.configCodec.fold(List.empty[ConfigOverride])(_.overrides(config))
 }
 
-final class CallerCodecAgentClient[Constructor] private[reflection] (
-  definition: AgentClientDefinition[Constructor],
-  transport: Transport
-) {
+final class CallerCodecAgentClient private[reflection] (transport: Transport) {
   def method[Input, Output](definition: CallerCodecMethod[Input, Output]): CallerCodecBoundMethod[Input, Output] =
     new CallerCodecBoundMethod(definition, transport)
 }
