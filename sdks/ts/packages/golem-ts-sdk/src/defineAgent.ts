@@ -209,7 +209,6 @@ export interface AgentClientContract<
 export interface AgentClientBindingDefinition<
   Methods extends MethodsRecord,
 > extends AgentClientBinding<import('./client').RemoteClient<Methods>> {
-  readonly name?: string;
   readonly methods: Methods;
 }
 
@@ -224,7 +223,7 @@ export interface AgentClientDefinition<
     ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
     : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
   /** A client factory compiled from this definition's local schemas. */
-  readonly client: AgentClientFactory<Id, Methods, Mode>;
+  readonly client: AgentClientFactory<Id, Methods, Config, Mode>;
   [bindAgentClient](agentId: ParsedAgentId): import('./client').RemoteClient<Methods, Mode>;
 }
 
@@ -422,7 +421,7 @@ export function defineAgent<
   let implemented = false;
   let surface:
     | {
-        client: AgentClientFactory<Id, Methods, Mode>;
+        client: AgentClientFactory<Id, Methods, Config, Mode>;
         agentId: AgentClientDefinition<Id, Methods, Config, Mode>['agentId'];
         [bindAgentClient]: AgentClientDefinition<Id, Methods, Config, Mode>[typeof bindAgentClient];
       }

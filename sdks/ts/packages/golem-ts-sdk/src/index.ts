@@ -177,6 +177,7 @@ export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
   AgentClientFactory,
   AgentClientSpec,
+  ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
