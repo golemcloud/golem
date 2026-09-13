@@ -35,6 +35,14 @@ pub(all) struct CancelableScheduledInvocationReceipt {
 }
 
 ///|
+/// Converts a typed configuration override carrier into the leaf values sent
+/// when constructing an agent client. The agent code generator implements this
+/// trait for generated `*Override` types.
+pub(open) trait AgentConfigOverrides {
+  fn typed_values(Self) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
+}
+
+///|
 fn make_client(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
