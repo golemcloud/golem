@@ -126,8 +126,8 @@ object SchemaRefSpec extends ZIOSpecDefault {
       )
     },
     test("caller-owned contracts expose two tiers and validate complete identity shapes") {
-      val binding: AgentClientDefinition[BindingOnly, Unit, NoConfig] = AgentClientDefinition.bindingOnly
-      val complete: AgentClientDefinition[Complete, String, NoConfig] = AgentClientDefinition.complete(
+      val binding: AgentClientDefinition[BindingOnly, Unit, NoConfig]        = AgentClientDefinition.bindingOnly
+      val complete: AgentClientDefinition[DurableComplete, String, NoConfig] = AgentClientDefinition.complete(
         name = "CounterAgent",
         constructor = InputRecordCodec.single[String]("name")
       )

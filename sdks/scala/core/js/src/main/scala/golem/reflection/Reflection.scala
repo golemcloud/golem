@@ -58,7 +58,8 @@ final case class ParsedAgentId(value: String) {
   def dynamicClient: Either[GolemReflectError, DynamicAgentClient] = DynamicAgentClient.fromAgentId(this)
   def client[Capability <: AgentClientCapability, Constructor, Config](
     definition: AgentClientDefinition[Capability, Constructor, Config]
-  ): Either[GolemReflectError, CallerCodecAgentClient] = definition.bind(this)
+  )(implicit canBind: CanBindAgentClient[Capability]): Either[GolemReflectError, CallerCodecAgentClient] =
+    definition.bind(this)
 }
 
 final case class ParsedAgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[Uuid])

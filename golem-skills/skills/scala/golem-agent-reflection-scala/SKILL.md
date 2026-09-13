@@ -93,8 +93,9 @@ val result = counter.map(_.method(add).invoke(5))
 ```
 
 A complete definition adds the exact name, lifecycle mode, constructor codec,
-and an optional typed config codec. Identity helpers and lifecycle factories
-are only available for the `Complete` capability:
+and an optional typed config codec. Construction infers `DurableComplete` or
+`EphemeralComplete`; both extend `Complete`, which gates identity helpers and
+lifecycle factories:
 
 ```scala
 val counter = AgentClientDefinition.complete(
@@ -113,7 +114,8 @@ val exact = counter.bind(existingId)
 Complete durable binding checks both the exact name and the constructor value
 against the declared constructor codec before creating transport. Complete
 ephemeral definitions support logical-new and known-phantom factories and
-reject generic binding. `AgentConfigCodec[C]` maps a typed config carrier to
+have no `CanBindAgentClient` capability, so generic binding is rejected at
+compile time. `AgentConfigCodec[C]` maps a typed config carrier to
 the existing typed `ConfigOverride` values; secret fields should not be exposed
 by that codec.
 
