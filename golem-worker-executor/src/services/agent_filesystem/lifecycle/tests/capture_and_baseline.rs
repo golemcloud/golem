@@ -1720,3 +1720,618 @@ async fn read_only_initial_files_follow_their_permission_bits_after_rename_link_
     assert!(!root.join("ro-deleted.txt").exists());
     delete(seal(resident)).await.unwrap();
 }
+
+/// The directory places of the path space of the restore property. A directory is the only object
+/// at these places.
+const DIRECTORY_PLACES: [&str; 2] = ["d", "e"];
+
+/// The file places of the path space: three names at the root and the three names in each directory.
+/// Regular files and symlinks are the only objects at these places. So no step makes a hard link to a
+/// directory.
+const FILE_PLACES: [&str; 9] = ["f", "g", "h", "d/f", "d/g", "d/h", "e/f", "e/g", "e/h"];
+
+/// The contents of declarations and writes. Two of them have the same size.
+const CONTENTS: [&[u8]; 3] = [b"one", b"two", b"three"];
+
+/// The targets of new symlinks. No target is outside the root. No target is a place where a symlink
+/// can be, so no symlink loop occurs.
+const SYMLINK_TARGETS: [&str; 4] = ["missing", "d", "d/new", "e"];
+
+/// The number of histories that the restore property checks when `PROPTEST_CASES` is not set.
+const RESTORE_PROPERTY_CASES: u32 = 2048;
+
+/// The seed of the restore property. Each run checks the same histories.
+const RESTORE_PROPERTY_SEED: [u8; 32] = *b"golem-577-restore-equals-replay!";
+
+/// One initial file that a history declares. `place` is an index into `FILE_PLACES`.
+#[derive(Clone, Debug)]
+struct DeclaredFile {
+    place: usize,
+    read_only: bool,
+    content: usize,
+}
+
+/// One step of a history: a filesystem operation of the agent, or a component update. A file place
+/// is an index into `FILE_PLACES`, and a directory place is an index into `DIRECTORY_PLACES`.
+#[derive(Clone, Debug)]
+enum HistoryStep {
+    Write { file: usize, content: usize },
+    Truncate { file: usize, size: u64 },
+    RemoveFile { file: usize },
+    MoveFile { source: usize, destination: usize },
+    MoveDirectory { source: usize, destination: usize },
+    HardLink { source: usize, destination: usize },
+    Symlink { file: usize, target: usize },
+    CreateDirectory { directory: usize },
+    RemoveDirectory { directory: usize },
+    Update { files: Vec<DeclaredFile> },
+}
+
+/// A history of one agent: its first declarations, its steps, and the position of one capture.
+#[derive(Clone, Debug)]
+struct History {
+    initial: Vec<DeclaredFile>,
+    steps: Vec<HistoryStep>,
+    capture: proptest::sample::Index,
+}
+
+/// What a step gave. An error keeps only the facts that do not name a host path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StepOutcome {
+    Done,
+    Access(AccessError),
+    Sandbox(Option<std::io::ErrorKind>),
+    AgentQuota,
+    PhysicalCapacity,
+    Baseline,
+    RuntimeInvalidated,
+    Conflict(String),
+}
+
+/// The step results and the final tree that another agent must give.
+struct Expected<'a> {
+    outcomes: &'a [StepOutcome],
+    tree: &'a Tree,
+}
+
+fn declared_files() -> impl proptest::strategy::Strategy<Value = Vec<DeclaredFile>> {
+    use proptest::strategy::Strategy as _;
+    proptest::collection::btree_map(
+        0..FILE_PLACES.len(),
+        (proptest::arbitrary::any::<bool>(), 0..CONTENTS.len()),
+        0..4,
+    )
+    .prop_map(|files| {
+        files
+            .into_iter()
+            .map(|(place, (read_only, content))| DeclaredFile {
+                place,
+                read_only,
+                content,
+            })
+            .collect()
+    })
+}
+
+fn history_step() -> impl proptest::strategy::Strategy<Value = HistoryStep> {
+    use proptest::strategy::Strategy as _;
+    let file = || 0..FILE_PLACES.len();
+    let directory = || 0..DIRECTORY_PLACES.len();
+    proptest::prop_oneof![
+        3 => (file(), 0..CONTENTS.len())
+            .prop_map(|(file, content)| HistoryStep::Write { file, content }),
+        1 => (file(), 0_u64..3).prop_map(|(file, size)| HistoryStep::Truncate { file, size }),
+        2 => file().prop_map(|file| HistoryStep::RemoveFile { file }),
+        2 => (file(), file())
+            .prop_map(|(source, destination)| HistoryStep::MoveFile { source, destination }),
+        1 => (directory(), directory())
+            .prop_map(|(source, destination)| HistoryStep::MoveDirectory { source, destination }),
+        2 => (file(), file())
+            .prop_map(|(source, destination)| HistoryStep::HardLink { source, destination }),
+        2 => (file(), 0..SYMLINK_TARGETS.len())
+            .prop_map(|(file, target)| HistoryStep::Symlink { file, target }),
+        1 => directory().prop_map(|directory| HistoryStep::CreateDirectory { directory }),
+        1 => directory().prop_map(|directory| HistoryStep::RemoveDirectory { directory }),
+        2 => declared_files().prop_map(|files| HistoryStep::Update { files }),
+    ]
+}
+
+fn histories() -> impl proptest::strategy::Strategy<Value = History> {
+    use proptest::strategy::Strategy as _;
+    (
+        declared_files(),
+        proptest::collection::vec(history_step(), 0..10),
+        proptest::arbitrary::any::<proptest::sample::Index>(),
+    )
+        .prop_map(|(initial, steps, capture)| History {
+            initial,
+            steps,
+            capture,
+        })
+}
+
+async fn declare_files(store: &InitialFileStore, files: &[DeclaredFile]) -> Vec<InitialAgentFile> {
+    futures::stream::iter(files)
+        .then(|file| async move {
+            let path = format!("/{}", FILE_PLACES[file.place]);
+            let permissions = if file.read_only {
+                AgentFilePermissions::ReadOnly
+            } else {
+                AgentFilePermissions::ReadWrite
+            };
+            store
+                .declare(&path, permissions, CONTENTS[file.content])
+                .await
+        })
+        .collect()
+        .await
+}
+
+/// Gives the declarations that are current after `steps`: the files of the last update that was
+/// done, or `initial`.
+fn declarations_at(
+    initial: &[DeclaredFile],
+    steps: &[HistoryStep],
+    outcomes: &[StepOutcome],
+) -> Vec<DeclaredFile> {
+    steps
+        .iter()
+        .zip(outcomes)
+        .fold(initial.to_vec(), |current, step| match step {
+            (HistoryStep::Update { files }, StepOutcome::Done) => files.clone(),
+            _ => current,
+        })
+}
+
+fn error_outcome(error: Error) -> StepOutcome {
+    match error {
+        Error::Access(error) => StepOutcome::Access(error),
+        Error::Sandbox(error)
+            if error
+                .to_string()
+                .contains("install a read-only initial file over other data at") =>
+        {
+            StepOutcome::Conflict(error.to_string())
+        }
+        Error::Sandbox(error) => StepOutcome::Sandbox(error.io_kind()),
+        Error::AgentQuota(_) => StepOutcome::AgentQuota,
+        Error::PhysicalCapacity(_) => StepOutcome::PhysicalCapacity,
+        Error::Baseline(_) => StepOutcome::Baseline,
+        Error::RuntimeInvalidated => StepOutcome::RuntimeInvalidated,
+    }
+}
+
+fn outcome_of(result: Result<(), Error>) -> StepOutcome {
+    result.map_or_else(error_outcome, |()| StepOutcome::Done)
+}
+
+/// Writes `content` to the file at `target`, as a guest write through a new descriptor does.
+async fn write_file(
+    generation_handle: &FilesystemGenerationHandle,
+    target: Result<PathTarget, AccessError>,
+    content: &'static [u8],
+) -> StepOutcome {
+    let options = OpenOptions::File {
+        access: AccessMode::Write,
+        disposition: FileDisposition::CreateOrTruncate,
+        follow: Follow::Yes,
+    };
+    let opened = match target.and_then(|target| open(generation_handle, target, options)) {
+        Ok(call) => call.await,
+        Err(error) => return StepOutcome::Access(error),
+    };
+    let opened = match opened {
+        Ok(opened) => opened,
+        Err(error) => return error_outcome(error),
+    };
+    let written = match &opened.node {
+        OpenNode::File(file) => match write(
+            generation_handle,
+            file,
+            WritePlacement::At(0),
+            Bytes::from_static(content),
+        ) {
+            Ok(call) => call.await.map(drop),
+            Err(error) => Err(Error::Access(error)),
+        },
+        OpenNode::Directory(_) => Ok(()),
+    };
+    let closed = close(opened.node).await;
+    outcome_of(written.and(closed))
+}
+
+/// Sets the size of the file at `target`, as a guest set-size through a new descriptor does.
+async fn truncate_file(
+    generation_handle: &FilesystemGenerationHandle,
+    target: Result<PathTarget, AccessError>,
+    size: u64,
+) -> StepOutcome {
+    let options = OpenOptions::Existing {
+        expected: ObjectKind::File,
+        access: AccessMode::Write,
+        follow: Follow::Yes,
+    };
+    let opened = match target.and_then(|target| open(generation_handle, target, options)) {
+        Ok(call) => call.await,
+        Err(error) => return StepOutcome::Access(error),
+    };
+    let opened = match opened {
+        Ok(opened) => opened,
+        Err(error) => return error_outcome(error),
+    };
+    let changes = AttributeChanges::File {
+        size,
+        times: TimeChanges {
+            accessed: TimeChange::Keep,
+            modified: TimeChange::Keep,
+        },
+    };
+    let resized = match set_attributes(generation_handle, Target::Open(&opened.node), changes) {
+        Ok(call) => call.await,
+        Err(error) => Err(Error::Access(error)),
+    };
+    let closed = close(opened.node).await;
+    outcome_of(resized.and(closed))
+}
+
+async fn namespace_edit(
+    generation_handle: &FilesystemGenerationHandle,
+    edit: Result<NamespaceEdit, AccessError>,
+) -> StepOutcome {
+    match edit.and_then(|edit| edit_namespace(generation_handle, edit)) {
+        Ok(call) => outcome_of(call.await),
+        Err(error) => StepOutcome::Access(error),
+    }
+}
+
+/// Runs one step on `filesystem` through the calls that the WASI adapters use.
+async fn run_step(
+    agents: &UnmanagedAgents,
+    filesystem: &ResidentFilesystem,
+    step: &HistoryStep,
+) -> StepOutcome {
+    let generation_handle = resident_generation_handle(filesystem);
+    let file = |place: usize| PathTarget::at_root(&generation_handle, FILE_PLACES[place]);
+    let directory = |place: usize| PathTarget::at_root(&generation_handle, DIRECTORY_PLACES[place]);
+    let pair = |source: Result<PathTarget, AccessError>,
+                destination: Result<PathTarget, AccessError>| {
+        source.and_then(|source| destination.map(|destination| (source, destination)))
+    };
+    match step {
+        HistoryStep::Write {
+            file: place,
+            content,
+        } => write_file(&generation_handle, file(*place), CONTENTS[*content]).await,
+        HistoryStep::Truncate { file: place, size } => {
+            truncate_file(&generation_handle, file(*place), *size).await
+        }
+        HistoryStep::RemoveFile { file: place } => {
+            let edit = file(*place).map(|target| NamespaceEdit::Remove {
+                target,
+                expected: ObjectKind::File,
+            });
+            namespace_edit(&generation_handle, edit).await
+        }
+        HistoryStep::MoveFile {
+            source,
+            destination,
+        } => {
+            let edit = pair(file(*source), file(*destination)).map(|(source, destination)| {
+                NamespaceEdit::Move {
+                    source,
+                    destination,
+                }
+            });
+            namespace_edit(&generation_handle, edit).await
+        }
+        HistoryStep::MoveDirectory {
+            source,
+            destination,
+        } => {
+            let edit =
+                pair(directory(*source), directory(*destination)).map(|(source, destination)| {
+                    NamespaceEdit::Move {
+                        source,
+                        destination,
+                    }
+                });
+            namespace_edit(&generation_handle, edit).await
+        }
+        HistoryStep::HardLink {
+            source,
+            destination,
+        } => {
+            let edit = pair(file(*source), file(*destination)).map(|(source, destination)| {
+                NamespaceEdit::Link {
+                    source,
+                    destination,
+                }
+            });
+            namespace_edit(&generation_handle, edit).await
+        }
+        HistoryStep::Symlink {
+            file: place,
+            target,
+        } => {
+            let edit = file(*place).map(|destination| NamespaceEdit::Insert {
+                destination,
+                object: NewObject::Symlink(SymlinkTarget(PathBuf::from(SYMLINK_TARGETS[*target]))),
+            });
+            namespace_edit(&generation_handle, edit).await
+        }
+        HistoryStep::CreateDirectory { directory: place } => {
+            let edit = directory(*place).map(|destination| NamespaceEdit::Insert {
+                destination,
+                object: NewObject::Directory,
+            });
+            namespace_edit(&generation_handle, edit).await
+        }
+        HistoryStep::RemoveDirectory { directory: place } => {
+            let edit = directory(*place).map(|target| NamespaceEdit::Remove {
+                target,
+                expected: ObjectKind::Directory,
+            });
+            namespace_edit(&generation_handle, edit).await
+        }
+        HistoryStep::Update { files } => {
+            let files = declare_files(&agents.store, files).await;
+            match update_initial_files(
+                &generation_handle,
+                Arc::clone(&agents.store.loader),
+                agents.store.environment_id,
+                files,
+            ) {
+                Ok(call) => outcome_of(call.await),
+                Err(error) => error_outcome(error),
+            }
+        }
+    }
+}
+
+async fn run_steps(
+    agents: &UnmanagedAgents,
+    filesystem: &ResidentFilesystem,
+    steps: &[HistoryStep],
+) -> Vec<StepOutcome> {
+    futures::stream::iter(steps)
+        .then(|step| run_step(agents, filesystem, step))
+        .collect()
+        .await
+}
+
+/// Reads the tree under `root` with the write permission bits of each object and without times.
+fn tree_without_times(root: &Path) -> Tree {
+    let tree = read_tree(root, |_| false);
+    Tree {
+        nodes: tree
+            .nodes
+            .into_iter()
+            .map(|(path, node)| {
+                let node = match node {
+                    Node::Directory { mode } => Node::Directory { mode: mode & 0o222 },
+                    Node::File {
+                        mode,
+                        content,
+                        modified,
+                    } => Node::File {
+                        mode: mode & 0o222,
+                        content,
+                        modified,
+                    },
+                    symlink @ Node::Symlink { .. } => symlink,
+                };
+                (path, node)
+            })
+            .collect(),
+        links: tree.links,
+    }
+}
+
+/// Starts an agent from a restore of `snapshot` with the declarations `files`.
+async fn start_restored(
+    agents: &UnmanagedAgents,
+    name: &str,
+    files: &[DeclaredFile],
+    snapshot: &FilesystemCapture,
+) -> (OwnedAgentId, Result<ResidentFilesystem, Error>) {
+    let agent = agents.agent(name);
+    let files = declare_files(&agents.store, files).await;
+    let started = agents
+        .start(&agent, &files, Some(copying_restore(snapshot)))
+        .await;
+    (agent, started)
+}
+
+/// Runs `steps` on a started agent, adds each difference from `expected` to `problems`, and
+/// deletes the agent.
+async fn compare_continuation(
+    agents: &UnmanagedAgents,
+    name: &str,
+    agent: &OwnedAgentId,
+    filesystem: ResidentFilesystem,
+    steps: &[HistoryStep],
+    expected: Expected<'_>,
+    problems: &mut Vec<String>,
+) {
+    let outcomes = run_steps(agents, &filesystem, steps).await;
+    if outcomes != expected.outcomes {
+        problems.push(format!(
+            "agent {name} gave {outcomes:?} after its start, and the replay gave {:?}",
+            expected.outcomes
+        ));
+    }
+    let tree = tree_without_times(&agents.root(agent));
+    if &tree != expected.tree {
+        problems.push(format!(
+            "agent {name} holds {tree:?}, and the replay holds {:?}",
+            expected.tree
+        ));
+    }
+    delete(seal(filesystem)).await.unwrap();
+}
+
+/// Checks one history on unmanaged storage.
+///
+/// Agent A replays every step. Agent B runs the steps before the capture position, and the
+/// lifecycle captures it. Agent C starts from a restore of that capture with the declarations that
+/// are current at the capture, and runs the other steps. When the step after the capture is an
+/// update, agent D starts from the same restore with the declarations of that update, and runs the
+/// steps after it. A replay step must not make the filesystem invalid.
+async fn check_restore_against_replay(
+    history: &History,
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    let agents = UnmanagedAgents::new().await;
+    let capture_at = history.capture.index(history.steps.len() + 1);
+    let (before, after) = history.steps.split_at(capture_at);
+    let initial = declare_files(&agents.store, &history.initial).await;
+    let mut problems = Vec::new();
+
+    let replay_agent = agents.agent("replay");
+    let replay_filesystem = agents
+        .start(&replay_agent, &initial, NO_RESTORE)
+        .await
+        .map_err(|error| {
+            proptest::test_runner::TestCaseError::fail(format!("the replay did not start: {error}"))
+        })?;
+    let replay_outcomes = run_steps(&agents, &replay_filesystem, &history.steps).await;
+    let replay_tree = tree_without_times(&agents.root(&replay_agent));
+    delete(seal(replay_filesystem)).await.unwrap();
+    replay_outcomes
+        .iter()
+        .enumerate()
+        .filter(|(_, outcome)| {
+            matches!(
+                outcome,
+                StepOutcome::RuntimeInvalidated | StepOutcome::Access(AccessError::Revoked)
+            )
+        })
+        .for_each(|(index, outcome)| {
+            problems.push(format!("step {index} of the replay gave {outcome:?}"));
+        });
+
+    let captured_agent = agents.agent("captured");
+    let captured = agents
+        .start(&captured_agent, &initial, NO_RESTORE)
+        .await
+        .map_err(|error| {
+            proptest::test_runner::TestCaseError::fail(format!(
+                "the captured agent did not start: {error}"
+            ))
+        })?;
+    let prefix = run_steps(&agents, &captured, before).await;
+    if prefix[..] != replay_outcomes[..capture_at] {
+        problems.push(format!(
+            "the captured agent gave {prefix:?}, and the replay gave {:?}",
+            &replay_outcomes[..capture_at]
+        ));
+    }
+    let snapshot = capture(&captured, Duration::from_secs(5)).await;
+    delete(seal(captured)).await.unwrap();
+    match snapshot {
+        Err(error) => problems.push(format!("the capture failed: {error}")),
+        Ok(snapshot) => {
+            let current = declarations_at(&history.initial, before, &prefix);
+            match start_restored(&agents, "restored", &current, &snapshot).await {
+                (agent, Ok(restored)) => {
+                    let expected = Expected {
+                        outcomes: &replay_outcomes[capture_at..],
+                        tree: &replay_tree,
+                    };
+                    compare_continuation(
+                        &agents,
+                        "C",
+                        &agent,
+                        restored,
+                        after,
+                        expected,
+                        &mut problems,
+                    )
+                    .await;
+                }
+                (_, Err(error)) => problems.push(format!("the restore did not start: {error}")),
+            }
+            if let Some((HistoryStep::Update { files }, rest)) = after.split_first() {
+                match (
+                    &replay_outcomes[capture_at],
+                    start_restored(&agents, "manual", files, &snapshot).await,
+                ) {
+                    (StepOutcome::Done, (agent, Ok(manual))) => {
+                        let expected = Expected {
+                            outcomes: &replay_outcomes[capture_at + 1..],
+                            tree: &replay_tree,
+                        };
+                        compare_continuation(
+                            &agents,
+                            "D",
+                            &agent,
+                            manual,
+                            rest,
+                            expected,
+                            &mut problems,
+                        )
+                        .await;
+                    }
+                    (StepOutcome::Conflict(expected), (_, Err(error))) => {
+                        let actual = error_outcome(error);
+                        if actual != StepOutcome::Conflict(expected.clone()) {
+                            problems.push(format!(
+                                "the manual update gave {actual:?}, and the replayed update gave \
+                                 the conflict {expected}"
+                            ));
+                        }
+                    }
+                    (expected, (_, Ok(manual))) => {
+                        problems.push(format!(
+                            "the manual update started, and the replayed update gave {expected:?}"
+                        ));
+                        delete(seal(manual)).await.unwrap();
+                    }
+                    (expected, (_, Err(error))) => problems.push(format!(
+                        "the manual update failed with {error}, and the replayed update gave \
+                         {expected:?}"
+                    )),
+                }
+            }
+            snapshot.discard().await.unwrap();
+        }
+    }
+    proptest::prop_assert!(problems.is_empty(), "{}", problems.join("\n"));
+    Ok(())
+}
+
+#[test]
+fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
+    use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+
+    let cases = std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|cases| cases.parse().ok())
+        .unwrap_or(RESTORE_PROPERTY_CASES);
+    let mut runner = TestRunner::new_with_rng(
+        Config {
+            cases,
+            source_file: Some(file!()),
+            ..Config::default()
+        },
+        TestRng::from_seed(RngAlgorithm::ChaCha, &RESTORE_PROPERTY_SEED),
+    );
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let started = Instant::now();
+
+    let result = runner.run(&histories(), |history| {
+        runtime.block_on(check_restore_against_replay(&history))
+    });
+
+    let elapsed = started.elapsed();
+    eprintln!(
+        "restore property: {cases} histories in {elapsed:?}, {:?} for each history",
+        elapsed / cases.max(1)
+    );
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+}
