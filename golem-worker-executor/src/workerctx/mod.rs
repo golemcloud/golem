@@ -43,7 +43,7 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -182,6 +182,12 @@ pub trait WorkerCtx:
     /// Supplies optional test-harness coordination for entity body execution.
     #[doc(hidden)]
     fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        None
+    }
+
+    /// Supplies optional test-harness coordination for worker deletion stages.
+    #[doc(hidden)]
+    fn worker_deletion_hook(_extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
         None
     }
 

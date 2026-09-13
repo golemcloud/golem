@@ -44,7 +44,7 @@ golem agent files 'CounterAgent("c1")' --format json
 ## `agent file-contents` — Download a File from an Agent
 
 ```shell
-golem agent file-contents <AGENT_ID> <PATH> [--output <LOCAL_FILE>]
+golem agent file-contents <AGENT_ID> <PATH> [--output <LOCAL_FILE|->]
 ```
 
 Downloads one file from the agent's virtual filesystem and saves it to the host filesystem.
@@ -55,7 +55,7 @@ Downloads one file from the agent's virtual filesystem and saves it to the host 
 |----------|-------------|
 | `<AGENT_ID>` | The agent to inspect, e.g. `CounterAgent("c1")` |
 | `<PATH>` | Absolute file path inside the agent filesystem, e.g. `/data/log.txt` |
-| `--output <LOCAL_FILE>` | Local host path to write. If omitted, the file is saved in the current directory using the guest file basename, or `output.bin` if no basename is available. |
+| `--output <LOCAL_FILE>` | Local host path to write. Use `-` to stream raw bytes to stdout. If omitted, the file is saved in the current directory using the guest file basename, or `output.bin` if no basename is available. |
 
 ### Examples
 
@@ -67,6 +67,12 @@ golem agent file-contents 'CounterAgent("c1")' /data/log.txt
 Save to an explicit local path:
 ```shell
 golem agent file-contents 'CounterAgent("c1")' /data/log.txt --output ./downloads/counter.log
+```
+
+Stream the raw bytes to stdout (progress messages remain on stderr):
+
+```shell
+golem agent file-contents 'CounterAgent("c1")' /data/log.txt --output -
 ```
 
 Get machine-readable metadata about the saved file:

@@ -18,7 +18,7 @@ use crate::repo::component::ComponentRepo;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
-use crate::services::component::utils::prepare_component_files_for_upload;
+use crate::services::component::utils::{ComponentFilesArchiveReader, map_archive_stream_error};
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::deployment::authorize_environment_permission;
@@ -66,14 +66,37 @@ use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::component::Component;
-use golem_service_base::replayable_stream::ReplayableStream;
+use golem_service_base::replayable_stream::{ContentHash, ReplayableStream};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 use tempfile::NamedTempFile;
-use tracing::info;
+use tokio::sync::{AcquireError, OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinSet;
+use tracing::{debug, info};
+
+#[derive(Clone)]
+struct ComponentFileUploadLimiter {
+    semaphore: Arc<Semaphore>,
+    max_concurrent_files: NonZeroUsize,
+}
+
+impl ComponentFileUploadLimiter {
+    fn new(max_concurrent_files: NonZeroUsize) -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(max_concurrent_files.get())),
+            max_concurrent_files,
+        }
+    }
+
+    async fn acquire(&self) -> Result<OwnedSemaphorePermit, AcquireError> {
+        self.semaphore.clone().acquire_owned().await
+    }
+}
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -84,6 +107,9 @@ pub struct ComponentWriteService {
     environment_service: Arc<EnvironmentService>,
     environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    component_file_upload_limiter: ComponentFileUploadLimiter,
+    max_uncompressed_file_size: u64,
+    max_uncompressed_archive_size: u64,
 }
 
 impl ComponentWriteService {
@@ -96,6 +122,9 @@ impl ComponentWriteService {
         environment_service: Arc<EnvironmentService>,
         environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        max_concurrent_component_files: NonZeroUsize,
+        max_uncompressed_file_size: u64,
+        max_uncompressed_archive_size: u64,
     ) -> Self {
         Self {
             component_repo,
@@ -106,6 +135,11 @@ impl ComponentWriteService {
             environment_service,
             environment_plugin_grant_service,
             registry_change_notifier,
+            component_file_upload_limiter: ComponentFileUploadLimiter::new(
+                max_concurrent_component_files,
+            ),
+            max_uncompressed_file_size,
+            max_uncompressed_archive_size,
         }
     }
 
@@ -704,32 +738,69 @@ impl ComponentWriteService {
         archive: NamedTempFile,
         referenced_paths: &HashSet<ArchiveFilePath>,
     ) -> Result<HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>, ComponentError> {
-        let to_upload = prepare_component_files_for_upload(archive)
-            .await?
-            .into_iter()
-            .filter(|(path, _)| referenced_paths.contains(path))
-            .collect::<Vec<_>>();
+        let started = Instant::now();
+        let archive = ComponentFilesArchiveReader::open(archive).await?;
+        let mut tasks = JoinSet::new();
+        let mut uploaded = HashMap::new();
+        let referenced_entries = archive.referenced_entries(
+            referenced_paths,
+            self.max_uncompressed_file_size,
+            self.max_uncompressed_archive_size,
+        )?;
 
-        let tasks = to_upload.into_iter().map(|(path, stream)| async move {
-            info!("Uploading file: {}", path.to_string());
+        for entry in referenced_entries {
+            while let Some(result) = tasks.try_join_next() {
+                let (path, file) = result.map_err(anyhow::Error::from)??;
+                uploaded.insert(path, file);
+            }
 
-            let size = stream
-                .length()
+            let permit = self
+                .component_file_upload_limiter
+                .acquire()
                 .await
-                .context("Failed to get component file size")?;
+                .map_err(anyhow::Error::from)?;
+            let path = entry.path.clone();
+            let size = entry.declared_size;
+            let stream = archive.stream(entry, self.max_uncompressed_file_size);
+            let initial_agent_files_service = self.initial_agent_files_service.clone();
 
-            let key = self
-                .initial_agent_files_service
-                .put_if_not_exists(environment_id, &stream)
-                .await
-                .context("Failed to upload component files")?;
+            debug!(path = %path, size, "Uploading component file");
+            tasks.spawn(async move {
+                let _permit = permit;
+                let hash = AgentFileContentHash(
+                    stream
+                        .content_hash()
+                        .await
+                        .map_err(map_archive_stream_error)?,
+                );
+                let key = initial_agent_files_service
+                    .put_if_not_exists_with_hash(environment_id, hash, stream)
+                    .await
+                    .context("Failed to upload component files")
+                    .map_err(map_archive_stream_error)?;
 
-            Ok::<_, ComponentError>((path, (key, size)))
-        });
+                Ok::<_, ComponentError>((path, (key, size)))
+            });
+        }
 
-        let uploaded = futures::future::try_join_all(tasks).await?;
+        while let Some(result) = tasks.join_next().await {
+            let (path, file) = result.map_err(anyhow::Error::from)??;
+            uploaded.insert(path, file);
+        }
 
-        Ok(HashMap::from_iter(uploaded))
+        let uploaded_bytes = uploaded.values().map(|(_, size)| size).sum::<u64>();
+        info!(
+            file_count = uploaded.len(),
+            uploaded_bytes,
+            max_concurrent_files = self
+                .component_file_upload_limiter
+                .max_concurrent_files
+                .get(),
+            elapsed_ms = started.elapsed().as_millis(),
+            "Uploaded component files"
+        );
+
+        Ok(uploaded)
     }
 
     /// Resolves all plugin grants in a single DB query.

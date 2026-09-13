@@ -18,9 +18,9 @@ import process from "node:process";
 // The SDK derives agent metadata at runtime from the schemas, so the
 // virtual entry only imports the user's main module for its side-effecting
 // `defineAgent(...).implement(...)` registrations. The SDK package, its supported
-// subpaths, and the `golem:*` host packages are externalized (provided by the
-// selected prebuilt wrapper); user code and the schema library are bundled into
-// main.js and injected into that wasm.
+// subpaths, `golem:*`, and `wasm-rquickjs:*` host packages are externalized
+// (provided by the selected prebuilt wrapper); user code and the schema library
+// are bundled into main.js and injected into that wasm.
 
 // Read tsconfig.json through the TypeScript compiler API — the same path
 // @rollup/plugin-typescript takes — so comments and `extends` are honored, and a
@@ -264,7 +264,9 @@ function componentRollupConfig() {
 
     const externalSdkModules = new Set([sdkPackage, `${sdkPackage}/middleware`]);
     const externalPackages = (id) =>
-        externalSdkModules.has(id) || id.startsWith("golem:");
+        externalSdkModules.has(id) ||
+        id.startsWith("golem:") ||
+        id.startsWith("wasm-rquickjs:");
 
     const virtualAgentMainId = "virtual:agent-main";
     const resolvedVirtualAgentMainId = "\0virtual:agent-main";
