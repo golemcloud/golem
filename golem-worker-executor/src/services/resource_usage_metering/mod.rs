@@ -15,11 +15,16 @@
 use crate::sandbox_filesystem::FilesystemStorageError;
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
-use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
+use crate::services::byte_time_accumulator::{
+    ByteTimeAccumulator, ByteTimeSettlement, MeteringTime, PeriodByteTimeSettlement,
+};
 use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceUsageFlusher};
+use chrono::{DateTime, Utc};
+use golem_common::model::account_usage::AccountUsagePeriod;
 use golem_common::model::agent::AgentMode;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
@@ -87,6 +92,15 @@ impl FilesystemUsageSource {
 trait MeteringClock: Send + Sync {
     fn now(&self) -> Instant;
 
+    fn utc_now(&self) -> DateTime<Utc>;
+
+    fn time(&self) -> MeteringTime {
+        let before = self.now();
+        let utc = self.utc_now();
+        let after = self.now();
+        MeteringTime::between(before, utc, after)
+    }
+
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
@@ -95,6 +109,10 @@ struct SystemMeteringClock;
 impl MeteringClock for SystemMeteringClock {
     fn now(&self) -> Instant {
         Instant::now()
+    }
+
+    fn utc_now(&self) -> DateTime<Utc> {
+        Utc::now()
     }
 
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
@@ -130,9 +148,16 @@ impl ResourceUsageAccount {
         self.linear_memory.current_bytes()
     }
 
-    fn record_settlement(&self, settlement: ResourceUsageSettlement) {
+    fn record_settlement(&self, settlement: &ResourceUsageSettlement) {
         if let Some(entry) = self.entry.upgrade() {
-            entry.record_resource_settlement(self.mode, settlement.memory, settlement.storage);
+            for (period, usage) in &settlement.periods {
+                entry.record_resource_settlement_for_period(
+                    self.mode,
+                    *period,
+                    usage.memory,
+                    usage.storage,
+                );
+            }
         }
     }
 }
@@ -216,7 +241,7 @@ struct WindowState {
 #[derive(Clone, Copy)]
 struct ActiveObservation {
     sequence: u64,
-    started_at: Instant,
+    started_at: MeteringTime,
 }
 
 struct StorageState {
@@ -226,7 +251,7 @@ struct StorageState {
 }
 
 impl StorageState {
-    fn new(opened_at: Instant) -> Self {
+    fn new(opened_at: MeteringTime) -> Self {
         Self {
             accumulator: ByteTimeAccumulator::new(BYTE_NANOSECONDS_PER_BYTE_SECOND, opened_at),
             level: None,
@@ -234,20 +259,23 @@ impl StorageState {
         }
     }
 
-    fn accrue_until(&mut self, at: Instant, pending_attempt: Option<Instant>) {
-        let mut charge_until = at;
+    fn accrue_until(&mut self, at: MeteringTime, pending_attempt: Option<Instant>) {
+        let mut charge_until = at.instant;
         if let Some(started_at) = pending_attempt {
             charge_until = charge_until.min(started_at);
         }
         if let Some(last_accepted_at) = self.last_accepted_at {
             charge_until = charge_until.min(last_accepted_at + FILESYSTEM_STALE_AFTER);
         }
-        self.accumulator.advance(charge_until, self.level);
-        if charge_until < at && pending_attempt.is_none_or(|started_at| started_at < at) {
+        self.accumulator
+            .advance(at.at_instant(charge_until), self.level);
+        if charge_until < at.instant
+            && pending_attempt.is_none_or(|started_at| started_at < at.instant)
+        {
             self.accumulator.advance(at, None);
             if self
                 .last_accepted_at
-                .is_some_and(|accepted| accepted + FILESYSTEM_STALE_AFTER <= at)
+                .is_some_and(|accepted| accepted + FILESYSTEM_STALE_AFTER <= at.instant)
             {
                 self.level = None;
                 self.last_accepted_at = None;
@@ -255,13 +283,13 @@ impl StorageState {
         }
     }
 
-    fn accept(&mut self, allocated_bytes: u64, at: Instant) {
+    fn accept(&mut self, allocated_bytes: u64, at: MeteringTime) {
         self.accrue_until(at, None);
         self.level = Some(allocated_bytes);
-        self.last_accepted_at = Some(at);
+        self.last_accepted_at = Some(at.instant);
     }
 
-    fn suspend_from(&mut self, attempt_started_at: Instant) {
+    fn suspend_from(&mut self, attempt_started_at: MeteringTime) {
         self.accrue_until(attempt_started_at, None);
         self.level = None;
         self.last_accepted_at = None;
@@ -331,10 +359,28 @@ impl Display for MeteringCloseError {
 
 impl std::error::Error for MeteringCloseError {}
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ResourceUsageSettlement {
+    periods: BTreeMap<AccountUsagePeriod, PeriodResourceUsageSettlement>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PeriodResourceUsageSettlement {
     pub(crate) memory: ByteTimeSettlement,
     pub(crate) storage: ByteTimeSettlement,
+}
+
+impl ResourceUsageSettlement {
+    fn new(memory: Vec<PeriodByteTimeSettlement>, storage: Vec<PeriodByteTimeSettlement>) -> Self {
+        let mut periods = BTreeMap::<AccountUsagePeriod, PeriodResourceUsageSettlement>::new();
+        for settlement in memory {
+            periods.entry(settlement.period).or_default().memory = settlement.usage;
+        }
+        for settlement in storage {
+            periods.entry(settlement.period).or_default().storage = settlement.usage;
+        }
+        Self { periods }
+    }
 }
 
 #[cfg(test)]
@@ -444,7 +490,8 @@ pub(crate) fn open_window(
         let _transition = meter
             .memory_enabled
             .then(|| meter.account.transition.lock().unwrap());
-        let opened_at = meter.clock.now();
+        let opened = meter.clock.time();
+        let opened_at = opened.instant;
         if meter.memory_enabled {
             let memory_bytes = meter.account.memory_bytes();
             if !meter
@@ -452,7 +499,7 @@ pub(crate) fn open_window(
                 .linear_memory
                 .meter_if_enabled()
                 .expect("memory metering is enabled")
-                .resume(memory_bytes, opened_at)
+                .resume_at(memory_bytes, opened)
             {
                 return Err(MeteringOpenError::MemoryMeterStopped);
             }
@@ -480,9 +527,7 @@ pub(crate) fn open_window(
                 sampling: false,
                 next_observation: 0,
                 active_observation: None,
-                storage: meter
-                    .filesystem_enabled
-                    .then(|| StorageState::new(opened_at)),
+                storage: meter.filesystem_enabled.then(|| StorageState::new(opened)),
                 settlement: None,
             }),
         });
@@ -563,8 +608,8 @@ impl Drop for ResourceUsageMeteringWindow {
         };
         shared.begin_close();
         shared.detach_active_observation();
-        let settlement = shared.settle_close(shared.clock.now());
-        shared.account.record_settlement(settlement);
+        let settlement = shared.settle_close(shared.clock.time());
+        shared.account.record_settlement(&settlement);
         shared.clear_meter();
         drop(permit);
     }
@@ -590,18 +635,18 @@ impl ResourceUsageMeter {
         let Some(shared) = &self.shared else {
             return;
         };
-        shared.flush_at(now);
+        shared.flush_at(shared.clock.time().at_instant(now));
     }
 }
 
 impl ResourceUsageFlusher for MeterShared {
     fn flush_usage(&self) {
-        self.flush_at(self.clock.now());
+        self.flush_at(self.clock.time());
     }
 }
 
 impl MeterShared {
-    fn flush_at(&self, now: Instant) {
+    fn flush_at(&self, now: MeteringTime) {
         let window = {
             let lifecycle = self.lifecycle.lock().unwrap();
             match &*lifecycle {
@@ -624,22 +669,18 @@ impl MeterShared {
                     .expect("memory metering is enabled")
                     .take_settlement_at(now)
             } else {
-                ByteTimeSettlement::default()
+                Vec::new()
             };
             let pending_attempt = state
                 .active_observation
-                .map(|observation| observation.started_at);
-            let storage =
-                state
-                    .storage
-                    .as_mut()
-                    .map_or_else(ByteTimeSettlement::default, |storage| {
-                        storage.accrue_until(now, pending_attempt);
-                        storage.accumulator.take_settlement()
-                    });
-            ResourceUsageSettlement { memory, storage }
+                .map(|observation| observation.started_at.instant);
+            let storage = state.storage.as_mut().map_or_else(Vec::new, |storage| {
+                storage.accrue_until(now, pending_attempt);
+                storage.accumulator.take_settlements()
+            });
+            ResourceUsageSettlement::new(memory, storage)
         });
-        self.account.record_settlement(settlement);
+        self.account.record_settlement(&settlement);
     }
 }
 
@@ -689,7 +730,7 @@ impl WindowShared {
             let timed_out = self
                 .wait_for_periodic_result(&mut observation, FILESYSTEM_OBSERVATION_TIMEOUT)
                 .await;
-            let completed_at = self.clock.now();
+            let completed_at = self.clock.time();
             let succeeded = match timed_out {
                 PeriodicAttempt::Completed(result) => {
                     self.finish_observation(observation.active, result, completed_at, false)
@@ -697,7 +738,7 @@ impl WindowShared {
                 PeriodicAttempt::TimedOut => {
                     self.suspend_observation(observation.active);
                     let result = observation.receiver.await.ok();
-                    let at = self.clock.now();
+                    let at = self.clock.time();
                     result.is_some_and(|result| {
                         self.finish_observation(observation.active, result, at, false)
                     })
@@ -713,7 +754,7 @@ impl WindowShared {
                 let delay = FILESYSTEM_RETRY_DELAYS
                     [consecutive_failures.min(FILESYSTEM_RETRY_DELAYS.len() - 1)];
                 consecutive_failures = consecutive_failures.saturating_add(1);
-                deadline = completed_at + delay;
+                deadline = completed_at.instant + delay;
             }
         }
     }
@@ -749,7 +790,7 @@ impl WindowShared {
                 .expect("filesystem usage observation sequence overflowed");
             let active = ActiveObservation {
                 sequence: state.next_observation,
-                started_at: self.clock.now(),
+                started_at: self.clock.time(),
             };
             state.active_observation = Some(active);
             active
@@ -808,7 +849,7 @@ impl WindowShared {
         observation: &mut Observation,
         timeout: Duration,
     ) -> PeriodicAttempt {
-        let timeout_at = observation.active.started_at + timeout;
+        let timeout_at = observation.active.started_at.instant + timeout;
         tokio::select! {
             result = &mut observation.receiver => PeriodicAttempt::Completed(result.unwrap_or_else(|_| {
                 Err(FilesystemStorageError::verification(
@@ -824,7 +865,7 @@ impl WindowShared {
         &self,
         observation: ActiveObservation,
         result: Result<FilesystemUsage, FilesystemStorageError>,
-        accepted_at: Instant,
+        accepted_at: MeteringTime,
         accept_while_closing: bool,
     ) -> bool {
         let mut state = self.state.lock().unwrap();
@@ -892,8 +933,8 @@ impl WindowShared {
             let final_deadline = deadline.min(self.clock.now() + FILESYSTEM_CLOSE_BUDGET);
             self.run_final_observation_sequence(final_deadline).await;
         }
-        let settlement = self.settle_close(self.clock.now());
-        self.account.record_settlement(settlement);
+        let settlement = self.settle_close(self.clock.time());
+        self.account.record_settlement(&settlement);
         self.clear_meter();
         Ok(settlement)
     }
@@ -910,8 +951,9 @@ impl WindowShared {
             let Some(mut observation) = self.start_observation(WindowStatus::Closing) else {
                 return;
             };
-            let timeout_at =
-                (observation.active.started_at + FILESYSTEM_OBSERVATION_TIMEOUT).min(deadline);
+            let timeout_at = (observation.active.started_at.instant
+                + FILESYSTEM_OBSERVATION_TIMEOUT)
+                .min(deadline);
             let result = tokio::select! {
                 result = &mut observation.receiver => match result {
                     Ok(result) => FinalAttempt::Completed(result),
@@ -921,8 +963,12 @@ impl WindowShared {
             };
             match result {
                 FinalAttempt::Completed(result) => {
-                    let accepted =
-                        self.finish_observation(observation.active, result, self.clock.now(), true);
+                    let accepted = self.finish_observation(
+                        observation.active,
+                        result,
+                        self.clock.time(),
+                        true,
+                    );
                     if accepted {
                         return;
                     }
@@ -950,7 +996,7 @@ impl WindowShared {
                             let accepted = self.finish_observation(
                                 observation.active,
                                 result,
-                                self.clock.now(),
+                                self.clock.time(),
                                 true,
                             );
                             if accepted {
@@ -1010,17 +1056,17 @@ impl WindowShared {
         self.observation_changed.notify_waiters();
     }
 
-    fn settle_close(&self, closed_at: Instant) -> ResourceUsageSettlement {
+    fn settle_close(&self, closed_at: MeteringTime) -> ResourceUsageSettlement {
         let _transition = self
             .memory_enabled
             .then(|| self.account.transition.lock().unwrap());
         let mut state = self.state.lock().unwrap();
-        if let Some(settlement) = state.settlement {
-            return settlement;
+        if let Some(settlement) = &state.settlement {
+            return settlement.clone();
         }
         let pending_attempt = state
             .active_observation
-            .map(|observation| observation.started_at);
+            .map(|observation| observation.started_at.instant);
         if let Some(storage) = state.storage.as_mut() {
             storage.accrue_until(closed_at, pending_attempt);
         }
@@ -1031,23 +1077,21 @@ impl WindowShared {
                 .linear_memory
                 .meter_if_enabled()
                 .expect("memory metering is enabled");
-            meter.set_bytes(memory_bytes, closed_at);
-            meter.pause(closed_at);
+            meter.set_bytes_at(memory_bytes, closed_at);
+            meter.pause_at(closed_at);
         }
-        let settlement = ResourceUsageSettlement {
-            memory: self.account.linear_memory.meter_if_enabled().map_or_else(
-                ByteTimeSettlement::default,
-                AgentMemoryMeter::take_settlement,
-            ),
-            storage: state
+        let settlement = ResourceUsageSettlement::new(
+            self.account
+                .linear_memory
+                .meter_if_enabled()
+                .map_or_else(Vec::new, AgentMemoryMeter::take_settlement),
+            state
                 .storage
                 .as_mut()
-                .map_or_else(ByteTimeSettlement::default, |storage| {
-                    storage.accumulator.take_settlement()
-                }),
-        };
+                .map_or_else(Vec::new, |storage| storage.accumulator.take_settlements()),
+        );
         state.status = WindowStatus::Closed;
-        state.settlement = Some(settlement);
+        state.settlement = Some(settlement.clone());
         settlement
     }
 
