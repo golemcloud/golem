@@ -1620,7 +1620,7 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
         environment_id,
-        account_id.clone(),
+        account_id,
         None,
         100,
         100,
