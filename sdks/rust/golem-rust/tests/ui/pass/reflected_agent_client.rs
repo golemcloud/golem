@@ -55,9 +55,39 @@ fn main() {
         );
     }
 
-    let _ = AgentClientDefinition::builder()
+    let durable = AgentClientDefinition::builder()
         .durable::<Query>("SearchAgent")
         .method::<Query, Vec<String>>("search")
         .expect("method schema")
         .build();
+    let ephemeral = AgentClientDefinition::builder()
+        .ephemeral::<Query>("SearchRequest")
+        .method::<Query, Vec<String>>("search")
+        .expect("method schema")
+        .build();
+    let configured = AgentClientDefinition::builder()
+        .durable::<Query>("SearchAgent")
+        .config::<SearchConfig>()
+        .build();
+
+    if false {
+        let constructor = Query {
+            text: "query".to_string(),
+        };
+        let phantom_id = golem_rust::Uuid::new_v4();
+        let parsed = durable
+            .agent_id(&constructor, Some(phantom_id))
+            .expect("agent id");
+        let client = durable.bind(&parsed).expect("durable bind");
+        let _ = client.agent_id();
+        let _ = durable.get(&constructor);
+        let _ = durable.get_phantom(phantom_id, &constructor);
+        let _ = durable.new_phantom(&constructor);
+        let _ = ephemeral.get_phantom(phantom_id, &constructor);
+        let _ = ephemeral.new_phantom(&constructor);
+        let config = SearchConfigRpc {
+            model: Some("fast".to_string()),
+        };
+        let _ = configured.get_with_config(&constructor, config);
+    }
 }
