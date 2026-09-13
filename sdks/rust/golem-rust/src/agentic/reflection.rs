@@ -397,6 +397,8 @@ impl AgentType {
                 parts.type_name
             )));
         }
+        self.constructor_input
+            .validate_value(&parts.constructor_value)?;
         let transport = RpcTransport::create(
             parts.type_name,
             parts.constructor_value,
@@ -1290,6 +1292,7 @@ mod tests {
     #[test]
     fn caller_owned_contract_can_be_partial_and_lifecycle_free() {
         let definition = AgentClientDefinition::builder()
+            .binding_only()
             .method::<String, u64>("lookup")
             .expect("method schema")
             .unit_method::<u32>("invalidate")
@@ -1301,6 +1304,22 @@ mod tests {
         assert_eq!(definition.methods[0].name, "lookup");
         assert_eq!(definition.methods[1].name, "invalidate");
     }
+
+    #[test]
+    fn complete_contract_rejects_a_constructor_value_with_the_wrong_shape() {
+        let definition = AgentClientDefinition::builder()
+            .durable::<String>("Counter")
+            .build();
+        let constructor = definition
+            .constructor
+            .as_ref()
+            .expect("complete contract constructor schema");
+
+        assert!(matches!(
+            constructor.validate_value(&SchemaValue::U64(1)),
+            Err(GolemReflectError::InvalidSchemaValue { .. })
+        ));
+    }
 }
 
 /// Typed Level 2 method contract retained by a caller-owned definition.
@@ -1311,18 +1330,94 @@ pub struct AgentClientMethodDefinition {
     pub output: Option<SchemaRef>,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct AgentClientDefinitionBuilder {
+#[derive(Clone, Debug)]
+pub struct AgentClientDefinitionBuilder<State> {
     type_name: Option<String>,
+    mode: Option<AgentMode>,
+    constructor: Option<SchemaRef>,
     methods: Vec<AgentClientMethodDefinition>,
+    state: PhantomData<State>,
 }
 
-impl AgentClientDefinitionBuilder {
-    pub fn type_name(mut self, type_name: impl Into<String>) -> Self {
-        self.type_name = Some(type_name.into());
-        self
+#[derive(Clone, Debug)]
+pub struct UnselectedAgentClientContract;
+
+#[derive(Clone, Debug)]
+pub struct BindingOnlyAgentClientContract;
+
+#[derive(Clone, Debug)]
+pub struct CompleteAgentClientContract;
+
+impl AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
+    fn new() -> Self {
+        Self {
+            type_name: None,
+            mode: None,
+            constructor: None,
+            methods: Vec::new(),
+            state: PhantomData,
+        }
     }
 
+    pub fn binding_only(self) -> AgentClientDefinitionBuilder<BindingOnlyAgentClientContract> {
+        AgentClientDefinitionBuilder {
+            type_name: None,
+            mode: None,
+            constructor: None,
+            methods: self.methods,
+            state: PhantomData,
+        }
+    }
+
+    pub fn durable<Id>(
+        self,
+        type_name: impl Into<String>,
+    ) -> AgentClientDefinitionBuilder<CompleteAgentClientContract>
+    where
+        Id: crate::IntoSchema,
+    {
+        AgentClientDefinitionBuilder {
+            type_name: Some(type_name.into()),
+            mode: Some(AgentMode::Durable),
+            constructor: Some(SchemaRef::new(
+                crate::schema::try_into_schema_graph::<Id>()
+                    .expect("complete agent client identity must have a valid schema"),
+            )),
+            methods: self.methods,
+            state: PhantomData,
+        }
+    }
+
+    pub fn ephemeral<Id>(
+        self,
+        type_name: impl Into<String>,
+    ) -> AgentClientDefinitionBuilder<CompleteAgentClientContract>
+    where
+        Id: crate::IntoSchema,
+    {
+        AgentClientDefinitionBuilder {
+            type_name: Some(type_name.into()),
+            mode: Some(AgentMode::Ephemeral),
+            constructor: Some(SchemaRef::new(
+                crate::schema::try_into_schema_graph::<Id>()
+                    .expect("complete agent client identity must have a valid schema"),
+            )),
+            methods: self.methods,
+            state: PhantomData,
+        }
+    }
+}
+
+impl AgentClientDefinitionBuilder<CompleteAgentClientContract> {
+    pub fn config<C>(self) -> Self
+    where
+        C: super::ConfigSchema,
+    {
+        self
+    }
+}
+
+impl<State> AgentClientDefinitionBuilder<State> {
     pub fn method<I, O>(mut self, name: impl Into<String>) -> Result<Self, GolemReflectError>
     where
         I: crate::IntoSchema,
@@ -1354,27 +1449,48 @@ impl AgentClientDefinitionBuilder {
         Ok(self)
     }
 
-    pub fn build(self) -> AgentClientDefinition {
+    fn finish(self) -> AgentClientDefinition {
         AgentClientDefinition {
             type_name: self.type_name,
+            mode: self.mode,
+            constructor: self.constructor,
             methods: self.methods.into(),
         }
+    }
+}
+
+impl AgentClientDefinitionBuilder<BindingOnlyAgentClientContract> {
+    pub fn build(self) -> AgentClientDefinition {
+        self.finish()
+    }
+}
+
+impl AgentClientDefinitionBuilder<CompleteAgentClientContract> {
+    pub fn build(self) -> AgentClientDefinition {
+        self.finish()
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct AgentClientDefinition {
     type_name: Option<String>,
+    mode: Option<AgentMode>,
+    constructor: Option<SchemaRef>,
     methods: Arc<[AgentClientMethodDefinition]>,
 }
 
 impl AgentClientDefinition {
-    pub fn builder() -> AgentClientDefinitionBuilder {
-        AgentClientDefinitionBuilder::default()
+    pub fn builder() -> AgentClientDefinitionBuilder<UnselectedAgentClientContract> {
+        AgentClientDefinitionBuilder::new()
     }
 
     pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
         let parts = agent_id.parts()?;
+        if self.mode == Some(AgentMode::Ephemeral) {
+            return Err(GolemReflectError::KnownEphemeralBinding(
+                self.type_name.clone().unwrap_or_default(),
+            ));
+        }
         if let Some(expected) = &self.type_name
             && expected != &parts.type_name
         {
@@ -1382,6 +1498,9 @@ impl AgentClientDefinition {
                 "client contract expects `{expected}`, identity is `{}`",
                 parts.type_name
             )));
+        }
+        if let Some(constructor) = &self.constructor {
+            constructor.validate_value(&parts.constructor_value)?;
         }
         let transport = RpcTransport::create(
             parts.type_name,

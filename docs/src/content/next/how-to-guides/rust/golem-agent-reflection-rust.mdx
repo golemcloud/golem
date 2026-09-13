@@ -71,29 +71,70 @@ stream input.
 
 ## Define a Caller-Owned Typed Contract
 
-`#[agent_client]` creates a partial, lifecycle-free typed interface without
-performing discovery. The trait's Rust `IntoSchema` and `FromSchema` codecs are
-the schema authority:
+`#[agent_client]` has two contract tiers. A trait containing only instance
+methods is binding-only: it can bind any existing durable `ParsedAgentId`, and
+the identity supplies the remote type name and constructor value. The trait's
+Rust `IntoSchema` and `FromSchema` codecs are the method-schema authority:
 
 ```rust
 use golem_rust::{ParsedAgentId, agent_client};
 
-#[agent_client(type_name = "CounterAgent")]
+#[agent_client]
 trait CounterContract {
     fn add(&self, by: u32) -> u32;
     fn reset(&self);
 }
 
 fn bind(agent_id: &ParsedAgentId) -> Result<CounterContractClient, golem_rust::GolemReflectError> {
-    CounterContractClient::for_agent_id(agent_id)
+    CounterContractClient::bind(agent_id)
 }
 ```
 
-Binding addresses the type by its environment-unique name, while the trait's
-codecs remain the schema authority. Generated named methods are awaited calls.
-The client also generates
+Binding-only contracts do not declare a name, constructor, mode, or config and
+do not discover the remote lifecycle. Generated named methods are awaited
+calls. The client also generates
 `trigger_<method>`, `pending_<method>`, and `schedule_<method>`. Binding checks
-the agent type name but does not discover the remote schema or lifecycle.
+no constructor shape because the contract does not own one.
+
+A complete contract declares exactly one static constructor returning `Self`
+and must also declare `type_name`. Either half without the other is a compile
+error. Constructor parameters use the same encoding and `#[agent_config]`
+rules as `#[agent_definition]`:
+
+```rust
+#[agent_client(type_name = "CounterAgent")]
+trait CounterContract {
+    fn new(
+        name: String,
+        #[agent_config] config: golem_rust::agentic::Config<CounterConfig>,
+    ) -> Self;
+    fn add(&self, by: u32) -> u32;
+}
+
+let ordinary = CounterContractClient::get("main".to_string());
+let known = CounterContractClient::get_phantom(phantom_id, "main".to_string());
+let fresh = CounterContractClient::new_phantom("main".to_string());
+let exact = CounterContractClient::bind(&agent_id)?;
+```
+
+Complete durable binding checks both the exact type name and the locally
+declared constructor shape before creating RPC transport. A complete ephemeral
+contract uses `mode = "ephemeral"`, supports fresh and known phantom factories,
+and deliberately has no generic `ParsedAgentId` binding.
+
+The programmatic equivalent starts in an explicit tier:
+
+```rust
+let binding = AgentClientDefinition::builder()
+    .binding_only()
+    .method::<AddInput, u32>("add")?
+    .build();
+let complete = AgentClientDefinition::builder()
+    .durable::<CounterId>("CounterAgent")
+    .config::<CounterConfig>()
+    .method::<AddInput, u32>("add")?
+    .build();
+```
 
 ## Construct and Bind Agent IDs
 
@@ -105,7 +146,7 @@ use serde_json::json;
 
 let agent_id = counter_type.agent_id_json(&json!({ "name": "main" }), None)?;
 let reflected = agent_id.reflected_client(&counter_type)?;
-let typed = CounterContractClient::for_agent_id(&agent_id)?;
+let typed = CounterContractClient::bind(&agent_id)?;
 ```
 
 `get_agent_type_for(&agent_id)` resolves the currently registered type for an
