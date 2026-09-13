@@ -17,33 +17,93 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashSet;
 use syn::parse::{Parse, ParseStream};
-use syn::{FnArg, Ident, ItemTrait, LitStr, Pat, ReturnType, Token, TraitItem, Type};
+use syn::punctuated::Punctuated;
+use syn::visit_mut::VisitMut;
+use syn::{
+    Expr, ExprLit, FnArg, Ident, ItemTrait, Lit, LitStr, Meta, Pat, ReturnType, Token, TraitItem,
+    Type,
+};
+
+use crate::agentic::get_remote_client_for_type;
+use crate::agentic::helpers::{
+    AgentConfigAttrRemover, has_agent_config_attr, is_constructor_method,
+};
 
 struct AgentClientArgs {
     type_name: Option<LitStr>,
+    agent_is_durable: bool,
+    mode_specified: bool,
 }
 
 impl Parse for AgentClientArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         if input.is_empty() {
-            return Ok(Self { type_name: None });
+            return Ok(Self {
+                type_name: None,
+                agent_is_durable: true,
+                mode_specified: false,
+            });
         }
-
-        let name: Ident = input.parse()?;
-        if name != "type_name" {
-            return Err(syn::Error::new(
-                name.span(),
-                "expected `type_name = \"...\"`",
-            ));
+        let entries = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
+        let mut result = Self {
+            type_name: None,
+            agent_is_durable: true,
+            mode_specified: false,
+        };
+        for entry in entries {
+            let Meta::NameValue(value) = entry else {
+                return Err(syn::Error::new_spanned(
+                    entry,
+                    "expected `type_name = \"...\"` or `mode = \"durable|ephemeral\"`",
+                ));
+            };
+            if value.path.is_ident("type_name") {
+                let Expr::Lit(ExprLit {
+                    lit: Lit::Str(name),
+                    ..
+                }) = value.value
+                else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "type_name must be a string literal",
+                    ));
+                };
+                if result.type_name.replace(name).is_some() {
+                    return Err(syn::Error::new_spanned(value.path, "duplicate type_name"));
+                }
+            } else if value.path.is_ident("mode") {
+                let Expr::Lit(ExprLit {
+                    lit: Lit::Str(mode),
+                    ..
+                }) = value.value
+                else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "mode must be a string literal",
+                    ));
+                };
+                if result.mode_specified {
+                    return Err(syn::Error::new_spanned(value.path, "duplicate mode"));
+                }
+                result.agent_is_durable = match mode.value().as_str() {
+                    "durable" => true,
+                    "ephemeral" => false,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            mode,
+                            "mode must be `durable` or `ephemeral`",
+                        ));
+                    }
+                };
+                result.mode_specified = true;
+            } else {
+                return Err(syn::Error::new_spanned(
+                    value.path,
+                    "unknown agent_client argument",
+                ));
+            }
         }
-        input.parse::<Token![=]>()?;
-        let type_name = input.parse()?;
-        if !input.is_empty() {
-            return Err(input.error("unexpected agent_client attribute argument"));
-        }
-        Ok(Self {
-            type_name: Some(type_name),
-        })
+        Ok(result)
     }
 }
 
@@ -60,7 +120,7 @@ fn expand(
     golem_rust: &Ident,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let args = syn::parse::<AgentClientArgs>(attr)?;
-    let item_trait = syn::parse::<ItemTrait>(item)?;
+    let mut item_trait = syn::parse::<ItemTrait>(item)?;
     if !item_trait.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item_trait.generics,
@@ -71,9 +131,96 @@ fn expand(
     let trait_ident = &item_trait.ident;
     let client_ident = format_ident!("{}Client", trait_ident);
     let visibility = &item_trait.vis;
-    let remote_type_name = args
-        .type_name
-        .unwrap_or_else(|| LitStr::new(&trait_ident.to_string(), trait_ident.span()));
+    let constructors = item_trait
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            TraitItem::Fn(method) if is_constructor_method(&method.sig, None) => Some(method),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if constructors.len() > 1 {
+        return Err(syn::Error::new_spanned(
+            &item_trait.ident,
+            "complete agent_client traits must declare exactly one constructor returning Self",
+        ));
+    }
+    if constructors.is_empty() && args.type_name.is_some() {
+        return Err(syn::Error::new_spanned(
+            &item_trait.ident,
+            "type_name requires exactly one static constructor returning Self",
+        ));
+    }
+    if constructors.is_empty() && args.mode_specified {
+        return Err(syn::Error::new_spanned(
+            &item_trait.ident,
+            "mode requires a complete contract with type_name and a constructor",
+        ));
+    }
+    if !constructors.is_empty() && args.type_name.is_none() {
+        return Err(syn::Error::new_spanned(
+            &item_trait.ident,
+            "a constructor returning Self requires type_name",
+        ));
+    }
+
+    if let (Some(constructor), Some(remote_type_name)) =
+        (constructors.first(), args.type_name.as_ref())
+    {
+        let mut data_defs = Vec::new();
+        let mut data_idents = Vec::new();
+        let mut config_defs = Vec::new();
+        let mut config_idents = Vec::new();
+        for input in &constructor.sig.inputs {
+            let FnArg::Typed(input) = input else {
+                return Err(syn::Error::new_spanned(
+                    input,
+                    "agent_client constructors must be static",
+                ));
+            };
+            let Pat::Ident(pattern) = input.pat.as_ref() else {
+                return Err(syn::Error::new_spanned(
+                    &input.pat,
+                    "agent_client constructor parameter patterns must be identifiers",
+                ));
+            };
+            let ident = pattern.ident.clone();
+            let ty = input.ty.as_ref();
+            let is_principal = matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "Principal"));
+            if has_agent_config_attr(input) {
+                config_defs.push(quote! {
+                    #ident: <<#ty as ::golem_rust::agentic::InnerTypeHelper>::Type as ::golem_rust::agentic::ConfigSchema>::RpcType
+                });
+                config_idents.push(ident);
+            } else if !is_principal {
+                data_defs.push(quote! { #ident: #ty });
+                data_idents.push(ident);
+            }
+        }
+        for item in &item_trait.items {
+            if let TraitItem::Fn(method) = item
+                && method.sig.ident != constructor.sig.ident
+                && method.sig.receiver().is_none()
+            {
+                return Err(syn::Error::new_spanned(
+                    &method.sig,
+                    "complete agent_client traits may only contain one static constructor",
+                ));
+            }
+        }
+        let remote_client = get_remote_client_for_type(
+            &item_trait,
+            &remote_type_name.value(),
+            &data_defs,
+            &data_idents,
+            &config_defs,
+            &config_idents,
+            &[],
+            args.agent_is_durable,
+        );
+        AgentConfigAttrRemover.visit_item_trait_mut(&mut item_trait);
+        return Ok(quote! { #item_trait #remote_client });
+    }
     let method_names = item_trait
         .items
         .iter()
@@ -82,7 +229,7 @@ fn expand(
             _ => None,
         })
         .collect::<HashSet<_>>();
-    for reserved in ["client_definition", "for_agent_id", "typed_client"] {
+    for reserved in ["client_definition", "bind", "typed_client"] {
         if method_names.contains(reserved) {
             return Err(syn::Error::new_spanned(
                 &item_trait.ident,
@@ -261,12 +408,12 @@ fn expand(
                 -> Result<#golem_rust::AgentClientDefinition, #golem_rust::GolemReflectError>
             {
                 let builder = #golem_rust::AgentClientDefinition::builder()
-                    .type_name(#remote_type_name);
+                    .binding_only();
                 #(#definition_steps)*
                 Ok(builder.build())
             }
 
-            pub fn for_agent_id(agent_id: &#golem_rust::ParsedAgentId)
+            pub fn bind(agent_id: &#golem_rust::ParsedAgentId)
                 -> Result<Self, #golem_rust::GolemReflectError>
             {
                 Ok(Self { inner: Self::client_definition()?.bind(agent_id)? })

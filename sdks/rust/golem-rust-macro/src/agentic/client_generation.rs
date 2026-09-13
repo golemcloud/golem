@@ -31,9 +31,30 @@ pub fn get_remote_client(
     agent_type_parameter_names: &[String],
     agent_is_durable: bool,
 ) -> proc_macro2::TokenStream {
-    let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
+    get_remote_client_for_type(
+        item_trait,
+        &item_trait.ident.to_string(),
+        constructor_data_value_param_defs,
+        constructor_data_value_param_idents,
+        constructor_agent_config_param_defs,
+        constructor_agent_config_param_idents,
+        agent_type_parameter_names,
+        agent_is_durable,
+    )
+}
 
-    let type_name = item_trait.ident.to_string();
+pub fn get_remote_client_for_type(
+    item_trait: &ItemTrait,
+    type_name: &str,
+    constructor_data_value_param_defs: &[proc_macro2::TokenStream],
+    constructor_data_value_param_idents: &[proc_macro2::Ident],
+    constructor_agent_config_param_defs: &[proc_macro2::TokenStream],
+    constructor_agent_config_param_idents: &[proc_macro2::Ident],
+    agent_type_parameter_names: &[String],
+    agent_is_durable: bool,
+) -> proc_macro2::TokenStream {
+    let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
+    let constructor_schema_type_name = format_ident!("__{}Constructor", item_trait.ident);
 
     let RemoteAgentMethodsInfo {
         methods_impl,
@@ -48,20 +69,20 @@ pub fn get_remote_client(
         }
     });
     let new_phantom_method_ident = method_names.fresh_ident("new_phantom");
-    let get_phantom_method_ident =
-        agent_is_durable.then(|| method_names.fresh_ident("get_phantom"));
+    let get_phantom_method_ident = method_names.fresh_ident("get_phantom");
     let get_with_config_method_ident = (agent_is_durable
         && !constructor_agent_config_param_defs.is_empty())
     .then(|| method_names.fresh_ident("get_with_config"));
     let new_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
         .then(|| method_names.fresh_ident("new_phantom_with_config"));
-    let get_phantom_with_config_method_ident = (agent_is_durable
-        && !constructor_agent_config_param_defs.is_empty())
-    .then(|| method_names.fresh_ident("get_phantom_with_config"));
+    let get_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
+        .then(|| method_names.fresh_ident("get_phantom_with_config"));
     let phantom_id_accessor_ident =
         agent_is_durable.then(|| method_names.fresh_ident("phantom_id"));
     let get_agent_id_accessor_ident =
         agent_is_durable.then(|| method_names.fresh_ident("get_agent_id"));
+    let agent_id_helper_ident = method_names.fresh_ident("agent_id");
+    let bind_helper_ident = agent_is_durable.then(|| method_names.fresh_ident("bind"));
     let constructor_param_idents = constructor_data_value_param_idents
         .iter()
         .chain(constructor_agent_config_param_idents)
@@ -79,6 +100,20 @@ pub fn get_remote_client(
         constructor_data_value_param_idents,
         &constructor_value_ident,
     );
+    let constructor_schema_fields = constructor_data_value_param_defs;
+    let constructor_schema_definition = agent_type_parameter_names.is_empty().then(|| {
+        quote! {
+            #[doc(hidden)]
+            #[derive(golem_rust::IntoSchema)]
+            struct #constructor_schema_type_name {
+                #(#constructor_schema_fields,)*
+            }
+        }
+    });
+    let agent_id_body = quote! {{
+        #encode_constructor
+        #constructor_value_ident
+    }};
 
     let agent_config_params_as_rpc_param = {
         let add_rpc_params_entries = constructor_agent_config_param_idents.iter().map(|param_ident|
@@ -180,9 +215,10 @@ pub fn get_remote_client(
         } else {
             build_ephemeral_constructor_body(
                 &remote_client_type_name,
-                &type_name,
+                type_name,
                 &encode_constructor,
                 &constructor_value_ident,
+                quote! { None },
                 agent_config_params_as_rpc_param.clone(),
             )
         };
@@ -196,18 +232,27 @@ pub fn get_remote_client(
         quote! {}
     };
 
-    let optional_get_phantom_with_config_impl = if agent_is_durable
-        && !constructor_agent_config_param_defs.is_empty()
-    {
+    let optional_get_phantom_with_config_impl = if !constructor_agent_config_param_defs.is_empty() {
         let get_phantom_with_config_method_ident = get_phantom_with_config_method_ident
             .as_ref()
             .expect("agents with config allocate get_phantom_with_config");
-        let body = build_constructor_body(
-            quote! {},
-            quote! { Some(#phantom_id_param_ident.into()) },
-            quote! { Some(#phantom_id_param_ident) },
-            agent_config_params_as_rpc_param.clone(),
-        );
+        let body = if agent_is_durable {
+            build_constructor_body(
+                quote! {},
+                quote! { Some(#phantom_id_param_ident.into()) },
+                quote! { Some(#phantom_id_param_ident) },
+                agent_config_params_as_rpc_param.clone(),
+            )
+        } else {
+            build_ephemeral_constructor_body(
+                &remote_client_type_name,
+                type_name,
+                &encode_constructor,
+                &constructor_value_ident,
+                quote! { Some(#phantom_id_param_ident.into()) },
+                agent_config_params_as_rpc_param.clone(),
+            )
+        };
         quote! {
             pub fn #get_phantom_with_config_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
                 #body
@@ -246,19 +291,31 @@ pub fn get_remote_client(
     } else {
         build_ephemeral_constructor_body(
             &remote_client_type_name,
-            &type_name,
+            type_name,
             &encode_constructor,
             &constructor_value_ident,
+            quote! { None },
             quote! { Vec::new() },
         )
     };
 
-    let get_phantom_body = build_constructor_body(
-        quote! {},
-        quote! { Some(#phantom_id_param_ident.into()) },
-        quote! { Some(#phantom_id_param_ident) },
-        quote! { Vec::new() },
-    );
+    let get_phantom_body = if agent_is_durable {
+        build_constructor_body(
+            quote! {},
+            quote! { Some(#phantom_id_param_ident.into()) },
+            quote! { Some(#phantom_id_param_ident) },
+            quote! { Vec::new() },
+        )
+    } else {
+        build_ephemeral_constructor_body(
+            &remote_client_type_name,
+            type_name,
+            &encode_constructor,
+            &constructor_value_ident,
+            quote! { Some(#phantom_id_param_ident.into()) },
+            quote! { Vec::new() },
+        )
+    };
 
     let durable_fields = agent_is_durable.then(|| {
         quote! {
@@ -267,22 +324,68 @@ pub fn get_remote_client(
             component_id: golem_rust::schema::wit::wire::ComponentId,
         }
     });
-    let get_phantom_impl = agent_is_durable.then(|| quote! {
+    let get_phantom_impl = quote! {
         pub fn #get_phantom_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #remote_client_type_name { #get_phantom_body }
-    });
+    };
     let accessors = agent_is_durable.then(|| {
         quote! {
             pub fn #phantom_id_accessor_ident(&self) -> Option<golem_rust::Uuid> { self.phantom_id }
             pub fn #get_agent_id_accessor_ident(&self) -> String { self.agent_id.clone() }
         }
     });
+    let bind_impl = (agent_is_durable && agent_type_parameter_names.is_empty()).then(|| {
+        quote! {
+            pub fn #bind_helper_ident(agent_id: &golem_rust::ParsedAgentId)
+                -> Result<Self, golem_rust::GolemReflectError>
+            {
+                let parts = agent_id.parts()?;
+                if parts.type_name != #type_name {
+                    return Err(golem_rust::GolemReflectError::InvalidType(format!(
+                        "client contract expects `{}`, identity is `{}`",
+                        #type_name,
+                        parts.type_name,
+                    )));
+                }
+                let expected = golem_rust::schema::try_into_schema_graph::<#constructor_schema_type_name>()
+                    .map_err(|error| golem_rust::GolemReflectError::InvalidType(error.to_string()))?;
+                golem_rust::SchemaRef::new(expected).validate_value(&parts.constructor_value)?;
+                let agent_type = golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
+                    .ok_or_else(|| golem_rust::GolemReflectError::AgentTypeNotFound(#type_name.to_string()))?;
+                let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                    #type_name,
+                    golem_rust::encode_schema_value(&parts.constructor_value)
+                        .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?,
+                    parts.phantom_id.map(Into::into),
+                    Vec::new(),
+                );
+                Ok(Self {
+                    agent_id: agent_id.as_str().to_string(),
+                    phantom_id: parts.phantom_id,
+                    component_id: agent_type.implemented_by,
+                    wasm_rpc,
+                })
+            }
+        }
+    });
     quote! {
+        #constructor_schema_definition
+
         pub struct #remote_client_type_name {
             #durable_fields
             wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
         }
 
         impl #remote_client_type_name {
+            pub fn #agent_id_helper_ident(
+                #(#constructor_data_value_param_defs,)*
+                #phantom_id_param_ident: Option<golem_rust::Uuid>,
+            ) -> Result<golem_rust::ParsedAgentId, golem_rust::GolemReflectError> {
+                let constructor = #agent_id_body;
+                golem_rust::ParsedAgentId::from_value(#type_name, constructor, #phantom_id_param_ident)
+            }
+
+            #bind_impl
+
             #get_impl
 
             #optional_get_with_config_impl
@@ -310,6 +413,7 @@ fn build_ephemeral_constructor_body(
     type_name: &str,
     encode_constructor: &proc_macro2::TokenStream,
     constructor_value: &syn::Ident,
+    phantom_id: proc_macro2::TokenStream,
     config: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     quote! {
@@ -318,7 +422,7 @@ fn build_ephemeral_constructor_body(
             #type_name,
             golem_rust::encode_schema_value(&#constructor_value)
                 .expect("Failed to encode constructor parameters"),
-            None,
+            #phantom_id,
             #config,
         );
         #client { wasm_rpc }
@@ -360,14 +464,14 @@ mod tests {
     }
 
     #[test]
-    fn ephemeral_agents_skip_non_phantom_getters() {
+    fn ephemeral_agents_generate_known_and_fresh_phantom_getters() {
         let rendered = render_client(false);
 
         assert!(!rendered.contains("pub fn get ("));
         assert!(!rendered.contains("get_with_config"));
         assert!(rendered.contains("new_phantom"));
-        assert!(!rendered.contains("get_phantom"));
-        assert!(!rendered.contains("get_phantom_with_config"));
+        assert!(rendered.contains("get_phantom"));
+        assert!(rendered.contains("get_phantom_with_config"));
         assert!(!rendered.contains("Uuid :: new_v4"));
         assert!(!rendered.contains("make_agent_id"));
         assert!(rendered.contains("async_invoke_and_await"));
