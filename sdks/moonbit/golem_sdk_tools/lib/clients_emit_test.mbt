@@ -214,7 +214,7 @@ test "generate_client_code - mixed config generates with_config methods" {
 }
 
 ///|
-test "generate_client_code - ephemeral agent skips non-phantom constructors" {
+test "generate_client_code - ephemeral agent supports logical and known phantom constructors" {
   let agent : @lib.AgentInfo = {
     name: "EphemeralWorker",
     description: "An ephemeral worker",
@@ -264,14 +264,13 @@ test "generate_client_code - ephemeral agent skips non-phantom constructors" {
   let output = @formatter.impls_to_string(impls)
 
   assert_false(output.contains("pub fn EphemeralWorkerClient::get("))
-  assert_false(output.contains("get_phantom("))
-  assert_false(output.contains("get_agent_id"))
+  assert_true(output.contains("get_phantom("))
   assert_false(output.contains("get_with_config"))
   assert_false(output.contains("scoped_with_config"))
   assert_true(output.contains("new_phantom_with_config"))
-  assert_false(output.contains("get_phantom_with_config"))
+  assert_true(output.contains("get_phantom_with_config"))
   assert_true(output.contains("scoped_new_phantom_with_config"))
-  assert_false(output.contains("scoped_get_phantom_with_config"))
+  assert_true(output.contains("scoped_get_phantom_with_config"))
   assert_true(output.contains("AgentClient::ephemeral"))
   assert_true(output.contains("InvocationResult"))
   assert_true(output.contains("response.metadata"))
@@ -363,6 +362,10 @@ test "generate_config_override_walkers - flat config" {
   assert_true(output.contains("collect_my_config_overrides"))
   assert_true(output.contains("config.timeout"))
   assert_true(output.contains("typed_config_value"))
+  assert_true(
+    output.contains("impl @rpc.AgentConfigOverrides for MyConfigOverride"),
+  )
+  assert_true(output.contains("typed_values(self)"))
   // Secret fields should not appear
   assert_false(output.contains("api_key"))
 }

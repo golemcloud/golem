@@ -66,10 +66,26 @@ calls use the asynchronous host invocation path and can carry live streams.
 Reflected trigger and scheduled calls reject methods whose input or output
 schema contains a stream.
 
-## Define a caller-codec typed contract
+## Define caller-codec contracts
 
 `CallerCodecClient` does not discover payload schemas. The caller's
-`IntoSchema` and `FromSchema` implementations are the schema authority:
+`IntoSchema` and `FromSchema` implementations are the schema authority. It has
+two contract tiers.
+
+Binding-only contracts contain method codecs only. Bind a durable
+`ParsedAgentId`; its type name, constructor value, and phantom UUID supply the
+target. Do not add a standalone name to this form:
+
+```moonbit
+let counter = @reflection.CallerCodecClient::bind(existing_id)
+let result : @reflection.Invocation[AddOutput] = counter.invoke(
+  "add",
+  AddInput::{ by: 5U },
+)
+```
+
+Complete contracts add an exact type name, typed constructor/ID shape,
+lifecycle mode, and an optional typed config carrier:
 
 ```moonbit
 #derive.golem_schema
@@ -79,19 +95,65 @@ struct AddInput { by : UInt }
 #derive.golem_schema
 struct AddOutput { value : UInt }
 
-let counter = @reflection.CallerCodecClient::create(
+let counter = @reflection.CallerCodecClient::get(
   "CounterAgent",
   CounterId::{ name: "main" },
 )
-let result : @reflection.Invocation[AddOutput] = counter.invoke(
-  "add",
-  AddInput::{ by: 5U },
+let known = @reflection.CallerCodecClient::get_phantom(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+  phantom_id,
+)
+let fresh = @reflection.CallerCodecClient::new_phantom(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+)
+let reusable_id = @reflection.CallerCodecClient::agent_id(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+  phantom_id~,
 )
 ```
 
+Bind an existing durable ID to a complete contract with a constructor type tag.
+This rejects both a different exact agent name and a constructor value that
+cannot be decoded as the declared ID shape before creating the RPC client:
+
+```moonbit
+let exact = @reflection.CallerCodecClient::bind_complete(
+  "CounterAgent",
+  existing_id,
+  (@schema.type_tag() : @schema.TypeTag[CounterId]),
+)
+```
+
+For ephemeral contracts, use `ephemeral` for a logical fresh target or
+`ephemeral_phantom` for a known phantom UUID. There is no generic complete
+ephemeral binding operation:
+
+```moonbit
+let logical = @reflection.CallerCodecClient::ephemeral(
+  "ResearchRequest",
+  ResearchRequestId::{ route: "live" },
+)
+let known = @reflection.CallerCodecClient::ephemeral_phantom(
+  "ResearchRequest",
+  ResearchRequestId::{ route: "live" },
+  phantom_id,
+)
+```
+
+Generated `*Override` records implement `@rpc.AgentConfigOverrides`, so the
+same typed carrier accepted by a generated client can be passed to
+`get_with_config`, `get_phantom_with_config`, `new_phantom_with_config`,
+`ephemeral_with_config`, or `ephemeral_phantom_with_config`. Secret config
+fields are deliberately absent from generated override records. Custom callers
+may implement `AgentConfigOverrides` using `@rpc.typed_config_value`.
+
 The type name is resolved to its current implementing component in the
-environment; callers do not pin component metadata. Existing IDs can be bound
-with `CallerCodecClient::bind(agent_id)`. Caller codecs remain authoritative
+environment; callers do not pin component metadata. Generated `#derive.agent`
+clients expose the same durable ordinary/known/fresh phantom and ephemeral
+logical/known phantom construction matrix. Caller codecs remain authoritative
 for payload encoding and decoding.
 
 For trigger or scheduled caller-codec calls, pass an output type tag so the

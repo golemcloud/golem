@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/agent/host",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
+  "golemcloud/golem_sdk/rpc",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
@@ -65,11 +66,22 @@ pub(all) struct CallerCodecClient {
   reusable_identity : ParsedAgentId?
   // private fields
 }
+pub fn[C : @schema.IntoSchema] CallerCodecClient::agent_id(String, C, phantom_id? : @types.Uuid?) -> ParsedAgentId raise ReflectError
 pub fn CallerCodecClient::bind(ParsedAgentId) -> Self raise ReflectError
-pub fn[C : @schema.IntoSchema] CallerCodecClient::create(String, C, phantom_id? : @types.Uuid?) -> Self raise ReflectError
+pub fn[C : @schema.FromSchema] CallerCodecClient::bind_complete(String, ParsedAgentId, @schema.TypeTag[C]) -> Self raise ReflectError
 pub fn CallerCodecClient::drop(Self) -> Unit
+pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral(String, C) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] CallerCodecClient::ephemeral_phantom(String, C, @types.Uuid) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::ephemeral_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::ephemeral_with_config(String, C, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] CallerCodecClient::get(String, C) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema] CallerCodecClient::get_phantom(String, C, @types.Uuid) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::get_phantom_with_config(String, C, @types.Uuid, Config) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::get_with_config(String, C, Config) -> Self raise ReflectError
 pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] CallerCodecClient::invoke(Self, String, I) -> Invocation[O]
 pub async fn[I : @schema.IntoSchema] CallerCodecClient::invoke_unit(Self, String, I) -> Invocation[Unit]
+pub fn[C : @schema.IntoSchema] CallerCodecClient::new_phantom(String, C) -> Self raise ReflectError
+pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] CallerCodecClient::new_phantom_with_config(String, C, Config) -> Self raise ReflectError
 pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
 pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] CallerCodecClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
 

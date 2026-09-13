@@ -9,11 +9,23 @@ fn Transport::create(
   constructor_value : @model.SchemaValue,
   phantom_id : @types.Uuid?,
 ) -> Transport raise ReflectError {
+  Transport::create_with_config(type_name, constructor_value, phantom_id, [])
+}
+
+///|
+fn Transport::create_with_config(
+  type_name : String,
+  constructor_value : @model.SchemaValue,
+  phantom_id : @types.Uuid?,
+  agent_config : Array[@common.TypedAgentConfigValue],
+) -> Transport raise ReflectError {
   let constructor_input = @model.schema_value_to_wit(constructor_value) catch {
     error => raise Schema("failed to encode constructor value: \{repr(error)}")
   }
   match
-    @agentHost.WasmRpc::create(type_name, constructor_input, phantom_id, []) {
+    @agentHost.WasmRpc::create(
+      type_name, constructor_input, phantom_id, agent_config,
+    ) {
     Ok(raw) => { raw, }
     Err(error) => raise rpc_error(error)
   }
