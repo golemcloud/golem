@@ -279,11 +279,11 @@ executor restart, an old key returns the recorded result without re-running the 
    `IdempotencyKey::derived(current_key, current_idempotency_key_oplog_index(begin_index))`. Inside
    an atomic region the index is the outermost region's *logical* counter
    (`next_idempotency_key_oplog_index`), not the physical index, because a rollback re-executes
-   the region at new physical positions and must not mint a new key. The streaming RPC path
-   (`prepared.is_streaming()` in `wasm_rpc/mod.rs`) instead derives
-   `IdempotencyKey::derived(&parent_key, handle.start_index())` from the physical index — a
-   discrepancy with the non-streaming path worth investigating before relying on streaming RPC
-   keys inside atomic regions.
+   the region at new physical positions and must not mint a new key. Both streaming entry points
+   reserve this logical key once on live and replay paths and reuse it for request persistence
+   and dispatch metadata. Outside atomic regions, streaming RPC uses the exact physical `Start`
+   index to distinguish concurrent calls. Its session descriptor excludes retry tracing and
+   canonicalizes environment ordering while retaining execution-relevant configuration.
 3. Caller state that the target may depend on is committed before the first dispatch.
 4. The target persists `PendingAgentInvocation` (durable acceptance) and later
    `AgentInvocationFinished`; same-key arrivals attach to that one invocation/result.
@@ -322,7 +322,9 @@ is exactly `snapshotting_mode`).
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
 `component_version_for_replay`): the last manual-update snapshot is the baseline; a
 revision-matching automatic snapshot overrides it and skips `INITIAL+1..=snapshot_idx`, but only
-while no update is pending and `snapshot_recovery_disabled` is unset. `prepare_instance`
+while no update is pending and its index is newer than the fingerprint-scoped persistent
+`rejected_periodic_snapshot_through` watermark and the startup attempt's temporary unavailable
+watermark. `prepare_instance`
 (`durable_host/mod.rs`) then branches on `PendingUpdate`:
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
@@ -331,8 +333,17 @@ while no update is pending and `snapshot_recovery_disabled` is unset. `prepare_i
   old history against the new component; success is recorded during that replay. If replay fails
   while the update is still pending, `on_worker_update_failed` appends `FailedUpdate` and returns
   `RetryDecision::Immediate` so the worker rebuilds on the old revision.
-- No pending update — `try_load_snapshot`; on `Failed`, set the resident `Worker`'s
-  `snapshot_recovery_disabled` flag and retry immediately with full replay.
+- No pending update — `try_load_snapshot`; an automatic snapshot load failure or divergent replay
+  suffix rejects that snapshot through its index and returns `RetryDecision::Immediate`. The outer
+  loop recreates the entire Store, component metadata, revision, and plugin context from the
+  authoritative manual-update baseline, never replaying pre-migration history. Only after this
+  fallback succeeds, and before readiness is published, is the monotonic rejection watermark
+  persisted under the worker's `AgentFingerprint`.
+
+An automatic snapshot payload-download failure instead records an in-memory unavailable watermark
+for that startup attempt, so the retry skips the payload without permanently rejecting it; a
+successful preparation clears the temporary watermark. A manual-update snapshot cannot be skipped:
+its load failure is terminal, wrapped as failure to resume while retaining the underlying cause.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
 open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
@@ -372,8 +383,8 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   (`validate_forwarded_mapping`, `CorruptHistory`).
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
-  Streaming keys derive from the physical `Start` index (see RPC section). Terminals are
-  finalized exactly once; a protocol terminal fences later guest terminals.
+  Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
+  later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.

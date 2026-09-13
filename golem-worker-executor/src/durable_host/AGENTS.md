@@ -58,7 +58,10 @@ for re-execution safety, and test both the inline path and the fall-back-to-trap
 
 ## RPC
 
-The key is derived from the durable call's `Start` index and reused by every attempt.
+The key is derived from the durable call's `Start` index, or the outermost atomic region's
+logical counter, and reused by every attempt. Streaming and non-streaming RPC follow the same
+rule. Streaming session descriptors must exclude retry tracing and canonicalize environment-map
+ordering without discarding execution-relevant configuration.
 `InvocationFreshnessDisposition::MayExist` is the default; `KnownFresh` is allowed only for live,
 ephemeral, non-`assume_idempotence` dispatch and must commit `DurableOnly` first
 (`wasm_rpc/mod.rs`). Same-key retry attaches to the existing target invocation; it is never new
@@ -76,6 +79,8 @@ work. Ephemeral targets are fail-stop; do not build resumption for them.
   `CorruptHistory` checks). Reject mismatches rather than reattaching to a recreated agent.
 - Every stream is finalized exactly once. Protocol terminals appended on invocation completion or
   failure fence later guest terminals; do not add a second finalization path.
+- Reconstruct terminal outputs from committed records without requiring the finished consumer to
+  reattach. Open agent-RPC outputs still require an active attachment before production.
 - Stream entries are hints and must stay hints: they take part in no `Start`/terminal pairing and
   never satisfy a claim.
 - The RPC result is completed (stripped of streams) before the stream-bearing value reaches the
@@ -116,8 +121,12 @@ Snapshot save/load runs in snapshotting mode (`durability_is_suppressed` ==
 `snapshotting_mode`): durable calls neither append nor consume entries (`DurableCallSession` with
 `persisted: false`). Snapshot admission is governed by `SnapshotBoundaryConditions`; do not add
 parallel boundary predicates.
-Automatic snapshots are revision-scoped baselines chosen at instance creation; a failed load sets
-the resident `Worker`'s `snapshot_recovery_disabled` flag and the next instance replays fully.
+Automatic snapshots are revision-scoped baselines chosen at instance creation. A deterministic load failure or
+divergent replay suffix rejects that snapshot through its index and recreates the full instance
+context from the authoritative manual-update baseline (never from pre-migration history). The
+fingerprint-scoped `rejected_periodic_snapshot_through` watermark is persisted only after that
+fallback succeeds and before readiness is published; payload-download failures use a temporary skip for the startup attempt.
+Failure to load a manual-update snapshot is terminal and retains the underlying cause.
 
 ## Spawned store tasks
 

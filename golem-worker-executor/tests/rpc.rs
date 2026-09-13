@@ -27,6 +27,7 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::StreamSessionRecordV1;
+use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId};
 use golem_common::schema::schema_value::ResultValuePayload;
@@ -2208,6 +2209,154 @@ async fn typescript_client_streaming_rpc_e2e(
         .into_typed::<u32>()?;
     assert_eq!((first, second), (1, 2));
     executor.check_oplog_is_queryable(&caller).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn streaming_rpc_identity_survives_atomic_rollback(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    for (synchronous, with_input) in [(false, false), (true, false), (false, true)] {
+        let name = format!("atomic-streaming-{synchronous}-{with_input}");
+        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
+        let target_id = agent_id!("StreamingRpcTarget", name);
+        let caller = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let target = executor
+            .start_agent(&component.id, target_id.clone())
+            .await?;
+        wait_for_agent_initialization(&executor, &caller).await?;
+        wait_for_agent_initialization(&executor, &target).await?;
+        let gate = executor
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let invocation = {
+            let executor = executor.clone();
+            let component = component.clone();
+            let caller_id = caller_id.clone();
+            let gate = gate.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent(
+                        &component,
+                        &caller_id,
+                        "atomic_streaming_increment",
+                        data_value!(gate, synchronous, with_input),
+                    )
+                    .await
+            })
+        };
+        executor
+            .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &target_id, "scalar_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            1,
+            "the provider must mutate before the caller crashes"
+        );
+        let before = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let requests = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+            entries
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+                    {
+                        start.request.as_ref().map(|request| {
+                            HostRequestGolemRpcInvoke::from_value(request.value())
+                                .map(|request| (entry.oplog_index, request))
+                        })
+                    }
+                    _ => None,
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let first = requests(&before)?;
+        assert_eq!(first.len(), 1);
+        let _ = executor.simulated_crash(&caller).await;
+        executor.complete_promise(&gate, Vec::new()).await?;
+        invocation.await??;
+
+        let after = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        assert!(
+            after
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::Jump(_)))
+        );
+        let attempts = requests(&after)?;
+        let second = attempts.last().expect("missing retried RPC Start");
+        assert_ne!(
+            first[0].0, second.0,
+            "rollback must create a new physical Start"
+        );
+        let mutations = executor
+            .invoke_and_await_agent(&component, &target_id, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        let provider = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        let executions = provider
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "increment_stream"
+                            || method.method_name == "increment_stream_input" =>
+                    {
+                        Some(&method.idempotency_key)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (&second.1.idempotency_key, mutations, executions),
+            (
+                &first[0].1.idempotency_key,
+                1,
+                vec![&first[0].1.idempotency_key]
+            ),
+            "two caller attempts must retain one target identity and execute one provider mutation (sync={synchronous}, input={with_input})"
+        );
+
+        // Reconstruct both agents after the region and its streams have completed.
+        drop(executor);
+        executor = start(deps, &context).await?;
+        executor
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &target_id, "scalar_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            1
+        );
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &target_id, "increment_scalar", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            2,
+            "a fresh provider invocation must continue from the single committed mutation"
+        );
+    }
     Ok(())
 }
 

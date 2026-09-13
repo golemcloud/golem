@@ -601,6 +601,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
+            // Reserve the atomic region's logical identity once, on both live and replay paths.
+            // Outside a region, concurrent calls require the exact physical Start index.
+            let atomic_key = self
+                .state
+                .current_atomic_region_idempotency_key_oplog_index()
+                .map(|_| self.derive_idempotency_key(begun.begin_index()));
             let begun = if begun.is_live() {
                 BegunCallReplayOutcome::ContinueLive(begun)
             } else {
@@ -611,11 +617,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 BegunCallReplayOutcome::ContinueLive(begun) => {
                     let request_prepared = prepared.clone();
                     let request_parent_key = parent_key.clone();
+                    let request_atomic_key = atomic_key.clone();
                     let request_scope_card = scope_card.clone();
                     begun
                         .start_live_with_index(self, move |start_index| {
-                            let idempotency_key =
-                                IdempotencyKey::derived(&request_parent_key, start_index);
+                            let idempotency_key = request_atomic_key.unwrap_or_else(|| {
+                                IdempotencyKey::derived(&request_parent_key, start_index)
+                            });
                             let remote_agent_id = invocation_target_agent_id(
                                 &request_prepared.logical_remote_agent_id,
                                 request_prepared.ephemeral_logical_agent_id.as_ref(),
@@ -631,7 +639,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .await?
                 }
             };
-            let idempotency_key = IdempotencyKey::derived(&parent_key, handle.start_index());
+            let idempotency_key = atomic_key
+                .unwrap_or_else(|| IdempotencyKey::derived(&parent_key, handle.start_index()));
             let remote_agent_id = invocation_target_agent_id(
                 &prepared.logical_remote_agent_id,
                 prepared.ephemeral_logical_agent_id.as_ref(),
@@ -1126,17 +1135,24 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
+            // Consume the same logical counter slot during replay as during live initiation.
+            let atomic_key = self
+                .state
+                .current_atomic_region_idempotency_key_oplog_index()
+                .map(|_| self.derive_idempotency_key(begun.begin_index()));
             let request_logical_remote_agent_id = logical_remote_agent_id.clone();
             let request_ephemeral_logical_agent_id = ephemeral_logical_agent_id.clone();
             let request_parent_key = parent_key.clone();
+            let request_atomic_key = atomic_key.clone();
             let request_method_name = method_name.clone();
             let request_input = strip_streams(input_value.clone());
             let request_scope_card = scope_card.clone();
             let mut handle = if begun.is_live() {
                 begun
                     .start_live_with_index(self, move |start_index| {
-                        let idempotency_key =
-                            IdempotencyKey::derived(&request_parent_key, start_index);
+                        let idempotency_key = request_atomic_key.unwrap_or_else(|| {
+                            IdempotencyKey::derived(&request_parent_key, start_index)
+                        });
                         let remote_agent_id = invocation_target_agent_id(
                             &request_logical_remote_agent_id,
                             request_ephemeral_logical_agent_id.as_ref(),
@@ -1157,7 +1173,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             } else {
                 begun.start_replay(self).await?
             };
-            let idempotency_key = IdempotencyKey::derived(&parent_key, handle.start_index());
+            let idempotency_key = atomic_key
+                .unwrap_or_else(|| IdempotencyKey::derived(&parent_key, handle.start_index()));
             let remote_agent_id = invocation_target_agent_id(
                 &logical_remote_agent_id,
                 ephemeral_logical_agent_id.as_ref(),

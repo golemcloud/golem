@@ -37,7 +37,7 @@ which durable fact makes that safe.
 | After caller `Start`, before target accepted | `Start` | Re-dispatch with same key (`MayExist`); target sees it as new and executes once | Same key |
 | After target accepted, before caller `End` | `Start` | Re-dispatch with same key; target's `lookup_invocation_result` attaches to the existing invocation/result | Target `PendingAgentInvocation` |
 | After caller `End` | `Start`, `End` | Recorded response returned; no dispatch | `End` payload |
-| Atomic-region rollback around the call | `Jump` + re-executed `Start` | Same logical counter → same key → target dedupes (non-streaming path; the streaming path keys from the physical index, see SKILL RPC section) | `next_idempotency_key_oplog_index` |
+| Atomic-region rollback around the call | `Jump` + re-executed `Start` | Streaming and non-streaming calls reuse the logical counter's key; the target reuses its invocation/result. Streaming descriptors retain semantic configuration, not retry tracing or environment-map ordering. | `next_idempotency_key_oplog_index`, target invocation/session identity |
 
 | Crash window (target) | Target behaviour | Durable fact |
 |---|---|---|
@@ -51,7 +51,9 @@ which durable fact makes that safe.
 |---|---|---|
 | After `PendingUpdate`, before the update runs | `prepare_instance` sees the pending update and starts it | `PendingUpdate` hint |
 | Snapshot load fails for an automatic update | `FailedUpdate` appended, `RetryDecision::Immediate`, old revision reconstructed | Old oplog is untouched by snapshotting mode |
-| Snapshot load fails with no pending update | Resident `Worker.snapshot_recovery_disabled` set, `RetryDecision::Immediate`, full replay from the manual baseline | Baseline chosen at instance creation |
+| Automatic snapshot load fails, or its replay suffix diverges, with no pending update | Reject through that index, return `RetryDecision::Immediate`, and recreate the full context from the authoritative manual-update baseline; never replay pre-migration history | Fingerprint-scoped `rejected_periodic_snapshot_through`, persisted only after successful fallback and before readiness |
+| Automatic snapshot payload download fails | Retry while temporarily skipping it for this startup attempt; successful preparation clears the skip | In-memory `unavailable_periodic_snapshot_through`; no persistent rejection |
+| Manual-update snapshot load fails | Resume terminates and reports the load failure with its underlying cause | The authoritative migration baseline cannot be skipped |
 | Replay under the new component diverges | `FailedUpdate` appended, `RetryDecision::Immediate`, old revision reconstructed | `FailedUpdate` |
 | After `SuccessfulUpdate` | New revision loaded on every later reconstruction; automatic snapshots from the old revision fail the revision filter and are ignored | `SuccessfulUpdate`, revision-scoped snapshots |
 | `SnapshotBased` update pending across a crash | Save hook already ran and payload is recorded; the new instance must be live at `prepare_instance`, then `finalize_pending_snapshot_update` loads it | Recorded snapshot payload |

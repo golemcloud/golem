@@ -10,12 +10,16 @@ invoke-and-await; a fire-and-forget streaming call is rejected with `RpcError::P
 
 ### Identity
 
-The caller's durable call `Start` is the identity. On the streaming path
-(`prepared.is_streaming()`) every stream handle derives its key as
-`IdempotencyKey::derived(&parent_key, handle.start_index())` from the *physical* `Start` index.
-The non-streaming path goes through `derive_idempotency_key`, which substitutes the outermost
-atomic region's logical counter; the streaming path does not. Treat that as a discrepancy to
-investigate before relying on streaming RPC keys inside atomic regions, not as a guarantee.
+Outside atomic regions, streaming RPC derives its child invocation key from the caller invocation
+key and the exact physical `Start` index. Inside an atomic region, both streaming entry points use
+`derive_idempotency_key` to reserve the outermost region's logical counter once per call, on live
+and replay paths alike. The persisted request and dispatch metadata reuse that key, so rollback
+can append a new physical `Start` without creating another logical target invocation.
+
+The durable session descriptor compares semantic execution configuration, with environment entries
+encoded in key order. Retry tracing does not change invocation identity; the target retains the
+first accepted invocation's tracing context. Stream registration coordinates use the stable child
+invocation identity, and complete durable stream handles remain part of descriptor matching.
 
 The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 (`golem-common/src/base_model/worker.rs`) is minted once at agent creation and stable across
@@ -54,6 +58,10 @@ are still being produced and consumed. Three crash windows follow:
 3. Invocation finished, session cleanup pending — `invocation_loop.rs::agent_invocation_finished`
    runs `complete_durable_streaming_session` after `on_agent_invocation_success`, appending
    protocol terminals and `StreamSession { Finished }` as hints after `AgentInvocationFinished`.
+
+Provider reconstruction drains terminal outputs against their committed records without waiting
+for a consumer attachment; the consumer may already have finished and detached permanently.
+For agent RPC, open outputs still require an active attachment before production.
 
 ### Exactly-once item delivery
 

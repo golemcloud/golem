@@ -54,6 +54,7 @@ pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
+pub mod scheduler_storage;
 pub mod scope_cards;
 pub mod tool_discovery;
 pub mod tool_streaming;
@@ -126,6 +127,7 @@ tag_suite!(tool_streaming, group1);
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
+sequential_suite!(scheduler_storage);
 sequential_suite!(oplog_blob_archive);
 sequential_suite!(resource_limits);
 

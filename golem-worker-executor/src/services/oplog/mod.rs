@@ -991,7 +991,7 @@ pub trait OplogOps: Oplog {
         payload: Vec<u8>,
         mime_type: String,
     ) -> Result<UpdateDescription, String> {
-        let payload = self.upload_payload(&payload).await?;
+        let payload = self.upload_payload_owned(payload).await?;
         Ok(UpdateDescription::SnapshotBased {
             target_revision,
             payload,

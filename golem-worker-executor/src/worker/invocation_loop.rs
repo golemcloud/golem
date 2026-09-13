@@ -3682,6 +3682,7 @@ mod tests {
     fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
         let result = Ok(InvokeResult::Failed {
             consumed_fuel: 0,
+            timed_out: false,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
             in_atomic_region: false,

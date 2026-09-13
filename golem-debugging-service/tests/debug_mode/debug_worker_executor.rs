@@ -92,6 +92,10 @@ impl DebugWorkerExecutorClient {
                             _ => {}
                         }
                     }
+                    Ok(Message::Close(frame)) => {
+                        anyhow::bail!("Debug connection closed: {frame:?}");
+                    }
+                    Err(error) => return Err(error.into()),
                     _ => {
                         if time.elapsed().as_secs() > 10 {
                             break Err(anyhow::anyhow!("Timeout")); // Break with an error
