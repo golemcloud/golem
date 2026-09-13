@@ -366,7 +366,8 @@ async fn register_plugin(
                 })?
                 .ok_or_else(|| {
                     anyhow::anyhow!("Plugin '{plugin_name}' exists but could not be loaded")
-                })?;
+                })?
+                .plugin;
             Ok(())
         }
         Err(other) => Err(anyhow::anyhow!(

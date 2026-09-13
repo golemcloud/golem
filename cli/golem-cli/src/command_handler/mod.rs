@@ -689,13 +689,6 @@ impl Handlers for Arc<Context> {
         LogHandler::new(self.clone())
     }
 
-    // TODO: atomic:
-    /*
-    fn plugin_installation_handler(&self) -> PluginInstallationHandler {
-        PluginInstallationHandler::new(self.clone())
-    }
-    */
-
     fn plugin_handler(&self) -> PluginCommandHandler {
         PluginCommandHandler::new(self.clone())
     }

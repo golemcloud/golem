@@ -25,7 +25,7 @@ use crate::model::app_raw;
 use crate::model::component::initial_permission_recipient_context;
 use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployProperties};
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::plugin::PluginNameAndVersion;
+use crate::model::plugin::PluginGrantKey;
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentTypeName;
@@ -219,7 +219,7 @@ pub struct ComponentStager<'a> {
     ctx: Arc<Context>,
     component_deploy_properties: &'a ComponentDeployProperties,
     diff: ComponentDiff,
-    plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+    plugin_grants: HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
     manifest_files_by_agent: OnceCell<BTreeMap<AgentTypeName, Vec<InitialComponentFile>>>,
     manifest_files_by_tool: OnceCell<BTreeMap<ToolName, Vec<InitialComponentFile>>>,
 }
@@ -228,7 +228,7 @@ impl<'a> ComponentStager<'a> {
     pub fn new(
         ctx: Arc<Context>,
         component_deploy_properties: &'a ComponentDeployProperties,
-        plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+        plugin_grants: HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
         // NOTE: none means ALL changed (e.g. new component)
         diff: Option<&diff::DiffForHashOf<diff::Component>>,
     ) -> anyhow::Result<Self> {
@@ -770,21 +770,21 @@ impl<'a> ComponentStager<'a> {
             .iter()
             .enumerate()
             .map(|(idx, p)| {
-                let grant = self
-                    .plugin_grants
-                    .get(&PluginNameAndVersion {
-                        name: p.name.clone(),
-                        version: p.version.clone(),
-                    })
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Plugin {}/{} is not available in this environment. \
+                let grant = PluginGrantKey::resolve(
+                    &self.plugin_grants,
+                    p.account.as_deref(),
+                    &p.name,
+                    &p.version,
+                )?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Plugin {}/{} is not available in this environment. \
                              Use 'golem plugin list' to see available plugins, \
                              or grant the plugin to this environment first.",
-                            p.name,
-                            p.version
-                        )
-                    })?;
+                        p.name,
+                        p.version
+                    )
+                })?;
                 Ok(PluginInstallation {
                     environment_plugin_grant_id: grant.id,
                     priority: PluginPriority(idx as i32),

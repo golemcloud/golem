@@ -21,6 +21,7 @@ use crate::model::text_format::{
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::plugin_registration::PluginRegistrationDto;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -50,9 +51,39 @@ pub struct PluginManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PluginNameAndVersion {
+pub struct PluginGrantKey {
+    pub account: String,
     pub name: String,
     pub version: String,
+}
+
+impl PluginGrantKey {
+    pub fn resolve<'a, T>(
+        grants: &'a HashMap<Self, T>,
+        account: Option<&str>,
+        name: &str,
+        version: &str,
+    ) -> anyhow::Result<Option<&'a T>> {
+        if let Some(account) = account {
+            return Ok(grants.get(&Self {
+                account: account.to_string(),
+                name: name.to_string(),
+                version: version.to_string(),
+            }));
+        }
+
+        let mut matches = grants
+            .iter()
+            .filter(|(key, _)| key.name == name && key.version == version)
+            .map(|(_, value)| value);
+        let result = matches.next();
+        if matches.next().is_some() {
+            anyhow::bail!(
+                "Plugin {name}/{version} is granted by multiple accounts; set 'account' in the plugin manifest entry"
+            );
+        }
+        Ok(result)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,4 +266,64 @@ fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, St
         );
 
     fields.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PluginGrantKey;
+    use std::collections::HashMap;
+    use test_r::test;
+
+    fn grants() -> HashMap<PluginGrantKey, u8> {
+        HashMap::from([
+            (
+                PluginGrantKey {
+                    account: "first@example.com".to_string(),
+                    name: "plugin".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                1,
+            ),
+            (
+                PluginGrantKey {
+                    account: "second@example.com".to_string(),
+                    name: "plugin".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                2,
+            ),
+        ])
+    }
+
+    #[test]
+    fn resolves_plugin_grant_by_account_name_and_version() {
+        let grants = grants();
+
+        assert_eq!(
+            PluginGrantKey::resolve(&grants, Some("second@example.com"), "plugin", "1.0.0")
+                .unwrap(),
+            Some(&2)
+        );
+    }
+
+    #[test]
+    fn resolves_unqualified_plugin_grant_when_unique() {
+        let mut grants = grants();
+        grants.retain(|key, _| key.account == "first@example.com");
+
+        assert_eq!(
+            PluginGrantKey::resolve(&grants, None, "plugin", "1.0.0").unwrap(),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_unqualified_plugin_grant() {
+        let error = PluginGrantKey::resolve(&grants(), None, "plugin", "1.0.0").unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Plugin plugin/1.0.0 is granted by multiple accounts; set 'account' in the plugin manifest entry"
+        );
+    }
 }

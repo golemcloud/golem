@@ -1,13 +1,10 @@
 # Agent API
 API working on agent instances
 ## undefined
+
 Path|Method|Protected
 ---|---|---
 `/v1/agents/invoke-agent`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -100,6 +97,7 @@ Path|Method|Protected
 ```
 
 ## Invoke an agent through an attached live streaming session
+
 Path|Method|Protected
 ---|---|---
 `/v1/agents/invoke-agent-session`|GET|Yes
@@ -109,20 +107,11 @@ subprotocol. Text frames carry public v1 JSON lifecycle messages, while
 binary frames carry the public v1 binary envelope. The bearer token is
 authenticated before the upgrade and authorizes both start and resume.
 
-
-
-
-
-
-
 ## undefined
+
 Path|Method|Protected
 ---|---|---
 `/v1/agents/create-agent`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy

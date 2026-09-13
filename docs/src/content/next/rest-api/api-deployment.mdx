@@ -1,15 +1,10 @@
 # Api Deployment API
 
 ## List http api deployment by domain in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/http-api-deployments`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -45,13 +40,10 @@ Path|Method|Protected
 ```
 
 ## Create a new api-deployment in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/http-api-deployments`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -106,15 +98,10 @@ Path|Method|Protected
 ```
 
 ## Get an api-deployment by id
+
 Path|Method|Protected
 ---|---|---
 `/v1/http-api-deployments/{http_api_deployment_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -146,11 +133,10 @@ Path|Method|Protected
 ```
 
 ## Delete an api-deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/http-api-deployments/{http_api_deployment_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
@@ -158,18 +144,11 @@ Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
 
-
-
-
-
 ## Update an api-deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/http-api-deployments/{http_api_deployment_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -224,15 +203,10 @@ Path|Method|Protected
 ```
 
 ## Get a specific http api deployment revision
+
 Path|Method|Protected
 ---|---|---
 `/v1/http-api-deployment/{http_api_deployment_id}/revisions/{revision}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -264,16 +238,11 @@ Path|Method|Protected
 ```
 
 ## Get http api deployment by domain in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/http-api-deployments/{domain}`|GET|Yes
 
-
-
-
-
-
-
 **Example Response JSON**
 
 ```json copy
@@ -304,16 +273,11 @@ Path|Method|Protected
 ```
 
 ## Get http api deployment by domain in the deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}`|GET|Yes
 
-
-
-
-
-
-
 **Example Response JSON**
 
 ```json copy
@@ -344,15 +308,10 @@ Path|Method|Protected
 ```
 
 ## Get http api deployment by domain in the deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

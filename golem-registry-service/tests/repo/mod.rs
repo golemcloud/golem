@@ -48,6 +48,7 @@ use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::repo::retry_policy::RetryPolicyRepo;
 use golem_registry_service::repo::tool_release::ToolReleaseRepo;
 use golem_registry_service::services::account::AccountService;
 use golem_registry_service::services::account_usage::AccountUsageService;
@@ -75,6 +76,7 @@ pub struct Deps {
     pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
     pub account_resource_override_repo: std::sync::Arc<dyn AccountResourceOverrideRepo>,
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
+    pub retry_policy_repo: Box<dyn RetryPolicyRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
     pub environment_tool_grant_repo: Box<dyn EnvironmentToolGrantRepo>,
