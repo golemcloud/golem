@@ -112,9 +112,11 @@ function remoteClientTypeChecks(): void {
   });
   void agentId.client(sharedContract).ping();
   void agentId.dynamicClient().method('ping');
+  // @ts-expect-error binding-only contracts cannot declare a name without an ID shape
+  defineAgentClient({ name: 'Named', methods: sharedContract.methods });
   // @ts-expect-error lifecycle mode belongs to exact constructor definitions, not ID bindings
   defineAgentClient({ mode: 'durable', methods: sharedContract.methods });
-  // @ts-expect-error name-only ID bindings do not carry lifecycle mode either
+  // @ts-expect-error binding-only contracts cannot declare a name or lifecycle mode
   defineAgentClient({ name: 'Named', mode: 'ephemeral', methods: sharedContract.methods });
   // @ts-expect-error binding definitions expose no synthetic lifecycle mode
   void sharedContract.mode;
@@ -122,6 +124,18 @@ function remoteClientTypeChecks(): void {
   sharedContract.agentId({});
   // @ts-expect-error method-only contracts do not expose constructor-based factories
   sharedContract.client.get({});
+
+  const configuredContract = defineAgentClient({
+    name: 'ConfiguredRemoteClient',
+    id: {},
+    config: { greeting: z.string(), apiKey: s.secret(z.string()) },
+    methods: { ping: method({ input: {}, returns: z.string() }) },
+  });
+  configuredContract.client.get({}, { greeting: 'hello' });
+  // @ts-expect-error config overrides retain their declared value types
+  configuredContract.client.get({}, { greeting: 42 });
+  // @ts-expect-error secret configuration cannot be overridden by an RPC caller
+  configuredContract.client.get({}, { apiKey: 'secret' });
 
   const ephemeralId = { name: z.string() };
   const ephemeralMethods = { ping: method({ input: {}, returns: z.string() }) };
@@ -650,7 +664,18 @@ describe('RPC client', () => {
         methods: { ping: method({ input: {}, returns: z.string() }) },
       } as any),
     ).toThrow(
-      'Agent ID binding contracts may only define methods and an optional name; id, config, and mode require a complete exact name + id definition',
+      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
+    );
+  });
+
+  it('rejects a type name without an ID shape on binding contracts', () => {
+    expect(() =>
+      defineAgentClient({
+        name: 'NamedBinding',
+        methods: { ping: method({ input: {}, returns: z.string() }) },
+      } as any),
+    ).toThrow(
+      'Agent ID binding contracts may only define methods; name, id, config, and mode require a complete exact name + id definition',
     );
   });
 
@@ -671,6 +696,29 @@ describe('RPC client', () => {
     ]);
 
     expect(target.client(definition).ping).toBeTypeOf('function');
+  });
+
+  it('rejects binding a complete contract to an incompatible constructor value', () => {
+    const definition = defineAgentClient({
+      name: 'ExactDurableAgent',
+      id: { name: z.string() },
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    const target = new ParsedAgentId('ExactDurableAgent(42)');
+    vi.mocked(parseAgentId).mockReturnValueOnce([
+      'ExactDurableAgent',
+      {
+        graph: { typeNodes: [], defs: [], root: 0 },
+        value: schemaValueToWit(v.record([v.f64(42)])),
+      },
+      undefined,
+    ]);
+    const creates = vi.mocked(WasmRpc.create).mock.calls.length;
+
+    expect(() => target.client(definition)).toThrow(
+      "Agent client contract 'ExactDurableAgent' cannot bind ParsedAgentId 'ExactDurableAgent(42)': constructor value does not conform to the contract ID schema",
+    );
+    expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
 
   it('rejects binding an exact ephemeral definition to an existing identity', () => {
@@ -697,9 +745,10 @@ describe('RPC client', () => {
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
 
-  it('checks an optional exact name locally before creating the remote client', () => {
+  it('checks a complete contract name locally before creating the remote client', () => {
     const contract = defineAgentClient({
       name: 'ExpectedAgent',
+      id: { name: z.string() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     const target = new ParsedAgentId('OtherAgent(one)');
