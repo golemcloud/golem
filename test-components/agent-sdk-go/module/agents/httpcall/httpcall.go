@@ -1,0 +1,25 @@
+// Package httpcall is the DEFINITION of the durable outbound-HTTP agent used
+// by the replay tests. The behaviour lives in httpcall/impl.
+package httpcall
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type Id struct{ Name string }
+
+type CallbackIn struct{ Payload string }
+
+var Agent = golem.DefineAgent[Id](golem.Spec{
+	Name: "HttpAgent", Description: "Durable outbound HTTP for replay tests", Mode: golem.Durable,
+})
+
+var Callback = golem.DefineMethod[Id, CallbackIn, string]("callback",
+	golem.Desc("GET the PORT callback endpoint with the payload and return its body"))
+
+// RetryCallback calls a flaky endpoint under a status-code retry policy.
+var RetryCallback = golem.DefineMethod[Id, CallbackIn, string]("retry-callback",
+	golem.Desc("GET the flaky endpoint under a retry policy that retries on 500"))
+
+// AtomicCallback makes the same call inside golem.Atomically — the minimal case
+// for "does an outbound HTTP call settle before an atomic region closes?".
+var AtomicCallback = golem.DefineMethod[Id, CallbackIn, string]("atomic-callback",
+	golem.Desc("GET the callback endpoint inside an atomic region"))

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod agents;
+mod go;
 mod requirements;
 mod rust;
 mod skills;
@@ -174,6 +175,11 @@ pub(crate) fn plan_dependency_fixes(
     if selected_languages.contains(&GuestLanguage::Rust) {
         let rust_steps = rust::plan_rust_cargo_fix_steps(ctx, overrides, &mut plan.warnings)?;
         plan.steps.extend(rust_steps);
+    }
+
+    if selected_languages.contains(&GuestLanguage::Go) {
+        let go_steps = go::plan_go_mod_fix_steps(ctx, overrides)?;
+        plan.steps.extend(go_steps);
     }
 
     if let Some(step) = agents::plan_agents_md_fix_step(ctx, &selected_languages)? {

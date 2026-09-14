@@ -29,8 +29,10 @@ const GOLEM_TS_VERSION: &str = "GOLEM_TS_VERSION";
 const GOLEM_SCALA_SDK_VERSION: &str = "GOLEM_SCALA_SDK_VERSION";
 const GOLEM_MOONBIT_SDK_PATH: &str = "GOLEM_MOONBIT_SDK_PATH";
 const GOLEM_MOONBIT_SDK_VERSION: &str = "GOLEM_MOONBIT_SDK_VERSION";
+const GOLEM_GO_PATH: &str = "GOLEM_GO_PATH";
+const GOLEM_GO_VERSION: &str = "GOLEM_GO_VERSION";
 
-const SDK_OVERRIDE_KEYS: [&str; 8] = [
+const SDK_OVERRIDE_KEYS: [&str; 10] = [
     GOLEM_PATH,
     GOLEM_RUST_PATH,
     GOLEM_RUST_VERSION,
@@ -39,9 +41,14 @@ const SDK_OVERRIDE_KEYS: [&str; 8] = [
     GOLEM_SCALA_SDK_VERSION,
     GOLEM_MOONBIT_SDK_PATH,
     GOLEM_MOONBIT_SDK_VERSION,
+    GOLEM_GO_PATH,
+    GOLEM_GO_VERSION,
 ];
 
 pub const SDK_OVERRIDES_FILE_NAME: &str = ".golem-sdk-overrides";
+
+/// Module path of the Go SDK, as required/replaced in a generated `go.mod`.
+pub const GO_SDK_MODULE: &str = "github.com/golemcloud/golem/sdks/go/golem";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SdkOverridesTestProfile {
@@ -65,6 +72,8 @@ pub struct SdkOverrides {
     pub scala_sdk_version: Option<String>,
     pub moonbit_sdk_path: Option<String>,
     pub moonbit_sdk_version: Option<String>,
+    pub go_sdk_path: Option<String>,
+    pub go_sdk_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +105,8 @@ impl SdkOverrides {
                 fs::path_to_str(&workspace_dir.join("sdks/moonbit/golem_sdk"))?.to_string(),
             ),
             moonbit_sdk_version: None,
+            go_sdk_path: Some(fs::path_to_str(&workspace_dir.join("sdks/go/golem"))?.to_string()),
+            go_sdk_version: None,
         }
         .to_env_vars())
     }
@@ -135,6 +146,38 @@ impl SdkOverrides {
                     .unwrap_or(versions::sdk::MOONBIT);
                 serde_json::to_string(version).expect("serializing a string cannot fail")
             }
+        }
+    }
+
+    /// The version for the SDK's `require` line in a generated `go.mod`.
+    ///
+    /// When a local path override is active the version is a placeholder: the
+    /// `replace` directive from [`Self::go_sdk_replace`] is what actually
+    /// resolves the module, and Go requires the module to be `require`d anyway.
+    pub fn go_sdk_dep(&self) -> String {
+        match &self.go_sdk_path {
+            Some(_) => "v0.0.0".to_string(),
+            None => format!(
+                "v{}",
+                self.go_sdk_version.as_deref().unwrap_or(versions::sdk::GO)
+            ),
+        }
+    }
+
+    /// The `replace` directive pointing at a local SDK checkout, or an empty
+    /// string when resolving the SDK from the module proxy.
+    ///
+    /// No trailing newline: the template placeholder sits on its own line, so
+    /// the line's own newline terminates the file with exactly one — matching
+    /// the canonical form `edit::go_mod::reconcile_sdk_dependency` produces, so a
+    /// freshly generated app's first build does not report a spurious go.mod
+    /// change (path mode).
+    pub fn go_sdk_replace(&self) -> String {
+        match &self.go_sdk_path {
+            Some(path) => {
+                format!("\nreplace {GO_SDK_MODULE} => {path}")
+            }
+            None => String::new(),
         }
     }
 
@@ -327,6 +370,13 @@ impl SdkOverrides {
                 "sdks/moonbit/golem_sdk",
             )?,
             moonbit_sdk_version: get_normalized_value_by_key(&values, GOLEM_MOONBIT_SDK_VERSION),
+            go_sdk_path: resolved_path_override(
+                &values,
+                GOLEM_GO_PATH,
+                golem_path.as_deref(),
+                "sdks/go/golem",
+            )?,
+            go_sdk_version: get_normalized_value_by_key(&values, GOLEM_GO_VERSION),
         })
     }
 
@@ -352,6 +402,12 @@ impl SdkOverrides {
         }
         if let Some(value) = &self.moonbit_sdk_version {
             values.insert(GOLEM_MOONBIT_SDK_VERSION.to_string(), value.clone());
+        }
+        if let Some(value) = &self.go_sdk_path {
+            values.insert(GOLEM_GO_PATH.to_string(), value.clone());
+        }
+        if let Some(value) = &self.go_sdk_version {
+            values.insert(GOLEM_GO_VERSION.to_string(), value.clone());
         }
         values
     }
@@ -646,6 +702,8 @@ mod tests {
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
+            go_sdk_path: None,
+            go_sdk_version: None,
         };
 
         assert_eq!(
@@ -665,6 +723,8 @@ mod tests {
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
+            go_sdk_path: None,
+            go_sdk_version: None,
         }
         .to_env_vars();
 

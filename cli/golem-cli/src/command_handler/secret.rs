@@ -267,6 +267,9 @@ impl SecretCommandHandler {
                     GuestLanguage::TypeScript => SourceLanguage::TypeScript,
                     GuestLanguage::Scala => SourceLanguage::Scala,
                     GuestLanguage::MoonBit => SourceLanguage::MoonBit,
+                    // No Go agent-id renderer/parser yet; Other(_) falls back to
+                    // the TypeScript-style syntax. Matches model/deploy.rs.
+                    GuestLanguage::Go => SourceLanguage::Other("go".to_string()),
                 };
             }
         }

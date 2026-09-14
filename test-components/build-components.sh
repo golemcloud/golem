@@ -6,10 +6,12 @@ rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-sy
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts")
 scala_test_apps=("tool-streaming-scala")
 moonbit_test_apps=("tool-streaming-moonbit")
+go_test_apps=("agent-sdk-go")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
 TS_CHUNKS=1   # Number of chunks to split ts apps into for parallel CI builds
+GO_CHUNKS=1   # Number of chunks to split go apps into for parallel CI builds
 
 # Optional arguments:
 # - clean: clean all projects without building
@@ -70,6 +72,9 @@ print_groups_json() {
   done
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true,"expected-artifact":"golem_it_tool_streaming_moonbit.wasm"}'
+  for ((i=1; i<=GO_CHUNKS; i++)); do
+    printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
+  done
   printf ',{"name":"benchmarks","needs-node":true,"needs-moonbit":false}]\n'
 }
 
@@ -89,12 +94,12 @@ for arg in "$@"; do
     check)
       check_only=true
       ;;
-    rust|ts|scala|moonbit|benchmarks)
+    rust|ts|scala|moonbit|go|benchmarks)
       single_group=true
       group="$arg"
       ;;
-    rust-*|ts-*)
-      if [[ "$arg" =~ ^(rust|ts)-([0-9]+)$ ]]; then
+    rust-*|ts-*|go-*)
+      if [[ "$arg" =~ ^(rust|ts|go)-([0-9]+)$ ]]; then
         single_group=true
         group="$arg"
       else
@@ -156,6 +161,38 @@ build_rust_apps() {
   fi
   TEST_COMP_DIR="$(pwd)"
   export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
+  for subdir in "${apps[@]}"; do
+    pushd "$subdir" || exit
+
+    if should_clean; then
+      echo "Cleaning $subdir..."
+      "$GOLEM_CLI" clean
+    fi
+
+    if [ "$check_only" = true ]; then
+      echo "Checking $subdir..."
+      "$GOLEM_CLI" build --step check --yes
+    elif [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      "$GOLEM_CLI" --preset release build --yes --skip-check
+      "$GOLEM_CLI" --preset release exec copy
+    fi
+
+    popd || exit
+  done
+}
+
+build_go_apps() {
+  local apps=("$@")
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning Go test apps"
+  elif [ "$check_only" = true ]; then
+    echo "Checking Go test apps"
+  else
+    echo "Building Go test apps"
+  fi
+  TEST_COMP_DIR="$(pwd)"
+  export GOLEM_GO_PATH="${TEST_COMP_DIR}/../sdks/go/golem"
   for subdir in "${apps[@]}"; do
     pushd "$subdir" || exit
 
@@ -285,6 +322,19 @@ fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "moonbit" ]; then
   build_sdk_apps "MoonBit" "${moonbit_test_apps[@]}"
+fi
+
+if [[ "$group" =~ ^go-([0-9]+)$ ]]; then
+  chunk_idx="${BASH_REMATCH[1]}"
+  if [ "$chunk_idx" -lt 1 ] || [ "$chunk_idx" -gt "$GO_CHUNKS" ]; then
+    echo "Invalid go chunk: $chunk_idx (expected 1..$GO_CHUNKS)" >&2
+    exit 1
+  fi
+  get_chunk chunk_apps go_test_apps "$chunk_idx" "$GO_CHUNKS"
+  echo "Go chunk $chunk_idx/$GO_CHUNKS: ${chunk_apps[*]}"
+  build_go_apps "${chunk_apps[@]}"
+elif [ "$single_group" = "false" ] || [ "$group" = "go" ]; then
+  build_go_apps "${go_test_apps[@]}"
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then

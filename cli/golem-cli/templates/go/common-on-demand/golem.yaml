@@ -1,0 +1,42 @@
+# golem-app-manifest-header
+
+componentTemplates:
+  go:
+    presets:
+      # debug keeps the name/DWARF custom sections for better diagnostics.
+      # Dependency resolution (go mod tidy) is NOT a build step: the CLI runs it
+      # automatically before the build, like `npm install` (see
+      # ensure_common_deps_for_tool).
+      debug:
+        default: true
+        build:
+        - command: go tool componentize-go build -o "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+          dir: "{{ componentDir }}"
+          mkdirs:
+          - "{{ golemTempDir }}/agents"
+          sources:
+          - "{{ componentDir }}"
+          targets:
+          - "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      # release strips the `name` custom sections (Go function names, ~2% of the
+      # component) for a smaller artifact that ships no internal symbol names,
+      # while keeping component-name/producers metadata the platform uses.
+      # componentize-go exposes no optimization levels, so this is the real
+      # debug/release difference.
+      release:
+        build:
+        - command: go tool componentize-go build -o "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.debug.wasm"
+          dir: "{{ componentDir }}"
+          mkdirs:
+          - "{{ golemTempDir }}/agents"
+          sources:
+          - "{{ componentDir }}"
+          targets:
+          - "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.debug.wasm"
+        - command: wasm-tools strip -d '^name$' "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.debug.wasm" -o "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+          sources:
+          - "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.debug.wasm"
+          targets:
+          - "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

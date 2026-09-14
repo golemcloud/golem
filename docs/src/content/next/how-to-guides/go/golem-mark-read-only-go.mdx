@@ -1,0 +1,152 @@
+# Marking Agent Methods as Read-Only (Go)
+
+## Overview
+
+A **read-only** method is one you promise is a pure read of the agent's
+already-loaded state. Golem enforces the most important part of the contract: the
+runtime **traps outgoing HTTP and agent RPC** from a read-only method. In
+exchange, Golem **caches the result** per the chosen cache policy.
+
+You mark a method read-only by passing the `golem.ReadOnly(...)` option to
+`golem.DefineMethod` in the **definition** package — it is a `golem.MethodOpt`,
+just like `golem.Desc(...)` and `golem.HTTP(...)`.
+
+## Steps
+
+1. **Add `golem.ReadOnly()`** as an option on the method descriptor in the def package.
+2. **(Optional) choose a cache policy** — pass `golem.NoCache()`, `golem.CacheUntilWrite()`, or `golem.CacheFor(ttl)`.
+3. **Keep the handler pure** — no outgoing HTTP, no RPC, no mutation of durable state.
+4. **Build** — run `golem build`.
+
+## Usage
+
+```go
+// Package counter is the DEFINITION.
+package counter
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
+
+var (
+	// Read-write: mutates shared state.
+	Increment = golem.DefineMethod[ID, golem.Unit, int64]("increment")
+
+	// Read-only: pure read over already-loaded state (default cache policy).
+	Value = golem.DefineMethod[ID, golem.Unit, int64]("value", golem.ReadOnly())
+)
+```
+
+The implementation is unchanged — a read-only method is an ordinary handler that
+happens not to perform side effects:
+
+```go
+func init() {
+	golem.Handle(agent, counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		ctx.State.count++
+		return ctx.State.count
+	})
+	golem.Handle(agent, counter.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		return ctx.State.count // pure read
+	})
+}
+```
+
+## Cache Policy
+
+Pass at most one `golem.CachePolicy` to `golem.ReadOnly(...)`. The default (no
+argument) is `CacheUntilWrite`.
+
+| Policy | Call | Behavior |
+|---|---|---|
+| Until write (default) | `golem.ReadOnly()` or `golem.ReadOnly(golem.CacheUntilWrite())` | Cached until any mutating (non-read-only) method of the agent completes |
+| TTL | `golem.ReadOnly(golem.CacheFor(30 * time.Second))` | Expires after the given duration even without a write |
+| No cache | `golem.ReadOnly(golem.NoCache())` | Runs every time; still side-effect-free, never cached |
+
+```go
+import "time"
+
+var (
+	// Cached until the next write.
+	Catalog = golem.DefineMethod[ID, golem.Unit, Catalog]("catalog", golem.ReadOnly())
+
+	// Cached for a minute regardless of writes.
+	Rates = golem.DefineMethod[ID, golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
+
+	// Never cached, but still trapped against remote side effects.
+	Compute = golem.DefineMethod[ID, ComputeIn, int64]("compute", golem.ReadOnly(golem.NoCache()))
+)
+```
+
+`golem.CacheFor` requires a **positive** ttl — `golem.CacheFor(0)` (or a negative
+duration) is a definition error; use `golem.NoCache()` to disable caching.
+
+## What the Runtime Enforces (and what it doesn't)
+
+A read-only method must be a pure function of the agent's already-loaded state and
+its inputs.
+
+| Allowed | Trapped by the runtime | Not checked — your responsibility |
+|---|---|---|
+| Reading `ctx.State` fields | Outgoing HTTP requests | Mutating `ctx.State` in memory |
+| Computation over inputs | RPC calls to other agents | Reading the clock / current time |
+| Returning derived values | | Randomness |
+| | | Reading environment variables |
+
+- **Outgoing HTTP and agent RPC trap** with a read-only violation before they run.
+  A read-only method therefore cannot call another agent — do read-only RPC
+  fan-out from a regular method instead (see [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go)).
+- **In-memory mutation, clocks, randomness, and env reads are NOT detected.** They
+  do not trap, but they break the cache contract (a cached, stale, or
+  non-deterministic value). Keeping the method pure is up to you. If you need any
+  of them, use a regular (non-read-only) method.
+
+## Common Pitfalls
+
+- **Read-only on an `Ephemeral` agent is a definition error** — ephemeral agents
+  have no shared state to read. Remove `golem.ReadOnly()` or make the agent
+  durable (see [`golem-configure-durability-go`](/next/how-to-guides/go/golem-configure-durability-go)).
+- **Setting `golem.ReadOnly()` twice on one method is a definition error**, as is
+  passing **more than one** cache policy — both are reported at discovery.
+- **`golem.NoCache()` does not relax the contract** — it only disables caching;
+  outgoing HTTP and RPC still trap and the same purity rules apply.
+
+## HTTP endpoints
+
+Read-only methods are the natural fit for HTTP `GET`/`HEAD` endpoints. Combine
+`golem.ReadOnly(...)` with `golem.HTTP(golem.GET(...))` on the same method (see
+[`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go)):
+
+```go
+var Catalog = golem.DefineMethod[ID, golem.Unit, Catalog]("catalog",
+	golem.ReadOnly(),
+	golem.HTTP(golem.GET("/catalog")))
+```
+
+## Not available in the Go SDK
+
+Unlike the Rust SDK, the Go SDK has **no per-principal read-only caching** — there
+is no `Principal` parameter you can add to a method and no automatic
+`Cache-Control: private` / `Vary` switch. Read-only results are cached
+per `(method, input)` and shared across callers. If you need per-caller isolation,
+model it explicitly (e.g. include the caller identity in the method input) rather
+than expecting the runtime to derive it.
+
+## Key Constraints
+
+- `golem.ReadOnly(...)` is a per-method option in the **definition** package; an
+  agent freely mixes read-only and regular methods.
+- Cache policy is only expressible via `golem.ReadOnly(...)`; a regular method
+  cannot carry one.
+- Read-only is only valid on **Durable** agents.
+- Pass **at most one** cache policy; the default is `golem.CacheUntilWrite()`.
+
+### Related Guides
+| Guide | Description |
+|-------|--------------|
+| [`golem-configure-durability-go`](/next/how-to-guides/go/golem-configure-durability-go) | Read-only requires a durable agent; configure durability/snapshots |
+| [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go) | Expose a read-only method as a cacheable GET/HEAD endpoint |
+| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | Read-only methods cannot RPC; fan out from a regular method |
+| [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent and its methods |

@@ -1,0 +1,4 @@
+*.wasm
+golem-temp/
+.golem/
+.golem-local/

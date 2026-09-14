@@ -52,6 +52,7 @@ the following section are the exception.
 | `sdks/ts/wit/deps/` | **all** root deps |
 | `sdks/scala/wit/deps/` | **all** root deps |
 | `sdks/moonbit/golem_sdk/wit/deps/` | **all** root deps |
+| `sdks/go/golem/wit/deps/` | **all** root deps |
 
 The exact copy lists live in the `wit-golem-common`, `wit-golem-cli`, and
 `wit-sdks` tasks in `Makefile.toml`.
@@ -163,7 +164,8 @@ If WIT changes affect SDK interfaces:
 2. **TS SDK**: Rebuild packages (`npx pnpm run build` in `sdks/ts/`), then rebuild agent template WASM (`npx pnpm run build-agent-template`)
 3. **Scala SDK**: Regenerate `agent_guest.wasm`, adjust Scala SDK types or codecs if the WIT shape changed, and run the relevant Scala test suites
 4. **MoonBit SDK**: In `sdks/moonbit/golem_sdk/`, run `moon run script bindgen` (the pinned generator and required post-processing), then `moon fmt` and `moon check --target wasm`
-5. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
+5. **Go SDK**: Regenerate WIT bindings (`cargo make generate-sdk-go-bindings`), then `GOOS=wasip1 GOARCH=wasm go build ./...` in `sdks/go/golem/`
+6. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
 
 ## Checklist
 

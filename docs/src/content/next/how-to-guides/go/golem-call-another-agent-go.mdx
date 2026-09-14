@@ -1,0 +1,105 @@
+# Calling Another Agent (RPC) in Go
+
+## Overview
+
+Agents talk to each other through the callee's **definition** package. You get a typed client from `Agent.Get(id)` and call a method descriptor on it. The caller imports only the callee's **definition** package (its `ID`, its method descriptors) — never its `impl` — so the two implementations never form a Go import cycle.
+
+Calls are durable: results are recorded in the oplog and replayed after a restart rather than re-issued.
+
+## Steps
+
+1. **Import the callee's definition package** (e.g. `myapp/agents/ledger`).
+2. **Get a client** for a specific instance: `ledger.Agent.Get(ledger.ID{Region: "eu"})`.
+3. **Call a method descriptor** on the client: `ledger.Record.Call(client, ledger.RecordIn{Amount: 10})`.
+4. If the method returns a `golem.Result`, unwrap it (`.MustOk()` or inspect it).
+
+## Synchronous call
+
+```go
+package impl
+
+import (
+	"myapp/agents/ledger"
+	"myapp/agents/rpccaller"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type state struct{}
+
+var agent = golem.Implement(rpccaller.Agent, func(rpccaller.ID) *state { return &state{} })
+
+func init() {
+	golem.Handle(agent, rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
+		// Get a client for the ledger instance identified by region.
+		c := ledger.Agent.Get(ledger.ID{Region: in.Region})
+		// Call returns the method's Out; here Out is a golem.Result, unwrapped with MustOk.
+		return ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
+	})
+}
+```
+
+`Call` blocks until the callee returns. Because a single agent processes invocations sequentially, a **synchronous self-call** (calling back into the same instance) would deadlock — use `Trigger`/`Schedule` for self-messaging (see [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go)).
+
+### Plain vs Result returns
+
+`Call` returns the method's declared output type **directly**. Only unwrap when that type is a `golem.Result` — don't append `.MustOk()` to a plain return:
+
+```go
+// greeter.Hello returns a plain string → use it directly
+greeting := greeter.Hello.Call(c, greeter.HelloIn{Name: "alice"})
+
+// ledger.Record returns golem.Result[int64, string] → unwrap
+total := ledger.Record.Call(c, ledger.RecordIn{Amount: 10}).MustOk()
+```
+
+## Asynchronous call
+
+Start the call, do other work, then await:
+
+```go
+fut := ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}) // *golem.Future[Out]
+// ... other work ...
+total := fut.Get().MustOk() // Get() blocks for the result
+```
+
+Launch several and await them to fan out work across other agents.
+
+## Unwrapping a `golem.Result`
+
+When a method's output is `golem.Result[Ok, Err]`:
+
+```go
+res := ledger.Record.Call(c, in) // golem.Result[int64, string]
+switch {
+case res.IsErr():
+    // handle the domain error value
+    msg := res.Err()
+    _ = msg
+default:
+    total := res.Ok()
+    _ = total
+}
+
+// Or fail loud (panic on Err, which the SDK turns into an agent-error):
+total := ledger.Record.Call(c, in).MustOk()
+```
+
+## Import-cycle rule (important)
+
+- **impl packages never import each other.** All cross-agent references go through the callee's **definition** package, which imports only the SDK.
+- This keeps the import graph a DAG no matter how cyclic the *call* graph is (A↔B mutual calls are fine as long as each impl imports the other's def, not its impl).
+
+## Key Constraints
+
+- You call `Method.Call(client, in)` (not `client.Call(method, in)`): the method descriptor carries the input/output types. Same for `Trigger`, `Schedule`, `CallAsync`.
+- The client comes from the **definition** (`Def.Agent.Get(id)`); the ID is encoded from the `ID` type, so the caller does not need the callee locally registered.
+- Don't hold a `*golem.Future` across invocations — await it (`Get()`) within the same handler.
+
+### Related Guides
+| Guide | Description |
+|-------|--------------|
+| [`golem-fire-and-forget-go`](/next/how-to-guides/go/golem-fire-and-forget-go) | Enqueue a call without awaiting a result (`Trigger`) |
+| [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go) | An agent messages itself / schedules future work |
+| [`golem-multi-instance-agent-go`](/next/how-to-guides/go/golem-multi-instance-agent-go) | Address a specific instance (or a phantom) by ID |
+| [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent being called |
