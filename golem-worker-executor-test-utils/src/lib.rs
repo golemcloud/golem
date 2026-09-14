@@ -65,8 +65,8 @@ use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
-    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment, ShardId,
-    TransactionId,
+    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment,
+    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -2584,6 +2584,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn golem_worker_executor::services::shard_manager::ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -2742,6 +2744,8 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn golem_worker_executor::services::shard_manager::ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -5216,24 +5220,53 @@ impl ShardService for FakeOwnership {
         self.inner.is_ready()
     }
 
-    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
-        self.inner.assign_shards(shard_ids)
+    /// Delegated rather than faked. A parked caller re-checks ownership through `check_worker`,
+    /// which is where this fake does its work; faking admission as well would stand in for a path
+    /// these tests never take.
+    fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
+        self.inner.check_admission(agent_id)
     }
 
-    fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
-        self.inner.register(number_of_shards, shard_ids)
-    }
-
-    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
-        self.inner.revoke_shards(shard_ids)
-    }
-
-    fn set_shard_assignment(
+    fn assign_shards(
         &self,
         number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        revision: ShardLeaseRevision,
+    ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
+        self.inner
+            .assign_shards(number_of_shards, shard_epochs, revision)
+    }
+
+    fn register(
+        &self,
+        number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        expires_at: Option<std::time::Instant>,
+        revision: ShardLeaseRevision,
+    ) -> ShardDeliveryOutcome {
+        self.inner
+            .register(number_of_shards, shard_epochs, expires_at, revision)
+    }
+
+    fn revoke_shards(
+        &self,
         shard_ids: &HashSet<ShardId>,
-    ) -> Result<(), WorkerExecutorError> {
-        self.inner.set_shard_assignment(number_of_shards, shard_ids)
+        revision: ShardLeaseRevision,
+    ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
+        self.inner.revoke_shards(shard_ids, revision)
+    }
+
+    fn update_lease(
+        &self,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        expires_at: std::time::Instant,
+        revision: ShardLeaseRevision,
+    ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
+        self.inner.update_lease(shard_epochs, expires_at, revision)
+    }
+
+    fn clear_assignment(&self) {
+        self.inner.clear_assignment()
     }
 
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError> {
