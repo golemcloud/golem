@@ -1484,6 +1484,8 @@ pub struct BridgeSdks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ts: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scala: Option<BridgeSdkLanguageTargets>,
@@ -1496,6 +1498,7 @@ impl BridgeSdks {
         match language {
             GuestLanguage::Rust => self.rust.as_ref(),
             GuestLanguage::TypeScript => self.ts.as_ref(),
+            GuestLanguage::Effect => self.effect.as_ref(),
             GuestLanguage::Scala => self.scala.as_ref(),
             GuestLanguage::MoonBit => self.moonbit.as_ref(),
         }

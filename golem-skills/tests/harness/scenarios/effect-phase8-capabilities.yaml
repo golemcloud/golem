@@ -1,0 +1,54 @@
+name: "effect-phase8-capabilities"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-streaming-agent"
+    prompt: >
+      In this Effect-based Golem project, add a durable `StreamingAgent` with an Effect-native
+      `doubled` method whose input and output are `Schema.AgentStream(Schema.Number)`. Convert the
+      affine input with `toEffect` using a real error mapper, double each element with Effect
+      `Stream`, and return the Effect produced by `AgentStream.AgentStream.fromEffect`. Also add a
+      normal `roundtrip` method that constructs a three-item AgentStream, calls `doubled` through
+      the typed client in a scope, consumes the response incrementally, and returns `[2, 4, 6]`.
+      Build and deploy successfully.
+    expectedSkills:
+      - "golem-streaming-agent-effect"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-streaming-agent"
+    invoke_json:
+      agent: 'StreamingAgent("main")'
+      method: "roundtrip"
+    expect:
+      result_json:
+        - path: "$"
+          equals: [2, 4, 6]
+
+  - id: "add-permission-card-contract"
+    prompt: >
+      Add an Effect Golem agent contract that accepts an opaque non-polymorphic permission card in
+      a schema and returns that same card without inspecting, cloning, stringifying, persisting, or
+      reusing it. The handler must return an Effect and transfer the affine card exactly once. The
+      project must compile successfully; do not invent APIs for creating permission cards.
+    expectedSkills:
+      - "golem-permission-card-effect"
+    verify:
+      build: true
+
+  - id: "add-tool-and-middleware"
+    prompt: >
+      Add a compile-checked Effect-native tool definition with `Tool.toolDefinition(...).body(...)`,
+      an Effect handler implementation, a typed `Tool.client`, and a `Middleware.typed` definition
+      that forwards to `underlying` exactly once. Keep stream handling Effect-native. Do not add a
+      manifest attachment because standalone middleware deployment is not supported. Ensure the
+      TypeScript project builds successfully.
+    expectedSkills:
+      - "golem-tools-middleware-effect"
+    verify:
+      build: true

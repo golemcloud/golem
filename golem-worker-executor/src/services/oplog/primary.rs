@@ -936,6 +936,9 @@ enum OplogJob {
         level: CommitLevel,
         done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
     },
+    Flush {
+        done: tokio::sync::oneshot::Sender<()>,
+    },
     DropPrefix {
         last_dropped_id: OplogIndex,
         done: tokio::sync::oneshot::Sender<u64>,
@@ -1024,6 +1027,7 @@ impl PrimaryOplog {
             key: key.clone(),
             buffer: VecDeque::new(),
             last_committed_idx: last_oplog_idx,
+            last_reported_commit_idx: last_oplog_idx,
             last_oplog_idx,
             owned_agent_id,
             agent_mode,
@@ -1165,8 +1169,16 @@ impl PrimaryOplog {
                         let _ = done.send(result);
                     }
                     OplogJob::Commit { level, done } => {
-                        let result = state.commit(level).await;
+                        let previously_committed_through = state.last_committed_idx;
+                        let committed = state.commit(level).await;
+                        let result = state
+                            .committed_since_last_report(previously_committed_through, committed)
+                            .await;
                         let _ = done.send(result);
+                    }
+                    OplogJob::Flush { done } => {
+                        state.commit(CommitLevel::Always).await;
+                        let _ = done.send(());
                     }
                     OplogJob::DropPrefix {
                         last_dropped_id,
@@ -1441,6 +1453,7 @@ struct PrimaryOplogState {
     buffer: VecDeque<OplogEntry>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
+    last_reported_commit_idx: OplogIndex,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     account_id: AccountId,
@@ -1648,6 +1661,31 @@ impl PrimaryOplogState {
         self.append(entries).await
     }
 
+    async fn committed_since_last_report(
+        &mut self,
+        previously_committed_through: OplogIndex,
+        mut newly_committed: BTreeMap<OplogIndex, OplogEntry>,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let committed_through = self.last_committed_idx;
+        let mut entries = if self.last_reported_commit_idx < previously_committed_through {
+            let start = self.last_reported_commit_idx.next();
+            let count =
+                u64::from(previously_committed_through) - u64::from(self.last_reported_commit_idx);
+            let entries = self.reader().read_source(start, count).await;
+            fail_stop(exact_from_source(
+                OplogReadSource::Primary,
+                start,
+                count,
+                entries,
+            ))
+        } else {
+            BTreeMap::new()
+        };
+        entries.append(&mut newly_committed);
+        self.last_reported_commit_idx = committed_through;
+        entries
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         record_oplog_call("drop_prefix");
 
@@ -1803,11 +1841,7 @@ impl Oplog for PrimaryOplog {
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
         record_oplog_call("wait_for_replicas");
 
-        self.run_job(|done| OplogJob::Commit {
-            level: CommitLevel::Always,
-            done,
-        })
-        .await;
+        self.run_job(|done| OplogJob::Flush { done }).await;
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         let replicas = replicas.min(reader.replicas);
         match reader

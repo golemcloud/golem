@@ -936,22 +936,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     DurableFunctionType::WriteRemote,
                 )
                 .await?;
-            let begin_index = begun.begin_index();
-            match begun.start_replay(self).await?.replay(self).await? {
-                CallReplayOutcome::Replayed(result) => {
-                    let idempotency_key = self.derive_idempotency_key(begin_index);
-                    let remote_agent_id = invocation_target_agent_id(
-                        &prepared.logical_remote_agent_id,
-                        prepared.ephemeral_logical_agent_id.as_ref(),
-                        &idempotency_key,
-                    )?;
-                    return match result.result {
-                        Ok(()) => Ok(Ok(invocation_metadata(&remote_agent_id, &idempotency_key))),
-                        Err(error) => Ok(Err(InternalRpcError::from(error).into())),
-                    };
-                }
-                CallReplayOutcome::Incomplete(live) => Either::Right(live),
-            }
+            Either::Right(begun.start_replay(self).await?)
         };
         let begin_index = match &call {
             Either::Left(begun) => begun.begin_index(),
@@ -970,6 +955,21 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             Either::Left(begun) => begun.start_live(self, request).await?,
             Either::Right(handle) => handle,
         };
+        // A committed Start may be the entire replay tail, before StartSpan was appended.
+        // Resolve that incomplete call through the normal eligibility and live-admission checks
+        // before creating its missing span. With recorded history remaining, reconstruct the span
+        // first: waiting for End here would block on the unconsumed StartSpan.
+        if !handle.is_live() && self.state.replay_state.is_live() {
+            handle = match handle.replay(self).await? {
+                CallReplayOutcome::Incomplete(live) => live,
+                CallReplayOutcome::Replayed(response) => {
+                    return Ok(response
+                        .result
+                        .map(|()| metadata)
+                        .map_err(|err| RpcError::from(InternalRpcError::from(err))));
+                }
+            };
+        }
         let span = match create_invocation_span(
             self,
             &prepared.connection_span_id,
@@ -2707,7 +2707,14 @@ async fn run_invoke<Ctx: WorkerCtx>(
     let result = 'result: {
         if !handle.is_live() {
             match handle.replay(ctx).await {
-                Ok(CallReplayOutcome::Replayed(replayed)) => break 'result Ok(replayed),
+                Ok(CallReplayOutcome::Replayed(replayed)) => {
+                    // End can commit before FinishSpan. Publish checked live admission when
+                    // replay consumed that tail so the missing span terminal can be appended.
+                    if !ctx.state.is_live() && ctx.state.replay_state.is_live() {
+                        ctx.switch_to_live().await?;
+                    }
+                    break 'result Ok(replayed);
+                }
                 Ok(CallReplayOutcome::Incomplete(live)) => handle = live,
                 Err(err) => break 'result Err(err),
             }

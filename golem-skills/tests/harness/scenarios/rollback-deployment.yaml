@@ -11,7 +11,12 @@ steps:
   # 2. Verify the default counter works
   - id: "invoke-increment-v1"
     invoke_json:
-      agent: 'CounterAgent("c1")'
+      agent:
+        effect: 'Counter("c1")'
+        rust: &counter-agent-c1 'CounterAgent("c1")'
+        ts: *counter-agent-c1
+        scala: *counter-agent-c1
+        moonbit: *counter-agent-c1
       method: "increment"
     expect:
       result_json:
@@ -20,17 +25,29 @@ steps:
 
   # 3. Ask the agent to change the increment step from 1 to 10, then build and deploy (revision 1)
   - id: "change-increment-step"
-    prompt: >
-      In the test-app project, modify the CounterAgent so that the `increment` method
-      increases the counter by 10 instead of 1. Do not change anything else — keep the
-      same method name, signature, and return type.
+    prompt:
+      effect: >
+        In the Effect-based test-app project, modify the existing Counter so that the `increment`
+        method increases the counter by 10 instead of 1. Preserve its `Counter` runtime name.
+      rust: &change-increment-prompt >
+        In the test-app project, modify the CounterAgent so that the `increment` method
+        increases the counter by 10 instead of 1. Do not change anything else — keep the
+        same method name, signature, and return type.
+      ts: *change-increment-prompt
+      scala: *change-increment-prompt
+      moonbit: *change-increment-prompt
     verify:
       deploy: true
 
   # 4. Verify the new behavior (incrementing by 10)
   - id: "invoke-increment-v2"
     invoke_json:
-      agent: 'CounterAgent("c2")'
+      agent:
+        effect: 'Counter("c2")'
+        rust: &counter-agent-c2 'CounterAgent("c2")'
+        ts: *counter-agent-c2
+        scala: *counter-agent-c2
+        moonbit: *counter-agent-c2
       method: "increment"
     expect:
       result_json:
@@ -40,14 +57,20 @@ steps:
   # 5. Rollback to revision 0
   - id: "rollback-to-revision-0"
     prompt: >
-      Roll back the deployment to revision 0.
+      Roll back the deployment to revision 0. Do not invoke or create any agents afterward;
+      the harness will verify the rolled-back behavior separately.
     expectedSkills:
       - "golem-rollback"
 
   # 6. Verify we are back to the original behavior (incrementing by 1)
   - id: "invoke-increment-after-rollback"
     invoke_json:
-      agent: 'CounterAgent("c3")'
+      agent:
+        effect: 'Counter("c3")'
+        rust: &counter-agent-c3 'CounterAgent("c3")'
+        ts: *counter-agent-c3
+        scala: *counter-agent-c3
+        moonbit: *counter-agent-c3
       method: "increment"
     expect:
       result_json:

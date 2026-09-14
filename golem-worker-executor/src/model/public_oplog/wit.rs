@@ -31,11 +31,11 @@ use golem_common::model::oplog::public_oplog_entry::{
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
@@ -465,6 +465,9 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }),
             PublicOplogEntry::Restart(RestartParams { timestamp }) => {
                 Self::Restart(timestamp.into())
+            }
+            PublicOplogEntry::Resumed(ResumedParams { timestamp }) => {
+                Self::Resumed(timestamp.into())
             }
             PublicOplogEntry::ActivatePlugin(ActivatePluginParams { timestamp, plugin }) => {
                 Self::ActivatePlugin(oplog::ActivatePluginParameters {
@@ -1347,6 +1350,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 message: params.message,
             }),
             oplog::OplogEntry::Restart(ts) => Ok(Self::Restart {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::Resumed(ts) => Ok(Self::Resumed {
                 timestamp: timestamp_from_datetime(ts.timestamp),
             }),
             oplog::OplogEntry::ActivatePlugin(params) => Ok(Self::ActivatePlugin {
@@ -2244,6 +2250,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 message,
             })),
             M::Restart { timestamp } => Ok(Self::Restart(timestamp.into())),
+            M::Resumed { timestamp } => Ok(Self::Resumed(timestamp.into())),
             M::ActivatePlugin {
                 timestamp,
                 plugin_grant_id,

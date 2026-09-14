@@ -2133,6 +2133,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Restart(RestartParams {
             timestamp: timestamp(),
         }),
+        PublicOplogEntry::Resumed(ResumedParams {
+            timestamp: timestamp(),
+        }),
         PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
             timestamp: timestamp(),
             plugin: plugin(2),

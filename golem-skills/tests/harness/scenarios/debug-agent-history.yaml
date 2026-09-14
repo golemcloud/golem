@@ -9,22 +9,34 @@ steps:
 
   - id: "invoke-1"
     invoke:
-      agent: 'CounterAgent("c1")'
+      agent: &counter-agent
+        effect: 'Counter("c1")'
+        rust: &non-effect-counter-agent 'CounterAgent("c1")'
+        ts: *non-effect-counter-agent
+        scala: *non-effect-counter-agent
+        moonbit: *non-effect-counter-agent
       method: "increment"
     expect:
       stdout_contains: "1"
 
   - id: "invoke-2"
     invoke:
-      agent: 'CounterAgent("c1")'
+      agent: *counter-agent
       method: "increment"
     expect:
       stdout_contains: "2"
 
   - id: "dump-oplog"
-    prompt: >
-      Use the CLI to dump the full operation log for CounterAgent "c1" and save the output
-      to a file called oplog-full.txt in the test-app directory.
+    prompt:
+      effect: >
+        Use the CLI to dump the full operation log for Counter "c1" and save the output
+        to a file called oplog-full.txt in the test-app directory.
+      rust: &dump-oplog-prompt >
+        Use the CLI to dump the full operation log for CounterAgent "c1" and save the output
+        to a file called oplog-full.txt in the test-app directory.
+      ts: *dump-oplog-prompt
+      scala: *dump-oplog-prompt
+      moonbit: *dump-oplog-prompt
     expectedSkills:
       - "golem-debug-agent-history"
 
@@ -35,9 +47,16 @@ steps:
       stdout_contains: "INVOKE"
 
   - id: "search-oplog"
-    prompt: >
-      Now search the operation log for CounterAgent "c1" for entries matching "increment"
-      and save the output to a file called oplog-search.txt in the test-app directory.
+    prompt:
+      effect: >
+        Now search the operation log for Counter "c1" for entries matching "increment"
+        and save the output to a file called oplog-search.txt in the test-app directory.
+      rust: &search-oplog-prompt >
+        Now search the operation log for CounterAgent "c1" for entries matching "increment"
+        and save the output to a file called oplog-search.txt in the test-app directory.
+      ts: *search-oplog-prompt
+      scala: *search-oplog-prompt
+      moonbit: *search-oplog-prompt
     continueSession: true
     expectedSkills:
       - "golem-debug-agent-history"

@@ -1685,6 +1685,10 @@
           "description": "TypeScript SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
         },
+        "effect": {
+          "description": "Effect SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
         "rust": {
           "description": "Rust SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"

@@ -1,4 +1,7 @@
 name: "add-retry-policies"
+semanticRequirements:
+  effect:
+    - The Effect implementation must execute the GET through Effect HttpClient with FetchHttpClient.layer; direct fetch and Effect.tryPromise are not substitutes.
 steps:
   - id: "create-project"
     create_project:
@@ -164,6 +167,45 @@ steps:
           baseDelay "100ms" and factor 3.0
 
         Make sure the project builds and deploys successfully.
+      effect: >
+        In the test-app project, add a new durable Effect-based agent type called
+        `RetryAgent`, using Effect and `@golemcloud/effect-golem`, identified by a
+        single string constructor parameter for the instance name.
+
+        RetryAgent must use the Golem host-operation retry policy system. Define a
+        `Retry.NamedPolicy` called "http-transient" that uses exponential backoff
+        with a base delay of 200ms, factor 2.0, clamped to [100ms, 5s], with 15%
+        jitter, filtered with `Retry.Predicate.oneOf(Retry.Props.statusCode, ...)`
+        to status codes [502, 503, 504], with max 5 retries and priority 10.
+        Install it persistently with `Retry.setPolicy` during agent implementation
+        setup, and apply it to the HTTP Effect using `Retry.withPolicy`.
+
+        Expose a method called `fetchWithRetry` that takes a `url` string parameter
+        and returns an object with two fields:
+        - `url` (string) — the URL that was fetched
+        - `status` (number) — the HTTP status code received
+
+        Execute the GET through `HttpClient` from `effect/unstable/http`, provide
+        `FetchHttpClient.layer`, and apply the HTTP Effect inside `Retry.withPolicy`.
+        Map a successful response to its status code and recover any remaining typed
+        HTTP failure to status 0 using Effect failure handling. Keep this typed failure
+        handling separate from the Golem host retry policy; do not use direct
+        `globalThis.fetch`, `Effect.tryPromise`, `Effect.retry`, or a manual retry loop.
+
+        Also expose a method called `listRetryPolicies` that takes no parameters and
+        returns an array of objects with `name` (string) and `priority` (number).
+        Query the active policies dynamically with `Retry.getPolicies`; do not
+        hardcode policy names.
+
+        In `golem.yaml`, define retry policy defaults under `retryPolicyDefaults`
+        for the `local` environment:
+        - policy name: `catch-all`
+        - priority: 0
+        - predicate: true
+        - policy: countBox with maxRetries 3, inner exponential with baseDelay
+          "100ms" and factor 3.0
+
+        Make sure the Effect project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-retry-policies-rust"
@@ -173,6 +215,8 @@ steps:
         - "golem-retry-policies-scala"
       moonbit:
         - "golem-retry-policies-moonbit"
+      effect:
+        - "golem-retry-policies-effect"
     verify:
       build: true
       deploy: true
@@ -192,6 +236,7 @@ steps:
         ts: ["-l", "getRetryPolicies|withRetryPolicy|NamedPolicy\\.named|Policy\\.exponential", "test-app/", "-g", "*.ts"]
         scala: ["-l", "getRetryPolicies|withRetryPolicy|named\\(|Policy\\.exponential", "test-app/", "-g", "*.scala"]
         moonbit: ["-l", "get_retry_policies|with_named_policy|NamedPolicy::named|Policy::exponential", "test-app/", "-g", "*.mbt"]
+        effect: ["-l", "Retry\\.(getPolicies|setPolicy|withPolicy|NamedPolicy|Policy)", "test-app/", "-g", "*.ts"]
     expect:
       exit_code: 0
 
@@ -203,6 +248,7 @@ steps:
         ts: "listRetryPolicies"
         scala: "listRetryPolicies"
         moonbit: "list_retry_policies"
+        effect: "listRetryPolicies"
       args: ""
     expect:
       rust:
@@ -224,6 +270,12 @@ steps:
           - path: "$[?(@.name=='http-transient')].priority"
             equals: 10
       moonbit:
+        result_json:
+          - path: "$[?(@.name=='catch-all')].priority"
+            equals: 0
+          - path: "$[?(@.name=='http-transient')].priority"
+            equals: 10
+      effect:
         result_json:
           - path: "$[?(@.name=='catch-all')].priority"
             equals: 0

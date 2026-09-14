@@ -138,15 +138,13 @@ impl ResourceDefinitionCommandHandler {
                 .resolve_environment(EnvironmentResolveMode::Any)
                 .await?;
 
-            let Some(resource) = clients
+            let resource = clients
                 .resources
-                .list_environment_resources(&environment.environment_id.0)
+                .get_environment_resource(&environment.environment_id.0, &name)
                 .await
-                .map_service_error()?
-                .values
-                .into_iter()
-                .find(|r| r.name.0 == name)
-            else {
+                .map_service_error_not_found_as_opt()?;
+
+            let Some(resource) = resource else {
                 log_error(format!(
                     "Resource definition '{name}' not found in environment"
                 ));
