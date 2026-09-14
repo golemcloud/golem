@@ -483,6 +483,12 @@ impl Context {
         &self.server_config.client_config.worker_url
     }
 
+    /// The URL the built-in local server is reached at, after applying the manifest's
+    /// `localServer` settings.
+    pub fn builtin_local_url(&self) -> &Url {
+        &self.server_config.builtin_local_url
+    }
+
     pub fn selected_server_description(&self) -> String {
         let builtin_local_url = &self.server_config.builtin_local_url;
         match &self.manifest_environment {
@@ -742,8 +748,9 @@ impl ResolvedServerConfig {
     }
 
     /// Selects the client config for the resolved built-in local URL. A selected manifest
-    /// environment always wins over the profile; without one, only the built-in local profile
-    /// is bound to the built-in local server.
+    /// environment always wins over the profile; without one, the built-in `local` and `cloud`
+    /// profiles are bound to their built-in servers regardless of the connection fields stored
+    /// in the config file, and only custom profiles use their stored URLs.
     fn for_builtin_local_url(
         manifest_environment: Option<&SelectedManifestEnvironment>,
         profile: &NamedProfile,
@@ -753,15 +760,9 @@ impl ResolvedServerConfig {
             .map(|env| {
                 ClientConfig::from_manifest_environment(&env.environment, &builtin_local_url)
             })
-            .unwrap_or_else(|| {
-                if profile.name.is_builtin_local() {
-                    ClientConfig::from_server(
-                        &Server::Builtin(BuiltinServer::Local),
-                        &builtin_local_url,
-                    )
-                } else {
-                    ClientConfig::from(&profile.profile)
-                }
+            .unwrap_or_else(|| match profile.name.builtin_server() {
+                Some(server) => ClientConfig::from_server(&server, &builtin_local_url),
+                None => ClientConfig::from(&profile.profile),
             });
 
         Self {
@@ -1060,6 +1061,21 @@ mod test {
         }
     }
 
+    /// A built-in profile as it may look in an older or hand-edited config file: connection
+    /// fields are stored, but must not be used.
+    fn builtin_profile_with_stored_connection(name: ProfileName) -> NamedProfile {
+        NamedProfile {
+            name,
+            profile: Profile {
+                custom_url: Some(Url::parse("http://stale-stored-url:1111").unwrap()),
+                custom_worker_url: Some(Url::parse("http://stale-stored-worker-url:2222").unwrap()),
+                allow_insecure: true,
+                config: Default::default(),
+                auth: AuthenticationConfig::static_builtin_local(),
+            },
+        }
+    }
+
     #[test]
     fn manifest_local_environment_uses_resolved_local_url() {
         for server in [Some(Server::Builtin(BuiltinServer::Local)), None] {
@@ -1114,13 +1130,43 @@ mod test {
 
     #[test]
     fn builtin_local_profile_without_manifest_environment_uses_resolved_local_url() {
-        // The stored local profile pins `custom_url` at profile creation time, so the resolved
-        // built-in local URL has to win over it.
         let config =
             ResolvedServerConfig::for_builtin_local_url(None, &local_profile(), local_url());
 
         assert_eq!(config.client_config.registry_url, local_url());
         assert_eq!(config.client_config.worker_url, local_url());
+    }
+
+    #[test]
+    fn builtin_profiles_ignore_stored_connection_fields() {
+        let config = ResolvedServerConfig::for_builtin_local_url(
+            None,
+            &builtin_profile_with_stored_connection(ProfileName::local()),
+            local_url(),
+        );
+        assert_eq!(config.client_config.registry_url, local_url());
+        assert_eq!(config.client_config.worker_url, local_url());
+        assert!(
+            !config
+                .client_config
+                .service_http_client_config
+                .allow_insecure
+        );
+
+        let config = ResolvedServerConfig::for_builtin_local_url(
+            None,
+            &builtin_profile_with_stored_connection(ProfileName::cloud()),
+            local_url(),
+        );
+        let cloud_url = Url::parse(DEFAULT_CLOUD_URL).unwrap();
+        assert_eq!(config.client_config.registry_url, cloud_url);
+        assert_eq!(config.client_config.worker_url, cloud_url);
+        assert!(
+            !config
+                .client_config
+                .service_http_client_config
+                .allow_insecure
+        );
     }
 
     #[test]

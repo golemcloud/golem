@@ -152,7 +152,6 @@ impl Verbosity {
     }
 }
 
-// TODO: flags for defining target server for "non-manifest" mode
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Global options")]
 pub struct GolemCliGlobalFlags {

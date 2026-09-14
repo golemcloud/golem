@@ -155,6 +155,15 @@ impl ProfileName {
     pub fn is_builtin_cloud(&self) -> bool {
         self.0.as_str() == PROFILE_NAME_CLOUD
     }
+
+    /// The built-in server a built-in profile is bound to, `None` for custom profiles.
+    pub fn builtin_server(&self) -> Option<Server> {
+        match self.0.as_str() {
+            PROFILE_NAME_LOCAL => Some(Server::Builtin(BuiltinServer::Local)),
+            PROFILE_NAME_CLOUD => Some(Server::Builtin(BuiltinServer::Cloud)),
+            _ => None,
+        }
+    }
 }
 
 impl Display for ProfileName {
@@ -196,9 +205,11 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// The built-in `local` profile. Its server is always the resolved built-in local URL, so no
+    /// connection fields are stored for it.
     pub fn default_local_profile() -> Self {
         Self {
-            custom_url: Some(builtin_local_url()),
+            custom_url: None,
             custom_worker_url: None,
             allow_insecure: false,
             config: ProfileConfig::default(),
@@ -246,11 +257,10 @@ impl Config {
             )
         })?;
 
-        // Built-in `local`/`cloud` URLs should be fixed (`builtin_local_url()` /
-        // `DEFAULT_CLOUD_URL`), but a `custom_url` hand-edited into their config
-        // entry is still honoured in non-manifest mode — a migration leftover.
-        // Making them authoritative and rewriting stale stored values is a deferred
-        // behaviour change; for now the stored value is left as-is.
+        // Connection fields (`custom_url`, `custom_worker_url`, `allow_insecure`) stored on the
+        // built-in `local`/`cloud` profiles are ignored: those profiles are always bound to their
+        // built-in servers (see `ProfileName::builtin_server`). Older config files may still
+        // carry a pinned `custom_url` for `local`; it is left as-is and never read.
         Ok(config.with_local_and_cloud_profiles())
     }
 

@@ -15,7 +15,7 @@
 pub mod profile;
 pub mod server;
 
-use crate::config::{AuthenticationConfig, NamedProfile, ProfileConfig, ProfileName};
+use crate::config::{AuthenticationConfig, ClientConfig, NamedProfile, ProfileConfig, ProfileName};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -36,7 +36,14 @@ pub struct ProfileView {
 }
 
 impl ProfileView {
-    pub fn from_profile(active: &ProfileName, profile: NamedProfile) -> Self {
+    /// Builds the view of a profile. Built-in profiles show the effective URL of their built-in
+    /// server (`builtin_local_url` for `local`, the cloud URL for `cloud`) instead of the
+    /// connection fields stored in the config file, which are not used for them.
+    pub fn from_profile(
+        active: &ProfileName,
+        profile: NamedProfile,
+        builtin_local_url: &Url,
+    ) -> Self {
         let NamedProfile { name, profile } = profile;
 
         let authenticated = match &profile.auth {
@@ -44,12 +51,24 @@ impl ProfileView {
             AuthenticationConfig::Static(_) => None,
         };
 
+        let (url, worker_url, allow_insecure) = match name.builtin_server() {
+            Some(server) => {
+                let client_config = ClientConfig::from_server(&server, builtin_local_url);
+                (Some(client_config.registry_url), None, false)
+            }
+            None => (
+                profile.custom_url,
+                profile.custom_worker_url,
+                profile.allow_insecure,
+            ),
+        };
+
         ProfileView {
             is_active: &name == active,
             name,
-            url: profile.custom_url,
-            worker_url: profile.custom_worker_url,
-            allow_insecure: profile.allow_insecure,
+            url,
+            worker_url,
+            allow_insecure,
             authenticated,
             config: profile.config,
         }

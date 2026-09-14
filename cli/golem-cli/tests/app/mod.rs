@@ -276,6 +276,10 @@ impl Output {
         self.status.success()
     }
 
+    fn exit_code(&self) -> Option<i32> {
+        self.status.code()
+    }
+
     #[must_use]
     fn success_or_dump(&self) -> bool {
         let success = self.status.success();

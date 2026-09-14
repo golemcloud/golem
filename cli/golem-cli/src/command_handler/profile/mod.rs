@@ -184,7 +184,11 @@ impl ProfileCommandHandler {
         let profiles = sorted_profiles
             .into_iter()
             .map(|(name, profile)| {
-                ProfileView::from_profile(&default_profile_name, NamedProfile { name, profile })
+                ProfileView::from_profile(
+                    &default_profile_name,
+                    NamedProfile { name, profile },
+                    self.ctx.builtin_local_url(),
+                )
             })
             .collect::<Vec<_>>();
 
@@ -233,7 +237,11 @@ impl ProfileCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(ProfileView::from_profile(&default_profile_name, profile))?;
+            .log_output(ProfileView::from_profile(
+                &default_profile_name,
+                profile,
+                self.ctx.builtin_local_url(),
+            ))?;
 
         Ok(())
     }
