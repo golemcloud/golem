@@ -33,7 +33,7 @@ pub const MAX_IDEMPOTENCY_KEY_SIZE: usize = 1024;
 
 #[cfg(feature = "full")]
 pub fn new_durable_stream_session_id() -> String {
-    ulid::Ulid::new().to_string()
+    crate::model::IdempotencyKey::fresh().value
 }
 
 /// Validates an invocation idempotency key used as a Durable Streams URL segment.
@@ -1371,12 +1371,11 @@ mod tests {
 
     #[cfg(feature = "full")]
     #[test]
-    fn durable_stream_session_ids_are_ulids() {
+    fn durable_stream_session_ids_are_uuids() {
         let first = new_durable_stream_session_id();
         let second = new_durable_stream_session_id();
         assert_ne!(first, second);
-        assert_eq!(first.len(), 26);
-        assert!(first.parse::<ulid::Ulid>().is_ok());
+        assert_eq!(first.parse::<uuid::Uuid>().unwrap().get_version_num(), 4);
         assert!(validate_durable_stream_session_id(&first).is_ok());
     }
 
