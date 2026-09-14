@@ -771,6 +771,9 @@ fn calculate_latest_worker_status(
             OplogEntry::Interrupted { .. } => {
                 current_status = AgentStatus::Interrupted;
             }
+            OplogEntry::Resumed { .. } => {
+                current_status = AgentStatus::Running;
+            }
             OplogEntry::Exited { .. } => {
                 current_status = AgentStatus::Exited;
             }

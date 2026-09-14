@@ -107,8 +107,9 @@ use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    AgentExportFuncs, GuestCallSettlementError, InvocationMode, InvokeResult,
+    invocation_uses_streams, invoke_observed_and_traced, load_load_snapshot_guest,
+    lower_invocation, run_guest_call_settled,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -5686,8 +5687,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     let worker = worker.clone();
                                     let result_value = output.clone();
                                     let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store
-                                        .run_concurrent(async move |_accessor| {
+                                    *output = store.run_concurrent(async move |_accessor| {
                                             worker
                                                 .materialize_durable_streaming_result(
                                                     &replay_idempotency_key,
@@ -5699,9 +5699,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 .await
                                         })
                                         .await
-                                        .map_err(|error| {
-                                            WorkerExecutorError::runtime(error.to_string())
-                                        })??;
+                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
+                                    run_guest_call_settled(&mut store.as_context_mut(), async |_accessor| ())
+                                        .await
+                                        .map_err(|error| match error {
+                                            GuestCallSettlementError::Infrastructure(error) => error,
+                                            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error) => WorkerExecutorError::runtime(error.to_string()),
+                                        })?;
                                 }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
@@ -5733,12 +5737,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 // otherwise resumed session clients never observe completion.
                                 if uses_streams
                                     && store.as_context().data().durable_ctx().is_live()
-                                    && let Err(error) = worker
-                                        .complete_durable_streaming_session(&idempotency_key)
-                                        .await
                                 {
-                                    error!(%error, "Failed to complete durable streaming session");
-                                    break Err(error);
+                                    let worker = worker.clone();
+                                    let idempotency_key = idempotency_key.clone();
+                                    let result = store.run_concurrent(async move |_accessor| {
+                                        worker.complete_durable_streaming_session(&idempotency_key).await
+                                    }).await;
+                                    if let Err(error) = result.map_err(|error| WorkerExecutorError::runtime(error.to_string())).and_then(|result| result) {
+                                        error!(%error, "Failed to complete durable streaming session");
+                                        break Err(error);
+                                    }
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;

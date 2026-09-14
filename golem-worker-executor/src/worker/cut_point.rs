@@ -165,6 +165,7 @@ where
             | OplogEntry::DropResource { .. }
             | OplogEntry::Log { .. }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }

@@ -890,8 +890,8 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
 
 <p>The pieces, top to bottom:</p>
 <ul>
-  <li><strong>Primary layer.</strong> <code>PrimaryOplogService</code> keeps an in-memory buffer per open oplog and writes it to indexed storage on commit: implicitly after <code>max_operations_before_commit</code> (128) appends, or explicitly wherever the executor needs the entries to be recoverable <em>now</em> (see <a href="#s-state">append versus commit</a>). Payloads above <code>max_payload_size</code> (64 KiB) are stored in blob storage and referenced from the entry, so a huge invocation argument does not bloat the index.</li>
-  <li><strong>Archive layers.</strong> With the default configuration there are two: one <code>CompressedOplogArchiveService</code> (<code>indexed_storage_layers</code> = 2 means "primary plus one compressed layer" in indexed storage) and one <code>BlobOplogArchiveService</code> (<code>blob_storage_layers</code> = 1). On every commit the multi-layer service checks whether more than <code>entry_count_limit</code> (1024) entries were added since the last transfer; if so it moves the oldest prefix one layer down. Independently, a persisted <code>ScheduledAction::ArchiveOplog</code> fires every <code>archive_interval</code> (24 h) and pushes the prefix of an <em>idle</em> agent's oplog down a layer, provided the oplog has not grown since the action was scheduled. Archiving never changes an index: entry #17 is #17 whichever layer holds it.</li>
+  <li><strong>Primary layer.</strong> <code>PrimaryOplogService</code> keeps an in-memory buffer per open oplog and writes it to indexed storage on commit: implicitly after <code>max_operations_before_commit</code> (128) appends, or explicitly wherever the executor needs the entries to be recoverable <em>now</em> (see <a href="#s-state">append versus commit</a>). An automatic commit makes entries durable but does not bypass status accounting: the primary retains the committed-but-unreported range and returns it with the next explicit commit so that commit's caller can deliver every entry to the status reducer. Payloads above <code>max_payload_size</code> (64 KiB) are stored in blob storage and referenced from the entry, so a huge invocation argument does not bloat the index.</li>
+  <li><strong>Archive layers.</strong> With the default configuration there are two: one <code>CompressedOplogArchiveService</code> (<code>indexed_storage_layers</code> = 2 means "primary plus one compressed layer" in indexed storage) and one <code>BlobOplogArchiveService</code> (<code>blob_storage_layers</code> = 1). On every commit the multi-layer service checks whether more than <code>entry_count_limit</code> (1024) entries were added since the last transfer; if so it moves the oldest prefix one layer down. Independently, a persisted <code>ScheduledAction::ArchiveOplog</code> fires every <code>archive_interval</code> (24 h) and pushes the prefix of an <em>idle</em> agent's oplog down a layer, provided the oplog has not grown since the action was scheduled. A transferred prefix may be removed from primary only through the last entry already reported to the status reducer. Archiving never changes an index: entry #17 is #17 whichever layer holds it.</li>
   <li><strong>Reads.</strong> <code>read</code> / <code>read_exact</code> ask the primary layer first and fill the remaining index range from lower layers, so a replay of a very old agent may touch all three layers for its first entries and only the primary for the recent tail.</li>
   <li><strong>Ephemeral oplogs.</strong> An ephemeral agent's <code>EphemeralOplog</code> buffers in memory, commits every <code>max_operations_before_commit_ephemeral</code> (1024) appends directly into the first archive layer, and is archived when the instance ends. It is never read back to resume the agent (<a href="#s-lifecycle">§6</a>); it exists so that what an ephemeral instance did can be inspected afterwards.</li>
 </ul>
@@ -1372,6 +1372,15 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   Look at the target, not the caller. T's counter (a provider-side effect) equals 1; the key T observed is identical across both attempts; C's oplog shows one <code>Start</code> with one <code>End</code>. That C received <code>1</code> proves nothing on its own: a duplicated increment also returns a value. In a lost-response scenario where a proxy between C and T drops T's reply and both sides restart, the proxy sees <em>two</em> identical attempts on the wire while T's oplog holds exactly one execution.
 </div>
 
+<h3 id="rpc-span-recovery">Fire-and-forget RPC span recovery</h3>
+<p>The serialized <code>invoke</code> path records <code>Start → StartSpan → End → FinishSpan</code>. Replay reconstructs the positional <code>StartSpan</code> before awaiting the RPC terminal; waiting for <code>End</code> first would block on that unconsumed span.</p>
+<ul>
+  <li><strong>Crash after Start:</strong> the incomplete-call path checks re-execution eligibility and publishes live admission before creating the missing span. The original RPC key is retained.</li>
+  <li><strong>Crash after StartSpan:</strong> reconstruct the span, then repair the incomplete RPC under the original key.</li>
+  <li><strong>Crash after End:</strong> reuse the recorded result without dispatching again. When replay consumes this tail, perform the checked <code>switch_to_live</code> transition before appending the missing <code>FinishSpan</code>.</li>
+  <li><strong>FinishSpan recorded:</strong> consume it normally during replay. Cursor exhaustion alone never authorizes a live effect.</li>
+</ul>
+
 <h3>Atomic regions keep the key across rollback</h3>
 <p><code>golem:api/host.mark-begin-operation</code> / <code>mark-end-operation</code> open and close an atomic region (<code>BeginAtomicRegion</code>/<code>EndAtomicRegion</code>). If the guest traps inside the region, the retry appends a <code>Jump</code> covering the region's entries so replay skips them and re-executes the region live. The region's outermost <em>logical counter</em>, rebuilt from the region's entries during replay, is what <code>current_idempotency_key_oplog_index</code> feeds into the key, so the re-executed RPC carries the same key and the target deduplicates.</p>
 <figure>
@@ -1487,6 +1496,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <li><strong>RPC result recorded, streams partially consumed</strong> — replay returns the recorded result; the consumer session resumes by offset.</li>
   <li><strong>Invocation finished, session cleanup pending</strong> — <code>agent_invocation_finished</code> runs <code>complete_durable_streaming_session</code> after the success hook, appending protocol terminals and <code>StreamSession { Finished }</code> as hints <em>after</em> <code>AgentInvocationFinished</code>.</li>
 </ol>
+<p><strong>Keep polling during cleanup.</strong> Output materialization settles positional tail work before invocation completion. Session completion then runs inside the Store event loop, both live and after replay reaches live. An unfinished host stream operation can retain a producer or session lock across a pending poll; awaiting cleanup outside that event loop can deadlock and leave the next invocation queued even though the oplog reports <code>Idle</code>.</p>
 
 <div class="widget" id="tl-stream">
   <h4>Crash-window walkthrough: producer restarts mid-stream <span class="pill js-only">interactive</span></h4>
@@ -1783,6 +1793,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <thead><tr><th scope="col">Trigger</th><th scope="col">Mechanism</th><th scope="col">Oplog</th><th scope="col">Comes back when</th></tr></thead>
   <tbody>
     <tr><td><strong>Interrupt</strong> (API)</td><td><code>Worker::set_interrupting(InterruptKind::Interrupt(ts))</code>; the running invocation is aborted at the next host-call boundary</td><td><code>Interrupted</code> (h)</td><td>An explicit resume; status stays <code>Interrupted</code> until then</td></tr>
+    <tr><td><strong>Resume interrupted invocation</strong></td><td><code>start_if_needed_internal</code>, after memory-requirement lookup succeeds and while the unloaded instance remains locked</td><td><code>Resumed</code> (h), timestamp only; committed before <code>WaitingForPermit</code></td><td>Status folds to <code>Running</code> immediately; reconstruction continues the existing invocation after admission</td></tr>
     <tr><td><strong>Restart</strong> (simulated crash, API)</td><td><code>InterruptKind::Restart</code></td><td><code>Restart</code> (h) — or nothing at all for a real crash</td><td>Immediately: the outer loop reconstructs at once</td></tr>
     <tr><td><strong>Suspend</strong></td><td><code>InterruptKind::Suspend(ts)</code>, used when the guest sleeps or waits for a promise long enough to unload</td><td><code>Suspend</code> (h)</td><td>On demand: a new invocation, a promise completion, or a <code>ScheduledAction::Resume</code></td></tr>
     <tr><td><strong>Jump</strong></td><td><code>InterruptKind::Jump</code> ("jumping back in time"): atomic-region rollback or <code>set-oplog-index</code></td><td><code>Jump { region }</code> (positional)</td><td>Immediately, replaying with the region skipped</td></tr>
@@ -1791,6 +1802,11 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
     <tr><td><strong>Process death</strong></td><td>—</td><td>whatever was committed</td><td>When any executor is asked for the worker</td></tr>
   </tbody>
 </table>
+</div>
+
+<div class="callout">
+  <span class="label"><code>Resumed</code> means admission, not a new invocation</span>
+  It is written only for a durable worker whose folded status is <code>Interrupted</code> and whose <code>current_idempotency_key</code> identifies unfinished work. The commit precedes <code>WaitingForPermit</code>, so a pending p3 wait can still be blocked on memory or concurrency admission while observers already fold the worker to <code>Running</code>. No <code>PendingAgentInvocation</code> is appended. <code>Restart</code> keeps automatic reconstruction and clean <code>Idle</code> semantics, and ephemeral workers keep their fail-stop behavior without this hint.
 </div>
 
 <h3>After the instance ends: <code>RetryDecision</code></h3>
