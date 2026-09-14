@@ -101,7 +101,7 @@ pub async fn apply_cors_outgoing_middleware(
     {
         result.headers.insert(
             http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-            "Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, ETag, Location, Retry-After".into(),
+            "Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, Producer-Epoch, Producer-Seq, Producer-Expected-Seq, Producer-Received-Seq, ETag, Location, Retry-After".into(),
         );
     }
     let cors = &resolved_route.route.cors;

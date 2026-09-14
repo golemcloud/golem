@@ -463,6 +463,10 @@ fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTr
                     "stream-ttl",
                     "stream-expires-at",
                     "stream-forked-from",
+                    "stream-closed",
+                    "producer-id",
+                    "producer-epoch",
+                    "producer-seq",
                 ]
                 .map(str::to_owned),
             );
@@ -1112,6 +1116,10 @@ mod tests {
                     "stream-ttl".into(),
                     "stream-expires-at".into(),
                     "stream-forked-from".into(),
+                    "stream-closed".into(),
+                    "producer-id".into(),
+                    "producer-epoch".into(),
+                    "producer-seq".into(),
                 ])
             );
             let bytes = desert_rust::serialize(&route, Vec::new()).unwrap();
