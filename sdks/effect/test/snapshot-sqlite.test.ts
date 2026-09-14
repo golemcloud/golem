@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Ref, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   __resetAgents,
   defineAgent,
@@ -52,28 +52,18 @@ const SqliteCounter = defineAgent({
     note: method({ input: {}, success: Schema.String }),
     setNote: method({ input: { v: Schema.String }, success: Schema.Void }),
   },
-}).implement(
-  ({ name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ note: name })
-      const db = new DatabaseSync(":memory:")
-      yield* snap.attachDatabase("counters", db)
-      return {
-        note: () => Ref.get(state).pipe(Effect.map((s) => s.note)),
-        setNote: ({ v }) => Ref.set(state, { note: v }),
-      }
-    }),
-  (_context, { name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ note: name })
-      const db = new DatabaseSync(":memory:")
-      yield* snap.attachDatabase("counters", db)
-      return {
-        note: () => Ref.get(state).pipe(Effect.map((s) => s.note)),
-        setNote: ({ v }) => Ref.set(state, { note: v }),
-      }
-    }),
-)
+}).implement({
+  init: ({ name }) => Effect.sync(() => ({ note: name, db: new DatabaseSync(":memory:") })),
+  methods: (state) => ({
+    note: () => Effect.sync(() => state.note),
+    setNote: ({ v }) => Effect.sync(() => void (state.note = v)),
+  }),
+  snapshot: {
+    save: (state) => Effect.succeed({ note: state.note }),
+    restore: (saved) => Effect.sync(() => ({ ...saved, db: new DatabaseSync(":memory:") })),
+    databases: (state) => ({ counters: state.db }),
+  },
+})
 
 // ---------------------------------------------------------------------------
 // Agent that declares a DB but never attaches it (negative test)
@@ -90,15 +80,16 @@ const SqliteForgetfulAttach = defineAgent({
   methods: {
     ping: method({ input: {}, success: Schema.Void }),
   },
-}).implement(
-  (_input, snap) =>
-    Effect.gen(function* () {
-      yield* snap.init({})
-      // Intentionally never call snap.attachDatabase("counters", ...).
-      return { ping: () => Effect.void }
-    }),
-  (_context, _input, snap) => snap.init({}).pipe(Effect.map(() => ({ ping: () => Effect.void }))),
-)
+}).implement({
+  init: () => Effect.succeed({}),
+  methods: () => ({ ping: () => Effect.void }),
+  snapshot: {
+    save: (state) => Effect.succeed(state),
+    restore: (saved) => Effect.succeed(saved),
+    // @ts-expect-error Deliberately bypass the required attachment to test runtime validation.
+    databases: () => ({}),
+  },
+})
 
 describe("snapshot + sqlite databases", () => {
   beforeEach(async () => {

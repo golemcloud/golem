@@ -80,11 +80,9 @@ export const Collector = defineAgent({
       success: Schema.Number,
     }),
   },
-}).implement((_id, snapshot) =>
-  Effect.gen(function* () {
-    const values = yield* snapshot.init([]);
-
-    return {
+}).implement({
+  init: () => Ref.make<ReadonlyArray<number>>([]),
+  methods: (values) => ({
       addValue: ({ value }) =>
         Ref.update(values, (current) => [...current, value]),
       getValues: () => Ref.get(values),
@@ -94,9 +92,9 @@ export const Collector = defineAgent({
             current.reduce((total, value) => total + value, 0),
           ),
         ),
-    };
   }),
-);
+  snapshot: Snapshot.ref<ReadonlyArray<number>>(),
+});
 
 export const PhantomCoordinator = defineAgent({
   name: "PhantomCoordinator",
@@ -118,8 +116,9 @@ export const PhantomCoordinator = defineAgent({
       success: Schema.Number,
     }),
   },
-}).implement(({ name }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ name }) => Effect.succeed(name),
+  methods: (name) => ({
     spawnAndFillPhantom: () =>
       Effect.gen(function* () {
         const collector = yield* Collector.client.newPhantom({ name });
@@ -147,7 +146,7 @@ export const PhantomCoordinator = defineAgent({
         return yield* collector.getTotal({});
       }).pipe(Effect.orDie),
   }),
-);
+});
 ```
 
 In an existing application, merge the coordinator methods and handlers into the existing agent

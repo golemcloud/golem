@@ -11,12 +11,14 @@ QuickJS-backed WASI Preview 3 components.
   `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are fiber-interruptible.
 - Config secrets are `Schema.Redacted` opaque handles. They are uncached, excluded from overrides,
   and never snapshotted.
-- Snapshotting metadata is `snapshotting`. A snapshotted definition requires distinct initialize
-  and restore factories. Restore receives `SnapshotRestorationContext`; after factory construction,
-  auto state and attached SQLite images are applied.
-- Agent streams are affine, single-reader P3 streams. Transfer consumes ownership; interruption and
-  early return close local endpoints. Effect-backed producers interrupt and join their fibers;
-  arbitrary JavaScript producers must cooperate with iterator cancellation.
+- Implement agents with `{ init, methods, snapshot? }`. `init` determines the state type;
+  `methods` is shared between initialization and restoration. `snapshotting` enables snapshots:
+  schema-shaped state restores automatically, `Snapshot.ref()` reconstructs Ref state, and custom
+  strategies receive `SnapshotRestorationContext`. SQLite images restore before methods are built.
+- Agent streams use native Effect `Stream`. Local programs are reusable; received P3 endpoints
+  are affine and single-reader. Transformed programs claim endpoints lazily during execution;
+  direct forwarding transfers ownership at commit. Interruption joins producer and codec
+  finalizers. Arbitrary JavaScript producers must cooperate with iterator cancellation.
 - `Tool` contains definition, guest, and typed client APIs. Standalone middleware is imported from
   `@golemcloud/effect-golem/middleware`; it supports universal and typed middleware.
 - Permission cards are opaque affine schema capabilities. Successful encoding transfers them;

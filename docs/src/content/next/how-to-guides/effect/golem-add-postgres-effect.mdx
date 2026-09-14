@@ -50,8 +50,8 @@ the client through Effect context.
 
 ## Open and Reuse a Connection
 
-Create the client once in the outer `Effect.gen` passed to `defineAgent(...).implement(...)`,
-before returning the handlers, so the implemented agent instance reuses one host connection:
+Create the client once in the agent's `init` Effect and return it as state before `methods`
+constructs the handlers, so the implemented agent instance reuses one host connection:
 
 ```typescript
 Effect.gen(function* () {

@@ -64,8 +64,8 @@ import { Effect, Schema } from "effect";
 import { defineAgent, method, Quota } from "@golemcloud/effect-golem";
 ```
 
-`Quota.acquireQuotaToken` is an Effect. Acquire it once in the agent's `.implement(...)` Effect
-body and close over it in the returned handlers. This closure is the Effect equivalent of keeping
+`Quota.acquireQuotaToken` is an Effect. Acquire it once in the agent's `init` Effect
+and pass it to `methods` as state. This is the Effect equivalent of keeping
 the token in the constructed agent's state; do not acquire a new token for every invocation or at
 module top level.
 
@@ -85,11 +85,9 @@ export const QuotaAgent = defineAgent({
       success: QuotaCallResult,
     }),
   },
-}).implement(() =>
-  Effect.gen(function* () {
-    const token = yield* Quota.acquireQuotaToken("api-calls", 1n);
-
-    return {
+}).implement({
+  init: () => Quota.acquireQuotaToken("api-calls", 1n),
+  methods: (token) => ({
       rateLimitedCall: ({ input }) =>
         Quota.withReservation(token, 1n, () =>
           Effect.succeed({
@@ -102,9 +100,8 @@ export const QuotaAgent = defineAgent({
           ),
           Effect.orDie,
         ),
-    };
   }),
-);
+});
 ```
 
 The second acquisition argument is the expected amount per reservation and is used for fair

@@ -58,10 +58,14 @@ export const BlobAgent = defineAgent({
       success: Schema.Number,
     }),
   },
-}).implement(({ name }) =>
-  Effect.gen(function* () {
-    const container = yield* Blobstore.getOrCreateContainer(name)
-    const photos = container.forSchema(Photo)
+}).implement({
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      const container = yield* Blobstore.getOrCreateContainer(name)
+      const photos = container.forSchema(Photo)
+      return { container, photos }
+    }),
+  methods: ({ container, photos }) => {
     const enc = (s: string) => new TextEncoder().encode(s)
     const dec = (b: Uint8Array) => new TextDecoder().decode(b)
 
@@ -84,5 +88,5 @@ export const BlobAgent = defineAgent({
         }),
       readSize: ({ key }) => container.getData(key).pipe(Effect.map((b) => b.length)),
     }
-  }),
-)
+  },
+})

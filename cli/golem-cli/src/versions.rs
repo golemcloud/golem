@@ -40,7 +40,7 @@ pub mod build_tool {
 }
 
 pub mod effect_dep {
-    pub const EFFECT: &str = "4.0.0-beta.98";
+    pub const EFFECT: &str = env!("GOLEM_EFFECT_VERSION");
 }
 
 // Keep this aligned with the TS component template

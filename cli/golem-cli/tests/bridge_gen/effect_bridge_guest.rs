@@ -1,10 +1,12 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-use crate::bridge_gen::fixtures::{agent, field, guest_streaming_agent_type, local_config, method};
+use crate::bridge_gen::fixtures::{
+    agent, def, field, guest_streaming_agent_type, local_config, method, ref_to,
+};
 use camino::Utf8Path;
 use golem_cli::bridge_gen::BridgeGenerator;
-use golem_cli::bridge_gen::typescript::effect_guest::EffectGuestBridgeGenerator;
+use golem_cli::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::SchemaType;
 use tempfile::TempDir;
@@ -18,11 +20,14 @@ fn effect_guest_all_schema_nested_streams_and_durable_config_compile() {
         schema,
         "guest-streaming-agent-guest-client.ts",
         r#"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { GuestStreamingAgent } from "./guest-streaming-agent-guest-client.js"
 const client = GuestStreamingAgent.getWithConfig("id", 10n)
 const call = Effect.flatMap(client, value => value.status())
+const streamCall = Effect.flatMap(client, value => value.produce())
+const checked: Effect.Effect<Stream.Stream<unknown, unknown>, unknown, unknown> = streamCall
 void call
+void checked
 "#,
     );
 }
@@ -51,6 +56,32 @@ import { EphemeralEffectAgent } from "./ephemeral-effect-agent-guest-client.js"
 const result = Effect.flatMap(EphemeralEffectAgent.newPhantomWithConfig("name", "model"), client => client.run(1))
 const checked: Effect.Effect<{ readonly metadata: unknown; readonly value: string }, unknown, unknown> = result
 void checked
+"#,
+    );
+}
+
+#[test]
+fn effect_guest_stream_agent_and_schema_name_compile() {
+    let schema = agent(
+        "Stream",
+        "effect",
+        vec![],
+        vec![method(
+            "produce",
+            vec![],
+            Some(SchemaType::stream(Some(ref_to("EffectStream")))),
+        )],
+        vec![def("EffectStream", SchemaType::string())],
+        AgentMode::Durable,
+    );
+    generate_and_compile(
+        schema,
+        "stream-guest-client.ts",
+        r#"
+import { Effect } from "effect"
+import { Stream as GeneratedStream } from "./stream-guest-client.js"
+const produced = GeneratedStream.get().pipe(Effect.flatMap(client => client.produce()))
+void produced
 "#,
     );
 }

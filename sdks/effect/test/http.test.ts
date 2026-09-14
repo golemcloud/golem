@@ -464,12 +464,14 @@ describe("Http defineAgent integration", () => {
             http: [post("/add"), get("/add?by={by}")],
           }),
         },
-      }).implement(() =>
-        Effect.succeed({
-          value: () => Effect.succeed(0),
-          add: ({ by }) => Effect.succeed(by),
-        }),
-      )
+      }).implement({
+        init: () => Effect.void,
+        methods: () =>
+          Effect.succeed({
+            value: () => Effect.succeed(0),
+            add: ({ by }) => Effect.succeed(by),
+          }),
+      })
 
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "Counter1")!
@@ -506,7 +508,10 @@ describe("Http defineAgent integration", () => {
         methods: {
           ping: method({ input: {}, success: Schema.Void }),
         },
-      }).implement(() => Effect.succeed({ ping: () => Effect.void }))
+      }).implement({
+        init: () => Effect.void,
+        methods: () => Effect.succeed({ ping: () => Effect.void }),
+      })
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "NoHttp")!
       expect(a.httpMount).toBeUndefined()
@@ -527,7 +532,10 @@ describe("Http defineAgent integration", () => {
           methods: {
             value: method({ input: {}, success: Schema.Number, http: [get("/v")] }),
           },
-        }).implement(() => Effect.succeed({ value: () => Effect.succeed(0) })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
+        }),
       /declares HTTP endpoints but no mount/,
     )
   })
@@ -540,7 +548,7 @@ describe("Http defineAgent integration", () => {
           id: { name: Schema.String },
           http: mount("/x/{nonExistent}") as never,
           methods: {},
-        }).implement(() => Effect.succeed({})),
+        }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }),
       /does not match any constructor parameter/,
     )
   })
@@ -553,7 +561,7 @@ describe("Http defineAgent integration", () => {
           id: { name: Schema.String, region: Schema.String },
           http: mount("/x/{name}") as never,
           methods: {},
-        }).implement(() => Effect.succeed({})),
+        }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }),
       /'region' is not covered by a mount path variable/,
     )
   })
@@ -569,7 +577,7 @@ describe("Http defineAgent integration", () => {
           },
           http: mount("/x/{name}/{region}") as never,
           methods: {},
-        }).implement(() => Effect.succeed({})),
+        }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }),
       /constructor parameter 'region' has a schema that is not bindable from a path variable/,
     )
   })
@@ -582,7 +590,7 @@ describe("Http defineAgent integration", () => {
         id: { name: Schema.String, region: Region },
         http: mount("/x/{name}/{region}"),
         methods: {},
-      }).implement(() => Effect.succeed({})),
+      }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }),
     ).not.toThrow()
   })
 
@@ -600,7 +608,10 @@ describe("Http defineAgent integration", () => {
               http: [get("/items/{nope}")] as never,
             }),
           },
-        }).implement(() => Effect.succeed({ getOne: () => Effect.succeed("") } as never)),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ getOne: () => Effect.succeed("") } as never),
+        }),
       /does not match any method parameter/,
     )
   })
@@ -623,7 +634,10 @@ describe("Http defineAgent integration", () => {
               http: [get("/items/{id}?id={id}")] as never,
             }),
           },
-        }).implement(() => Effect.succeed({ op: ({ id }) => Effect.succeed(id) })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: ({ id }) => Effect.succeed(id) }),
+        }),
       /bound from both/,
     )
   })
@@ -645,7 +659,10 @@ describe("Http defineAgent integration", () => {
               http: [get("/items", { headers: { "X-Foo": "a", "x-foo": "b" } as const }) as never],
             }),
           },
-        }).implement(() => Effect.succeed({ op: ({ a, b }) => Effect.succeed(`${a}/${b}`) })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: ({ a, b }) => Effect.succeed(`${a}/${b}`) }),
+        }),
       /duplicate header/,
     )
   })
@@ -669,7 +686,10 @@ describe("Http defineAgent integration", () => {
               http: [get("/op")],
             }),
           },
-        }).implement(() => Effect.succeed({ op: ({ payload }) => Effect.succeed(payload) })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: ({ payload }) => Effect.succeed(payload) }),
+        }),
       /may not have unbound parameters/,
     )
   })
@@ -688,9 +708,10 @@ describe("Http defineAgent integration", () => {
               http: [post("/items/{obj}")],
             }),
           },
-        }).implement(() =>
-          Effect.succeed({ op: ({ obj }) => Effect.succeed(JSON.stringify(obj)) }),
-        ),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: ({ obj }) => Effect.succeed(JSON.stringify(obj)) }),
+        }),
       /not bindable from a path variable/,
     )
   })
@@ -711,9 +732,10 @@ describe("Http defineAgent integration", () => {
               http: [post("/items/{values}")],
             }),
           },
-        }).implement(() =>
-          Effect.succeed({ op: ({ values }) => Effect.succeed(values.join(",")) }),
-        ),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: ({ values }) => Effect.succeed(values.join(",")) }),
+        }),
       /not bindable from a path variable/,
     )
   })
@@ -734,7 +756,10 @@ describe("Http defineAgent integration", () => {
               http: [get("/items?value={values}")],
             }),
           },
-        }).implement(() => Effect.succeed({ op: () => Effect.succeed("") })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: () => Effect.succeed("") }),
+        }),
       /not bindable from a query parameter/,
     )
   })
@@ -755,7 +780,10 @@ describe("Http defineAgent integration", () => {
               http: [get("/items", { headers: { "X-Value": "values" } as const })],
             }),
           },
-        }).implement(() => Effect.succeed({ op: () => Effect.succeed("") })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: () => Effect.succeed("") }),
+        }),
       /not bindable from a header/,
     )
   })
@@ -777,7 +805,10 @@ describe("Http defineAgent integration", () => {
               http: [post("/items/{text}")],
             }),
           },
-        }).implement(() => Effect.succeed({ op: () => Effect.succeed("") })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: () => Effect.succeed("") }),
+        }),
       /multimodal\/unstructured/,
     )
   })
@@ -799,7 +830,10 @@ describe("Http defineAgent integration", () => {
               http: [post("/items/{mm}")],
             }),
           },
-        }).implement(() => Effect.succeed({ op: () => Effect.succeed("") })),
+        }).implement({
+          init: () => Effect.void,
+          methods: () => Effect.succeed({ op: () => Effect.succeed("") }),
+        }),
       /multimodal\/unstructured/,
     )
   })
@@ -817,11 +851,13 @@ describe("Http defineAgent integration", () => {
             http: [get("/items/{id}?q={q}", { headers: { "X-Trace": "traceId" } as const })],
           }),
         },
-      }).implement(() =>
-        Effect.succeed({
-          find: ({ id, q, traceId }) => Effect.succeed(`${id}/${q}/${traceId}`),
-        }),
-      )
+      }).implement({
+        init: () => Effect.void,
+        methods: () =>
+          Effect.succeed({
+            find: ({ id, q, traceId }) => Effect.succeed(`${id}/${q}/${traceId}`),
+          }),
+      })
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "GoodBindings")!
       const find = a.methods[0]!
@@ -853,11 +889,13 @@ describe("Http defineAgent integration", () => {
             ],
           }),
         },
-      }).implement(() =>
-        Effect.succeed({
-          find: ({ tags, scores }) => Effect.succeed(`${tags.join(",")}/${scores.join(",")}`),
-        }),
-      )
+      }).implement({
+        init: () => Effect.void,
+        methods: () =>
+          Effect.succeed({
+            find: ({ tags, scores }) => Effect.succeed(`${tags.join(",")}/${scores.join(",")}`),
+          }),
+      })
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const find = types.find((t) => t.typeName === "CollectionBindings")!.methods[0]!
       expect(find.httpEndpoint[0]!.queryVars).toEqual([
@@ -959,11 +997,13 @@ describe("Http pipeable combinators — endpoints", () => {
             http: [get("/items/{id}").pipe(withHeader("X-Trace", "traceId"), withAuth(true))],
           }),
         },
-      }).implement(() =>
-        Effect.succeed({
-          find: ({ id, traceId }) => Effect.succeed(`${id}/${traceId}`),
-        }),
-      )
+      }).implement({
+        init: () => Effect.void,
+        methods: () =>
+          Effect.succeed({
+            find: ({ id, traceId }) => Effect.succeed(`${id}/${traceId}`),
+          }),
+      })
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "PipedEndpoints")!
       const find = a.methods[0]!
@@ -1037,7 +1077,7 @@ describe("Http pipeable combinators — mounts", () => {
           // that would otherwise fire first.
           http: mount("/api/{tenant}").pipe(withWebhookSuffix("/{nope}")),
           methods: {},
-        }).implement(() => Effect.succeed({})),
+        }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }),
       /webhook-suffix path variable 'nope'/,
     )
   })
@@ -1055,7 +1095,10 @@ describe("Http pipeable combinators — mounts", () => {
             http: [get("/items")],
           }),
         },
-      }).implement(() => Effect.succeed({ find: () => Effect.succeed("ok") }))
+      }).implement({
+        init: () => Effect.void,
+        methods: () => Effect.succeed({ find: () => Effect.succeed("ok") }),
+      })
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const a = types.find((t) => t.typeName === "PipedMount")!
       expect(a.httpMount?.authDetails).toEqual({ required: true })

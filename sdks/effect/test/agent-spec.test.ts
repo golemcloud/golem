@@ -10,7 +10,6 @@ import { Effect, Ref, Schema } from "effect"
 import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import { guest } from "../src/internal/guest.js"
-import { Snapshot } from "../src/index.js"
 
 const SpecOnlyAgent = defineAgent({
   name: "SpecOnlyAgent",
@@ -26,14 +25,12 @@ const ImplementedAgent = defineAgent({
   methods: {
     getValue: method({ input: {}, success: Schema.Number }),
   },
-}).implement(({ initial }) =>
-  Effect.gen(function* () {
-    const ref = yield* Ref.make(initial)
-    return {
-      getValue: () => Ref.get(ref),
-    }
+}).implement({
+  init: ({ initial }) => Ref.make(initial),
+  methods: (ref) => ({
+    getValue: () => Ref.get(ref),
   }),
-)
+})
 
 interface RecursiveValue {
   readonly value: string
@@ -60,12 +57,13 @@ const RecursiveGraphsAgent = defineAgent({
     first: method({ input: { value: RecursiveInputA }, success: RecursiveOutputA }),
     second: method({ input: { value: RecursiveInputB }, success: RecursiveOutputB }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     first: ({ value }) => Effect.succeed(value),
     second: ({ value }) => Effect.succeed(value),
   }),
-)
+})
 
 describe("defineAgent / .implement split", () => {
   beforeEach(async () => {
@@ -124,7 +122,10 @@ describe("defineAgent / .implement split", () => {
       id: {},
       methods: { ping: method({ input: {}, success: Schema.Void }) },
     })
-    const implemented = spec.implement(() => Effect.succeed({ ping: () => Effect.void }))
+    const implemented = spec.implement({
+      init: () => Effect.void,
+      methods: () => ({ ping: () => Effect.void }),
+    })
     expect(implemented.client).toBe(spec.client)
   })
 
@@ -134,7 +135,10 @@ describe("defineAgent / .implement split", () => {
       id: {},
       methods: { ping: method({ input: {}, success: Schema.Void }) },
     })
-    const implemented = spec.implement(() => Effect.succeed({ ping: () => Effect.void }))
+    const implemented = spec.implement({
+      init: () => Effect.void,
+      methods: () => ({ ping: () => Effect.void }),
+    })
     expect(implemented.spec).toBe(spec)
   })
 
@@ -163,7 +167,7 @@ describe("defineAgent / .implement split", () => {
       id: {},
       methods: { ping: method({ input: {}, success: Schema.Void }) },
     })
-    specA.implement(() => Effect.succeed({ ping: () => Effect.void }))
+    specA.implement({ init: () => Effect.void, methods: () => ({ ping: () => Effect.void }) })
 
     // Second impl with the same name: must be stashed and re-emitted
     // from discoverAgentTypes as a typed AgentError.
@@ -172,7 +176,7 @@ describe("defineAgent / .implement split", () => {
       id: {},
       methods: { ping: method({ input: {}, success: Schema.Void }) },
     })
-    specB.implement(() => Effect.succeed({ ping: () => Effect.void }))
+    specB.implement({ init: () => Effect.void, methods: () => ({ ping: () => Effect.void }) })
 
     let caught: unknown
     try {
@@ -193,10 +197,10 @@ describe("defineAgent / .implement split", () => {
       methods: { ping: method({ input: {}, success: Schema.Void }) },
     })
     // First call: succeeds and registers.
-    spec.implement(() => Effect.succeed({ ping: () => Effect.void }))
+    spec.implement({ init: () => Effect.void, methods: () => ({ ping: () => Effect.void }) })
     // Second call on the same spec object: must NOT re-register; must
     // push a deferred DuplicateAgentNameError instead.
-    spec.implement(() => Effect.succeed({ ping: () => Effect.void }))
+    spec.implement({ init: () => Effect.void, methods: () => ({ ping: () => Effect.void }) })
 
     let caught: unknown
     try {
@@ -226,7 +230,10 @@ describe("defineAgent / .implement split", () => {
       id: {},
       methods: { ping: method({ input: {}, success: Schema.Void }) },
     })
-    const implemented = spec.implement(() => Effect.succeed({ ping: () => Effect.void }))
+    const implemented = spec.implement({
+      init: () => Effect.void,
+      methods: () => ({ ping: () => Effect.void }),
+    })
     // @ts-expect-error — `implement` MUST NOT exist on ImplementedAgent.
     void implemented.implement
     // `client` and `spec` MUST exist on ImplementedAgent.
@@ -234,42 +241,19 @@ describe("defineAgent / .implement split", () => {
     void implemented.spec
   })
 
-  it("snap arg of impl is typed and present only when snapshot is set", () => {
-    // Compile-time check: this would fail tsc if the snap arg leaked
-    // into the no-snapshot variant.
+  it("implementation state is inferred exclusively from init", () => {
     const noSnap = defineAgent({
       name: "NoSnapAgent",
       id: {},
       methods: { ping: method({ input: {}, success: Schema.Void }) },
-    }).implement((input) => {
-      // input is the constructor-input record; no second arg
-      void input
-      return Effect.succeed({ ping: () => Effect.void })
+    }).implement({
+      init: (input) => {
+        void input
+        return Effect.void
+      },
+      methods: () => ({ ping: () => Effect.void }),
     })
     void noSnap
-
-    const withSnapSpec = defineAgent({
-      name: "WithSnapAgent",
-      id: {},
-      snapshotting: Snapshot.define({
-        schema: Schema.Struct({ count: Schema.Number }),
-        policy: Snapshot.policy.default,
-      }),
-      methods: { ping: method({ input: {}, success: Schema.Void }) },
-    })
-    const initialize = (
-      input: Record<string, never>,
-      snap: Parameters<Parameters<typeof withSnapSpec.implement>[0]>[1],
-    ) =>
-      Effect.gen(function* () {
-        void input
-        yield* snap.init({ count: 0 })
-        return { ping: () => Effect.void }
-      })
-    const withSnap = withSnapSpec.implement(initialize, (_context, input, snap) =>
-      initialize(input, snap),
-    )
-    void withSnap
     expect(true).toBe(true)
   })
 })

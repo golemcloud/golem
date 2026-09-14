@@ -98,8 +98,8 @@ The typed client is attached to the value returned by `defineAgent(...)`. Import
 agent spec to access `.client`. For agents shared across components or involved in module cycles,
 keep the spec and implementation separate:
 
-- `agents/CounterAgent.ts` exports the `defineAgent(...)` spec without calling `.implement(...)`;
-- `agents/CounterAgent.impl.ts` imports the spec and calls `CounterAgent.implement(...)`;
+- `agents/CounterAgent.ts` exports the `defineAgent(...)` spec without implementing it;
+- `agents/CounterAgent.impl.ts` imports the spec and calls `CounterAgent.implement({ init, methods })`;
 - the hosting component's `src/main.ts` imports `CounterAgent.impl.js` for registration;
 - RPC callers import only `CounterAgent.js`, avoiding implementation side effects.
 

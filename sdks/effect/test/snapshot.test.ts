@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Duration, Effect, Ref, Schema } from "effect"
+import { Context, Duration, Effect, Ref, Schema } from "effect"
 import {
   __resetAgents,
   defineAgent,
@@ -31,6 +31,7 @@ import {
 } from "../src/internal/snapshotEnvelope.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
+import { Principal } from "../src/Principal.js"
 
 const anonymous = { tag: "anonymous" } as const
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
@@ -51,7 +52,7 @@ const oidcBob = {
 // Auto-snapshot agent
 // ---------------------------------------------------------------------------
 
-const AutoSnapshotCounter = defineAgent({
+const AutoSnapshotCounterSpec = defineAgent({
   name: "AutoSnapshotCounter",
   id: { name: Schema.String },
   snapshotting: Snapshot.define({
@@ -73,39 +74,36 @@ const AutoSnapshotCounter = defineAgent({
     add: method({ input: { by: Schema.Number }, success: Schema.Number }),
     owner: method({ input: {}, success: Schema.String }),
   },
-}).implement(
-  ({ name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({
-        count: 0,
-        owner: name,
-        groups: {
-          primary: { values: [1, 2, 3], note: "nested record" },
-          secondary: { values: [] },
-        },
-      })
-      return {
-        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-        owner: () => Ref.get(state).pipe(Effect.map((s) => s.owner)),
-      }
-    }),
-  (_context, { name }, snap) =>
-    Effect.gen(function* () {
-      const state = yield* snap.init({ count: 0, owner: name, groups: {} })
-      return {
-        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-        owner: () => Ref.get(state).pipe(Effect.map((s) => s.owner)),
-      }
-    }),
-)
+})
+
+const initializeAutoCounter = (({ name }) =>
+  Ref.make<{
+    readonly count: number
+    readonly owner: string
+    readonly groups: Readonly<
+      Record<string, { readonly values: ReadonlyArray<number>; readonly note?: string }>
+    >
+  }>({
+    count: 0,
+    owner: name,
+    groups: {
+      primary: { values: [1, 2, 3], note: "nested record" },
+      secondary: { values: [] },
+    },
+  })) satisfies Parameters<typeof AutoSnapshotCounterSpec.implement>[0]["init"]
+
+const AutoSnapshotCounter = AutoSnapshotCounterSpec.implement({
+  init: initializeAutoCounter,
+  methods: (state) => ({
+    value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
+    add: ({ by }) =>
+      Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
+        Effect.map((s) => s.count),
+      ),
+    owner: () => Ref.get(state).pipe(Effect.map((s) => s.owner)),
+  }),
+  snapshot: Snapshot.ref(),
+})
 
 // ---------------------------------------------------------------------------
 // Custom-snapshot agent
@@ -124,78 +122,52 @@ const CustomSnapshotAgent = defineAgent({
     value: method({ input: {}, success: Schema.Number }),
     add: method({ input: { by: Schema.Number }, success: Schema.Number }),
   },
-}).implement(
-  ({ name }, snap) =>
-    Effect.gen(function* () {
-      const ref = yield* Ref.make({ count: 0, owner: name })
-      yield* snap.register({
-        save: Effect.gen(function* () {
-          customStore.saveCalls++
-          const s = yield* Ref.get(ref)
-          return new TextEncoder().encode(JSON.stringify(s))
-        }),
-        load: (bytes) =>
-          Effect.gen(function* () {
-            customStore.loadCalls++
-            const decoded = JSON.parse(new TextDecoder().decode(bytes)) as {
-              count: number
-              owner: string
-            }
-            yield* Ref.set(ref, decoded)
-          }),
-      })
-      return {
-        value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-  (_context, { name }, snap) =>
-    Effect.gen(function* () {
-      const ref = yield* Ref.make({ count: 0, owner: name })
-      yield* snap.register({
-        save: Ref.get(ref).pipe(Effect.map((s) => new TextEncoder().encode(JSON.stringify(s)))),
-        load: (bytes) =>
-          Effect.gen(function* () {
-            customStore.loadCalls++
-            yield* Ref.set(ref, JSON.parse(new TextDecoder().decode(bytes)))
-          }),
-      })
-      return {
-        value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-)
+}).implement({
+  init: ({ name }) => Ref.make({ count: 0, owner: name }),
+  methods: (ref) => ({
+    value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
+    add: ({ by }) =>
+      Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
+        Effect.map((s) => s.count),
+      ),
+  }),
+  snapshot: {
+    save: (ref) =>
+      Effect.gen(function* () {
+        customStore.saveCalls++
+        const s = yield* Ref.get(ref)
+        return new TextEncoder().encode(JSON.stringify(s))
+      }),
+    restore: (bytes) =>
+      Effect.gen(function* () {
+        customStore.loadCalls++
+        const decoded: { count: number; owner: string } = JSON.parse(
+          new TextDecoder().decode(bytes),
+        )
+        return yield* Ref.make(decoded)
+      }),
+  },
+})
 
 // ---------------------------------------------------------------------------
-// Agent that declares snapshot but never binds (negative test)
+// Auto snapshots can use the state directly when its type exactly matches the schema.
 // ---------------------------------------------------------------------------
 
-const ForgetfulSnapshotAgent = defineAgent({
-  name: "ForgetfulSnapshotAgent",
+let directInitCalls = 0
+const DirectSnapshotAgent = defineAgent({
+  name: "DirectSnapshotAgent",
   id: {},
   snapshotting: Snapshot.define({
     schema: Schema.Struct({ count: Schema.Number }),
     policy: Snapshot.policy.default,
   }),
   methods: {
-    noop: method({ input: {}, success: Schema.Void }),
+    value: method({ input: {}, success: Schema.Number }),
   },
+}).implement({
+  init: () => Effect.sync(() => ({ count: ++directInitCalls })),
+  methods: (state) => ({ value: () => Effect.succeed(state.count) }),
 })
-  // Intentionally never call snap.init: triggers SnapshotNotBoundError.
-  .implement(
-    (_, _snap) =>
-      Effect.succeed({
-        noop: () => Effect.void,
-      }),
-    (_context, _input, _snap) => Effect.succeed({ noop: () => Effect.void }),
-  )
 
 // ---------------------------------------------------------------------------
 // Custom-snapshot agent that reads a config service inside its save/load
@@ -222,71 +194,47 @@ const ConfigCustomAgent = defineAgent({
     value: method({ input: {}, success: Schema.Number }),
     add: method({ input: { by: Schema.Number }, success: Schema.Number }),
   },
-}).implement(
-  ({ name }, snap) =>
-    Effect.gen(function* () {
-      const ref = yield* Ref.make({ count: 0, owner: name })
-      yield* snap.register({
-        save: Effect.gen(function* () {
-          configCustomStore.saveCalls++
-          // Read the config service from inside the save handler.
-          const cfg = yield* ConfigCustomCfg
-          const prefix = yield* cfg.prefix
-          const s = yield* Ref.get(ref)
-          return new TextEncoder().encode(`${prefix}:${JSON.stringify(s)}`)
-        }),
-        load: (bytes) =>
-          Effect.gen(function* () {
-            configCustomStore.loadCalls++
-            // Read the config service from inside the load handler too.
-            const cfg = yield* ConfigCustomCfg
-            const prefix = yield* cfg.prefix
-            const text = new TextDecoder().decode(bytes)
-            if (!text.startsWith(`${prefix}:`)) {
-              throw new Error(
-                `load handler: payload prefix '${text.slice(0, 20)}' does not match config prefix '${prefix}'`,
-              )
-            }
-            const decoded = JSON.parse(text.slice(prefix.length + 1)) as {
-              count: number
-              owner: string
-            }
-            yield* Ref.set(ref, decoded)
-          }),
-      })
-      return {
-        value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-  (_context, { name }, snap) =>
-    Effect.gen(function* () {
-      const ref = yield* Ref.make({ count: 0, owner: name })
-      yield* snap.register({
-        save: Ref.get(ref).pipe(Effect.map((s) => new TextEncoder().encode(JSON.stringify(s)))),
-        load: (bytes) =>
-          Effect.gen(function* () {
-            configCustomStore.loadCalls++
-            const cfg = yield* ConfigCustomCfg
-            const prefix = yield* cfg.prefix
-            const text = new TextDecoder().decode(bytes)
-            if (!text.startsWith(`${prefix}:`))
-              throw new Error(`does not match config prefix '${prefix}'`)
-            yield* Ref.set(ref, JSON.parse(text.slice(prefix.length + 1)))
-          }),
-      })
-      return {
-        value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
-        add: ({ by }) =>
-          Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
-            Effect.map((s) => s.count),
-          ),
-      }
-    }),
-)
+}).implement({
+  init: ({ name }) => Ref.make({ count: 0, owner: name }),
+  methods: (ref) => ({
+    value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
+    add: ({ by }) =>
+      Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
+        Effect.map((s) => s.count),
+      ),
+  }),
+  snapshot: {
+    save: (ref) =>
+      Effect.gen(function* () {
+        configCustomStore.saveCalls++
+        // Read the config service from inside the save handler.
+        const cfg = yield* ConfigCustomCfg
+        const prefix = yield* cfg.prefix
+        const s = yield* Ref.get(ref)
+        return new TextEncoder().encode(`${prefix}:${JSON.stringify(s)}`)
+      }),
+    restore: (bytes) =>
+      Effect.gen(function* () {
+        configCustomStore.loadCalls++
+        const principal = yield* Principal
+        expect(principal).toEqual(oidcBob)
+        // Read the config service from inside the load handler too.
+        const cfg = yield* ConfigCustomCfg
+        const prefix = yield* cfg.prefix
+        const text = new TextDecoder().decode(bytes)
+        if (!text.startsWith(`${prefix}:`)) {
+          throw new Error(
+            `load handler: payload prefix '${text.slice(0, 20)}' does not match config prefix '${prefix}'`,
+          )
+        }
+        const decoded = JSON.parse(text.slice(prefix.length + 1)) as {
+          count: number
+          owner: string
+        }
+        return yield* Ref.make(decoded)
+      }),
+  },
+})
 
 describe("snapshotting", () => {
   beforeEach(async () => {
@@ -296,10 +244,11 @@ describe("snapshotting", () => {
     configCustomStore.saveCalls = 0
     configCustomStore.loadCalls = 0
     configCustomStore.lastBytes = null
+    directInitCalls = 0
     void AutoSnapshotCounter
     void CustomSnapshotAgent
     void ConfigCustomAgent
-    void ForgetfulSnapshotAgent
+    void DirectSnapshotAgent
   })
 
   afterEach(() => {
@@ -342,7 +291,7 @@ describe("snapshotting", () => {
         name: "NoSnapAgent",
         id: {},
         methods: { ping: method({ input: {}, success: Schema.Void }) },
-      }).implement(() => Effect.succeed({ ping: () => Effect.void }))
+      }).implement({ init: () => Effect.void, methods: () => ({ ping: () => Effect.void }) })
       void NoSnapAgent
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
       const t = types.find((t) => t.typeName === "NoSnapAgent")!
@@ -410,6 +359,21 @@ describe("snapshotting", () => {
       expect(owner).toBe("alice")
     }),
   )
+
+  it("auto: init runs once for initialization and is skipped during restoration", async () => {
+    await guest.initialize("DirectSnapshotAgent", wire(), anonymous)
+    expect(directInitCalls).toBe(1)
+    const snapshot = await dispatchSaveSnapshot()
+
+    await __resetAgents()
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "DirectSnapshotAgent"]])
+    __setParseAgentIdForTest(() => ["DirectSnapshotAgent", typed(wire()), undefined])
+    await dispatchLoadSnapshot(snapshot)
+
+    expect(directInitCalls).toBe(1)
+    const out = await guest.invoke("value", wire(), anonymous)
+    expect(read<number>(out!)).toBe(1)
+  })
 
   it("auto: load rejects an envelope whose mime type is binary", async () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
@@ -551,7 +515,7 @@ describe("snapshotting", () => {
       name: "NoSnap",
       id: {},
       methods: { ping: method({ input: {}, success: Schema.Void }) },
-    }).implement(() => Effect.succeed({ ping: () => Effect.void }))
+    }).implement({ init: () => Effect.void, methods: () => ({ ping: () => Effect.void }) })
     void NoSnap
     await guest.initialize("NoSnap", wire(), anonymous)
     await expect(dispatchSaveSnapshot()).rejects.toThrow(/did not declare a snapshot/)
@@ -593,34 +557,77 @@ describe("snapshotting", () => {
     ).rejects.toThrow(UnsupportedSnapshotFormatError)
   })
 
-  it("declared snapshot but unbound impl → SnapshotNotBoundError on initialize", async () => {
-    await expect(guest.initialize("ForgetfulSnapshotAgent", wire(), anonymous)).rejects.toThrow(
-      /SnapshotNotBoundError|did not bind/,
-    )
-  })
-
-  it("auto: snap.init called twice fails the second time", async () => {
-    const TwiceBound = defineAgent({
-      name: "TwiceBound",
+  it("restore failure closes resources acquired by the restoration strategy", async () => {
+    let cleaned = false
+    const CleanupOnRestoreFailure = defineAgent({
+      name: "CleanupOnRestoreFailure",
       id: {},
-      snapshotting: Snapshot.define({
-        schema: Schema.Number,
-        policy: Snapshot.policy.default,
-      }),
+      snapshotting: Snapshot.custom({ policy: Snapshot.policy.default }),
       methods: { ping: method({ input: {}, success: Schema.Void }) },
-    }).implement(
-      (_input, snap) =>
-        Effect.gen(function* () {
-          yield* snap.init(0)
-          yield* snap.init(1) // boom
-          return { ping: () => Effect.void }
-        }),
-      (_context, _input, snap) =>
-        snap.init(0).pipe(Effect.map(() => ({ ping: () => Effect.void }))),
-    )
-    void TwiceBound
-    await expect(guest.initialize("TwiceBound", wire(), anonymous)).rejects.toThrow(
-      /SnapshotAlreadyBoundError|already bound/,
-    )
+    }).implement({
+      init: () => Effect.succeed("fresh"),
+      methods: () => Effect.fail("methods failed"),
+      snapshot: {
+        save: (state) => Effect.succeed(new TextEncoder().encode(state)),
+        restore: () =>
+          Effect.acquireRelease(Effect.succeed("restored"), () =>
+            Effect.sync(() => void (cleaned = true)),
+          ),
+      },
+    })
+    void CleanupOnRestoreFailure
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "CleanupOnRestoreFailure"]])
+    __setParseAgentIdForTest(() => ["CleanupOnRestoreFailure", typed(wire()), undefined])
+
+    await expect(
+      dispatchLoadSnapshot(encodeBinaryEnvelope(anonymous, new Uint8Array([1]))),
+    ).rejects.toBeTruthy()
+    expect(cleaned).toBe(true)
   })
 })
+
+// Compile-time regressions for state inference and snapshot environment constraints.
+const checkSnapshotTypes = () => {
+  const Auto = Snapshot.define({
+    schema: Schema.Struct({ count: Schema.Number }),
+    policy: Snapshot.policy.default,
+  })
+  defineAgent({ name: "TypeStateMismatch", id: {}, snapshotting: Auto, methods: {} }).implement({
+    init: () => Effect.succeed({ count: "wrong" }),
+    methods: () => ({}),
+    // @ts-expect-error the strategy state must be exactly the state inferred from init
+    snapshot: Snapshot.ref<{ count: number }>(),
+  })
+
+  defineAgent({ name: "TypeRefNeedsStrategy", id: {}, snapshotting: Auto, methods: {} }).implement({
+    init: () => Ref.make({ count: 0 }),
+    methods: () => ({}),
+    // @ts-expect-error Ref state is not bidirectionally assignable with the schema-decoded state
+    snapshot: undefined,
+  })
+
+  defineAgent({
+    name: "TypeCustomNeedsStrategy",
+    id: {},
+    snapshotting: Snapshot.custom({ policy: Snapshot.policy.default }),
+    methods: {},
+    // @ts-expect-error Snapshot.custom requires an explicit byte strategy
+  }).implement({ init: () => Effect.void, methods: () => ({}) })
+
+  class Undeclared extends Context.Service<Undeclared, string>()("Undeclared") {}
+  defineAgent({
+    name: "TypeUndeclaredRestoreEnvironment",
+    id: {},
+    snapshotting: Snapshot.custom({ policy: Snapshot.policy.default }),
+    methods: {},
+  }).implement({
+    init: () => Effect.succeed(""),
+    methods: () => ({}),
+    snapshot: {
+      save: (state) => Effect.succeed(new TextEncoder().encode(state)),
+      // @ts-expect-error restoration may only require declared/provided services
+      restore: () => Undeclared,
+    },
+  })
+}
+void checkSnapshotTypes

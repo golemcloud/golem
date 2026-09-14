@@ -6,7 +6,7 @@ use crate::bridge_gen::fixtures::{
 };
 use camino::Utf8Path;
 use golem_cli::bridge_gen::BridgeGenerator;
-use golem_cli::bridge_gen::typescript::effect_external::EffectExternalBridgeGenerator;
+use golem_cli::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::SchemaType;
 use tempfile::TempDir;
@@ -167,6 +167,40 @@ declare const client: NamedRecordAgent
 const replaced: Effect.Effect<Profile, unknown> = client.replace(profile)
 void created
 void replaced
+"#,
+    )
+    .unwrap();
+    compile(target, &generated);
+}
+
+#[test]
+fn effect_external_stream_agent_and_schema_name_compile() {
+    let schema = agent(
+        "Stream",
+        "rust",
+        vec![],
+        vec![method(
+            "produce",
+            vec![],
+            Some(SchemaType::stream(Some(ref_to("EffectStream")))),
+        )],
+        vec![def("EffectStream", SchemaType::string())],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    EffectExternalBridgeGenerator::new(schema, target, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let generated = target.join("stream-client.ts");
+    std::fs::write(
+        target.join("consumer.ts"),
+        r#"import { Effect } from "effect"
+import { Stream as GeneratedStream } from "./stream-client.js"
+const produced = GeneratedStream.get().pipe(Effect.flatMap(client => client.produce()))
+void produced
 "#,
     )
     .unwrap();

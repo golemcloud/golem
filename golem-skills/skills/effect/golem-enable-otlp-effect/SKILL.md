@@ -70,8 +70,9 @@ export const TracedAgent = defineAgent({
       success: Schema.String,
     }),
   },
-}).implement(({ instanceName }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ instanceName }) => Effect.succeed(instanceName),
+  methods: (instanceName) => ({
     doTracedWork: ({ taskName }) =>
       Effect.gen(function* () {
         yield* Effect.logInfo(`processing: ${taskName}`).pipe(
@@ -85,7 +86,7 @@ export const TracedAgent = defineAgent({
         }),
       ),
   }),
-);
+});
 ```
 
 Import the implemented agent module from `src/main.ts` so its top-level registration runs:

@@ -6,16 +6,16 @@ description: "Adding an Effect-based agent to a Golem component. Use when creati
 # Adding an Agent to an Effect Golem Component
 
 Effect Golem agents declare their public contract with Effect Schema and implement every method
-as an `Effect`. A top-level `defineAgent(...).implement(...)` call registers the agent when its
+as an `Effect`. A top-level `defineAgent(...).implement({ init, methods })` call registers the agent when its
 module is imported.
 
 ## Steps
 
 1. Add `src/<agent-name>.ts` with the schemas, definition, and implementation.
 2. Declare constructor identity and method contracts with `defineAgent` and `method`.
-3. Implement methods as Effects, using `Ref` for mutable state.
-4. For snapshot-enabled state, declare `Snapshot.define(...)` and initialize it exactly once with
-   `snapshot.init(...)`.
+3. Implement `init` as an Effect and derive all handlers from its shared state with `methods`.
+4. For snapshot-enabled `Ref` state, declare `Snapshot.define(...)` and use
+   `snapshot: Snapshot.ref<Saved>()`.
 5. Add `import "./<agent-name>.js"` to `src/main.ts` so the implementation registers.
 6. Run `golem build` to type-check and build the component.
 
@@ -66,11 +66,9 @@ export const ItemRepositoryAgent = defineAgent({
       success: Schema.Array(Item),
     }),
   },
-}).implement(({ repositoryName }, snapshot) =>
-  Effect.gen(function* () {
-    const state = yield* snapshot.init({ items: {} });
-
-    return {
+}).implement({
+  init: () => Ref.make({ items: {} as Record<string, typeof Item.Type> }),
+  methods: (state) => ({
       createItem: ({ item }) =>
         Ref.update(state, ({ items }) => ({
           items: { ...items, [item.id]: item },
@@ -100,9 +98,9 @@ export const ItemRepositoryAgent = defineAgent({
 
       listItems: () =>
         Ref.get(state).pipe(Effect.map(({ items }) => Object.values(items))),
-    };
-  }).pipe(Effect.annotateLogs({ repositoryName })),
-);
+  }),
+  snapshot: Snapshot.ref<{ items: Record<string, typeof Item.Type> }>(),
+});
 ```
 
 Register the implementation from the component entry point:
@@ -155,7 +153,7 @@ retry the invocation. Do not use defects to represent normal business outcomes.
   error.
 - Constructor parameters define durable agent identity.
 - Handlers return `Effect` values; do not implement them as plain `async` functions.
-- Call `snapshot.init(...)` exactly once when the definition has a snapshot.
+- Use `Snapshot.ref<Saved>()` when a snapshotted `Ref` contains the saved schema value.
 - Keep snapshot values schema-serializable; do not put JavaScript `Map`, functions, or services in
   snapshot state.
 - Agents are created on first invocation and process invocations sequentially.

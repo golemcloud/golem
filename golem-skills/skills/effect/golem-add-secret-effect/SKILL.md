@@ -49,8 +49,9 @@ export const SecureAgent = defineAgent({
       success: Info,
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     getInfo: () =>
       Effect.gen(function* () {
         const config = yield* SecureAgentConfig;
@@ -64,7 +65,7 @@ export const SecureAgent = defineAgent({
         };
       }),
   }),
-);
+});
 ```
 
 Register the implementation from the component entry point:
@@ -202,7 +203,7 @@ the CLI rather than checking them into the manifest.
   `Schema.Struct` is not a valid `config` value.
 - Do not use `Config<T>` or `Secret<T>` from the plain TypeScript SDK; Effect agents use
   `defineConfig`, `Schema.Redacted`, and Effect `Redacted`.
-- Config is not a positional `.implement(...)` argument. Yield the config service in an Effect.
+- Config is not an `init` argument. Yield the config service in an Effect.
 - Regular fields are field Effects; secret fields provide a `.get` Effect that yields a redacted
   value.
 - Secret paths retain TypeScript camelCase and are scoped per environment, not per agent instance.

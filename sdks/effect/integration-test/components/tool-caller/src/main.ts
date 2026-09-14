@@ -32,8 +32,9 @@ defineAgent({
   methods: {
     roundtrip: method({ input: { payload: Schema.String }, success: Schema.String }),
   },
-}).implement(({ name }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ name }) => Effect.succeed(name),
+  methods: (name) => ({
     roundtrip: ({ payload }) =>
       Effect.gen(function* () {
         let stdout = ""
@@ -55,4 +56,4 @@ defineAgent({
         return `${result}|${stdout}`
       }).pipe(Effect.orDie),
   }),
-)
+})

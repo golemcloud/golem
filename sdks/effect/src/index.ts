@@ -35,14 +35,6 @@ export * as Agent from "./Agent.js"
 export * as Agents from "./Agents.js"
 
 /**
- * Stream values used by streaming agent methods.
- *
- * @since 1.6.0
- * @category modules
- */
-export * as AgentStream from "./AgentStream.js"
-
-/**
  * Effect-typed wrappers around `wasi:blobstore/*` — container CRUD, object
  * I/O, listing as a `Stream`, and a `forSchema` typed view per container.
  *

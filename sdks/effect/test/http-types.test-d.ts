@@ -24,6 +24,14 @@ import type {
 import { multimodal } from "../src/Multimodal.js"
 import { UnstructuredText } from "../src/Unstructured.js"
 
+// Principal-sensitive read-only dispatch is inferred exclusively from a PrincipalSchema input.
+void method({
+  input: {},
+  success: Schema.String,
+  // @ts-expect-error usesPrincipal is no longer a supported readOnly option
+  readOnly: { cache: "no-cache", usesPrincipal: true },
+})
+
 // ---------------------------------------------------------------------------
 // Mount path: ValidMountPath
 // ---------------------------------------------------------------------------
@@ -171,7 +179,10 @@ defineAgent({
   methods: {
     op: method({ input: {}, success: Schema.String }),
   },
-}).implement(() => Effect.succeed({ op: () => Effect.succeed("ok") }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ op: () => Effect.succeed("ok") }),
+})
 
 // Positive case — agent without `http:` is OK regardless of the
 // constructor params.
@@ -181,7 +192,10 @@ defineAgent({
   methods: {
     op: method({ input: {}, success: Schema.String }),
   },
-}).implement(() => Effect.succeed({ op: () => Effect.succeed("ok") }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ op: () => Effect.succeed("ok") }),
+})
 
 // Positive case — agent with empty constructor params and a literal
 // mount path. `keyof C & string` is `never`, so coverage is trivial.
@@ -192,7 +206,10 @@ defineAgent({
   methods: {
     op: method({ input: {}, success: Schema.String }),
   },
-}).implement(() => Effect.succeed({ op: () => Effect.succeed("ok") }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ op: () => Effect.succeed("ok") }),
+})
 
 // Negative case — mount path is missing `{id}`.
 defineAgent({
@@ -203,7 +220,10 @@ defineAgent({
   methods: {
     op: method({ input: {}, success: Schema.String }),
   },
-}).implement(() => Effect.succeed({ op: () => Effect.succeed("ok") }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ op: () => Effect.succeed("ok") }),
+})
 
 // Negative case — mount path covers neither constructor parameter.
 defineAgent({
@@ -214,7 +234,10 @@ defineAgent({
   methods: {
     op: method({ input: {}, success: Schema.String }),
   },
-}).implement(() => Effect.succeed({ op: () => Effect.succeed("ok") }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ op: () => Effect.succeed("ok") }),
+})
 
 // ---------------------------------------------------------------------------
 // segment-level rules and parser-level checks
@@ -443,7 +466,7 @@ void (() =>
     id: { tenant: Schema.String },
     http: Http.mount("/api/{tenant}"),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // ---------------------------------------------------------------------------
 // webhook-suffix vars validated against constructor params
@@ -456,7 +479,7 @@ void (() =>
     id: { tenant: Schema.String },
     http: Http.mount("/api/{tenant}", { webhookSuffix: "/inbox/{tenant}" }),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // Positive — webhook var matches a bindable constructor key (pipeable form).
 void (() =>
@@ -465,7 +488,7 @@ void (() =>
     id: { tenant: Schema.String },
     http: Http.mount("/api/{tenant}").pipe(Http.withWebhookSuffix("/inbox/{tenant}")),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // Positive — webhook suffix uses only system variables.
 void (() =>
@@ -474,7 +497,7 @@ void (() =>
     id: { tenant: Schema.String },
     http: Http.mount("/api/{tenant}", { webhookSuffix: "/inbox/{agent-type}" }),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // Positive — empty webhook suffix (no vars) is the no-op case.
 void (() =>
@@ -483,7 +506,7 @@ void (() =>
     id: { tenant: Schema.String },
     http: Http.mount("/api/{tenant}", { webhookSuffix: "/inbox" }),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // Negative — webhook var doesn't match any constructor key (literal form).
 void (() =>
@@ -493,7 +516,7 @@ void (() =>
     // @ts-expect-error — webhook-suffix var '{nope}' is not a constructor parameter
     http: Http.mount("/api/{tenant}", { webhookSuffix: "/inbox/{nope}" }),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // Negative — webhook var doesn't match any constructor key (pipeable form).
 void (() =>
@@ -503,7 +526,7 @@ void (() =>
     // @ts-expect-error — webhook-suffix var '{nope}' is not a constructor parameter
     http: Http.mount("/api/{tenant}").pipe(Http.withWebhookSuffix("/inbox/{nope}")),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // Negative — webhook var refers to a Multimodal constructor param.
 // All constructor params are covered by the mount path, so the rejection
@@ -518,7 +541,7 @@ void (() =>
     // @ts-expect-error — webhook-suffix var '{payload}' refers to a multimodal constructor param
     http: Http.mount("/api/{tenant}/{payload}", { webhookSuffix: "/inbox/{payload}" }),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // Negative — webhook var refers to an ElementSpec (UnstructuredText)
 // constructor param. All constructor params are covered by the mount
@@ -533,7 +556,7 @@ void (() =>
     // @ts-expect-error — webhook-suffix var '{text}' refers to an ElementSpec constructor param
     http: Http.mount("/api/{tenant}/{text}", { webhookSuffix: "/inbox/{text}" }),
     methods: {},
-  }).implement(() => Effect.succeed({})))
+  }).implement({ init: () => Effect.void, methods: () => Effect.succeed({}) }))
 
 // ---------------------------------------------------------------------------
 // a method param can be bound at most once across
@@ -1000,7 +1023,10 @@ void defineAgent({
   methods: {
     value: method({ input: {}, success: Schema.Number }),
   },
-}).implement(() => Effect.succeed({ value: () => Effect.succeed(0) }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
+})
 
 // Positive — agent with NO HTTP methods may also omit `http` even when
 // `withHttp` is NOT used. Confirms `HasHttp = false` is the default.
@@ -1010,7 +1036,10 @@ void defineAgent({
   methods: {
     ping: method({ input: {}, success: Schema.Void }),
   },
-}).implement(() => Effect.succeed({ ping: () => Effect.void }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ ping: () => Effect.void }),
+})
 
 // Positive — agent with HTTP methods AND a matching mount compiles.
 void defineAgent({
@@ -1024,7 +1053,10 @@ void defineAgent({
       http: [Http.get("/value")],
     }),
   },
-}).implement(() => Effect.succeed({ value: () => Effect.succeed(0) }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
+})
 
 // Negative — agent with HTTP methods but NO mount is rejected at
 // compile time. The `@ts-expect-error` directive asserts the type
@@ -1040,7 +1072,10 @@ void defineAgent({
       http: [Http.get("/value")],
     }),
   },
-}).implement(() => Effect.succeed({ value: () => Effect.succeed(0) }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
+})
 
 // Negative — same as above but the http endpoint is added via the
 // pipeable `withHttp` combinator. `withHttp` flips `HasHttp` to `true`,
@@ -1052,7 +1087,10 @@ void defineAgent({
   methods: {
     value: method({ input: {}, success: Schema.Number }).pipe(Method.withHttp(Http.get("/value"))),
   },
-}).implement(() => Effect.succeed({ value: () => Effect.succeed(0) }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
+})
 
 // Positive — agent with an EMPTY http array on a method does NOT
 // require a mount. Matches the runtime check (`endpoints.length > 0`).
@@ -1062,7 +1100,10 @@ void defineAgent({
   methods: {
     value: method({ input: {}, success: Schema.Number, http: [] }),
   },
-}).implement(() => Effect.succeed({ value: () => Effect.succeed(0) }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
+})
 
 // Positive — `withHttp` + matching mount also compiles.
 void defineAgent({
@@ -1072,4 +1113,7 @@ void defineAgent({
   methods: {
     value: method({ input: {}, success: Schema.Number }).pipe(Method.withHttp(Http.get("/value"))),
   },
-}).implement(() => Effect.succeed({ value: () => Effect.succeed(0) }))
+}).implement({
+  init: () => Effect.void,
+  methods: () => Effect.succeed({ value: () => Effect.succeed(0) }),
+})

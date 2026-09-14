@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Layer } from "effect"
+import { Effect, Fiber, Layer, Stream } from "effect"
 import * as Bridge from "../src/Bridge.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcClient, type RpcConnection } from "../src/host/RpcClient.js"
@@ -80,11 +80,9 @@ describe("Bridge", () => {
         })
       },
     }
-    const source = Bridge.AgentStream.from([[1, 2], [3]])
+    const source = Stream.make([1, 2], [3])
     const forwarded = Bridge.agentStreamFromHandle(Bridge.agentStreamToHandle(source, codec), codec)
-    expect(await forwarded.next()).toEqual({ done: false, value: [1, 2] })
-    expect(await forwarded.next()).toEqual({ done: false, value: [3] })
-    expect(await forwarded.next()).toEqual({ done: true, value: undefined })
+    expect([...(await Effect.runPromise(Stream.runCollect(forwarded)))]).toEqual([[1, 2], [3]])
   })
 
   it("validates protocol-shaped helper input instead of silently coercing it", () => {

@@ -2,15 +2,15 @@ use crate::app::build::extract_component_metadata::extract_and_store_component_m
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
+use crate::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
+use crate::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
+use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
 use crate::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
 use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode};
 use crate::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
 use crate::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode};
-use crate::bridge_gen::typescript::effect_external::EffectExternalBridgeGenerator;
-use crate::bridge_gen::typescript::effect_guest::EffectGuestBridgeGenerator;
-use crate::bridge_gen::typescript::effect_tool::EffectToolBridgeGenerator;
 use crate::bridge_gen::typescript::tool::TypeScriptToolBridgeGenerator;
 use crate::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptBridgeMode};
 use crate::bridge_gen::{

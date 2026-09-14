@@ -15,6 +15,7 @@
 import { Effect, Redacted, Schema } from "effect"
 import { defineAgent, defineConfig, method, Snapshot } from "@golemcloud/effect-golem"
 import { IgniteClient } from "@golemcloud/effect-golem/ignite2"
+import type { IgniteClient as IgniteClientType } from "@golemcloud/effect-golem/ignite2"
 
 export class IgniteCounterConfig extends defineConfig("IgniteCounter.Config", {
   // Distinct from the other RDBMS counters so the local
@@ -56,9 +57,59 @@ const IgniteCounterSpec = defineAgent({
   },
 })
 
-const IgniteCounterFactory: Parameters<typeof IgniteCounterSpec.implement>[0] = ({ name }, snap) =>
+type IgniteState = {
+  readonly name: string
+  readonly sql: IgniteClientType
+}
+
+const igniteMethods = ({ name, sql }: IgniteState) => {
+  const readCount = (id: string): Effect.Effect<number, unknown> =>
+    sql`SELECT count FROM ignite_counters WHERE id = ${id}`.pipe(
+      Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
+    )
+  return {
+    value: () => readCount(name),
+    add: ({ by }: { by: number }) =>
+      sql`UPDATE ignite_counters SET count = count + ${by} WHERE id = ${name}`.pipe(
+        Effect.flatMap(() => readCount(name)),
+      ),
+    transferAdd: ({ from, by }: { from: string; by: number }) =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql`MERGE INTO ignite_counters (id, count) VALUES (${from}, 0)`
+          yield* sql`UPDATE ignite_counters SET count = count - ${by} WHERE id = ${from}`
+          yield* sql`UPDATE ignite_counters SET count = count + ${by} WHERE id = ${name}`
+          return yield* readCount(name)
+        }),
+      ),
+    failingAdd: ({ by }: { by: number }) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`UPDATE ignite_counters SET count = count + ${by} WHERE id = ${name}`
+            return yield* Effect.fail("forced rollback" as const)
+          }),
+        )
+        .pipe(
+          Effect.match({
+            onFailure: () => "rolled-back" as const,
+            onSuccess: () => "committed" as const,
+          }),
+        ),
+    streamAll: () =>
+      sql`SELECT id, count FROM ignite_counters ORDER BY id`.pipe(
+        Effect.map((rows) =>
+          (rows as ReadonlyArray<{ id: string; count: number | bigint }>).map((r) => ({
+            id: r.id,
+            count: Number(r.count),
+          })),
+        ),
+      ),
+  }
+}
+
+const openIgniteState = (name: string) =>
   Effect.gen(function* () {
-    yield* snap.init({})
     const cfg = yield* IgniteCounterConfig
     const dsnRedacted = yield* cfg.igniteConnectionAddress.get
     const dsnString = Redacted.value(dsnRedacted)
@@ -69,58 +120,21 @@ const IgniteCounterFactory: Parameters<typeof IgniteCounterSpec.implement>[0] = 
       connectionAddress: dsnString,
       transformResultNames: (s) => s.toLowerCase(),
     })
-    // Idempotent DDL.
-    yield* sql`CREATE TABLE IF NOT EXISTS ignite_counters (id VARCHAR PRIMARY KEY, count INT)`
-    // Ignite-specific upsert.
-    yield* sql`MERGE INTO ignite_counters (id, count) VALUES (${name}, 0)`
-
-    const readCount = (id: string): Effect.Effect<number, unknown> =>
-      sql`SELECT count FROM ignite_counters WHERE id = ${id}`.pipe(
-        Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
-      )
-
-    return {
-      value: () => readCount(name),
-      add: ({ by }) =>
-        sql`UPDATE ignite_counters SET count = count + ${by} WHERE id = ${name}`.pipe(
-          Effect.flatMap(() => readCount(name)),
-        ),
-      transferAdd: ({ from, by }) =>
-        sql.withTransaction(
-          Effect.gen(function* () {
-            yield* sql`MERGE INTO ignite_counters (id, count) VALUES (${from}, 0)`
-            yield* sql`UPDATE ignite_counters SET count = count - ${by} WHERE id = ${from}`
-            yield* sql`UPDATE ignite_counters SET count = count + ${by} WHERE id = ${name}`
-            return yield* readCount(name)
-          }),
-        ),
-      failingAdd: ({ by }) =>
-        sql
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* sql`UPDATE ignite_counters SET count = count + ${by} WHERE id = ${name}`
-              return yield* Effect.fail("forced rollback" as const)
-            }),
-          )
-          .pipe(
-            Effect.match({
-              onFailure: () => "rolled-back" as const,
-              onSuccess: () => "committed" as const,
-            }),
-          ),
-      streamAll: () =>
-        sql`SELECT id, count FROM ignite_counters ORDER BY id`.pipe(
-          Effect.map((rows) =>
-            (rows as ReadonlyArray<{ id: string; count: number | bigint }>).map((r) => ({
-              id: r.id,
-              count: Number(r.count),
-            })),
-          ),
-        ),
-    }
+    return { name, sql }
   })
 
-export const IgniteCounter = IgniteCounterSpec.implement(
-  IgniteCounterFactory,
-  (_context, ...args) => IgniteCounterFactory(...args),
-)
+export const IgniteCounter = IgniteCounterSpec.implement<IgniteState>({
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      const state = yield* openIgniteState(name)
+      const { sql } = state
+      yield* sql`CREATE TABLE IF NOT EXISTS ignite_counters (id VARCHAR PRIMARY KEY, count INT)`
+      yield* sql`MERGE INTO ignite_counters (id, count) VALUES (${name}, 0)`
+      return state
+    }),
+  methods: igniteMethods,
+  snapshot: {
+    save: () => Effect.succeed({}),
+    restore: (_saved, context) => openIgniteState(context.id.name),
+  },
+})

@@ -70,10 +70,14 @@ const TickerDefinition = defineAgent({
   },
 });
 
-export const Ticker = TickerDefinition.implement(({ name }) =>
-  Effect.gen(function* () {
+export const Ticker = TickerDefinition.implement({
+  init: ({ name }) =>
+    Effect.gen(function* () {
     const state = yield* Ref.make({ tickCount: 0, running: false });
     const pending = yield* Ref.make<Client.ScheduledInvocation | null>(null);
+    return { name, state, pending };
+  }),
+  methods: ({ name, state, pending }) => {
 
     const scheduleNext = (delaySeconds: number) =>
       Effect.gen(function* () {
@@ -130,8 +134,8 @@ export const Ticker = TickerDefinition.implement(({ name }) =>
       getTickCount: () =>
         Ref.get(state).pipe(Effect.map(({ tickCount }) => tickCount)),
     };
-  }),
-);
+  },
+});
 ```
 
 Register the implementation from the component entry point:

@@ -19,6 +19,7 @@
 import { Effect, Schema } from "effect"
 import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem"
 import { SqliteClient } from "@golemcloud/effect-golem/sqlite"
+import type { SqliteClient as SqliteClientType } from "@golemcloud/effect-golem/sqlite"
 
 const SqliteCounterSpec = defineAgent({
   name: "SqliteCounter",
@@ -56,36 +57,47 @@ const SqliteCounterSpec = defineAgent({
   },
 })
 
-const SqliteCounterFactory: Parameters<typeof SqliteCounterSpec.implement>[0] = ({ name }, snap) =>
+type SqliteState = {
+  readonly name: string
+  readonly sql: SqliteClientType
+}
+
+const sqliteMethods = ({ name, sql }: SqliteState) => {
+  const readCount = (): Effect.Effect<number, unknown> =>
+    sql`SELECT count FROM counters WHERE id = ${name}`.pipe(
+      Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
+    )
+
+  return {
+    value: () => readCount(),
+    increment: () =>
+      sql`UPDATE counters SET count = count + 1 WHERE id = ${name}`.pipe(
+        Effect.flatMap(() => readCount()),
+      ),
+    add: ({ by }: { by: number }) =>
+      sql`UPDATE counters SET count = count + ${by} WHERE id = ${name}`.pipe(
+        Effect.flatMap(() => readCount()),
+      ),
+    reset: () => sql`UPDATE counters SET count = 0 WHERE id = ${name}`.pipe(Effect.asVoid),
+  }
+}
+
+const openSqliteState = (name: string) =>
   Effect.gen(function* () {
-    yield* snap.init({})
     const sql = yield* SqliteClient.make({ filename: ":memory:" })
     yield* sql.exec(
       `CREATE TABLE IF NOT EXISTS counters (id TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)`,
     )
     yield* sql`INSERT OR IGNORE INTO counters (id, count) VALUES (${name}, 0)`
-    yield* snap.attachDatabase("counters", sql)
-
-    const readCount = (): Effect.Effect<number, unknown> =>
-      sql`SELECT count FROM counters WHERE id = ${name}`.pipe(
-        Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
-      )
-
-    return {
-      value: () => readCount(),
-      increment: () =>
-        sql`UPDATE counters SET count = count + 1 WHERE id = ${name}`.pipe(
-          Effect.flatMap(() => readCount()),
-        ),
-      add: ({ by }) =>
-        sql`UPDATE counters SET count = count + ${by} WHERE id = ${name}`.pipe(
-          Effect.flatMap(() => readCount()),
-        ),
-      reset: () => sql`UPDATE counters SET count = 0 WHERE id = ${name}`.pipe(Effect.asVoid),
-    }
+    return { name, sql }
   })
 
-export const SqliteCounter = SqliteCounterSpec.implement(
-  SqliteCounterFactory,
-  (_context, ...args) => SqliteCounterFactory(...args),
-)
+export const SqliteCounter = SqliteCounterSpec.implement<SqliteState>({
+  init: ({ name }) => openSqliteState(name),
+  methods: sqliteMethods,
+  snapshot: {
+    save: () => Effect.succeed({}),
+    restore: (_saved, context) => openSqliteState(context.id.name),
+    databases: (state) => ({ counters: state.sql }),
+  },
+})

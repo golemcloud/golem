@@ -40,7 +40,7 @@ const WebhookAgentError = Schema.Struct({
   message: Schema.String,
 })
 
-export const WebhookAgent = defineAgent({
+const WebhookAgentSpec = defineAgent({
   name: "WebhookAgent",
   description: "Exercises Webhook.create + Webhook.<handle>.await round-trips.",
   mode: "durable",
@@ -73,46 +73,49 @@ export const WebhookAgent = defineAgent({
       http: [Http.get("/is-primed")],
     }),
   },
-}).implement(({ name }) =>
-  Effect.gen(function* () {
-    yield* Effect.logInfo("WebhookAgent constructed").pipe(Effect.annotateLogs({ name }))
-    const slot = yield* Ref.make<PrimedWebhook | null>(null)
-    return {
-      prime: () =>
-        Effect.gen(function* () {
-          const existing = yield* Ref.get(slot)
-          if (existing !== null) {
-            return yield* Effect.fail({
-              code: "already-primed" as const,
-              message: `WebhookAgent("${name}") already has a primed webhook awaiting POST — call waitForEvent first`,
-            })
-          }
-          // Webhook.create + slot.set are infrastructure — escalate
-          // any AgentsHostError / WebhookHostError to defects so they
-          // do not pollute the typed domain error channel.
-          const handle = yield* Webhook.create.pipe(Effect.orDie)
-          yield* Ref.set(slot, { url: handle.url, handle })
-          yield* Effect.logInfo("webhook primed").pipe(
-            Effect.annotateLogs({ name, url: handle.url }),
-          )
-          return { url: handle.url }
-        }),
-      waitForEvent: () =>
-        Effect.gen(function* () {
-          const primed = yield* Ref.get(slot)
-          if (primed === null) {
-            return yield* Effect.fail({
-              code: "not-primed" as const,
-              message: "webhook not primed — call `prime` first to mint the URL",
-            })
-          }
-          // `await` carries an AgentsHostError typed failure; treat
-          // it as infrastructure and escalate to defect.
-          const payload = yield* primed.handle.await.pipe(Effect.orDie)
-          yield* Ref.set(slot, null)
-          return { url: primed.url, body: payload.text() }
-        }),
-      isPrimed: () => Ref.get(slot).pipe(Effect.map((p) => p !== null)),
-    }
-  }),
-)
+})
+
+interface WebhookAgentState {
+  readonly name: string
+  readonly slot: Ref.Ref<PrimedWebhook | null>
+}
+
+const webhookMethods = ({ name, slot }: WebhookAgentState) => ({
+  prime: () =>
+    Effect.gen(function* () {
+      const existing = yield* Ref.get(slot)
+      if (existing !== null) {
+        return yield* Effect.fail({
+          code: "already-primed" as const,
+          message: `WebhookAgent("${name}") already has a primed webhook awaiting POST — call waitForEvent first`,
+        })
+      }
+      const handle = yield* Webhook.create.pipe(Effect.orDie)
+      yield* Ref.set(slot, { url: handle.url, handle })
+      yield* Effect.logInfo("webhook primed").pipe(Effect.annotateLogs({ name, url: handle.url }))
+      return { url: handle.url }
+    }),
+  waitForEvent: () =>
+    Effect.gen(function* () {
+      const primed = yield* Ref.get(slot)
+      if (primed === null) {
+        return yield* Effect.fail({
+          code: "not-primed" as const,
+          message: "webhook not primed — call `prime` first to mint the URL",
+        })
+      }
+      const payload = yield* primed.handle.await.pipe(Effect.orDie)
+      yield* Ref.set(slot, null)
+      return { url: primed.url, body: payload.text() }
+    }),
+  isPrimed: () => Ref.get(slot).pipe(Effect.map((p) => p !== null)),
+})
+
+export const WebhookAgent = WebhookAgentSpec.implement<WebhookAgentState>({
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      yield* Effect.logInfo("WebhookAgent constructed").pipe(Effect.annotateLogs({ name }))
+      return { name, slot: yield* Ref.make<PrimedWebhook | null>(null) }
+    }),
+  methods: webhookMethods,
+})

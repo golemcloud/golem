@@ -88,8 +88,8 @@ authentication because it inherits `auth: true` from the mount.
 
 ## Reading the Authenticated Principal
 
-Import the `Principal` namespace and yield the `Principal.Principal` Context service inside a
-handler to read the caller for that invocation:
+Declare `Principal.PrincipalSchema` as a bare method input to receive the caller automatically. It
+does not consume an HTTP body, path, query, or header field:
 
 ```typescript
 import { Effect, Schema } from "effect";
@@ -109,30 +109,26 @@ export const CallerAgent = defineAgent({
   http: Http.mount("/callers/{name}", { auth: true }),
   methods: {
     whoAmI: method({
-      input: {},
+      input: { caller: Principal.PrincipalSchema },
       success: Schema.String,
       http: [Http.get("/whoami")],
     }),
   },
-}).implement(() =>
-  Effect.succeed({
-    whoAmI: () =>
-      Effect.gen(function* () {
-        const caller = yield* Principal.Principal;
-        return caller.tag === "oidc" ? caller.val.sub : caller.tag;
-      }),
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
+    whoAmI: ({ caller }) =>
+      Effect.succeed(caller.tag === "oidc" ? caller.val.sub : caller.tag),
   }),
-);
+});
 ```
 
 For an OIDC principal, narrow `caller.tag === "oidc"` before reading the subject from
-`caller.val.sub`. Principals are host-supplied services, not method parameters, request-body
-fields, or path/query/header bindings.
+`caller.val.sub`. The principal parameter is host-supplied and is not part of request binding.
 
-The principal available while the `.implement(...)` initialization Effect runs is the principal
-that created the agent. The principal yielded inside a returned method handler is the current
-invocation's caller. For caller-based authorization, always read `Principal.Principal` inside the
-handler rather than capturing the initialization-time principal.
+`Principal.Principal` in `init` is the principal that created the agent. For caller-based
+authorization, use the auto-injected method input shown above rather than capturing that
+initialization-time principal.
 
 ## Deployment Configuration
 

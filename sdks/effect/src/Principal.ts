@@ -43,14 +43,21 @@ export type AgentPrincipal = AgentCommon.AgentPrincipal
  */
 export type GolemUserPrincipal = AgentCommon.GolemUserPrincipal
 
+declare const principalSchemaBrand: unique symbol
+
+/** Type-level marker used to recognize host-injected principal parameters. @since 1.6.0 @category models */
+export interface PrincipalInputSchema extends Schema.Schema<PrincipalValue> {
+  readonly [principalSchemaBrand]: true
+}
+
 /** Schema for principals as ordinary values and auto-injected agent inputs. @since 1.6.0 @category schemas */
-export const PrincipalSchema: Schema.Schema<PrincipalValue> = Schema.declare(
+export const PrincipalSchema: PrincipalInputSchema = Schema.declare(
   (value): value is PrincipalValue => {
     if (typeof value !== "object" || value === null || !("tag" in value)) return false
     const tag = (value as { readonly tag: unknown }).tag
     return tag === "oidc" || tag === "agent" || tag === "golem-user" || tag === "anonymous"
   },
-).pipe(Schema.annotate({ [witPrincipalAnnotationKey]: true }))
+).pipe(Schema.annotate({ [witPrincipalAnnotationKey]: true })) as unknown as PrincipalInputSchema
 
 /**
  * Effect service exposing the active {@link Principal}.

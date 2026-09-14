@@ -2,7 +2,6 @@ import { Duration, Effect, Ref, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
-import type { Principal } from "./Principal.js"
 import {
   __getUnderlyingDatabase,
   isSqliteClient,
@@ -12,26 +11,16 @@ import {
 /**
  * Per-agent snapshotting configuration.
  *
- * Snapshotting is opt-in: an agent without a `snapshot` field maps to
- * `agent-type.snapshotting = disabled` and the runtime never invokes
- * `save`/`load`. When opted in via {@link Snapshot.define} (auto,
- * schema-driven) or {@link Snapshot.custom} (user-managed bytes), the
- * SDK:
+ * Snapshotting is opt-in. A snapshotted agent supplies separate `initialize`
+ * and `restore` factories and a state {@link Strategy}. The strategy describes
+ * how the initialized state is saved and how a fresh state is constructed from
+ * a saved value. {@link ref} is the standard strategy for state held in an
+ * Effect `Ref`.
  *
- * - emits the matching `snapshotting` value into the agent type
- *   metadata,
- * - constructs a fresh {@link SnapshotBinding} per agent instance and
- *   passes it to `impl` as the second argument,
- * - exposes save/load through the host's
- *   `golem:api/save-snapshot@1.5.0` / `golem:api/load-snapshot@1.5.0`
- *   exports, with envelopes that are bit-for-bit compatible with the
- *   official `golem-ts-sdk`.
- *
- * On restore the host calls `load-snapshot.load` instead of
- * `agent-guest.guest.initialize`. The SDK reads the agent's own ID
- * (via `wasi:cli/environment` / `golem:agent/host.parse-agent-id`),
- * runs the constructor with those parameters, then applies the
- * snapshot.
+ * {@link define} uses a schema to encode and decode a plain saved value.
+ * A strategy may also expose named SQLite databases from its live state; all
+ * names must be declared by the definition's `databases` tuple. Use
+ * {@link custom} when the saved value is already a binary payload.
  *
  * @since 1.5.0
  */
@@ -140,55 +129,7 @@ export class InvalidSnapshotError {
 }
 
 /**
- * Raised when an agent declared `snapshot` but `impl` never called
- * `init`/`register`.
- *
- * @since 1.5.0
- * @category errors
- */
-export class SnapshotNotBoundError {
-  readonly _tag = "SnapshotNotBoundError"
-  readonly message: string
-  constructor(readonly agentName: string) {
-    this.message = `SnapshotNotBoundError: agent '${agentName}' declared a snapshot but did not call snap.init / snap.register inside impl`
-  }
-}
-
-/**
- * Raised when `init`/`register` is called more than once during a
- * single agent lifetime.
- *
- * @since 1.5.0
- * @category errors
- */
-export class SnapshotAlreadyBoundError {
-  readonly _tag = "SnapshotAlreadyBoundError"
-  readonly message: string
-  constructor(readonly agentName: string) {
-    this.message = `SnapshotAlreadyBoundError: agent '${agentName}' has already bound its snapshot — snap.init / snap.register may only be called once per impl`
-  }
-}
-
-/**
- * Raised when `attachDatabase` is called more than once for the same
- * name.
- *
- * @since 1.5.0
- * @category errors
- */
-export class SnapshotDatabaseDuplicateAttachError {
-  readonly _tag = "SnapshotDatabaseDuplicateAttachError"
-  readonly message: string
-  constructor(
-    readonly agentName: string,
-    readonly databaseName: string,
-  ) {
-    this.message = `SnapshotDatabaseDuplicateAttachError: agent '${agentName}' attached database '${databaseName}' more than once`
-  }
-}
-
-/**
- * Raised when `attachDatabase` is called with a name that was not
+ * Raised when a snapshot strategy exposes a database name that was not
  * declared in `Snapshot.define({ databases: [...] })`.
  *
  * @since 1.5.0
@@ -201,15 +142,14 @@ export class SnapshotDatabaseNotDeclaredError {
     readonly agentName: string,
     readonly databaseName: string,
   ) {
-    this.message = `SnapshotDatabaseNotDeclaredError: agent '${agentName}' called snap.attachDatabase('${databaseName}', ...) but '${databaseName}' is not listed in 'Snapshot.define({ databases: [...] })'`
+    this.message = `SnapshotDatabaseNotDeclaredError: agent '${agentName}' exposed database '${databaseName}' but '${databaseName}' is not listed in 'Snapshot.define({ databases: [...] })'`
   }
 }
 
 /**
  * Raised when, at save or load time, a declared database name has no
- * corresponding `attachDatabase` call (`phase: "save"` — during
- * dispatch-save; `phase: "load-attach"` — during dispatch-load, after
- * the constructor was re-run by the load path) or no corresponding
+ * corresponding database exposed by the state strategy (`phase: "save"` or
+ * `phase: "load-attach"`) or no corresponding
  * part in the loaded envelope (`phase: "load-envelope"`).
  *
  * @since 1.5.0
@@ -225,10 +165,10 @@ export class SnapshotDatabaseMissingPartError {
   ) {
     switch (phase) {
       case "save":
-        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' save: declared database '${databaseName}' but never called snap.attachDatabase('${databaseName}', ...) inside impl`
+        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' save: declared database '${databaseName}' but the snapshot strategy did not expose it`
         break
       case "load-attach":
-        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: declared database '${databaseName}' but never called snap.attachDatabase('${databaseName}', ...) inside impl while restoring`
+        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: declared database '${databaseName}' but the restored state's snapshot strategy did not expose it`
         break
       case "load-envelope":
         this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: snapshot envelope is missing required 'db:${databaseName}' part`
@@ -305,15 +245,13 @@ const DB_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 /**
  * Schema-driven snapshot definition. Produced by {@link Snapshot.define}.
  *
- * `State` is the in-memory shape the user wants persisted. The SDK
- * manages a `Ref.Ref<State>` and (when the host calls `save`) encodes
- * its current value via the provided `Schema.Top`, JSON-stringifies it,
- * and wraps the result in the JSON envelope.
+ * The schema describes the plain saved value produced by the agent's state
+ * strategy. The SDK encodes that value, JSON-stringifies it, and wraps the
+ * result in the JSON envelope.
  *
  * The optional `databases` tuple declares one or more SQLite databases
- * that should be captured alongside the auto state. Each name must be
- * registered exactly once via the per-instance binding's
- * `attachDatabase(name, db)` call. When `databases` is non-empty the
+ * that may be exposed by the state strategy and captured alongside the auto
+ * state. When `databases` is non-empty the
  * envelope on the wire becomes `multipart/mixed` with one
  * `application/x-sqlite3` part per declared database.
  *
@@ -325,15 +263,15 @@ export interface AutoSnapshotDef<S extends Schema.Top, DBs extends ReadonlyArray
   readonly schema: S
   readonly policy: SnapshotPolicy
   readonly databases?: DBs
-  /** Phantom marker so `SnapshotBinding<S>` can recover `State`. */
+  /** Phantom marker preserving the schema's decoded state type. */
   readonly [snapshotDefBrand]?: S["Type"]
 }
 
 /**
  * User-managed snapshot definition. Produced by {@link Snapshot.custom}.
  *
- * The user is responsible for serializing/deserializing their own state
- * through the `register({ save, load })` call inside `impl`.
+ * The agent's snapshot strategy is responsible for producing and restoring
+ * the binary payload.
  *
  * @since 1.5.0
  * @category models
@@ -353,115 +291,14 @@ export interface CustomSnapshotDef {
 export type SnapshotDef = AutoSnapshotDef<Schema.Top, ReadonlyArray<string>> | CustomSnapshotDef
 
 /**
- * The per-instance binding object the dispatcher passes to `impl` as
- * its second argument when an agent declares a `snapshot` field.
- *
- * The shape depends on which definition variant was used: `init` +
- * `attachDatabase` for auto, `register` for custom.
- *
- * The optional `R` parameter widens the user-supplied custom-handler
- * effects' R-channel — defaults to `Principal` (matching the original
- * behaviour). The agent dispatcher specialises this to `Principal |
- * CfgTagOf<F>` so user effects in `Snapshot.custom({...})`'s `save` /
- * `load` may also yield from the agent's config `Context.Service`
- * (when one is declared via `defineAgent({ config: ... })`). Auto
- * bindings ignore `R` because they don't run user effects on save.
- *
- * @since 1.5.0
- * @category models
- */
-export type SnapshotBinding<S, R = Principal> =
-  S extends AutoSnapshotDef<infer Sc, infer DBs>
-    ? AutoSnapshotBinding<Sc, DBs>
-    : S extends CustomSnapshotDef
-      ? CustomSnapshotBinding<R>
-      : never
-
-/**
- * Acceptable second argument to `attachDatabase`.
+ * SQLite database handle accepted from a snapshot strategy.
  *
  * @since 1.5.0
  * @category models
  */
 export type AttachableDatabase = SqliteClient | DatabaseSync
 
-/**
- * Auto-variant binding: yields a `Ref` initialised by the user.
- *
- * @since 1.5.0
- * @category models
- */
-export interface AutoSnapshotBinding<S extends Schema.Top, DBs extends ReadonlyArray<string> = []> {
-  /**
-   * Allocate the snapshotted `Ref.Ref<State>` with the supplied
-   * `initial` value and register it with the SDK as the snapshot
-   * source. Must be called exactly once inside `impl`.
-   */
-  readonly init: (
-    initial: S["Type"],
-  ) => Effect.Effect<Ref.Ref<S["Type"]>, SnapshotAlreadyBoundError>
-  /**
-   * Register a SQLite database to be captured alongside the auto
-   * state. `name` must be one of the names declared on
-   * `Snapshot.define({ databases: ... })`. Each declared name must be
-   * attached exactly once before `impl` returns, otherwise
-   * `dispatchSaveSnapshot` raises {@link SnapshotDatabaseMissingPartError}.
-   */
-  readonly attachDatabase: (
-    name: DBs[number],
-    db: AttachableDatabase,
-  ) => Effect.Effect<void, SnapshotDatabaseDuplicateAttachError | SnapshotDatabaseNotDeclaredError>
-}
-
-/**
- * Custom-variant binding: lets the user provide save/load Effects.
- *
- * `R` defaults to `Principal` (the original behaviour). The agent
- * dispatcher specialises this to `Principal | CfgTagOf<F>` when the
- * surrounding agent declares a `config:` field, so user save/load
- * effects can also yield from that config `Context.Service`.
- *
- * @since 1.5.0
- * @category models
- */
-export interface CustomSnapshotBinding<R = Principal> {
-  /**
-   * Provide the per-instance `save` and `load` effects. Must be called
-   * exactly once inside `impl`. `save` returns the raw user payload;
-   * the SDK wraps it in the binary v2 envelope. `load` is invoked with
-   * the inner user payload, post-envelope-decoding.
-   */
-  readonly register: (
-    handlers: CustomSnapshotHandlers<R>,
-  ) => Effect.Effect<void, SnapshotAlreadyBoundError>
-}
-
-/**
- * User-supplied save/load handlers for {@link Snapshot.custom}.
- *
- * `R` defaults to {@link Principal} (the dispatcher always provides
- * the snapshotted agent's principal before running the handler). When
- * the agent also declares a `config:` field, the dispatcher additionally
- * provides that config `Context.Service` and the agent's `impl`
- * receives a `SnapshotBinding<S, Principal | CfgTagOf<F>>` whose
- * `register(...)` accepts handlers parameterised on the same wider `R`.
- *
- * Any service NOT in this `R` (a user-defined service unknown to the
- * dispatcher) must be supplied by the user with `Effect.provideService` /
- * `Effect.provide` BEFORE the effect reaches `register({...})`.
- *
- * @since 1.5.0
- * @category models
- */
-export interface CustomSnapshotHandlers<R = Principal> {
-  readonly save: Effect.Effect<Uint8Array, unknown, R>
-  readonly load: (
-    payload: Uint8Array,
-    context: SnapshotRestorationContext,
-  ) => Effect.Effect<void, unknown, R>
-}
-
-/** Context supplied when restoring a fresh custom-snapshot instance. @since 1.6.0 @category models */
+/** Context supplied when restoring a fresh snapshotted agent instance. @since 1.6.0 @category models */
 export interface SnapshotRestorationContext<
   Id = Readonly<Record<string, unknown>>,
   Config = unknown,
@@ -475,25 +312,72 @@ export interface SnapshotRestorationContext<
   readonly config: Config
 }
 
+/**
+ * State lifecycle used by a snapshotted agent's initialization, methods, and
+ * restoration factory. `save` projects live state to the schema-encoded plain
+ * value (or custom bytes), while `restore` constructs fresh live state. Use
+ * `databases` to expose declared SQLite handles owned by the live state.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface Strategy<
+  State,
+  Saved,
+  R = never,
+  Id = Readonly<Record<string, unknown>>,
+  Config = unknown,
+> {
+  readonly save: (state: State) => Effect.Effect<Saved, unknown, R>
+  readonly restore: (
+    saved: Saved,
+    context: SnapshotRestorationContext<Id, Config>,
+  ) => Effect.Effect<State, unknown, R>
+  readonly databases?: (state: State) => Readonly<Record<string, AttachableDatabase>>
+}
+
+/**
+ * Preserve inference for a typed snapshot strategy, including its agent ID and
+ * configuration available through {@link SnapshotRestorationContext}.
+ *
+ * @since 1.6.0
+ * @category constructors
+ */
+export const strategy = <
+  State,
+  Saved,
+  R = never,
+  Id = Readonly<Record<string, unknown>>,
+  Config = unknown,
+>(
+  value: Strategy<State, Saved, R, Id, Config>,
+): Strategy<State, Saved, R, Id, Config> => value
+
+/**
+ * Snapshot strategy for state held in an Effect `Ref`; methods operate on the
+ * `Ref`, while snapshots contain only its plain value.
+ *
+ * @since 1.6.0
+ * @category constructors
+ */
+export const ref = <Saved>(): Strategy<Ref.Ref<Saved>, Saved> => ({
+  save: Ref.get,
+  restore: (saved) => Ref.make(saved),
+})
+
 // ---------------------------------------------------------------------------
 // Builders
 // ---------------------------------------------------------------------------
 
 /**
- * Schema-driven snapshot definition (the typical case): the SDK manages
- * a `Ref.Ref<State>` whose snapshot encoding is driven by the supplied
- * `Schema.Top`.
- *
- * The returned value goes into `defineAgent({ snapshot: ... })`. Inside
- * `impl`, the second argument is a {@link AutoSnapshotBinding} whose
- * `init(initial)` produces the actual `Ref`.
+ * Schema-driven snapshot definition for the plain value produced by the
+ * agent's snapshot strategy. The initialized state itself may be richer, such
+ * as an Effect `Ref`; only the strategy's saved value is encoded by `schema`.
  *
  * The optional `databases` tuple — typically declared as
  * `databases: ["counters"] as const` — pre-declares one or more
- * SQLite databases that must each be attached exactly once via
- * `snap.attachDatabase(name, db)` before `impl` returns. The set of
- * accepted names is reflected at compile time in the binding's
- * `attachDatabase` first argument.
+ * SQLite databases that the strategy may expose from initialized or restored
+ * state. Save and load continue to reject a missing declared database.
  *
  * @since 1.5.0
  * @category constructors
@@ -517,9 +401,8 @@ export const define = <S extends Schema.Top, const DBs extends ReadonlyArray<str
       }
 
 /**
- * User-managed snapshot definition: the user provides per-instance
- * `save`/`load` effects from inside `impl` via the
- * {@link CustomSnapshotBinding} that the dispatcher passes in.
+ * Binary snapshot definition for a strategy that directly saves and restores
+ * `Uint8Array` values.
  *
  * @since 1.5.0
  * @category constructors
@@ -605,14 +488,12 @@ export const compileSnapshot = (
   })
 
 // ---------------------------------------------------------------------------
-// Per-instance binding + bound state
+// Per-instance snapshot state
 // ---------------------------------------------------------------------------
 
 /**
- * Result of a successful `impl` for an agent that declared a snapshot.
- * Read by the dispatcher after `impl` returns; carries the actual Ref
- * (auto) or save/load effects (custom) the user bound from inside
- * `impl`.
+ * Runtime snapshot resources resolved from a compiled definition and the
+ * databases exposed by an initialized or restored state.
  *
  * @since 1.5.0
  * @category models
@@ -620,105 +501,46 @@ export const compileSnapshot = (
 export type BoundSnapshot =
   | {
       readonly kind: "auto"
-      readonly ref: Ref.Ref<unknown>
       readonly schema: Schema.Top
-      /** Names declared on `Snapshot.define({ databases })`. */
       readonly declaredDatabases: ReadonlyArray<string>
-      /** DBs the user attached via `attachDatabase(name, db)`. */
       readonly databases: ReadonlyMap<string, DatabaseSync>
     }
-  | {
-      readonly kind: "custom"
-      // Dispatcher-internal storage: the user's handlers were originally
-      // typed `CustomSnapshotHandlers<Principal>` (default) or
-      // `CustomSnapshotHandlers<Principal | CfgTagOf<F>>` (when the
-      // surrounding agent declares a `config:` field). The dispatcher
-      // erases the per-agent R here and re-provides each known service
-      // (Principal, plus the agent's optional config tag) at the call
-      // site, ending with a runtime cast through to `Effect<_,_,never>`.
-      readonly handlers: CustomSnapshotHandlers<any>
-    }
+  | { readonly kind: "custom" }
 
 /**
- * Dispatcher-internal: a binding object plus a way to read whatever the
- * user bound. The same shape underlies both `init` (auto) and
- * `register` (custom).
+ * Resolve the SQLite handles exposed by an initialized or restored state.
+ * Unknown names are rejected immediately; declared names omitted here remain
+ * subject to the save/load missing-part checks.
  *
- * @since 1.5.0
- * @category models
- */
-export interface BindingHandle {
-  readonly binding: SnapshotBinding<SnapshotDef>
-  readonly read: () => BoundSnapshot | null
-}
-
-/**
- * Construct a fresh per-instance binding for the given compiled
- * snapshot definition. The dispatcher passes the resulting `binding` to
- * `impl` as its second argument; after `impl` resolves, the dispatcher
- * calls `read()` to capture whatever the user bound (or `null` if
- * nothing was bound — that's a `SnapshotNotBoundError`).
- *
- * @since 1.5.0
+ * @since 1.6.0
  * @category constructors
  */
-export const createBinding = (agentName: string, compiled: CompiledSnapshot): BindingHandle => {
-  let bound: BoundSnapshot | null = null
-  if (compiled.kind === "auto") {
-    const declaredSet = new Set(compiled.declaredDatabases)
-    const databases = new Map<string, DatabaseSync>()
-    const auto: AutoSnapshotBinding<Schema.Top, ReadonlyArray<string>> = {
-      init: (initial) =>
-        Effect.gen(function* () {
-          if (bound !== null) {
-            return yield* Effect.fail(new SnapshotAlreadyBoundError(agentName))
-          }
-          const ref = yield* Ref.make(initial as unknown)
-          bound = {
-            kind: "auto",
-            ref,
-            schema: compiled.schema,
-            declaredDatabases: compiled.declaredDatabases,
-            databases,
-          }
-          return ref
-        }),
-      attachDatabase: (name, db) =>
-        Effect.suspend(
-          (): Effect.Effect<
-            void,
-            SnapshotDatabaseNotDeclaredError | SnapshotDatabaseDuplicateAttachError
-          > => {
-            if (!declaredSet.has(name)) {
-              return Effect.fail(new SnapshotDatabaseNotDeclaredError(agentName, name))
-            }
-            if (databases.has(name)) {
-              return Effect.fail(new SnapshotDatabaseDuplicateAttachError(agentName, name))
-            }
-            const handle = isSqliteClient(db) ? __getUnderlyingDatabase(db) : (db as DatabaseSync)
-            databases.set(name, handle)
-            return Effect.void
-          },
-        ),
+export const createSnapshot = (
+  agentName: string,
+  compiled: CompiledSnapshot,
+  databases: Readonly<Record<string, AttachableDatabase>> = {},
+): BoundSnapshot => {
+  if (compiled.kind === "custom") {
+    const unknownName = Object.keys(databases)[0]
+    if (unknownName !== undefined) {
+      throw new SnapshotDatabaseNotDeclaredError(agentName, unknownName)
     }
-    return {
-      binding: auto as unknown as SnapshotBinding<SnapshotDef>,
-      read: () => bound,
-    }
+    return { kind: "custom" }
   }
-  const customBinding: CustomSnapshotBinding = {
-    register: (handlers) =>
-      Effect.suspend(() => {
-        if (bound !== null) {
-          return Effect.fail(new SnapshotAlreadyBoundError(agentName))
-        }
-        bound = { kind: "custom", handlers }
-        return Effect.void
-      }),
+
+  const declared = new Set(compiled.declaredDatabases)
+  const resolved = new Map<string, DatabaseSync>()
+  for (const [name, database] of Object.entries(databases)) {
+    if (!declared.has(name)) {
+      throw new SnapshotDatabaseNotDeclaredError(agentName, name)
+    }
+    resolved.set(name, isSqliteClient(database) ? __getUnderlyingDatabase(database) : database)
   }
   return {
-    binding: customBinding as unknown as SnapshotBinding<SnapshotDef>,
-    read: () => bound,
+    kind: "auto",
+    schema: compiled.schema,
+    declaredDatabases: compiled.declaredDatabases,
+    databases: resolved,
   }
 }
 

@@ -88,90 +88,89 @@ export const QuotaTester = defineAgent({
       success: ReserveOutcome,
     }),
   },
-}).implement(() =>
-  Effect.gen(function* () {
-    return {
-      acquire: ({ expected }) =>
-        Effect.gen(function* () {
-          yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(expected))
-          return {
-            resourceName: RESOURCE_NAME,
-            expectedUse: expected,
-          }
-        }),
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
+    acquire: ({ expected }) =>
+      Effect.gen(function* () {
+        yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(expected))
+        return {
+          resourceName: RESOURCE_NAME,
+          expectedUse: expected,
+        }
+      }),
 
-      withReservationOk: ({ amount, used }) =>
-        Effect.gen(function* () {
-          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-          return yield* Quota.withReservation(token, BigInt(amount), () =>
-            Effect.succeed({ used: BigInt(used), value: `committed:${used}` }),
-          )
-        }),
+    withReservationOk: ({ amount, used }) =>
+      Effect.gen(function* () {
+        const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+        return yield* Quota.withReservation(token, BigInt(amount), () =>
+          Effect.succeed({ used: BigInt(used), value: `committed:${used}` }),
+        )
+      }),
 
-      withReservationFailure: ({ amount }) =>
-        Effect.gen(function* () {
-          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-          return yield* Quota.withReservation(token, BigInt(amount), () =>
-            Effect.gen(function* () {
-              yield* Effect.fail("body-said-no" as const)
-              return { used: 0n, value: "unreachable" }
-            }),
-          ).pipe(Effect.catch((e) => Effect.succeed(`failed:${String(e)}`)))
-        }),
+    withReservationFailure: ({ amount }) =>
+      Effect.gen(function* () {
+        const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+        return yield* Quota.withReservation(token, BigInt(amount), () =>
+          Effect.gen(function* () {
+            yield* Effect.fail("body-said-no" as const)
+            return { used: 0n, value: "unreachable" }
+          }),
+        ).pipe(Effect.catch((e) => Effect.succeed(`failed:${String(e)}`)))
+      }),
 
-      manualReserveCommit: ({ amount, used }) =>
-        Effect.gen(function* () {
-          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-          yield* Effect.scoped(
-            Effect.gen(function* () {
-              const reservation = yield* Quota.reserve(token, BigInt(amount))
-              yield* Quota.commit(reservation, BigInt(used))
-            }),
-          )
-          return `manual-commit:${used}`
-        }),
+    manualReserveCommit: ({ amount, used }) =>
+      Effect.gen(function* () {
+        const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const reservation = yield* Quota.reserve(token, BigInt(amount))
+            yield* Quota.commit(reservation, BigInt(used))
+          }),
+        )
+        return `manual-commit:${used}`
+      }),
 
-      manualReserveDrop: ({ amount }) =>
-        Effect.gen(function* () {
-          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-          yield* Effect.scoped(
-            Effect.gen(function* () {
-              yield* Quota.reserve(token, BigInt(amount))
-              // No explicit commit — scope close ≡ host commit(0).
-            }),
-          )
-          return "manual-drop:0"
-        }),
+    manualReserveDrop: ({ amount }) =>
+      Effect.gen(function* () {
+        const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Quota.reserve(token, BigInt(amount))
+            // No explicit commit — scope close ≡ host commit(0).
+          }),
+        )
+        return "manual-drop:0"
+      }),
 
-      splitMerge: ({ initial, child }) =>
-        Effect.gen(function* () {
-          const parent = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(initial))
-          const childToken = yield* Quota.split(parent, BigInt(child))
-          yield* Quota.merge(parent, childToken)
-          return {
-            afterSplitParent: (BigInt(initial) - BigInt(child)).toString(),
-            afterSplitChild: child,
-            afterMerge: initial,
-          }
-        }),
+    splitMerge: ({ initial, child }) =>
+      Effect.gen(function* () {
+        const parent = yield* Quota.acquireQuotaToken(RESOURCE_NAME, BigInt(initial))
+        const childToken = yield* Quota.split(parent, BigInt(child))
+        yield* Quota.merge(parent, childToken)
+        return {
+          afterSplitParent: (BigInt(initial) - BigInt(child)).toString(),
+          afterSplitChild: child,
+          afterMerge: initial,
+        }
+      }),
 
-      exhaustAndReject: ({ amount }) =>
-        Effect.gen(function* () {
-          const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
-          return yield* Quota.withReservation(token, BigInt(amount), () =>
+    exhaustAndReject: ({ amount }) =>
+      Effect.gen(function* () {
+        const token = yield* Quota.acquireQuotaToken(RESOURCE_NAME, 1n)
+        return yield* Quota.withReservation(token, BigInt(amount), () =>
+          Effect.succeed({
+            used: BigInt(amount),
+            value: { _tag: "ok" as const, used: amount },
+          }),
+        ).pipe(
+          Effect.catchTag("FailedReservationError", (e) =>
             Effect.succeed({
-              used: BigInt(amount),
-              value: { _tag: "ok" as const, used: amount },
+              _tag: "rejected" as const,
+              estimatedWaitNanos: e.estimatedWaitNanos?.toString(),
             }),
-          ).pipe(
-            Effect.catchTag("FailedReservationError", (e) =>
-              Effect.succeed({
-                _tag: "rejected" as const,
-                estimatedWaitNanos: e.estimatedWaitNanos?.toString(),
-              }),
-            ),
-          )
-        }),
-    }
+          ),
+        )
+      }),
   }),
-)
+})

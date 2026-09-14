@@ -38,8 +38,9 @@ export const Caller = defineAgent({
      */
     abortInFlight: method({ input: { seconds: Schema.Number }, success: Schema.Boolean }),
   },
-}).implement(({ counterName }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ counterName }) => Effect.succeed(counterName),
+  methods: (counterName) => ({
     bump: () =>
       Effect.gen(function* () {
         const counter = yield* Counter.client.get({ name: counterName })
@@ -86,4 +87,4 @@ export const Caller = defineAgent({
         Effect.scoped,
       ),
   }),
-)
+})

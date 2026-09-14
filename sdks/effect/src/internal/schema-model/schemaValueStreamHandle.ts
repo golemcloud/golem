@@ -10,6 +10,7 @@ export interface StreamOwnership {
   available: boolean
   reservation?: object
   busy?: boolean
+  reader?: object
   iterator?: AsyncIterator<SchemaValueTree>
 }
 
@@ -46,6 +47,7 @@ export class GuestSchemaValueStreamHandle {
 
   reserve(owner: object): void {
     assertCapabilityReady(this.#ownership)
+    if (this.#ownership.reader) throw new Error("schema stream already has a reader")
     if (this.#ownership.busy) throw new Error("a schema stream operation is in progress")
     if (this.#ownership.reservation !== undefined || this.peek() === undefined) {
       throw new Error("schema stream is already reserved or transferred")
@@ -59,6 +61,7 @@ export class GuestSchemaValueStreamHandle {
 
   take(owner?: object): GuestSchemaValueStream | undefined {
     assertCapabilityReady(this.#ownership)
+    if (this.#ownership.reader) throw new Error("schema stream already has a reader")
     if (this.#ownership.busy) throw new Error("a schema stream operation is in progress")
     if (this.#ownership.reservation !== owner)
       throw new Error("schema stream is reserved for transfer")
@@ -72,6 +75,7 @@ export class GuestSchemaValueStreamHandle {
 
   release(): void {
     assertCapabilityReady(this.#ownership)
+    if (this.#ownership.reader) throw new Error("schema stream already has a reader")
     if (this.#ownership.busy) throw new Error("a schema stream operation is in progress")
     if (this.#ownership.reservation !== undefined)
       throw new Error("schema stream is reserved for transfer")

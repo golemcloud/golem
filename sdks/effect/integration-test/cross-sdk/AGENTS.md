@@ -21,7 +21,7 @@ Single-component applications keep `src/` and `tsconfig.json` at the application
 - Agents are durable by default and invocations are processed sequentially.
 - Declare method inputs with `input`, mark side-effect-free methods with `readOnly`, and use
   `Snapshot.define(...)` through the agent's `snapshotting` field for schema-driven snapshots.
-- Use `WitTypes.AgentStream(...)` and `AgentStream.AgentStream.fromEffect(...)` for streaming values.
+- Use `WitTypes.AgentStream(...)` in schemas and native Effect `Stream` values in handlers.
 - Secrets remain opaque `Schema.Redacted(...)` handles; never log or stringify them.
 - Define and call tools through `Tool`, and attach typed or universal middleware through
   `Middleware`. Standalone middleware deployment is not supported by the current CLI template.
@@ -567,4 +567,3 @@ If you see `This action requires confirmation, but the current shell is non-inte
 - Full docs: https://learn.golem.cloud
 - Standard Schema: https://standardschema.dev
 <!-- golem-managed:guide:ts:end -->
-

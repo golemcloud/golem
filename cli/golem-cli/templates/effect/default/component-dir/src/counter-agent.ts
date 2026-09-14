@@ -1,10 +1,5 @@
 import { Effect, Ref, Schema } from "effect";
-import {
-  defineAgent,
-  Http,
-  method,
-  Snapshot,
-} from "@golemcloud/effect-golem";
+import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
 
 export const Counter = defineAgent({
   name: "Counter",
@@ -31,30 +26,21 @@ export const Counter = defineAgent({
       http: [Http.post("/increment")],
     }),
   },
-}).implement(({ name }, snapshotting) =>
-  Effect.gen(function* () {
-    const state = yield* snapshotting.init({ count: 0 });
-    yield* Effect.logInfo("Counter constructed").pipe(
-      Effect.annotateLogs({ name }),
-    );
-
-    return {
-      value: () => Ref.get(state).pipe(Effect.map(({ count }) => count)),
-      increment: () =>
-        Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
-          Effect.map(({ count }) => count),
-        ),
-    };
-  }),
-  (_restoration, _id, snapshotting) =>
+}).implement({
+  init: ({ name }) =>
     Effect.gen(function* () {
-      const state = yield* snapshotting.init({ count: 0 });
-      return {
-        value: () => Ref.get(state).pipe(Effect.map(({ count }) => count)),
-        increment: () =>
-          Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
-            Effect.map(({ count }) => count),
-          ),
-      };
+      const state = yield* Ref.make({ count: 0 });
+      yield* Effect.logInfo("Counter constructed").pipe(
+        Effect.annotateLogs({ name }),
+      );
+      return state;
     }),
-);
+  methods: (state) => ({
+    value: () => Ref.get(state).pipe(Effect.map(({ count }) => count)),
+    increment: () =>
+      Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
+        Effect.map(({ count }) => count),
+      ),
+  }),
+  snapshot: Snapshot.ref(),
+});

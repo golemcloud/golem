@@ -10,6 +10,7 @@
 import { Effect, Redacted, Schema } from "effect"
 import { defineAgent, defineConfig, method, Snapshot } from "@golemcloud/effect-golem"
 import { MySqlClient } from "@golemcloud/effect-golem/mysql"
+import type { MySqlClient as MySqlClientType } from "@golemcloud/effect-golem/mysql"
 
 export class MySqlCounterConfig extends defineConfig("MySqlCounter.Config", {
   // Distinct from PgCounter's `connectionAddress` so the local
@@ -51,64 +52,78 @@ const MySqlCounterSpec = defineAgent({
   },
 })
 
-const MySqlCounterFactory: Parameters<typeof MySqlCounterSpec.implement>[0] = ({ name }, snap) =>
+type MySqlState = {
+  readonly name: string
+  readonly sql: MySqlClientType
+}
+
+const mysqlMethods = ({ name, sql }: MySqlState) => {
+  const readCount = (id: string): Effect.Effect<number, unknown> =>
+    sql`SELECT count FROM mysql_counters WHERE id = ${id}`.pipe(
+      Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
+    )
+  return {
+    value: () => readCount(name),
+    add: ({ by }: { by: number }) =>
+      sql`UPDATE mysql_counters SET count = count + ${by} WHERE id = ${name}`.pipe(
+        Effect.flatMap(() => readCount(name)),
+      ),
+    transferAdd: ({ from, by }: { from: string; by: number }) =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql`INSERT IGNORE INTO mysql_counters (id, count) VALUES (${from}, 0)`
+          yield* sql`UPDATE mysql_counters SET count = count - ${by} WHERE id = ${from}`
+          yield* sql`UPDATE mysql_counters SET count = count + ${by} WHERE id = ${name}`
+          return yield* readCount(name)
+        }),
+      ),
+    failingAdd: ({ by }: { by: number }) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`UPDATE mysql_counters SET count = count + ${by} WHERE id = ${name}`
+            return yield* Effect.fail("forced rollback" as const)
+          }),
+        )
+        .pipe(
+          Effect.match({
+            onFailure: () => "rolled-back" as const,
+            onSuccess: () => "committed" as const,
+          }),
+        ),
+    streamAll: () =>
+      sql`SELECT id, count FROM mysql_counters ORDER BY id`.pipe(
+        Effect.map((rows) =>
+          (rows as ReadonlyArray<{ id: string; count: number | bigint }>).map((r) => ({
+            id: r.id,
+            count: Number(r.count),
+          })),
+        ),
+      ),
+  }
+}
+
+const openMySqlState = (name: string) =>
   Effect.gen(function* () {
-    yield* snap.init({})
     const cfg = yield* MySqlCounterConfig
     const dsnRedacted = yield* cfg.mysqlConnectionAddress.get
     const dsnString = Redacted.value(dsnRedacted)
     const sql = yield* MySqlClient.make({ connectionAddress: dsnString })
-    // Idempotent DDL; safe across snapshots and updates. MySQL has
-    // no `ON CONFLICT` syntax — use `INSERT IGNORE` instead.
-    yield* sql`CREATE TABLE IF NOT EXISTS mysql_counters (id VARCHAR(64) PRIMARY KEY, count INT NOT NULL DEFAULT 0)`
-    yield* sql`INSERT IGNORE INTO mysql_counters (id, count) VALUES (${name}, 0)`
-
-    const readCount = (id: string): Effect.Effect<number, unknown> =>
-      sql`SELECT count FROM mysql_counters WHERE id = ${id}`.pipe(
-        Effect.map((rows) => Number((rows[0] as { count?: number } | undefined)?.count ?? 0)),
-      )
-
-    return {
-      value: () => readCount(name),
-      add: ({ by }) =>
-        sql`UPDATE mysql_counters SET count = count + ${by} WHERE id = ${name}`.pipe(
-          Effect.flatMap(() => readCount(name)),
-        ),
-      transferAdd: ({ from, by }) =>
-        sql.withTransaction(
-          Effect.gen(function* () {
-            yield* sql`INSERT IGNORE INTO mysql_counters (id, count) VALUES (${from}, 0)`
-            yield* sql`UPDATE mysql_counters SET count = count - ${by} WHERE id = ${from}`
-            yield* sql`UPDATE mysql_counters SET count = count + ${by} WHERE id = ${name}`
-            return yield* readCount(name)
-          }),
-        ),
-      failingAdd: ({ by }) =>
-        sql
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* sql`UPDATE mysql_counters SET count = count + ${by} WHERE id = ${name}`
-              return yield* Effect.fail("forced rollback" as const)
-            }),
-          )
-          .pipe(
-            Effect.match({
-              onFailure: () => "rolled-back" as const,
-              onSuccess: () => "committed" as const,
-            }),
-          ),
-      streamAll: () =>
-        sql`SELECT id, count FROM mysql_counters ORDER BY id`.pipe(
-          Effect.map((rows) =>
-            (rows as ReadonlyArray<{ id: string; count: number | bigint }>).map((r) => ({
-              id: r.id,
-              count: Number(r.count),
-            })),
-          ),
-        ),
-    }
+    return { name, sql }
   })
 
-export const MySqlCounter = MySqlCounterSpec.implement(MySqlCounterFactory, (_context, ...args) =>
-  MySqlCounterFactory(...args),
-)
+export const MySqlCounter = MySqlCounterSpec.implement<MySqlState>({
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      const state = yield* openMySqlState(name)
+      const { sql } = state
+      yield* sql`CREATE TABLE IF NOT EXISTS mysql_counters (id VARCHAR(64) PRIMARY KEY, count INT NOT NULL DEFAULT 0)`
+      yield* sql`INSERT IGNORE INTO mysql_counters (id, count) VALUES (${name}, 0)`
+      return state
+    }),
+  methods: mysqlMethods,
+  snapshot: {
+    save: () => Effect.succeed({}),
+    restore: (_saved, context) => openMySqlState(context.id.name),
+  },
+})

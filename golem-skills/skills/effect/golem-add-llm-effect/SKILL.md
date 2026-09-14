@@ -141,8 +141,9 @@ export const LlmAgent = defineAgent({
       success: Schema.String,
     }),
   },
-}).implement(() =>
-  Effect.gen(function* () {
+}).implement({
+  init: () =>
+    Effect.gen(function* () {
     const cfg = yield* LlmConfig;
     const apiKey = yield* cfg.apiKey.get;
     const apiUrl = yield* cfg.apiUrl;
@@ -155,7 +156,10 @@ export const LlmAgent = defineAgent({
       Layer.provide(OpenAiClientLive),
     );
 
-    const ask = ({ question }: { readonly question: string }) =>
+    return LanguageModelLive;
+  }),
+  methods: (LanguageModelLive) => ({
+    ask: ({ question }) =>
       LanguageModel.generateText({
         prompt: question,
         toolChoice: "none",
@@ -163,11 +167,9 @@ export const LlmAgent = defineAgent({
         Effect.map((response) => response.text),
         Effect.provide(LanguageModelLive),
         Effect.orDie,
-      );
-
-    return { ask };
+      ),
   }),
-);
+});
 ```
 
 Import the implementation module from `src/main.ts` using its emitted `.js` suffix so the

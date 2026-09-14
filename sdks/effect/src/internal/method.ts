@@ -7,7 +7,7 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { HostServices } from "../host/HostLive.js"
 import type { EndpointDef } from "../Http.js"
 import { isMultimodal, type Multimodal } from "../Multimodal.js"
-import { Principal } from "../Principal.js"
+import { Principal, type PrincipalInputSchema } from "../Principal.js"
 import { SelfAgentId } from "../SelfAgentId.js"
 import { isElementSpec, tryGetter, type ElementSpec } from "../Unstructured.js"
 import {
@@ -65,7 +65,6 @@ export type MethodInput<Input extends MethodParams> = {
 /** @since 1.6.0 @category models */
 export type ReadOnlyOption = {
   readonly cache?: "no-cache" | "until-write" | { readonly ttlNanos: bigint }
-  readonly usesPrincipal?: boolean
 }
 
 declare const methodHasHttpBrand: unique symbol
@@ -76,6 +75,7 @@ export interface MethodSpec<
   in out Success extends MethodSuccess,
   in out Error extends Schema.Top,
   HasHttp extends boolean = boolean,
+  out ReadOnly extends boolean | ReadOnlyOption | undefined = boolean | ReadOnlyOption | undefined,
 >
   extends Pipeable.Pipeable {
   readonly [methodHasHttpBrand]?: HasHttp
@@ -85,8 +85,23 @@ export interface MethodSpec<
   readonly description?: string
   readonly promptHint?: string
   readonly http?: ReadonlyArray<EndpointDef<BindableKeys<Input>>>
-  readonly readOnly?: boolean | ReadOnlyOption
+  readonly readOnly?: ReadOnly
 }
+
+type HasPrincipalInput<Input extends MethodParams> = true extends {
+  [K in keyof Input]: Input[K] extends PrincipalInputSchema ? true : false
+}[keyof Input]
+  ? true
+  : false
+
+type HandlerServices<S extends MethodSpec<any, any, any>, CfgTag> =
+  S extends MethodSpec<any, any, any, any, infer ReadOnly>
+    ? ReadOnly extends true | ReadOnlyOption
+      ? HasPrincipalInput<S["input"]> extends true
+        ? Principal | SelfAgentId | HostServices | CfgTag
+        : SelfAgentId | HostServices | CfgTag
+      : Principal | SelfAgentId | HostServices | CfgTag
+    : never
 
 type UnsupportedBinding<N extends string, A extends string, S extends string> = string extends N
   ? unknown
@@ -149,6 +164,7 @@ export const method: {
     Success extends Schema.Top,
     Error extends Schema.Top,
     const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Input>>> = readonly [],
+    const ReadOnly extends boolean | ReadOnlyOption | undefined = undefined,
   >(spec: {
     readonly input: Input
     readonly success: Success
@@ -156,20 +172,27 @@ export const method: {
     readonly description?: string
     readonly promptHint?: string
     readonly http?: ValidateEndpointsTuple<Eps, Input>
-    readonly readOnly?: boolean | ReadOnlyOption
-  }): MethodSpec<Input, Success, Error, IsNonEmptyTuple<Eps>>
+    readonly readOnly?: ReadOnly &
+      (ReadOnly extends ReadOnlyOption
+        ? Record<Exclude<keyof ReadOnly, keyof ReadOnlyOption>, never>
+        : unknown)
+  }): MethodSpec<Input, Success, Error, IsNonEmptyTuple<Eps>, ReadOnly>
   <
     const Input extends MethodParams,
     Success extends MethodSuccess,
     const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Input>>> = readonly [],
+    const ReadOnly extends boolean | ReadOnlyOption | undefined = undefined,
   >(spec: {
     readonly input: Input
     readonly success: Success
     readonly description?: string
     readonly promptHint?: string
     readonly http?: ValidateEndpointsTuple<Eps, Input>
-    readonly readOnly?: boolean | ReadOnlyOption
-  }): MethodSpec<Input, Success, typeof Schema.Void, IsNonEmptyTuple<Eps>>
+    readonly readOnly?: ReadOnly &
+      (ReadOnly extends ReadOnlyOption
+        ? Record<Exclude<keyof ReadOnly, keyof ReadOnlyOption>, never>
+        : unknown)
+  }): MethodSpec<Input, Success, typeof Schema.Void, IsNonEmptyTuple<Eps>, ReadOnly>
 } = (spec: any): any => withPipe({ error: Schema.Void, ...spec })
 
 /** @since 1.6.0 @category combinators */
@@ -177,7 +200,9 @@ export const withHttp =
   <V extends string>(...endpoints: ReadonlyArray<EndpointDef<V>>) =>
   <T extends MethodSpec<any, any, any, any>>(
     spec: T & { readonly input: Readonly<Record<V, unknown>> },
-  ): T extends MethodSpec<infer I, infer S, infer E, infer _H> ? MethodSpec<I, S, E, true> : T =>
+  ): T extends MethodSpec<infer I, infer S, infer E, infer _H, infer RO>
+    ? MethodSpec<I, S, E, true, RO>
+    : T =>
     withPipe({ ...spec, http: [...(spec.http ?? []), ...endpoints] }) as never
 /** @since 1.6.0 @category combinators */
 export const withDescription =
@@ -221,11 +246,7 @@ export const defineMethod: {
 /** @since 1.6.0 @category models */
 export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
   input: MethodInput<S["input"]>,
-) => Effect.Effect<
-  MethodSuccessType<S["success"]>,
-  S["error"]["Type"],
-  Principal | SelfAgentId | HostServices | CfgTag
->
+) => Effect.Effect<MethodSuccessType<S["success"]>, S["error"]["Type"], HandlerServices<S, CfgTag>>
 /** @since 1.6.0 @category operations */
 export const invoke = <I extends MethodParams, S extends MethodSuccess, E extends Schema.Top, R>(
   m: Method<I, S, E, R>,
@@ -363,6 +384,7 @@ export interface MethodCodec<
 const isVoidSchema = (schema: Schema.Top): boolean => schema.ast._tag === "Void"
 const readOnlyConfig = (
   option: boolean | ReadOnlyOption | undefined,
+  usesPrincipal: boolean,
 ): AgentCommon.ReadOnlyConfig | undefined => {
   if (!option) return undefined
   const value = option === true ? {} : option
@@ -374,7 +396,7 @@ const readOnlyConfig = (
         : typeof cache === "object"
           ? { tag: "ttl", val: cache.ttlNanos }
           : { tag: "until-write" },
-    usesPrincipal: value.usesPrincipal ?? false,
+    usesPrincipal,
   }
 }
 
@@ -389,6 +411,9 @@ export const compileMethodSpec = <
 ): Effect.Effect<MethodCodec<I, S, E>, UnsupportedSchemaError> =>
   Effect.gen(function* () {
     const inputCodec = yield* compileParamBindings(name, spec.input)
+    const usesPrincipal = Object.values(spec.input).some(
+      (param) => !isElementSpec(param) && !isMultimodal(param) && isPrincipal(param as Schema.Top),
+    )
     const errorWrapped = !isVoidSchema(spec.error)
     if (errorWrapped && isElementSpec(spec.success)) {
       return yield* Effect.fail({
@@ -441,7 +466,7 @@ export const compileMethodSpec = <
       outputSchema: outputRoot === undefined ? { tag: "unit" } : { tag: "single", val: outputRoot },
       errorWrapped,
       successVoid,
-      readOnly: readOnlyConfig(spec.readOnly),
+      readOnly: readOnlyConfig(spec.readOnly, usesPrincipal),
     }
   })
 

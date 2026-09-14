@@ -33,8 +33,9 @@ export const LogDemoAgent = defineAgent({
       success: Schema.String,
     }),
   },
-}).implement(({ instanceName }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ instanceName }) => Effect.succeed(instanceName),
+  methods: (instanceName) => ({
     doWork: ({ taskName }) =>
       Effect.gen(function* () {
         yield* Effect.logInfo(`starting task: ${taskName}`);
@@ -49,7 +50,7 @@ export const LogDemoAgent = defineAgent({
         Effect.provideService(References.MinimumLogLevel, "Debug"),
       ),
   }),
-);
+});
 ```
 
 Register the implementation from the component entry point:

@@ -53,8 +53,8 @@ through Effect context.
 
 ## Open and Reuse a Connection
 
-Pass a MySQL URL to `MySqlClient.make` in the outer `Effect.gen` used by
-`defineAgent(...).implement(...)`. Construct the client once, before returning the handlers, so
+Pass a MySQL URL to `MySqlClient.make` in the agent's `init` Effect. Construct the client once and
+return it as state before `methods` constructs the handlers, so
 the implemented agent instance reuses one host connection:
 
 ```typescript

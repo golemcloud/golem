@@ -35,15 +35,16 @@ export const TextProcessorAgent = defineAgent({
       success: Schema.String,
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     toUpper: ({ input }) => Effect.succeed(input.toUpperCase()),
     toLower: ({ input }) => Effect.succeed(input.toLowerCase()),
   }),
-);
+});
 ```
 
-The `.implement(...)` call registers the agent eagerly when the module is evaluated. Import the
+The `.implement({ init, methods })` call registers the agent eagerly when the module is evaluated. Import the
 implementation module from the component entry point so registration occurs:
 
 ```typescript
@@ -59,11 +60,11 @@ Generated Effect projects use ESM and NodeNext module resolution, so local impor
 For every invocation, Golem:
 
 1. Starts a fresh ephemeral agent instance.
-2. Runs the `.implement(...)` Effect to obtain that instance's handlers.
+2. Runs `init` and then `methods` to obtain that instance's handlers.
 3. Runs the requested handler.
 4. Discards the instance and its captured in-memory values.
 
-Do not add `Snapshot.define(...)`, call `snapshot.init(...)`, or create mutable state merely to
+Do not add `Snapshot.define(...)` or create mutable state merely to
 represent a stateless handler. Omitting `snapshot` disables snapshotting. If calls must observe or
 update shared state, the agent is not stateless; use a durable agent and the normal snapshot-backed
 state pattern instead.
@@ -82,7 +83,7 @@ state pattern instead.
   `TextProcessorAgent("processor-1")`.
 - Ephemeral agents can still expose HTTP routes, call other agents, and use Golem host APIs;
   ephemeral mode changes instance lifetime and recovery, not the available capabilities.
-- Do not call a runner or registration helper. The top-level `.implement(...)` call plus the
+- Do not call a runner or registration helper. The top-level `.implement({ ... })` call plus the
   `src/main.ts` side-effect import is the registration path.
 
 ## Choosing Ephemeral Mode

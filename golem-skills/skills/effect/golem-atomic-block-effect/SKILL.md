@@ -263,7 +263,7 @@ host-visible retry behavior is required.
 
 - Import `Durability` and `Retry` from `@golemcloud/effect-golem`; do not import internal host
   clients or layers.
-- Normal `defineAgent(...).implement(...)` execution supplies the services required by these
+- Normal `defineAgent(...).implement({ init, methods })` execution supplies the services required by these
   Effects. Do not manually provide SDK-internal layers in application code.
 - Keep agent methods Effect-based; do not wrap `Durability.atomically` in an `async` callback.
 - Prefer `Durability.atomically` over manual begin/end markers.

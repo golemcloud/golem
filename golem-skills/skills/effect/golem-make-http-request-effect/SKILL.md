@@ -282,8 +282,9 @@ export const MessageForwarder = defineAgent({
       success: Schema.String,
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     recordMessageViaHttp: ({ message }) =>
       HttpClientRequest.post(
         "http://test-app.localhost:9006/requests/main/record",
@@ -297,7 +298,7 @@ export const MessageForwarder = defineAgent({
         Effect.orDie,
       ),
   }),
-);
+});
 ```
 
 Import the implementation module from `src/main.ts` using its emitted `.js` suffix so the

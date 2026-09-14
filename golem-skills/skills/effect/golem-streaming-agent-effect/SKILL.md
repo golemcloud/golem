@@ -5,26 +5,27 @@ description: Adds nested input and output streams to Effect Golem agents. Use fo
 
 # Effect agent streams
 
-Declare streams with the SDK schema and bridge them to scoped Effect streams:
+Declare streams with the SDK schema and use native Effect streams:
 
 ```ts
-import { Stream, Schema } from "effect"
-import { AgentStream, Schema as GolemSchema, method } from "@golemcloud/effect-golem"
+import { Effect, Stream, Schema } from "effect"
+import { method, WitTypes } from "@golemcloud/effect-golem"
 
 const doubled = method({
-  input: { values: GolemSchema.AgentStream(Schema.Number) },
-  success: GolemSchema.AgentStream(Schema.Number),
+  input: { values: WitTypes.AgentStream(Schema.Number) },
+  success: WitTypes.AgentStream(Schema.Number),
 })
 
-const handler = ({ values }: { values: AgentStream.AgentStream<number> }) =>
-  values.toEffect(String).pipe(
-    Stream.map((value) => value * 2),
-    AgentStream.AgentStream.fromEffect,
-  )
+const handler = ({ values }: { values: Stream.Stream<number, unknown> }) =>
+  Effect.succeed(values.pipe(Stream.map((value) => value * 2)))
 ```
 
-`toEffect` requires an error-mapping function. `AgentStream.fromEffect` returns an
-`Effect<AgentStream<...>>`, so return that Effect from the handler; do not unwrap it or return the
-intermediate Effect `Stream`.
+Local streams are reusable. Streams received from Preview 3 endpoints are affine and single-reader:
+consume or forward them exactly once. Keep consumption and RPC clients scoped. Streams may be
+nested in structs. Never convert a potentially large stream to an array just to cross RPC;
+interruption must release the producer.
 
-Keep consumption and RPC clients scoped. Streams may be nested in structs. Never convert a potentially large stream to an array just to cross RPC; interruption must release the producer.
+Transformations remain lazy: a mapped or effectfully constructed stream claims its underlying
+received endpoint when execution reaches it, not when the program is encoded for RPC. Directly
+forwarding a known received endpoint transfers ownership immediately. Competing consumers fail;
+they never consume or close the endpoint owned by the successful reader.

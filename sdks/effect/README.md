@@ -13,7 +13,8 @@ npm install @golemcloud/effect-golem effect
 ```
 
 The 1.6 vocabulary is `id` for agent identity, `input` for method input, and the client attached to
-the definition. `defineAgent` creates an inert specification; `.implement(...)` registers it.
+the definition. `defineAgent` creates an inert specification; `.implement({ init, methods })`
+registers it.
 
 ```ts
 import { Effect, Ref, Schema } from "effect"
@@ -29,19 +30,18 @@ export const Counter = defineAgent({
   },
 })
 
-Counter.implement(({ name }) =>
-  Effect.gen(function* () {
-    const count = yield* Ref.make(0)
-    return {
-      value: () => Ref.get(count),
-      add: ({ by }) => Ref.updateAndGet(count, (value) => value + by),
-    }
+Counter.implement({
+  init: () => Ref.make(0),
+  methods: (count) => ({
+    value: () => Ref.get(count),
+    add: ({ by }) => Ref.updateAndGet(count, (value) => value + by),
   }),
-)
+})
 ```
 
 `method` optionally accepts `error`, `description`, `promptHint`, HTTP endpoints, and `readOnly`.
-Read-only metadata may be `true` or `{ cache, usesPrincipal }`. Public modules are namespaces from
+Read-only metadata may be `true` or `{ cache }`; principal-aware caching is derived from a declared
+`PrincipalSchema` input. Public modules are namespaces from
 the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
 `defineAgent`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
 middleware use the documented sub-imports. `internal/*` and `host/*` are not public imports.
@@ -122,16 +122,18 @@ const Service = defineAgent({
   methods: { endpoint: method({ input: {}, success: Schema.String }) },
 })
 
-Service.implement(() =>
-  Effect.gen(function* () {
-    const config = yield* ServiceConfig
-    const endpoint = yield* config.endpoint
-    const apiKey = yield* config.apiKey.get
-    // Reveal only at the boundary that needs plaintext:
-    void Redacted.value(apiKey)
-    return { endpoint: () => Effect.succeed(endpoint) }
-  }),
-)
+Service.implement({
+  init: () =>
+    Effect.gen(function* () {
+      const config = yield* ServiceConfig
+      const endpoint = yield* config.endpoint
+      const apiKey = yield* config.apiKey.get
+      // Reveal only at the boundary that needs plaintext:
+      void Redacted.value(apiKey)
+      return endpoint
+    }),
+  methods: (endpoint) => ({ endpoint: () => Effect.succeed(endpoint) }),
+})
 ```
 
 Plain leaves are invocation-local cached; secret reads are not cached. `Schema.optional(...)`
@@ -150,10 +152,10 @@ Config is never stored in snapshots. Restoration reads current host values.
 
 ## Snapshots and restoration
 
-Snapshotting agents must provide separate initialization and restoration factories. Restoration
-constructs a fresh instance and receives a `SnapshotRestorationContext` containing `id`,
-`principal`, `phantomId`, `agentId`, `parsedAgentId`, and current `config`; it must not perform the
-fresh-instance side effects of initialization. Both factories must bind the snapshot exactly once.
+Snapshotting agents initialize runtime state with `init(id)`. The implementation's snapshot
+strategy restores that state before `methods(state)` constructs handlers. Custom restoration
+receives a `SnapshotRestorationContext` containing `id`, `principal`, `phantomId`, `agentId`,
+`parsedAgentId`, and current `config`; it must not perform fresh-instance initialization effects.
 
 ```ts
 import { Effect, Ref, Schema } from "effect"
@@ -173,30 +175,29 @@ const handlers = (state: Ref.Ref<{ readonly count: number }>) => ({
   value: () => Ref.get(state).pipe(Effect.map((value) => value.count)),
 })
 
-definition.implement(
-  (_id, snapshot) => Effect.map(snapshot.init({ count: 0 }), handlers),
-  (_restoration, _id, snapshot) => Effect.map(snapshot.init({ count: 0 }), handlers),
-)
+definition.implement({
+  init: () => Ref.make({ count: 0 }),
+  methods: handlers,
+  snapshot: Snapshot.ref<{ count: number }>(),
+})
 ```
 
-After the restoration factory returns, the SDK applies restored auto state. For SQLite snapshots it
-then restores each attached database image in place, so restoration must recreate and attach all
-declared handles first and DDL must be idempotent. `Snapshot.custom(...)` uses
-`snapshot.register({ save, load })`; its `load(payload, context)` also receives the restoration
-context. Snapshot schema evolution remains the application's responsibility.
+For SQLite snapshots, add `databases: state => ({ main: state.database })` to the snapshot strategy;
+the SDK restores each declared image before constructing methods. DDL must be idempotent. A
+`Snapshot.custom(...)` implementation uses `{ save(state), restore(saved, context) }` with raw
+bytes. Snapshot schema evolution remains the application's responsibility.
 
-Auto snapshots can declare `databases: ["main"] as const` and attach an SDK `SqliteClient` or
-`node:sqlite` `DatabaseSync`. Every declared database must be attached exactly once, be in
-autocommit mode, and have no extra attached schemas. External Postgres/MySQL/Ignite data is not
-part of a worker snapshot.
+Auto snapshots can declare `databases: ["main"] as const`; expose the corresponding SDK
+`SqliteClient` or `node:sqlite` `DatabaseSync` from the implementation snapshot strategy. Every
+declared database must be present, be in autocommit mode, and have no extra attached schemas.
+External Postgres/MySQL/Ignite data is not part of a worker snapshot.
 
 ## Agent streams
 
-Use `WitTypes.AgentStream(itemSchema)` inside any input or output schema and pass an
-`AgentStream<T>`. Streams are demand-driven, single-reader, and affine: encoding or forwarding one
-transfers ownership, so the original object must not be reused. `AgentStream.from(...)` wraps an
-iterable; `yield* AgentStream.fromEffect(stream)` captures Effect services; `toEffect(onError)`
-bridges a received stream back to Effect.
+Use `WitTypes.AgentStream(itemSchema)` inside any input or output schema and pass native Effect
+`Stream<T>` values. Local streams are reusable. Streams received from Preview 3 endpoints are
+demand-driven, single-reader, and affine: consuming or forwarding one transfers ownership, so a
+received stream must not be reused.
 
 Early `break`, `return()`, or Effect interruption closes the readable endpoint and awaits local
 cleanup. A downstream drop stops future source pulls and eventually calls the producer iterator's
@@ -216,20 +217,19 @@ agent handler as follows:
 
 ```ts
 import { Effect, Stream } from "effect"
-import { AgentStream } from "@golemcloud/effect-golem"
 import { TsPeer } from "ts-peer-guest-client"
 
 const program = Effect.scoped(
   Effect.gen(function* () {
     const peer = yield* TsPeer.get("peer-1")
-    const input = yield* AgentStream.AgentStream.fromEffect(Stream.make({ id: 1, values: [9, 12] }))
+    const input = Stream.make({ id: 1, values: [9, 12] })
     const output = yield* peer.nestedStream("fx", input)
-    return yield* output.items.toEffect(String).pipe(Stream.runCollect)
+    return yield* output.items.pipe(Stream.runCollect)
   }),
 )
 ```
 
-Guest bridges use the same affine `AgentStream` and capability handles as the SDK. Their host
+Guest bridges use the same affine received streams and capability handles as the SDK. Their host
 service requirements flow through the Effect environment; the agent dispatcher supplies live
 services. Stream-free methods also expose `.trigger(...)` and `.schedule(...)`, with cancelable
 scheduling. Streaming methods cannot be triggered or scheduled.

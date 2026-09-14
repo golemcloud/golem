@@ -118,8 +118,9 @@ export const PaymentWatcher = defineAgent({
       http: [Http.post("/wait")],
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     waitForPayment: () =>
       Effect.gen(function* () {
         const handle = yield* Webhook.create;
@@ -128,7 +129,7 @@ export const PaymentWatcher = defineAgent({
         return yield* payload.decode(PaymentEvent);
       }).pipe(Effect.provide(FetchHttpClient.layer), Effect.orDie),
   }),
-);
+});
 ```
 
 The generated URL has this shape:

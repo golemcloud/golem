@@ -29,7 +29,7 @@ export const Counter = defineAgent({
   mode: "durable",
   id: { name: Schema.String },
   methods: {},
-}).implement(() => Effect.succeed({}));
+}).implement({ init: () => Effect.void, methods: () => ({}) });
 ```
 
 Do not try to disable oplog writes while retaining normal durable recovery. If replay becomes slow
@@ -38,11 +38,11 @@ because the oplog is long, keep the agent durable and add snapshots.
 ## Durable with Periodic Snapshots
 
 Snapshots keep the durable agent mode but let recovery restore saved state before replaying newer
-oplog entries. Define snapshot state with Effect Schema and initialize its binding exactly once in
-the agent implementation:
+oplog entries. Define snapshot state with Effect Schema and select a snapshot strategy in the
+agent implementation:
 
 ```typescript
-import { Duration, Effect, Schema } from "effect";
+import { Duration, Effect, Ref, Schema } from "effect";
 import { Snapshot } from "@golemcloud/effect-golem";
 
 const CounterState = Schema.Struct({ count: Schema.Number });
@@ -58,8 +58,8 @@ const periodicSnapshot = Snapshot.define({
 });
 ```
 
-Set the chosen definition as the agent's top-level `snapshotting` field. The second argument passed to
-`.implement(...)` is then the snapshot binding:
+Set the chosen definition as the agent's top-level `snapshotting` field and use `Snapshot.ref<Saved>()`
+when the runtime state is a `Ref` of that schema:
 
 ```typescript
 defineAgent({
@@ -68,17 +68,16 @@ defineAgent({
   id: { name: Schema.String },
   snapshotting: snapshot,
   methods: {},
-}).implement((_id, snapshot) =>
-  Effect.gen(function* () {
-    const state = yield* snapshot.init({ count: 0 });
-    return {
+}).implement({
+  init: () => Ref.make({ count: 0 }),
+  methods: (state) => ({
       // Existing method handlers that use state...
-    };
   }),
-);
+  snapshot: Snapshot.ref<{ count: number }>(),
+});
 ```
 
-Call `snapshot.init(...)` once, and keep the value schema-serializable. `everyN` accepts a positive
+Keep the saved value schema-serializable. `everyN` accepts a positive
 integer from 1 through 65,535. `periodic` accepts an Effect `Duration.Input` such as
 `Duration.seconds(30)`.
 
@@ -93,7 +92,7 @@ export const StatelessHandler = defineAgent({
   mode: "ephemeral",
   id: { name: Schema.String },
   methods: {},
-}).implement(() => Effect.succeed({}));
+}).implement({ init: () => Effect.void, methods: () => ({}) });
 ```
 
 Ephemeral agents are not addressable by agent id fields alone through the Effect SDK's

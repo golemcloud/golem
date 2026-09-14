@@ -132,11 +132,9 @@ export const DeciderAgent = defineAgent({
       http: [Http.post("/decide")],
     }),
   },
-}).implement(() =>
-  Effect.gen(function* () {
-    const pending = yield* Ref.make<Agents.PromiseId | undefined>(undefined);
-
-    return {
+}).implement({
+  init: () => Ref.make<Agents.PromiseId | undefined>(undefined),
+  methods: (pending) => ({
       receive: ({ promiseId }) => Ref.set(pending, promiseId),
 
       decide: ({ decision }) =>
@@ -156,9 +154,8 @@ export const DeciderAgent = defineAgent({
           if (completed) yield* Ref.set(pending, undefined);
           return completed;
         }).pipe(Effect.orDie),
-    };
   }),
-);
+});
 
 export const ApprovalAgent = defineAgent({
   name: "ApprovalAgent",
@@ -179,11 +176,13 @@ export const ApprovalAgent = defineAgent({
       http: [Http.get("/result")],
     }),
   },
-}).implement(({ name }) =>
-  Effect.gen(function* () {
-    const result = yield* Ref.make("");
-
-    return {
+}).implement({
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      const result = yield* Ref.make("");
+      return { name, result };
+    }),
+  methods: ({ name, result }) => ({
       request: () =>
         Effect.gen(function* () {
           const promiseId = yield* Agents.Promises.create;
@@ -199,9 +198,8 @@ export const ApprovalAgent = defineAgent({
         }).pipe(Effect.orDie),
 
       getResult: () => Ref.get(result),
-    };
   }),
-);
+});
 ```
 
 Register the module for side effects:

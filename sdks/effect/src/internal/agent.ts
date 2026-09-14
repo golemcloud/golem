@@ -1,7 +1,7 @@
 /**
  * @since 1.5.0
  */
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Ref, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
@@ -35,19 +35,17 @@ import { Principal } from "../Principal.js"
 import { SelfAgentId } from "../SelfAgentId.js"
 import {
   compileSnapshot,
-  createBinding,
+  createSnapshot,
   InvalidSnapshotError,
   SnapshotDatabaseHasAttachmentsError,
   SnapshotDatabaseMissingPartError,
   SnapshotDatabaseNotInAutocommitError,
   SnapshotDatabaseUnknownPartError,
-  SnapshotNotBoundError,
-  type BindingHandle,
   type BoundSnapshot,
   type CompiledSnapshot,
-  type SnapshotBinding,
   type SnapshotDef,
   type SnapshotRestorationContext,
+  type Strategy as SnapshotStrategy,
 } from "../Snapshot.js"
 import {
   decodeEnvelope,
@@ -228,80 +226,71 @@ export type CfgTagOf<F> = [F] extends [never]
     ? ConfigShape<F>
     : never
 
-/**
- * Conditional `impl` parameter list. When `S` is `never` (no
- * `snapshot` field on the agent), `impl` takes only the decoded
- * constructor input. When `S` is a {@link SnapshotDef}, `impl` takes a
- * second argument: the per-instance {@link SnapshotBinding} that
- * lets it `init` (auto) or `register` (custom) the snapshot source.
- *
- * The optional `CfgTag` parameter widens the `R` channel of the
- * binding's user-supplied custom save/load effects to `Principal |
- * CfgTag`. Defaults to `never`, so agents without a `config:` field
- * keep the original `R = Principal` exactly. The dispatcher always
- * provides the matching services at runtime.
- *
- * @since 1.5.0
- * @category models
- */
-export type ImplArgs<C extends MethodParams, S, CfgTag = never> = [S] extends [never]
-  ? readonly [input: MethodInput<C>]
-  : readonly [input: MethodInput<C>, snapshot: SnapshotBinding<S, Principal | CfgTag>]
+type SavedState<S> = S extends import("../Snapshot.js").AutoSnapshotDef<
+  infer Sc extends Schema.Top,
+  ReadonlyArray<string>
+>
+  ? Sc["Type"]
+  : Uint8Array
 
-/**
- * Constructor effect signature for an agent. Runs once per agent
- * instance in the agent's lifetime `Scope`. May depend on
- * {@link Principal} (provided by the dispatcher with the value the
- * host passed to `initialize`) and on the optional config service.
- * When `S` is a {@link SnapshotDef}, the constructor receives a
- * second {@link SnapshotBinding} argument.
- *
- * @since 1.5.0
+/** State initialization, shared methods, and optional typed snapshot reconstruction.
+ * @since 1.6.0
  * @category models
  */
 export type AgentImpl<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
+  State,
   F extends ConfigFields = never,
   S extends SnapshotDef = never,
-> = (
-  ...args: ImplArgs<C, S, CfgTagOf<F>>
-) => Effect.Effect<
-  Handlers<Methods, CfgTagOf<F>>,
-  unknown,
-  Scope.Scope | Principal | HostServices | CfgTagOf<F>
->
+> = {
+  readonly init: (
+    id: MethodInput<C>,
+  ) => Effect.Effect<State, unknown, Scope.Scope | Principal | HostServices | CfgTagOf<F>>
+  readonly methods: (
+    state: NoInfer<State>,
+  ) =>
+    | Handlers<Methods, CfgTagOf<F>>
+    | Effect.Effect<
+        Handlers<Methods, CfgTagOf<F>>,
+        unknown,
+        Scope.Scope | Principal | HostServices | CfgTagOf<F>
+      >
+} & ([S] extends [never]
+  ? { readonly snapshot?: never }
+  : S extends import("../Snapshot.js").AutoSnapshotDef<
+        Schema.Top,
+        infer DBs extends ReadonlyArray<string>
+      >
+    ? [DBs[number]] extends [never]
+      ? [NoInfer<State>] extends [SavedState<S>]
+        ? [SavedState<S>] extends [NoInfer<State>]
+          ? { readonly snapshot?: StateStrategy<C, State, F, S> }
+          : { readonly snapshot: StateStrategy<C, State, F, S> }
+        : { readonly snapshot: StateStrategy<C, State, F, S> }
+      : {
+          readonly snapshot: StateStrategy<C, State, F, S> & {
+            readonly databases: (
+              state: NoInfer<State>,
+            ) => Readonly<Record<DBs[number], import("../Snapshot.js").AttachableDatabase>>
+          }
+        }
+    : { readonly snapshot: StateStrategy<C, State, F, S> })
 
-/**
- * Factory used only when restoring a snapshotted agent. Unlike {@link AgentImpl},
- * it is never called during normal initialization and receives the complete
- * identity/config context recovered by the snapshot lifecycle.
- *
- * @since 1.6.0
- * @category models
- */
-export type AgentRestore<
+type StateStrategy<
   C extends MethodParams,
-  Methods extends Record<string, AnyMethodSpec>,
+  State,
   F extends ConfigFields,
   S extends SnapshotDef,
-> = (
-  context: SnapshotRestorationContext<MethodInput<C>, CfgTagOf<F>>,
-  ...args: ImplArgs<C, S, CfgTagOf<F>>
-) => Effect.Effect<
-  Handlers<Methods, CfgTagOf<F>>,
-  unknown,
-  Scope.Scope | Principal | HostServices | CfgTagOf<F>
+> = NoInfer<
+  SnapshotStrategy<
+    State,
+    SavedState<S>,
+    Scope.Scope | Principal | HostServices | CfgTagOf<F>,
+    MethodInput<C>,
+    CfgTagOf<F>
+  >
 >
-
-type ImplementArgs<
-  C extends MethodParams,
-  Methods extends Record<string, AnyMethodSpec>,
-  F extends ConfigFields,
-  S extends SnapshotDef,
-> = [S] extends [never]
-  ? readonly [initialize: AgentImpl<C, Methods, F, S>]
-  : readonly [initialize: AgentImpl<C, Methods, F, S>, restore: AgentRestore<C, Methods, F, S>]
 
 /**
  * Metadata describing an agent's *type*: the constructor and method
@@ -359,9 +348,8 @@ export interface AgentMetadata<
   /**
    * Optional snapshot definition. Built with `Snapshot.define(...)` for
    * the schema-driven auto path or `Snapshot.custom(...)` for the
-   * user-managed path. When present, the agent's `impl` receives a
-   * second {@link SnapshotBinding} argument, and the agent type's
-   * `snapshotting` metadata reflects the configured policy.
+   * user-managed path. The implementation's snapshot strategy converts
+   * between initialized state and this definition's persisted representation.
    */
   readonly snapshotting?: S
 }
@@ -406,8 +394,8 @@ export type AgentSpec<
    * (stashed in {@link pendingRegistrationErrors}, re-emitted from
    * {@link dispatchDiscoverAgentTypes}).
    */
-  readonly implement: (
-    ...args: ImplementArgs<C, Methods, F, S>
+  readonly implement: <State>(
+    implementation: AgentImpl<C, Methods, State, F, S>,
   ) => ImplementedAgent<C, Methods, M, F, S>
 }
 
@@ -557,10 +545,9 @@ export const defineAgent = <
   // {@link DuplicateAgentNameError} so a flaky retry loop cannot leak
   // additional registrations or accumulate stacked errors.
   let consumed = false
-  const implement = (
-    ...args: ImplementArgs<C, Methods, F, S>
+  const implement = <State>(
+    implementation: AgentImpl<C, Methods, State, F, S>,
   ): ImplementedAgent<C, Methods, M, F, S> => {
-    const [impl, restore] = args
     if (consumed) {
       pendingRegistrationErrors.push({
         agentName: canonical.name,
@@ -573,7 +560,7 @@ export const defineAgent = <
       // for `registerAgent`'s strictly-typed input.
       const metadataForRegistration = canonical as AgentMetadata<C, Methods, M, F, S, MV, WV> &
         AgentHttpRequirement<C, Methods, MV, WV>
-      const exit = Effect.runSyncExit(registerAgent(metadataForRegistration, impl, restore))
+      const exit = Effect.runSyncExit(registerAgent(metadataForRegistration, implementation))
       if (Exit.isFailure(exit)) {
         pendingRegistrationErrors.push({ agentName: canonical.name, cause: exit.cause })
       }
@@ -616,13 +603,7 @@ interface CompiledAgent {
    * alongside the metadata. Called by {@link dispatchInitialize} and
    * {@link dispatchLoadSnapshot} with the decoded constructor input.
    */
-  readonly impl: AgentImpl<MethodParams, Record<string, AnyMethodSpec>, never, SnapshotDef>
-  readonly restore: AgentRestore<
-    MethodParams,
-    Record<string, AnyMethodSpec>,
-    never,
-    SnapshotDef
-  > | null
+  readonly impl: AgentImpl<MethodParams, Record<string, AnyMethodSpec>, unknown, never, SnapshotDef>
   readonly constructorCodec: CompiledInputCodec
   readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
   readonly agentType: AgentCommon.AgentType
@@ -700,10 +681,10 @@ export const registerAgent = <
   S extends SnapshotDef = never,
   MV extends string = BindableKeys<C>,
   WV extends string = never,
+  State = unknown,
 >(
   metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
-  impl: AgentImpl<C, Methods, F, S>,
-  restore?: AgentRestore<C, Methods, F, S>,
+  impl: AgentImpl<C, Methods, State, F, S>,
 ): Effect.Effect<
   void,
   UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError
@@ -832,18 +813,10 @@ export const registerAgent = <
       impl: impl as unknown as AgentImpl<
         MethodParams,
         Record<string, AnyMethodSpec>,
+        unknown,
         never,
         SnapshotDef
       >,
-      restore:
-        restore === undefined
-          ? null
-          : (restore as unknown as AgentRestore<
-              MethodParams,
-              Record<string, AnyMethodSpec>,
-              never,
-              SnapshotDef
-            >),
       constructorCodec: constructorCodec as CompiledInputCodec,
       methodCodecs,
       agentType,
@@ -909,6 +882,7 @@ interface ActiveAgent {
    * and written-through by `dispatchLoadSnapshot`.
    */
   readonly snapshot: BoundSnapshot | null
+  readonly state: unknown
 }
 
 let activeAgent: ActiveAgent | null = null
@@ -960,18 +934,18 @@ const initAgentInstance = async (
   restoration?: {
     readonly phantomId: CoreTypes.Uuid | undefined
     readonly parsedAgentId: string
+    readonly saved: unknown
+    readonly restoreDatabases: (bound: BoundSnapshot) => void
   },
 ): Promise<{
   scope: Scope.Closeable
   handlers: Record<string, Handler<AnyMethodSpec>>
-  bindingHandle: BindingHandle | null
+  snapshot: BoundSnapshot | null
   selfAgentId: CoreTypes.AgentId
   configShape: unknown
+  state: unknown
 }> => {
-  const bindingHandle: BindingHandle | null =
-    compiled.compiledSnapshot !== null
-      ? createBinding(agentTypeName, compiled.compiledSnapshot)
-      : null
+  let snapshot: BoundSnapshot | null = null
 
   // Capture the structured AgentId once at agent-init time. Subsequent
   // user-side reads via the `SelfAgentId` Context service are free.
@@ -995,40 +969,45 @@ const initAgentInstance = async (
 
   const scope = await Effect.runPromise(Scope.make())
   let handlers: Record<string, Handler<AnyMethodSpec>>
+  let state: unknown
   let configShape: unknown = undefined
   try {
     if (compiled.compiledConfig !== null) {
       configShape = await runUserPromise(compiled.compiledConfig.buildShape())
     }
-    const implArgs: Array<unknown> = [constructorInput]
-    if (bindingHandle !== null) implArgs.push(bindingHandle.binding)
-    const factory = restoration === undefined ? compiled.impl : compiled.restore
-    if (factory === null) {
-      throw new Error(
-        `agent '${agentTypeName}' declares snapshotting but its implementation has no restoration factory`,
-      )
-    }
-    const factoryArgs =
+    const context = {
+      id: constructorInput,
+      principal,
+      phantomId: restoration?.phantomId,
+      agentId: selfAgentId,
+      parsedAgentId: restoration?.parsedAgentId ?? "",
+      config: configShape,
+    } satisfies SnapshotRestorationContext
+    const stateProgram =
       restoration === undefined
-        ? implArgs
-        : [
-            {
-              id: constructorInput,
-              principal,
-              phantomId: restoration.phantomId,
-              agentId: selfAgentId,
-              parsedAgentId: restoration.parsedAgentId,
-              config: configShape,
-            } satisfies SnapshotRestorationContext,
-            ...implArgs,
-          ]
-    let program = (
-      (factory as (...a: ReadonlyArray<unknown>) => unknown)(...factoryArgs) as Effect.Effect<
-        Record<string, Handler<AnyMethodSpec>>,
-        unknown,
-        Scope.Scope | Principal | SelfAgentId
-      >
-    ).pipe(
+        ? compiled.impl.init(constructorInput)
+        : compiled.impl.snapshot === undefined
+          ? Effect.succeed(restoration.saved)
+          : compiled.impl.snapshot.restore(restoration.saved as never, {
+              ...context,
+              config: configShape as never,
+            })
+    let program = Effect.gen(function* () {
+      const state = yield* stateProgram
+      if (compiled.compiledSnapshot !== null) {
+        snapshot = createSnapshot(
+          agentTypeName,
+          compiled.compiledSnapshot,
+          compiled.impl.snapshot?.databases?.(state),
+        )
+        if (restoration !== undefined) {
+          restoration.restoreDatabases(snapshot)
+        }
+      }
+      const produced = compiled.impl.methods(state)
+      const handlers = Effect.isEffect(produced) ? yield* produced : produced
+      return { state, handlers }
+    }).pipe(
       Effect.provideService(Principal, principal),
       Effect.provideService(SelfAgentId, selfAgentId),
     )
@@ -1045,10 +1024,9 @@ const initAgentInstance = async (
     // the scope when `program` finishes, which would tear down any
     // resources `impl` opened (e.g. SqliteClient handles) before the
     // agent's first method invocation.
-    handlers = (await runUserPromise(Scope.provide(program, scope))) as Record<
-      string,
-      Handler<AnyMethodSpec>
-    >
+    const built = await runUserPromise(Scope.provide(program, scope))
+    handlers = built.handlers as Record<string, Handler<AnyMethodSpec>>
+    state = built.state
   } catch (e) {
     // Initialization failed; close the scope to release anything that
     // managed to be acquired before the failure.
@@ -1056,7 +1034,7 @@ const initAgentInstance = async (
     throw e
   }
 
-  return { scope, handlers, bindingHandle, selfAgentId, configShape }
+  return { scope, handlers, snapshot, selfAgentId, configShape, state: state! }
 }
 
 /**
@@ -1081,24 +1059,14 @@ export const dispatchInitialize = async (
   }
 
   const constructorInput = await decodeConstructorInput(compiled, input)
-  const { scope, handlers, bindingHandle, selfAgentId } = await initAgentInstance(
+  const { scope, handlers, snapshot, selfAgentId, state } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
     principal,
   )
 
-  let snapshot: BoundSnapshot | null = null
-  if (compiled.compiledSnapshot !== null) {
-    const bound = bindingHandle!.read()
-    if (bound === null) {
-      await Effect.runPromise(Scope.close(scope, Exit.void))
-      throw new SnapshotNotBoundError(agentTypeName)
-    }
-    snapshot = bound
-  }
-
-  activeAgent = { name: agentTypeName, scope, handlers, principal, selfAgentId, snapshot }
+  activeAgent = { name: agentTypeName, scope, handlers, principal, selfAgentId, snapshot, state }
 }
 
 /**
@@ -1140,10 +1108,14 @@ export const dispatchInvoke = async (
     { errorWrapped: mc.errorWrapped, successVoid: mc.successVoid },
     handler,
     input,
-  ).pipe(
-    Effect.provideService(Principal, principal),
-    Effect.provideService(SelfAgentId, activeAgent.selfAgentId),
-  ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
+  ).pipe(Effect.provideService(SelfAgentId, activeAgent.selfAgentId)) as Effect.Effect<
+    CoreTypes.SchemaValueTree | undefined,
+    unknown,
+    never
+  >
+  if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {
+    program = program.pipe(Effect.provideService(Principal, principal)) as typeof program
+  }
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
     const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     program = program.pipe(
@@ -1231,13 +1203,15 @@ const resolveSqliteHostExtSync = (): {
   )
 
 /**
- * Encode the auto-snapshot path synchronously.
+ * Encode the schema-driven snapshot state and optional SQLite images.
  */
-const encodeAutoSnapshot = (
+const encodeAutoSnapshot = async (
   agent: ActiveAgent,
+  compiled: CompiledAgent,
   snap: Extract<BoundSnapshot, { kind: "auto" }>,
-): ApiHost.Snapshot => {
-  const state = Effect.runSync(Ref.get(snap.ref) as Effect.Effect<unknown, never>)
+): Promise<ApiHost.Snapshot> => {
+  const state =
+    compiled.impl.snapshot === undefined ? agent.state : await saveSnapshotState(agent, compiled)
   const encoded = Effect.runSync(
     Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
   )
@@ -1289,35 +1263,28 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
   }
   const snap = agent.snapshot
   if (snap.kind === "auto") {
-    return encodeAutoSnapshot(agent, snap)
+    return encodeAutoSnapshot(agent, compiled, snap)
   }
-  return dispatchSaveCustomSnapshot(agent, compiled, snap)
+  const bytes = await saveSnapshotState(agent, compiled)
+  return encodeBinaryEnvelope(agent.principal, bytes as Uint8Array)
 }
 
 /**
- * Custom (`Snapshot.custom(...)`) save path: runs the user's
- * `Effect<Uint8Array, ...>` handler under the same runtime layer the
- * dispatcher uses for `invoke`.
+ * Run either strategy's save effect with the same services as initialization.
  */
-const dispatchSaveCustomSnapshot = async (
-  agent: ActiveAgent,
-  compiled: CompiledAgent,
-  snap: Extract<BoundSnapshot, { kind: "custom" }>,
-): Promise<ApiHost.Snapshot> => {
-  let saveProgram: Effect.Effect<Uint8Array, unknown, never> = snap.handlers.save.pipe(
+const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): Promise<unknown> => {
+  let saveProgram = Effect.suspend(() => compiled.impl.snapshot!.save(agent.state)).pipe(
     Effect.provideService(Principal, agent.principal),
-  ) as Effect.Effect<Uint8Array, unknown, never>
-  // Mirror `dispatchInvoke`: when the agent declares a config service,
-  // make it available to the user's custom save handler too. Auto
-  // snapshots don't run user code here, so they don't need this branch.
+    Effect.provideService(SelfAgentId, agent.selfAgentId),
+    Effect.scoped,
+  ) as Effect.Effect<unknown, unknown, never>
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
     const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     saveProgram = saveProgram.pipe(
       Effect.provideService(compiled.metadata.config as never, shape as never),
-    ) as Effect.Effect<Uint8Array, unknown, never>
+    ) as Effect.Effect<unknown, unknown, never>
   }
-  const bytes = await runUserPromise(saveProgram)
-  return encodeBinaryEnvelope(agent.principal, bytes)
+  return runUserPromise(saveProgram)
 }
 
 /**
@@ -1327,10 +1294,8 @@ const dispatchSaveCustomSnapshot = async (
  *
  * 1. Recover the agent's own ID from `GOLEM_AGENT_ID` and parse it.
  * 2. Decode the envelope to recover principal + user-state bytes.
- * 3. Run the constructor (the same path `initialize` would have taken).
- * 4. Apply the restored state on top of the freshly-constructed
- *    instance (auto → write the Ref; custom → invoke the user's
- *    `load` Effect).
+ * 3. Decode state or run the strategy's restore effect, skipping `init`.
+ * 4. Restore SQLite images and construct the shared methods with that state.
  * 5. Mark the agent active so subsequent `invoke`s see the restored
  *    state.
  *
@@ -1386,24 +1351,29 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   }
   const principal = decoded.principal
 
-  // 3. Run the constructor with the recovered params + principal.
-  const constructorInput = await decodeConstructorInput(compiled, typedConstructor.value)
-  const { scope, handlers, bindingHandle, selfAgentId, configShape } = await initAgentInstance(
-    agentTypeName,
-    compiled,
-    constructorInput,
-    principal,
-    { phantomId, parsedAgentId: agentIdString },
-  )
-
-  const bound = bindingHandle!.read()
-  if (bound === null) {
-    await Effect.runPromise(Scope.close(scope, Exit.void))
-    throw new SnapshotNotBoundError(agentTypeName)
+  let saved: unknown
+  if (compiled.compiledSnapshot.kind === "auto") {
+    if (decoded.kind !== "json" && decoded.kind !== "multipart") {
+      throw new SnapshotEnvelopeError(
+        `agent '${agentTypeName}' expects a JSON snapshot state but received ${snapshot.mimeType}`,
+      )
+    }
+    saved = await Effect.runPromise(
+      Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(decoded.state) as Effect.Effect<
+        unknown,
+        Schema.SchemaError
+      >,
+    )
+  } else {
+    if (decoded.kind !== "binary") {
+      throw new SnapshotEnvelopeError(
+        `agent '${agentTypeName}' expects a binary envelope but received ${snapshot.mimeType}`,
+      )
+    }
+    saved = decoded.userPayload
   }
 
-  // 4. Apply restored state.
-  try {
+  const restoreDatabases = (bound: BoundSnapshot): void => {
     if (bound.kind === "auto") {
       const declared = bound.declaredDatabases
       if (declared.length === 0) {
@@ -1412,13 +1382,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
             `agent '${agentTypeName}' expects a JSON envelope but received ${snapshot.mimeType}`,
           )
         }
-        const decodedState = await Effect.runPromise(
-          Schema.decodeUnknownEffect(bound.schema)(decoded.state) as Effect.Effect<
-            unknown,
-            Schema.SchemaError
-          >,
-        )
-        await Effect.runPromise(Ref.set(bound.ref, decodedState) as Effect.Effect<void, never>)
       } else {
         if (decoded.kind !== "multipart") {
           throw new SnapshotEnvelopeError(
@@ -1461,13 +1424,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
           // call sequence as the live connection did after the snapshot.
           handle.prepare("SELECT count(*) FROM sqlite_master").get()
         }
-        const decodedState = await Effect.runPromise(
-          Schema.decodeUnknownEffect(bound.schema)(decoded.state) as Effect.Effect<
-            unknown,
-            Schema.SchemaError
-          >,
-        )
-        await Effect.runPromise(Ref.set(bound.ref, decodedState) as Effect.Effect<void, never>)
       }
     } else {
       if (decoded.kind !== "binary") {
@@ -1475,34 +1431,24 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
           `agent '${agentTypeName}' expects a binary envelope but received ${snapshot.mimeType}`,
         )
       }
-      const restorationContext: SnapshotRestorationContext = {
-        id: constructorInput,
-        principal,
-        phantomId,
-        agentId: selfAgentId,
-        parsedAgentId: agentIdString,
-        config: configShape,
-      }
-      let loadProgram: Effect.Effect<void, unknown, never> = bound.handlers
-        .load(decoded.userPayload, restorationContext)
-        .pipe(Effect.provideService(Principal, principal)) as Effect.Effect<void, unknown, never>
-      // Mirror the save path + `dispatchInvoke`: when the agent declares
-      // a config service, make it available to the user's custom load
-      // handler too.
-      if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
-        const shape = await runUserPromise(compiled.compiledConfig.buildShape())
-        loadProgram = loadProgram.pipe(
-          Effect.provideService(compiled.metadata.config as never, shape as never),
-        ) as Effect.Effect<void, unknown, never>
-      }
-      await runUserPromise(loadProgram)
+      // The lifecycle strategy restored the custom state before methods were built.
     }
-  } catch (e) {
-    await Effect.runPromise(Scope.close(scope, Exit.void))
-    throw e
   }
 
-  // 5. Publish.
+  // Restore resources and database images before constructing shared methods.
+  const constructorInput = await decodeConstructorInput(compiled, typedConstructor.value)
+  const {
+    scope,
+    handlers,
+    snapshot: bound,
+    selfAgentId,
+    state,
+  } = await initAgentInstance(agentTypeName, compiled, constructorInput, principal, {
+    phantomId,
+    parsedAgentId: agentIdString,
+    saved,
+    restoreDatabases,
+  })
   activeAgent = {
     name: agentTypeName,
     scope,
@@ -1510,5 +1456,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     principal,
     selfAgentId,
     snapshot: bound,
+    state,
   }
 }

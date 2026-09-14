@@ -49,8 +49,9 @@ export const Lookup = defineAgent({
       error: NotFoundError,
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     fetch: ({ id }) =>
       id === "missing"
         ? Effect.fail({ _tag: "NotFoundError" as const, resource: id })
@@ -58,7 +59,7 @@ export const Lookup = defineAgent({
     cmd: ({ fail }) =>
       fail ? Effect.fail({ _tag: "NotFoundError" as const, resource: "always" }) : Effect.void,
   }),
-)
+})
 
 /**
  * Discriminate between the typed user error (`NotFoundError`) and any
@@ -98,8 +99,9 @@ export const LookupCaller = defineAgent({
       success: Schema.String,
     }),
   },
-}).implement(({ realm }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ realm }) => Effect.succeed(realm),
+  methods: (realm) => ({
     fetchAndReport: ({ id }) =>
       Effect.gen(function* () {
         const lookup = yield* Lookup.client.get({ realm })
@@ -117,4 +119,4 @@ export const LookupCaller = defineAgent({
         Effect.scoped,
       ),
   }),
-)
+})

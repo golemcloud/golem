@@ -13,6 +13,7 @@ import {
   withPromptHint,
 } from "../src/Method.js"
 import { schemaValueFromWit } from "../src/internal/schema-model/wit.js"
+import { PrincipalSchema } from "../src/Principal.js"
 
 const Person = Schema.Struct({ name: Schema.String, age: Schema.Number })
 const greet = defineMethod({
@@ -90,9 +91,9 @@ describe("Method", () => {
       const noCache = yield* compileMethodSpec(
         "no-cache",
         method({
-          input: {},
+          input: { principal: PrincipalSchema },
           success: Schema.String,
-          readOnly: { cache: "no-cache", usesPrincipal: true },
+          readOnly: { cache: "no-cache" },
         }),
       )
       const ttl = yield* compileMethodSpec(

@@ -1,10 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, DateTime, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
+import { Cause, DateTime, Effect, Exit, Fiber, Layer, Result, Schema, Stream } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import { defineAgent } from "../src/Agent.js"
-import { AgentStream } from "../src/AgentStream.js"
 import { defineConfig } from "../src/Config.js"
 import { DurabilityModeClient } from "../src/host/DurabilityModeClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
@@ -189,10 +188,10 @@ describe("Client 1.6 durable lifecycle", () => {
         },
       })
       const runtime = makeRuntime()
-      const first = AgentStream.from([11])
-      const sibling = AgentStream.from([22])
-      const scheduledFirst = AgentStream.from([33])
-      const scheduledSibling = AgentStream.from([44])
+      const first = Stream.make(11)
+      const sibling = Stream.make(22)
+      const scheduledFirst = Stream.make(33)
+      const scheduledSibling = Stream.make(44)
 
       yield* Effect.gen(function* () {
         const remote = yield* StreamingInput.client.get({})
@@ -216,16 +215,10 @@ describe("Client 1.6 durable lifecycle", () => {
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
 
       expect(runtime.calls).toHaveLength(0)
-      expect(yield* Effect.promise(() => first.next())).toEqual({ done: false, value: 11 })
-      expect(yield* Effect.promise(() => sibling.next())).toEqual({ done: false, value: 22 })
-      expect(yield* Effect.promise(() => scheduledFirst.next())).toEqual({
-        done: false,
-        value: 33,
-      })
-      expect(yield* Effect.promise(() => scheduledSibling.next())).toEqual({
-        done: false,
-        value: 44,
-      })
+      expect([...(yield* Stream.runCollect(first))]).toEqual([11])
+      expect([...(yield* Stream.runCollect(sibling))]).toEqual([22])
+      expect([...(yield* Stream.runCollect(scheduledFirst))]).toEqual([33])
+      expect([...(yield* Stream.runCollect(scheduledSibling))]).toEqual([44])
     }),
   )
 
@@ -235,7 +228,7 @@ describe("Client 1.6 durable lifecycle", () => {
       Effect.gen(function* () {
         interface Node {
           readonly label: string
-          readonly children: AgentStream<Node>
+          readonly children: Stream.Stream<Node, unknown>
         }
         const Node: Schema.Codec<Node> = Schema.suspend(() =>
           Schema.Struct({ label: Schema.String, children: WitTypes.AgentStream(Node) }),

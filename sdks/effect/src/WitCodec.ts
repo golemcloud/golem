@@ -16,6 +16,7 @@ import {
   SchemaAST,
   SchemaGetter,
   SchemaIssue,
+  Stream,
 } from "effect"
 import {
   field,
@@ -62,7 +63,7 @@ import {
   type WitNumericKind,
   type WitTypedArrayKind,
 } from "./WitTypes.js"
-import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from "./internal/agentStream.js"
+import { agentStreamFromHandle, agentStreamToHandle } from "./internal/agentStream.js"
 import { GuestSecretHandle, peekGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 import { SECRET_INTERNAL } from "./internal/schema-model/secretInternal.js"
 import {
@@ -1062,7 +1063,7 @@ const walk = (
               return {
                 type: t.stream(item.type),
                 pair: {
-                  toValue: (stream: AgentStream<unknown>) =>
+                  toValue: (stream: Stream.Stream<unknown, unknown, any>) =>
                     v.stream(agentStreamToHandle(stream, codec(), requireConversionContext())),
                   fromValue: (x) =>
                     agentStreamFromHandle(

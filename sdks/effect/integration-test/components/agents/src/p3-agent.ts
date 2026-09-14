@@ -1,5 +1,5 @@
 import { Effect, Ref, Schema, Stream } from "effect"
-import { AgentStream, defineAgent, method, Schema as GolemSchema } from "@golemcloud/effect-golem"
+import { defineAgent, method, Schema as GolemSchema } from "@golemcloud/effect-golem"
 
 const Item = Schema.Struct({
   id: Schema.Number,
@@ -42,39 +42,32 @@ const StreamTarget = defineAgent({
   },
 })
 
-StreamTarget.implement(() =>
-  Effect.gen(function* () {
-    const scheduledCount = yield* Ref.make(0)
-    return {
-      sum: ({ values }) =>
-        values.toEffect(String).pipe(
-          Stream.runFold(
-            () => 0,
-            (sum, value) => sum + value,
-          ),
+StreamTarget.implement({
+  init: () => Ref.make(0),
+  methods: (scheduledCount) => ({
+    sum: ({ values }) =>
+      values.pipe(
+        Stream.runFold(
+          () => 0,
+          (sum, value) => sum + value,
         ),
-      doubled: ({ values }) =>
-        values.toEffect(String).pipe(
-          Stream.map((value) => value * 2),
-          AgentStream.AgentStream.fromEffect,
-        ),
-      transformNested: ({ request }) =>
-        Effect.gen(function* () {
-          const values = yield* request.nested.values.toEffect(String).pipe(
-            Stream.map((item) => ({
-              id: item.id * 10,
-              summary: `${request.prefix}:${item.label}:${item.weights.join("+")}`,
-              total: item.weights.reduce((total, weight) => total + weight, 0),
-            })),
-            AgentStream.AgentStream.fromEffect,
-          )
-          return { response: { values } }
-        }),
-      markScheduled: () => Ref.update(scheduledCount, (count) => count + 1),
-      scheduledCount: () => Ref.get(scheduledCount),
-    }
+      ),
+    doubled: ({ values }) => Effect.succeed(values.pipe(Stream.map((value) => value * 2))),
+    transformNested: ({ request }) =>
+      Effect.gen(function* () {
+        const values = request.nested.values.pipe(
+          Stream.map((item) => ({
+            id: item.id * 10,
+            summary: `${request.prefix}:${item.label}:${item.weights.join("+")}`,
+            total: item.weights.reduce((total, weight) => total + weight, 0),
+          })),
+        )
+        return { response: { values } }
+      }),
+    markScheduled: () => Ref.update(scheduledCount, (count) => count + 1),
+    scheduledCount: () => Ref.get(scheduledCount),
   }),
-)
+})
 
 const EphemeralProbe = defineAgent({
   name: "EffectEphemeralProbe",
@@ -85,9 +78,10 @@ const EphemeralProbe = defineAgent({
   },
 })
 
-EphemeralProbe.implement(({ label }) =>
-  Effect.succeed({ echo: ({ value }) => Effect.succeed(`${label}:${value}`) }),
-)
+EphemeralProbe.implement({
+  init: ({ label }) => Effect.succeed(label),
+  methods: (label) => ({ echo: ({ value }) => Effect.succeed(`${label}:${value}`) }),
+})
 
 defineAgent({
   name: "EffectP3Caller",
@@ -115,14 +109,14 @@ defineAgent({
     }),
     cancelledSchedule: method({ input: {}, success: Schema.Number }),
   },
-}).implement(({ name }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ name }) => Effect.succeed(name),
+  methods: (name) => ({
     streamRoundtrip: () =>
       Effect.gen(function* () {
         const target = yield* StreamTarget.client.get({ name })
-        const input = yield* AgentStream.AgentStream.fromEffect(Stream.fromIterable([1, 2, 3]))
-        const output = yield* target.doubled({ values: input })
-        return yield* output.toEffect(String).pipe(
+        const output = yield* target.doubled({ values: Stream.fromIterable([1, 2, 3]) })
+        return yield* output.pipe(
           Stream.runCollect,
           Effect.map((values) => Array.from(values)),
         )
@@ -146,11 +140,10 @@ defineAgent({
           Stream.tap(() => Ref.update(pulls, (count) => count + 1)),
           Stream.ensuring(Ref.set(closed, true)),
         )
-        const input = yield* AgentStream.AgentStream.fromEffect(source)
         const output = yield* target.transformNested({
-          request: { prefix: "rpc", nested: { values: input } },
+          request: { prefix: "rpc", nested: { values: source } },
         })
-        const values = yield* output.response.values.toEffect(String).pipe(
+        const values = yield* output.response.values.pipe(
           Stream.take(2),
           Stream.runCollect,
           Effect.map((items) => Array.from(items) as Array<typeof TransformedItem.Type>),
@@ -187,4 +180,4 @@ defineAgent({
         return yield* target.scheduledCount({})
       }).pipe(Effect.orDie, Effect.scoped),
   }),
-)
+})

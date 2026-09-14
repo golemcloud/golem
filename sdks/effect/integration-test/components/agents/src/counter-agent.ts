@@ -22,6 +22,7 @@ import {
   Snapshot,
   Unstructured,
 } from "@golemcloud/effect-golem"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
   greeting: Schema.String,
@@ -147,77 +148,88 @@ const CounterSpec = defineAgent({
   },
 })
 
-const CounterFactory: Parameters<typeof CounterSpec.implement>[0] = ({ name }, snap) =>
-  Effect.gen(function* () {
-    yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
-    const state = yield* snap.init({ count: 0 })
-    const ownerPrincipal = yield* Principal.Principal
-    const ownerTag =
-      ownerPrincipal.tag === "oidc" ? `oidc:${ownerPrincipal.val.sub}` : ownerPrincipal.tag
-    return {
-      value: () =>
-        Ref.get(state).pipe(
-          Effect.map((s) => s.count),
-          Effect.withSpan("Counter.value"),
-        ),
-      increment: () =>
-        Ref.updateAndGet(state, (s) => ({ count: s.count + 1 })).pipe(
-          Effect.tap((s) =>
-            Effect.logInfo("incremented").pipe(Effect.annotateLogs({ to: s.count })),
-          ),
-          Effect.map((s) => s.count),
-          Effect.withSpan("Counter.increment"),
-        ),
-      add: ({ by }) =>
-        Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
-          Effect.tap(() => Effect.logDebug("added").pipe(Effect.annotateLogs({ by }))),
-          Effect.map((s) => s.count),
-          Effect.withSpan("Counter.add", { attributes: { by } }),
-        ),
-      reset: () => Ref.set(state, { count: 0 }),
-      owner: () => Effect.succeed(ownerTag),
-      caller: () =>
-        Effect.gen(function* () {
-          const p = yield* Principal.Principal
-          return p.tag === "oidc" ? `oidc:${p.val.sub}` : p.tag
-        }),
-      currentGreeting: () =>
-        Effect.gen(function* () {
-          const cfg = yield* CounterConfig
-          return yield* cfg.greeting
-        }),
-      keyTail: () =>
-        Effect.gen(function* () {
-          const cfg = yield* CounterConfig
-          const r = yield* cfg.apiKey.get
-          return Redacted.value(r).slice(-4)
-        }),
-      textResponse: () =>
-        Effect.succeed({
-          _tag: "inline" as const,
-          val: "hello from Effect",
-          languageCode: "en",
-        }),
-      binaryResponse: () =>
-        Effect.succeed({
-          _tag: "inline" as const,
-          val: new Uint8Array([0, 127, 255]),
-          mimeType: "application/octet-stream",
-        }),
-      jsonResponse: () =>
-        Ref.get(state).pipe(Effect.map((s) => ({ kind: "counter", count: s.count }))),
-      emptyResponse: () => Effect.void,
-      collectionBindings: ({ tags, scores }) => Effect.succeed({ tags, scores }),
-      slowValue: ({ seconds }) =>
-        Effect.gen(function* () {
-          yield* Effect.logInfo("slowValue: sleeping").pipe(Effect.annotateLogs({ seconds }))
-          yield* Effect.sleep(`${seconds} seconds`)
-          const s = yield* Ref.get(state)
-          return s.count
-        }).pipe(Effect.withSpan("Counter.slowValue", { attributes: { seconds } })),
-    }
-  })
+interface CounterState {
+  readonly count: Ref.Ref<{ count: number }>
+  readonly ownerTag: string
+}
 
-export const Counter = CounterSpec.implement(CounterFactory, (_context, ...args) =>
-  CounterFactory(...args),
-)
+const principalTag = (principal: AgentCommon.Principal): string =>
+  principal.tag === "oidc" ? `oidc:${principal.val.sub}` : principal.tag
+
+const counterMethods = (state: CounterState) => ({
+  value: () =>
+    Ref.get(state.count).pipe(
+      Effect.map((s) => s.count),
+      Effect.withSpan("Counter.value"),
+    ),
+  increment: () =>
+    Ref.updateAndGet(state.count, (s) => ({ count: s.count + 1 })).pipe(
+      Effect.tap((s) => Effect.logInfo("incremented").pipe(Effect.annotateLogs({ to: s.count }))),
+      Effect.map((s) => s.count),
+      Effect.withSpan("Counter.increment"),
+    ),
+  add: ({ by }: { by: number }) =>
+    Ref.updateAndGet(state.count, (s) => ({ count: s.count + by })).pipe(
+      Effect.tap(() => Effect.logDebug("added").pipe(Effect.annotateLogs({ by }))),
+      Effect.map((s) => s.count),
+      Effect.withSpan("Counter.add", { attributes: { by } }),
+    ),
+  reset: () => Ref.set(state.count, { count: 0 }),
+  owner: () => Effect.succeed(state.ownerTag),
+  caller: () =>
+    Effect.gen(function* () {
+      return principalTag(yield* Principal.Principal)
+    }),
+  currentGreeting: () =>
+    Effect.gen(function* () {
+      const cfg = yield* CounterConfig
+      return yield* cfg.greeting
+    }),
+  keyTail: () =>
+    Effect.gen(function* () {
+      const cfg = yield* CounterConfig
+      const r = yield* cfg.apiKey.get
+      return Redacted.value(r).slice(-4)
+    }),
+  textResponse: () =>
+    Effect.succeed({ _tag: "inline" as const, val: "hello from Effect", languageCode: "en" }),
+  binaryResponse: () =>
+    Effect.succeed({
+      _tag: "inline" as const,
+      val: new Uint8Array([0, 127, 255]),
+      mimeType: "application/octet-stream",
+    }),
+  jsonResponse: () =>
+    Ref.get(state.count).pipe(Effect.map((s) => ({ kind: "counter", count: s.count }))),
+  emptyResponse: () => Effect.void,
+  collectionBindings: ({
+    tags,
+    scores,
+  }: {
+    tags: ReadonlyArray<string>
+    scores: ReadonlyArray<number>
+  }) => Effect.succeed({ tags, scores }),
+  slowValue: ({ seconds }: { seconds: number }) =>
+    Effect.gen(function* () {
+      yield* Effect.logInfo("slowValue: sleeping").pipe(Effect.annotateLogs({ seconds }))
+      yield* Effect.sleep(`${seconds} seconds`)
+      return (yield* Ref.get(state.count)).count
+    }).pipe(Effect.withSpan("Counter.slowValue", { attributes: { seconds } })),
+})
+
+export const Counter = CounterSpec.implement<CounterState>({
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
+      const ownerPrincipal = yield* Principal.Principal
+      return { count: yield* Ref.make({ count: 0 }), ownerTag: principalTag(ownerPrincipal) }
+    }),
+  methods: counterMethods,
+  snapshot: {
+    save: (state) => Ref.get(state.count),
+    restore: (saved, context) =>
+      Ref.make(saved).pipe(
+        Effect.map((count) => ({ count, ownerTag: principalTag(context.principal) })),
+      ),
+  },
+})

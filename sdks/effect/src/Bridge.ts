@@ -1,5 +1,5 @@
 /** Effect-native runtime used by generated guest agent bridges. @since 1.6.0 */
-import { Effect, Schema, SchemaGetter, Scope } from "effect"
+import { Effect, Schema, SchemaGetter, Scope, Stream } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
@@ -8,7 +8,6 @@ import * as Datetime from "./Datetime.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
-import { AgentStream } from "./internal/agentStream.js"
 import {
   agentStreamFromHandle as fromStreamHandle,
   agentStreamToHandle as toStreamHandle,
@@ -51,8 +50,6 @@ export type SecretHandle = GuestSecretHandle
 export type PermissionCardHandle = GuestPermissionCardHandle
 /** Quota capability used in generated schemas. @since 1.6.0 @category capabilities */
 export type { QuotaToken }
-/** Native stream used in generated schemas. @since 1.6.0 @category streams */
-export { AgentStream }
 /** Schema text payload alias emitted by the generator. @since 1.6.0 @category models */
 export type AgentText = string
 /** Schema binary payload alias emitted by the generator. @since 1.6.0 @category models */
@@ -156,13 +153,15 @@ const effectCodec = <T>(codec: SchemaCodec<T>): Schema.Codec<T, SchemaValue> =>
   )
 
 /** Transfer a native stream into a generated schema value. @since 1.6.0 @category streams */
-export const agentStreamToHandle = <T>(stream: AgentStream<T>, codec: SchemaCodec<T>) =>
-  toStreamHandle(stream, effectCodec(codec))
+export const agentStreamToHandle = <T, E, R>(
+  stream: Stream.Stream<T, E, R>,
+  codec: SchemaCodec<T>,
+) => toStreamHandle(stream, effectCodec(codec))
 /** Lift a generated schema stream while retaining its source item codec. @since 1.6.0 @category streams */
 export const agentStreamFromHandle = <T>(
   handle: Parameters<typeof fromStreamHandle>[0],
   codec: SchemaCodec<T>,
-): AgentStream<T> => fromStreamHandle(handle, effectCodec(codec))
+): Stream.Stream<T, unknown> => fromStreamHandle(handle, effectCodec(codec))
 
 /** Adopt capabilities atomically while constructing a schema value. @since 1.6.0 @category conversions */
 export { withCapabilityAdoptionTransaction }

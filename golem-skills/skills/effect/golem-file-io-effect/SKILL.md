@@ -40,8 +40,9 @@ export const ProvisionedFileAgent = defineAgent({
       success: Schema.String,
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     readConfig: () =>
       Effect.promise(() => readFile("/data/config.json", "utf8")),
 
@@ -54,7 +55,7 @@ export const ProvisionedFileAgent = defineAgent({
         }),
       ),
   }),
-);
+});
 ```
 
 Register the implementation from the component entry point:

@@ -37,11 +37,12 @@ export const Worker = defineAgent({
       success: Schema.Number,
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     compute: ({ value }) => Effect.succeed(value * 2),
   }),
-);
+});
 
 export const Coordinator = defineAgent({
   name: "Coordinator",
@@ -55,8 +56,9 @@ export const Coordinator = defineAgent({
       success: Numbers,
     }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     fanOut: ({ items }) =>
       Effect.all(
         items.map((value, id) =>
@@ -68,7 +70,7 @@ export const Coordinator = defineAgent({
         { concurrency: "unbounded" },
       ).pipe(Effect.orDie),
   }),
-);
+});
 ```
 
 `Worker.client.get({ id })` and `worker.compute({ value })` both return lazy Effects. `Effect.all`

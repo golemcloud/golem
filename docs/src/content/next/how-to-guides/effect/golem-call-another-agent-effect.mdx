@@ -52,11 +52,9 @@ export const GlobalRegistry = defineAgent({
       success: RegistryEntries,
     }),
   },
-}).implement((_id, snapshot) =>
-  Effect.gen(function* () {
-    const state = yield* snapshot.init({});
-
-    return {
+}).implement({
+  init: () => Ref.make<Record<string, typeof RegistryEntry.Type>>({}),
+  methods: (state) => ({
       register: ({ name, count }) =>
         Ref.update(state, (entries) => ({
           ...entries,
@@ -64,9 +62,9 @@ export const GlobalRegistry = defineAgent({
         })).pipe(Effect.as(count < 5)),
 
       getAll: () => Ref.get(state).pipe(Effect.map(Object.values)),
-    };
   }),
-);
+  snapshot: Snapshot.ref<Record<string, typeof RegistryEntry.Type>>(),
+});
 ```
 
 Constructor parameters and method parameters/results/errors must use WIT-representable schemas.
@@ -129,7 +127,7 @@ use `try`/`catch` around an unexecuted Effect.
 - Import local modules with their emitted `.js` suffix under the generated NodeNext/ESM setup.
 - Import the target's exported agent spec or implemented value to access `.client`.
 - Ensure `src/main.ts` imports every implementation module for side-effect registration.
-- For larger layouts, keep the `defineAgent(...)` spec in one module and call `.implement(...)` in
+- For larger layouts, keep the `defineAgent(...)` spec in one module and call `.implement({ ... })` in
   a separate implementation module. Callers can then import the spec without registering another
   implementation.
 

@@ -1,7 +1,7 @@
 /**
  * @since 1.5.0
  */
-import { Effect, Option, Schema, SchemaAST, SchemaIssue } from "effect"
+import { Effect, Option, Schema, SchemaAST, SchemaIssue, Stream } from "effect"
 import type {
   BinaryRestrictions,
   Datetime as DatetimeValue,
@@ -14,7 +14,6 @@ import type {
   TextRestrictions,
   UrlRestrictions,
 } from "golem:core/types@2.0.0"
-import { AgentStream as AgentStreamValue } from "./AgentStream.js"
 import { GuestPermissionCardHandle } from "./internal/schema-model/permissionCardHandle.js"
 import { GuestQuotaTokenHandle } from "./internal/schema-model/quotaTokenHandle.js"
 import { GuestSecretHandle } from "./internal/schema-model/secretHandle.js"
@@ -439,11 +438,11 @@ export const PermissionCard = (spec: PermissionCardSpec) =>
 
 /** Agent stream capability schema. @since 1.6.0 @category schemas */
 export const AgentStream = <S extends Schema.Top>(element: S) =>
-  Schema.declareConstructor<AgentStreamValue<S["Type"]>>()(
+  Schema.declareConstructor<Stream.Stream<S["Type"], unknown>>()(
     [element],
     () => (u, ast) =>
-      u instanceof AgentStreamValue
-        ? Effect.succeed(u as AgentStreamValue<S["Type"]>)
+      Stream.isStream(u)
+        ? Effect.succeed(u as Stream.Stream<S["Type"], unknown>)
         : Effect.fail(new SchemaIssue.InvalidType(ast, Option.some(u))),
   ).pipe(
     Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "stream", elementSchema: element } }),

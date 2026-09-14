@@ -149,11 +149,11 @@ change to its oplog:
 ```typescript
 const installPolicy = Retry.setPolicy(httpTransient);
 
-// In an Effect.gen block, including defineAgent(...).implement(...) setup:
+// In an agent init Effect.gen block:
 yield* Retry.setPolicy(httpTransient);
 ```
 
-Installing during `defineAgent(...).implement(...)` setup makes the policy available to all
+Installing during `init` makes the policy available to all
 handlers of that agent instance. It remains active until overwritten or removed.
 
 Use `Retry.withPolicy` when the policy should apply only while one Effect runs:

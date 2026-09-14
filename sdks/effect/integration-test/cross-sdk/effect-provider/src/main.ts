@@ -1,6 +1,5 @@
 import { Effect, Ref, Result, Schema, Stream } from "effect"
 import {
-  AgentStream,
   defineAgent,
   defineConfig,
   method,
@@ -117,10 +116,10 @@ defineAgent({
       input: {
         request: Schema.Struct({
           prefix: Schema.String,
-          items: GolemSchema.AgentStream(StreamItem),
+          items: WitTypes.AgentStream(StreamItem),
         }),
       },
-      success: Schema.Struct({ items: GolemSchema.AgentStream(StreamItem) }),
+      success: Schema.Struct({ items: WitTypes.AgentStream(StreamItem) }),
     }),
     reserveForwardedQuota: method({
       input: { token: Quota.QuotaTokenSchema },
@@ -131,42 +130,41 @@ defineAgent({
       success: WitTypes.PermissionCard({ polymorphic: false }),
     }),
   },
-}).implement(({ tenant }) =>
-  Effect.gen(function* () {
-    const config = yield* FixtureConfig
-    const prefix = yield* config.prefix
-    return {
-      transform: ({ request }) => {
-        if (request.items.length === 0) {
-          return Effect.fail({ code: "EMPTY_ITEMS", requestId: request.header.requestId })
-        }
-        return Effect.succeed({
-          summary: `${prefix}:${tenant}:${request.header.flags.length}`,
-          accepted: request.items.map((item) => ({
-            sku: item.sku,
-            total: item.quantities.reduce((left, right) => left + right, 0),
+}).implement({
+  init: ({ tenant }) =>
+    Effect.gen(function* () {
+      const config = yield* FixtureConfig
+      const prefix = yield* config.prefix
+      return { tenant, prefix }
+    }),
+  methods: ({ tenant, prefix }) => ({
+    transform: ({ request }) => {
+      if (request.items.length === 0) {
+        return Effect.fail({ code: "EMPTY_ITEMS", requestId: request.header.requestId })
+      }
+      return Effect.succeed({
+        summary: `${prefix}:${tenant}:${request.header.flags.length}`,
+        accepted: request.items.map((item) => ({
+          sku: item.sku,
+          total: item.quantities.reduce((left, right) => left + right, 0),
+        })),
+        audit: { requestId: request.header.requestId, itemCount: request.items.length },
+      })
+    },
+    transformStream: ({ request }) =>
+      Effect.succeed({
+        items: request.items.pipe(
+          Stream.map((item) => ({
+            id: item.id * 10,
+            values: item.values.map((value) => value + request.prefix.length),
           })),
-          audit: { requestId: request.header.requestId, itemCount: request.items.length },
-        })
-      },
-      transformStream: ({ request }) =>
-        Effect.map(
-          AgentStream.AgentStream.fromEffect(
-            request.items.toEffect(String).pipe(
-              Stream.map((item) => ({
-                id: item.id * 10,
-                values: item.values.map((value) => value + request.prefix.length),
-              })),
-            ),
-          ),
-          (items) => ({ items }),
         ),
-      reserveForwardedQuota: ({ token }) =>
-        Quota.withReservation(token, 1n, () => Effect.succeed({ used: 1n, value: token })),
-      echoPermissionCard: ({ card }) => Effect.succeed(card),
-    }
+      }),
+    reserveForwardedQuota: ({ token }) =>
+      Quota.withReservation(token, 1n, () => Effect.succeed({ used: 1n, value: token })),
+    echoPermissionCard: ({ card }) => Effect.succeed(card),
   }),
-)
+})
 
 defineAgent({
   name: "EffectRichFixture",
@@ -174,8 +172,9 @@ defineAgent({
   methods: {
     transformRichCorpus: method({ input: { corpus: RichCorpus }, success: RichCorpus }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     transformRichCorpus: ({ corpus }) =>
       Effect.succeed({
         ...corpus,
@@ -199,7 +198,7 @@ defineAgent({
           typeof corpus.choice === "string" ? { kind: "point" as const, x: 17 } : "name:effect",
       }),
   }),
-)
+})
 
 const SnapshotFixture = defineAgent({
   name: "EffectSnapshotFixture",
@@ -214,19 +213,17 @@ const SnapshotFixture = defineAgent({
   },
 })
 
-const snapshotFactory: Parameters<typeof SnapshotFixture.implement>[0] = (_id, snapshotting) =>
-  Effect.gen(function* () {
-    const state = yield* snapshotting.init({ value: 0 })
-    return {
-      add: ({ by }) =>
-        Ref.updateAndGet(state, ({ value }) => ({ value: value + by })).pipe(
-          Effect.map(({ value }) => value),
-        ),
-      value: () => Ref.get(state).pipe(Effect.map(({ value }) => value)),
-    }
-  })
-
-SnapshotFixture.implement(snapshotFactory, (_restoration, ...args) => snapshotFactory(...args))
+SnapshotFixture.implement<Ref.Ref<{ value: number }>>({
+  init: () => Ref.make({ value: 0 }),
+  methods: (state) => ({
+    add: ({ by }) =>
+      Ref.updateAndGet(state, ({ value }) => ({ value: value + by })).pipe(
+        Effect.map(({ value }) => value),
+      ),
+    value: () => Ref.get(state).pipe(Effect.map(({ value }) => value)),
+  }),
+  snapshot: Snapshot.ref<{ value: number }>(),
+})
 
 defineAgent({
   name: "EffectSchemaFixture",
@@ -256,11 +253,12 @@ defineAgent({
     }),
     echoRecursive: method({ input: { value: RecursiveNode }, success: RecursiveNode }),
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     echoText: ({ value }) => Effect.succeed(value),
     echoBinary: ({ value }) => Effect.succeed(value),
     echoQuantity: ({ value }) => Effect.succeed(value),
     echoRecursive: ({ value }) => Effect.succeed(value),
   }),
-)
+})

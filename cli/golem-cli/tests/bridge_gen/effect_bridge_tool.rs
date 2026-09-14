@@ -3,7 +3,7 @@
 
 use crate::bridge_gen::scala::grep_tool;
 use camino::Utf8Path;
-use golem_cli::bridge_gen::typescript::effect_tool::EffectToolBridgeGenerator;
+use golem_cli::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
 use golem_common::schema::tool::{CommandIndex, StreamSpec};
 use tempfile::TempDir;
 use test_r::test;

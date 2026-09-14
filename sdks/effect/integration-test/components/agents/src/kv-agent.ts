@@ -53,10 +53,14 @@ export const KvAgent = defineAgent({
       success: Schema.Array(Schema.NullOr(Schema.String)),
     }),
   },
-}).implement(({ name }) =>
-  Effect.gen(function* () {
-    const bucket = yield* KeyValue.openBucket(name)
-    const users = bucket.forSchema(User)
+}).implement({
+  init: ({ name }) =>
+    Effect.gen(function* () {
+      const bucket = yield* KeyValue.openBucket(name)
+      const users = bucket.forSchema(User)
+      return { bucket, users }
+    }),
+  methods: ({ bucket, users }) => {
     const enc = (s: string) => new TextEncoder().encode(s)
     const dec = (b: Uint8Array) => new TextDecoder().decode(b)
 
@@ -78,5 +82,5 @@ export const KvAgent = defineAgent({
             Effect.map((arr) => arr.map((opt) => (Option.isSome(opt) ? dec(opt.value) : null))),
           ),
     }
-  }),
-)
+  },
+})

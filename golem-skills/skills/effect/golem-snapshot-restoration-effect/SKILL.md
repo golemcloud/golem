@@ -5,13 +5,15 @@ description: Configures durable snapshots and restoration for Effect Golem agent
 
 # Snapshot restoration
 
-Set `snapshotting: Snapshot.define({ schema, policy })` and call `snapshot.init(initial)` exactly
-once in the initialization factory. A snapshotted definition requires a distinct restoration
-factory as the second argument to `.implement(initialize, restore)`. The restoration factory
-receives `(context, id, snapshot)` and constructs the handlers; after it completes, the SDK applies
-the restored automatic state and attached SQLite images. Do not assume the initialization factory
-runs during restoration.
+Set `snapshotting: Snapshot.define({ schema, policy })` and use
+`.implement({ init, methods, snapshot })`. `init(id)` exclusively infers runtime state. For a common
+`Ref<State>` whose saved value matches the schema, use `snapshot: Snapshot.ref<Saved>()`. For a custom
+representation use `{ save: state => Effect<Saved>, restore: (saved, context) => Effect<State> }`.
+When SQLite databases are declared, add `databases: state => ({ declaredName: state.handle })` to
+that strategy. The runtime restores database images before constructing methods.
 
-Use `Snapshot.custom({ policy })` plus `snapshot.register({ save, load })` only for user-managed bytes. For SQLite, declare database names in `Snapshot.define` and attach each database exactly once. External PostgreSQL, MySQL, and Ignite state is not included.
+Use `Snapshot.custom({ policy })` with implementation `save`/`restore` only for user-managed bytes.
+Ordinary agents omit `snapshot`. External PostgreSQL, MySQL, and Ignite state is not included.
 
-Use host-backed `Durability` combinators around external effects. Do not add compatibility migration envelopes or assume constructors run in addition to restoration.
+Use host-backed `Durability` combinators around external effects. Do not add compatibility migration
+envelopes or legacy initialize/restore factories.

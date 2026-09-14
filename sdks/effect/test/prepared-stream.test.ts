@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
-import { Effect } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import type { SchemaValueTree } from "golem:core/types@2.0.0"
-import { AgentStream, agentStreamToHandle } from "../src/internal/agentStream.js"
+import { agentStreamFromHandle, agentStreamToHandle } from "../src/internal/agentStream.js"
 import { toWitCodec } from "../src/WitCodec.js"
-import { Uint32 } from "../src/WitTypes.js"
+import { AgentStream, Uint32 } from "../src/WitTypes.js"
 import { withCapabilityAdoptionTransaction } from "../src/internal/schema-model/capabilityTransaction.js"
 import { PreparedStream } from "../src/internal/schema-model/preparedStream.js"
 import { GuestSchemaValueStreamHandle } from "../src/internal/schema-model/schemaValueStreamHandle.js"
@@ -122,9 +122,44 @@ describe("stream transfer preparation", () => {
     expect(open).not.toHaveBeenCalled()
   })
 
-  // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
+  it("rolls back interrupted nested item wrapping and disposes a late result", async () => {
+    const inner = agentStreamFromHandle(agentStreamToHandle(Stream.make(23), numbers), numbers)
+    const itemCodec = Effect.runSync(toWitCodec(AgentStream(Uint32))).codec
+    const outer = agentStreamFromHandle(
+      agentStreamToHandle(Stream.make(inner), itemCodec),
+      itemCodec,
+    )
+    let started!: () => void
+    const entered = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    let finish!: (value: object) => void
+    const pending = new Promise<object>((resolve) => {
+      finish = resolve
+    })
+    let disposed!: () => void
+    const lateDisposed = new Promise<void>((resolve) => {
+      disposed = resolve
+    })
+    const drop = vi.fn(disposed)
+    transport.wrap.mockReset()
+    transport.wrap.mockImplementationOnce(() => {
+      started()
+      return pending
+    })
+    const consumer = Effect.runFork(Stream.runDrain(outer))
+    await entered
+    expect(() => agentStreamToHandle(inner, numbers)).toThrow(/reserved/)
+    await Effect.runPromise(Fiber.interrupt(consumer))
+    expect(() => agentStreamToHandle(inner, numbers)).not.toThrow()
+    finish({ [Symbol.dispose]: drop })
+    await lateDisposed
+    expect(drop).toHaveBeenCalledTimes(1)
+    expect(await Effect.runPromise(Stream.runCollect(inner))).toEqual([23])
+  })
+
   it("restores an AgentStream when asynchronous wrapping fails", async () => {
-    const stream = AgentStream.from([23])
+    const stream = agentStreamFromHandle(agentStreamToHandle(Stream.make(23), numbers), numbers)
     const value = withCapabilityAdoptionTransaction(() =>
       v.stream(agentStreamToHandle(stream, numbers)),
     )
@@ -132,6 +167,6 @@ describe("stream transfer preparation", () => {
     transport.wrap.mockRejectedValueOnce(new Error("wrap failed"))
 
     await expect(schemaValueToWitAsync(value)).rejects.toThrow("wrap failed")
-    await expect(stream.next()).resolves.toEqual({ done: false, value: 23 })
+    expect([...(await Effect.runPromise(Stream.runCollect(stream)))]).toEqual([23])
   })
 })

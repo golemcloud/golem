@@ -1,13 +1,5 @@
 import { Effect, Schema, Stream } from "effect"
-import {
-  AgentStream,
-  defineAgent,
-  method,
-  Quota,
-  Reflection,
-  Schema as GolemSchema,
-  Tool,
-} from "@golemcloud/effect-golem"
+import { defineAgent, method, Quota, Reflection, Tool, WitTypes } from "@golemcloud/effect-golem"
 import { TsCrossStreamingClient } from "ts-cross-streaming-tool-guest-client"
 import { TsPeer as GeneratedTsPeer } from "ts-peer-guest-client"
 
@@ -30,8 +22,8 @@ const TsPeer = defineAgent({
       success: Schema.Struct({ language: Schema.String, value: Schema.String }),
     }),
     nestedStream: method({
-      input: { prefix: Schema.String, items: GolemSchema.AgentStream(StreamItem) },
-      success: Schema.Struct({ items: GolemSchema.AgentStream(StreamItem) }),
+      input: { prefix: Schema.String, items: WitTypes.AgentStream(StreamItem) },
+      success: Schema.Struct({ items: WitTypes.AgentStream(StreamItem) }),
     }),
     markScheduled: method({ input: {}, success: Schema.Void }),
     scheduledCount: method({ input: {}, success: Schema.Number }),
@@ -69,8 +61,9 @@ defineAgent({
     toolRoundTrip: method({ input: { payload: Schema.String }, success: Schema.String }),
     quotaThroughTs: method({ input: {}, success: Schema.String }),
   },
-}).implement(({ name }) =>
-  Effect.succeed({
+}).implement({
+  init: ({ name }) => Effect.succeed(name),
+  methods: (name) => ({
     roundTrip: ({ value }) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -153,9 +146,8 @@ defineAgent({
             Stream.rechunk(1),
             Stream.tap(() => Effect.sync(() => pulled++)),
           )
-          const items = yield* AgentStream.AgentStream.fromEffect(source)
-          const output = yield* peer.nestedStream("fx", items)
-          const values = yield* output.items.toEffect(String).pipe(
+          const output = yield* peer.nestedStream("fx", source)
+          const values = yield* output.items.pipe(
             Stream.ensuring(
               Effect.sync(() => {
                 readerClosed = true
@@ -242,4 +234,4 @@ defineAgent({
         }).pipe(Effect.orDie),
       ),
   }),
-)
+})

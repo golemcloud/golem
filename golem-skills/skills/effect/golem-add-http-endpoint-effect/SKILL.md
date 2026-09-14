@@ -48,11 +48,12 @@ export const TaskAgent = defineAgent({
   methods: {
     // ...
   },
-}).implement(() =>
-  Effect.succeed({
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
     // ...
   }),
-);
+});
 ```
 
 Mount rules:
@@ -260,11 +261,9 @@ export const TodoAgent = defineAgent({
       http: [Http.post("/items/{id}/complete")],
     }),
   },
-}).implement((_constructor, snapshot) =>
-  Effect.gen(function* () {
-    const state = yield* snapshot.init({ items: [] });
-
-    return {
+}).implement({
+  init: () => Ref.make({ items: [] as ReadonlyArray<typeof TodoItem.Type> }),
+  methods: (state) => ({
       createItem: ({ title }) =>
         Ref.modify(state, ({ items }) => {
           const item = {
@@ -290,9 +289,9 @@ export const TodoAgent = defineAgent({
             },
           ] as const;
         }),
-    };
   }),
-);
+  snapshot: Snapshot.ref<{ items: ReadonlyArray<typeof TodoItem.Type> }>(),
+});
 ```
 
 Register the top-level implementation:
@@ -331,6 +330,6 @@ generated OpenAPI document at `/openapi.yaml` after deployment.
 - Every bound path, query, or header variable must match a method parameter.
 - Unbound bodyful-method parameters use same-named camelCase JSON body fields.
 - Handlers return Effects, not plain values or `async` functions.
-- Call `snapshot.init(...)` exactly once when the definition declares a snapshot.
+- Use `Snapshot.ref<Saved>()` when a snapshotted `Ref` contains the saved schema value.
 - Import the implementation module from `src/main.ts`; otherwise it is not registered.
 - Do not edit generated files under `golem-temp/`.

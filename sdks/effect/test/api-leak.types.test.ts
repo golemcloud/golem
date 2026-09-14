@@ -184,11 +184,13 @@ type AssertEqual<X, Y> =
     methods: {
       probe: method({ input: {}, success: Schema.Number }),
     },
-  }).implement(() =>
-    Effect.succeed({
-      probe: () => Effect.succeed(42),
-    }),
-  )
+  }).implement({
+    init: () => Effect.void,
+    methods: () =>
+      Effect.succeed({
+        probe: () => Effect.succeed(42),
+      }),
+  })
 }
 
 // Provide schema-services pass-through evidence: a method handler can
