@@ -3425,6 +3425,131 @@ async fn test_ts_counter() {
 }
 
 #[test]
+async fn test_previous_invocation_failed_revert_workflow() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, "failed-revert", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd("failed-revert");
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter-agent.ts"),
+        indoc! { r#"
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+            export const CounterAgent = defineAgent({
+              name: 'CounterAgent',
+              id: { name: z.string() },
+              methods: {
+                value: method({ input: {}, returns: z.number() }),
+                increment: method({ input: {}, returns: z.number() }),
+                fail: method({ input: {}, returns: z.number() }),
+              },
+            });
+
+            export const CounterAgentImpl = CounterAgent.implement({
+              init: () => ({ count: 0 }),
+              methods: {
+                value() {
+                  return this.count;
+                },
+                increment() {
+                  this.count += 1;
+                  return this.count;
+                },
+                fail() {
+                  console.error('intentional failure stderr');
+                  throw new Error('intentional invocation failure');
+                },
+              },
+            });
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            "retry-policy",
+            "create",
+            "no-retries",
+            "--priority",
+            "100",
+            "--predicate",
+            "true",
+            "--policy",
+            "never",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let agent_id = r#"CounterAgent("quote ' and space")"#;
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, agent_id, "increment"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("1"));
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "fail"]).await;
+    assert!(!outputs.success());
+
+    let outputs = ctx.cli([cmd::AGENT, "resume", agent_id]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("Previous Invocation Failed"));
+    assert!(outputs.stderr_contains("agent revert"));
+
+    let outputs = ctx.cli([cmd::AGENT, "stream", agent_id]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("Previous Invocation Failed"));
+    assert!(outputs.stderr_contains("agent revert"));
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "value"]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains_ordered([
+        "Previous Invocation Failed",
+        "intentional failure stderr",
+        "intentional invocation failure",
+        "To discard the failed invocation",
+        "agent revert",
+        "External side effects",
+    ]));
+    assert!(outputs.stderr_contains("--number-of-invocations 1"));
+    assert!(!outputs.stderr_contains("agent revert --yes"));
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "revert",
+            agent_id,
+            "--number-of-invocations",
+            "1",
+        ])
+        .await;
+    assert!(!outputs.success());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "revert",
+            agent_id,
+            "--number-of-invocations",
+            "1",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "value"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("1"));
+}
+
+#[test]
 async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
     let mut ctx = TestContext::new();
     let app_name = "long-agent-id-rejected";
