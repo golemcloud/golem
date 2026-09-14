@@ -244,7 +244,6 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
             _ => {}
         }
     }
-    drop(host);
     for (interface_name, item) in component.component_type().imports(&engine) {
         let ComponentItem::ComponentInstance(interface) = item.ty else {
             continue;
