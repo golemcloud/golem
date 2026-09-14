@@ -541,13 +541,6 @@ async fn start_shard_management(
 ) {
     let executor_count = shard_state.executor_count();
     let number_of_shards = shard_state.number_of_shards;
-    // The fixture's leases are re-based on the configured length: the cluster under test has always
-    // run with it. A startup re-grant honours the length each executor was last told, so a fixture
-    // granted for 60s would otherwise keep a 1s test's executors alive for a minute.
-    let mut shard_state = shard_state;
-    for lease in shard_state.executor_leases.values_mut() {
-        lease.expires_at = lease.granted_at + lease_ttl;
-    }
     let persistence = TestPersistence::new(shard_state);
     let health_check = Arc::new(TestHealthCheck::all_healthy());
     let mut join_set = JoinSet::new();
@@ -2191,6 +2184,42 @@ async fn a_lease_that_lapsed_before_its_renewal_is_not_found() {
         ),
         "got {err:?}"
     );
+}
+
+#[test]
+// A renewal's reply can be lost, and the executor then keeps admitting to the deadline it was last
+// told. So a renewal under a `shard_lease_duration` shortened across a restart must not store an
+// earlier deadline than the executor may still hold, or the manager would reap from the new one and
+// re-home shards the executor still serves. Here both persisted leases outlive the configured
+// length by a minute, and the reply to the early renewal is simply never applied on the executor.
+async fn a_renewal_under_a_shortened_lease_keeps_the_outstanding_deadline() {
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let mut state = balanced_pair();
+    let outstanding = Utc::now() + chrono::Duration::seconds(60);
+    for lease in state.executor_leases.values_mut() {
+        lease.granted_at = Utc::now();
+        lease.expires_at = outstanding;
+    }
+    let (shard_management, persistence, mut join_set) =
+        start_shard_management(state, worker_executors.clone(), Duration::from_secs(1)).await;
+
+    assert!(
+        expiry_of(&persistence.latest().await, executor(1)) >= outstanding,
+        "the startup re-grant must not shorten an outstanding lease either"
+    );
+
+    let claimed = claim_of(&persistence.latest().await, executor(1));
+    let grant = shard_management
+        .renew_shard_lease(executor(1), claimed)
+        .await
+        .expect("a renewal of the held set is granted");
+    assert!(
+        grant.expires_at >= outstanding,
+        "the renewal stored {:?}, before the {outstanding:?} the executor may still be holding",
+        grant.expires_at
+    );
+
+    join_set.abort_all();
 }
 
 #[test]

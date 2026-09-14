@@ -22,7 +22,7 @@ use golem_common::model::{
 };
 use golem_service_base::clients::shard_manager::{ShardLeaseError, ShardManagerError};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
@@ -60,6 +60,14 @@ pub type ShardAssignmentChangedHookFn =
     dyn Fn() -> BoxFuture<'static, Result<RecoveryOutcome, anyhow::Error>> + Send + Sync;
 pub type ShardAssignmentChangedHook = Arc<ShardAssignmentChangedHookFn>;
 
+/// Names one attempt at recovering agents for the set, handed out by
+/// [`ShardManagerService::recovery_deferred`] and handed back by
+/// [`ShardManagerService::recovery_succeeded`]. A recovery can only retire the
+/// attempt it was started for, so one that ran to completion after a newer
+/// delivery deferred its own cannot report that newer one done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecoveryTicket(u64);
+
 #[async_trait]
 pub trait ShardManagerService: Send + Sync {
     /// Registers this executor and returns the shard assignment the manager
@@ -84,16 +92,19 @@ pub trait ShardManagerService: Send + Sync {
     /// implementation that never re-registers has nothing to announce.
     fn set_assignment_changed_hook(&self, _hook: &ShardAssignmentChangedHook) {}
 
-    /// Reports that agents have been recovered for the current set by a path other than a granted
-    /// renewal - an `AssignShards` push does its own. Without it a recovery that failed on a
-    /// renewal and then succeeded on a push would stay recorded as outstanding, and every later
-    /// renewal would sweep again for a failure that had already been repaired. No-op by default.
-    fn recovery_succeeded(&self) {}
+    /// Registers that a recovery of the agents for the current set is owed, and returns the
+    /// ticket the attempt started now hands back if it completes. Called by the receipt path
+    /// before anything runs: a push that lands on a lapsed lease, a recovery that fails, and a
+    /// recovery that is still running all leave it owed, and the next grant runs it. No-op by
+    /// default.
+    fn recovery_deferred(&self) -> RecoveryTicket {
+        RecoveryTicket(0)
+    }
 
-    /// Reports that a recovery is outstanding: a push landed while the local lease had lapsed,
-    /// so its agents were swept but not recovered, and the grant that revives the lease is to
-    /// run the recovery. No-op by default.
-    fn recovery_deferred(&self) {}
+    /// Reports that the attempt started under `ticket` ran to completion. It retires the owed
+    /// recovery only if nothing newer was registered since: a newer registration means a delivery
+    /// this attempt did not see, whose agents it therefore did not start. No-op by default.
+    fn recovery_succeeded(&self, _ticket: RecoveryTicket) {}
 }
 
 /// The interval arm of the renewal loop. A `None` delay is a lease that never
@@ -136,11 +147,18 @@ pub struct GrpcShardManagerService {
     /// Shortest per-attempt deadline this executor will use; see [`Self::rpc_deadline`].
     /// A field rather than the constant so a test does not have to wait out the production floor.
     rpc_deadline_floor: Duration,
-    /// Set when a recovery is outstanding - the hook failed, or a push landed on a lapsed lease
-    /// and deferred it - so the next grant runs it even if the set is unchanged. A push that
-    /// fails is retried by the shard manager; a renewal has nobody to retry it, and an unchanged
-    /// grant would otherwise never run it again.
-    recovery_pending: AtomicBool,
+    /// The newest recovery attempt still owed, as its ticket; `0` is none. The next grant runs a
+    /// recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
+    /// by the shard manager, but a renewal has nobody to retry it, and an unchanged grant would
+    /// otherwise never run it again. A ticket rather than a flag because two attempts can
+    /// overlap: a renewal's recovery can outlast the lease, a push can then land and defer its
+    /// own, and the first to finish must not retire the second's, because it scanned the set
+    /// before the push changed it. Only [`Self::recovery_succeeded`] with the matching ticket
+    /// clears this.
+    recovery_outstanding: AtomicU64,
+    /// Source of tickets; never reused, so an attempt that outlives a full clear-and-defer cycle
+    /// cannot collide with a later one.
+    recovery_tickets: AtomicU64,
 }
 
 impl GrpcShardManagerService {
@@ -177,7 +195,8 @@ impl GrpcShardManagerService {
             granted_cadence: RwLock::new(None),
             assignment_changed_hook: RwLock::new(None),
             rpc_deadline_floor,
-            recovery_pending: AtomicBool::new(false),
+            recovery_outstanding: AtomicU64::new(0),
+            recovery_tickets: AtomicU64::new(0),
         })
     }
 
@@ -234,7 +253,13 @@ impl GrpcShardManagerService {
     /// agents are recovered for the new set. A failure here is logged, never
     /// fatal — the lease itself is already installed — and remembered, so the
     /// next grant runs the recovery again.
+    ///
+    /// The attempt is registered here as well as inside the hook: the hook is
+    /// the receipt path, which registers and retires its own ticket, but a
+    /// hook that is missing or that is a test double has no ticket of its own,
+    /// and this one is retired only on a completed recovery.
     async fn announce_assignment_changed(&self) {
+        let ticket = self.recovery_deferred();
         let hook = self
             .assignment_changed_hook
             .read()
@@ -243,23 +268,18 @@ impl GrpcShardManagerService {
             .and_then(Weak::upgrade);
         let Some(hook) = hook else {
             // Only reachable once the executor that owns the hook is gone, i.e. during teardown.
-            // Recorded rather than passed over: a set-changing grant has been applied and the
+            // Left owed rather than passed over: a set-changing grant has been applied and the
             // agents it moved have not been swept.
-            self.recovery_pending.store(true, Ordering::SeqCst);
             warn!("No assignment-changed hook is installed; agents were not recovered");
             return;
         };
         match hook().await {
-            Ok(RecoveryOutcome::Recovered) => self.recovery_pending.store(false, Ordering::SeqCst),
-            Ok(RecoveryOutcome::DeferredUntilLeaseIsLive) => {
-                self.recovery_pending.store(true, Ordering::SeqCst);
-                info!(
-                    "Recovering agents for the shard set waits for the lease; running it on the next grant"
-                );
-            }
+            Ok(RecoveryOutcome::Recovered) => self.recovery_succeeded(ticket),
+            Ok(RecoveryOutcome::DeferredUntilLeaseIsLive) => info!(
+                "Recovering agents for the shard set waits for the lease; running it on the next grant"
+            ),
             Err(error) => {
-                self.recovery_pending.store(true, Ordering::SeqCst);
-                warn!(%error, "Recovering agents for the shard set failed; retrying on the next grant");
+                warn!(%error, "Recovering agents for the shard set failed; retrying on the next grant")
             }
         }
     }
@@ -350,8 +370,8 @@ impl GrpcShardManagerService {
                 self.announce_assignment_changed().await
             }
             Ok(ShardDeliveryOutcome::Applied { set_changed: false }) => {
-                if self.recovery_pending.load(Ordering::SeqCst) {
-                    info!(%revision, "Retrying the agent recovery that failed on the last grant");
+                if self.recovery_outstanding.load(Ordering::SeqCst) != 0 {
+                    info!(%revision, "Running the agent recovery still owed from an earlier delivery");
                     self.announce_assignment_changed().await
                 }
             }
@@ -539,12 +559,23 @@ impl ShardManagerService for GrpcShardManagerService {
         *self.assignment_changed_hook.write().unwrap() = Some(Arc::downgrade(hook));
     }
 
-    fn recovery_succeeded(&self) {
-        self.recovery_pending.store(false, Ordering::SeqCst);
+    fn recovery_deferred(&self) -> RecoveryTicket {
+        let ticket = self.recovery_tickets.fetch_add(1, Ordering::SeqCst) + 1;
+        // `fetch_max`, so two attempts registering concurrently leave the newer one owed whatever
+        // order their stores land in.
+        self.recovery_outstanding
+            .fetch_max(ticket, Ordering::SeqCst);
+        RecoveryTicket(ticket)
     }
 
-    fn recovery_deferred(&self) {
-        self.recovery_pending.store(true, Ordering::SeqCst);
+    fn recovery_succeeded(&self, ticket: RecoveryTicket) {
+        // Retires the owed recovery only if this attempt is still the newest one registered.
+        let _ = self.recovery_outstanding.compare_exchange(
+            ticket.0,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
     }
 }
 
@@ -1108,7 +1139,8 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // A push then recovers the agents itself and reports it.
-        service.recovery_succeeded();
+        let ticket = service.recovery_deferred();
+        service.recovery_succeeded(ticket);
 
         // The next grant changes nothing and has nothing outstanding, so the hook stays quiet.
         service.renew_shard_lease().await;
@@ -1217,6 +1249,117 @@ mod tests {
         );
 
         // Nothing outstanding: the next unchanged grant stays quiet.
+        service.renew_shard_lease().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    // A registration can answer with a nonempty set whose lease, anchored where the request was
+    // sent, has already lapsed by the time it is installed. The receipt path then defers the
+    // recovery and latches it - stood in for here by `recovery_deferred()`, the call that path
+    // makes before anything runs - and the first renewal that revives the lease starts those
+    // agents even though it changes nothing. Without the latch an unchanged renewal restores
+    // admission and starts nothing, and the manager's repair push, arriving after that renewal
+    // advanced the revision, is dropped as stale: the agents are never started at all.
+    async fn a_registration_whose_lease_arrived_lapsed_is_recovered_by_the_renewal_that_revives_it()
+    {
+        let lapsed = Instant::now();
+        let live = Instant::now() + Duration::from_secs(300);
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_register(move |_| Ok(registration(lapsed, [(0, 1), (1, 1)])))
+                .with_renew(move |_, claimed| {
+                    Ok(ShardLease {
+                        shard_epochs: claimed,
+                        expires_at: live,
+                        revision: ShardLeaseRevision(2),
+                    })
+                }),
+        );
+        let (service, shard_service) = make_service(mock, Shutdown::new());
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls = calls.clone();
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let hook_calls = hook_calls.clone();
+            Box::pin(async move {
+                hook_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(RecoveryOutcome::Recovered)
+            })
+        });
+        service.set_assignment_changed_hook(&hook);
+
+        let assignment = service.register(PORT, None).await.unwrap();
+        shard_service.register(
+            assignment.number_of_shards,
+            &assignment.shard_epochs,
+            assignment.expires_at,
+            assignment.revision,
+        );
+        assert!(
+            !shard_service.is_ready(),
+            "the registration's lease had lapsed by the time it was installed"
+        );
+        service.recovery_deferred();
+
+        service.renew_shard_lease().await;
+
+        assert!(
+            shard_service.is_ready(),
+            "the unchanged renewal revived the lease"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "and it must start the agents the registration could not"
+        );
+    }
+
+    #[test]
+    // Two recovery attempts can overlap: a renewal's recovery outlasts the lease, a push lands,
+    // finds the lease lapsed and defers its own. The renewal's attempt then completes - but it
+    // scanned the set before the push widened it, so it must not retire the push's deferral. A
+    // flag would; the ticket does not.
+    async fn a_recovery_that_finishes_after_a_newer_deferral_leaves_that_one_owed() {
+        let expiry = Instant::now() + Duration::from_secs(300);
+        let mock = Arc::new(MockShardManager::new().with_renew(move |_, claimed| {
+            Ok(ShardLease {
+                shard_epochs: claimed,
+                expires_at: expiry,
+                revision: ShardLeaseRevision(2),
+            })
+        }));
+        let (service, shard_service) = make_service(mock, Shutdown::new());
+        shard_service.register(
+            SHARDS,
+            &epochs([(0, 1)]),
+            Some(expiry),
+            ShardLeaseRevision(1),
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls = calls.clone();
+        let hook: ShardAssignmentChangedHook = Arc::new(move || {
+            let hook_calls = hook_calls.clone();
+            Box::pin(async move {
+                hook_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(RecoveryOutcome::Recovered)
+            })
+        });
+        service.set_assignment_changed_hook(&hook);
+
+        let earlier = service.recovery_deferred();
+        let _newer = service.recovery_deferred();
+
+        // The earlier attempt completes: the newer one is still owed, so the grant runs it.
+        service.recovery_succeeded(earlier);
+        service.renew_shard_lease().await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the deferral registered after the completed attempt must still be run"
+        );
+
+        // That run was the newest attempt, so nothing is owed any more.
         service.renew_shard_lease().await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }

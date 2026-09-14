@@ -355,12 +355,20 @@ impl ShardLeaseState {
             _ => None,
         };
 
+        // A retried registration of the same id reaches here with a lease already stored, and the
+        // rule of `renew_lease` applies to it too: the deadline never moves earlier.
+        let expires_at = self
+            .executor_leases
+            .get(&executor_id)
+            .map_or(now + lease_ttl, |lease| {
+                lease.expires_at.max(now + lease_ttl)
+            });
         self.executor_leases.insert(
             executor_id,
             ExecutorLease {
                 addr,
                 granted_at: now,
-                expires_at: now + lease_ttl,
+                expires_at,
                 pod_name,
             },
         );
@@ -406,6 +414,20 @@ impl ShardLeaseState {
     /// Only the clock moves: a renewal never touches a shard assignment and never advances an
     /// epoch, which is what lets an executor assert the set it holds without the assertion racing
     /// the manager.
+    ///
+    /// The clock never moves backwards. An executor holds, on its own clock, some deadline this
+    /// manager granted it earlier, and nothing guarantees it receives the reply to this renewal -
+    /// so a reply that would shorten the lease, under a `shard_lease_duration` reduced across a
+    /// restart, may never arrive, and the executor would go on admitting to the old deadline while
+    /// the manager reaped and re-homed its shards from the new one. The deadline an executor may
+    /// still be holding is therefore kept, and the configured length takes over once
+    /// `now + length` passes it. The executor's own copy is the other way round, it adopts every
+    /// grant as is, which is safe precisely because this side never hands out an earlier deadline
+    /// than it did before.
+    ///
+    /// Across a leader failover the deadline kept is one the previous leader stamped on its own
+    /// clock, so this also assumes the leaders' clocks agree to within the residual the executor's
+    /// decoder documents.
     pub fn renew_lease(
         &mut self,
         executor_id: ExecutorId,
@@ -415,7 +437,7 @@ impl ShardLeaseState {
         match self.executor_leases.get_mut(&executor_id) {
             Some(lease) => {
                 lease.granted_at = now;
-                lease.expires_at = now + lease_ttl;
+                lease.expires_at = lease.expires_at.max(now + lease_ttl);
                 true
             }
             None => false,
@@ -428,13 +450,8 @@ impl ShardLeaseState {
     /// Persisted expiries are absolute, so after any outage longer than the lease every one of them
     /// is in the past and the first housekeeping would evict a cluster that is perfectly healthy.
     /// A shard manager coming up re-grants to exactly the executors its startup health check just
-    /// found alive.
-    ///
-    /// Never for less than the executor was last told. The executor still holds that length on
-    /// its own clock, anchored no later than the grant that told it, and nothing but its next
-    /// renewal can shorten its copy - so a re-grant under a reduced `shard_lease_duration` that
-    /// used the new length would lapse here before it lapses there. The configured length applies
-    /// from that renewal; a longer one applies at once.
+    /// found alive. Like any renewal it never shortens a deadline an executor may still hold; see
+    /// [`Self::renew_lease`].
     pub fn regrant_leases(
         &mut self,
         executors: &HashSet<ExecutorId>,
@@ -443,15 +460,7 @@ impl ShardLeaseState {
     ) -> usize {
         executors
             .iter()
-            .filter(|executor_id| {
-                let Some(lease) = self.executor_leases.get(executor_id) else {
-                    return false;
-                };
-                let told = (lease.expires_at - lease.granted_at)
-                    .to_std()
-                    .unwrap_or(Duration::ZERO);
-                self.renew_lease(**executor_id, now, lease_ttl.max(told))
-            })
+            .filter(|executor_id| self.renew_lease(**executor_id, now, lease_ttl))
             .count()
     }
 
@@ -1248,41 +1257,82 @@ mod tests {
         assert!(!shard_state.renew_lease(executor(9), later, TTL));
     }
 
-    /// A shard manager coming back with a shorter `shard_lease_duration` must not re-grant for
-    /// less than the executor was last told: the executor still holds that length on its own
-    /// clock, anchored no later than the grant, and would otherwise outlive the re-grant. The
-    /// configured length applies from the executor's next renewal. A longer one applies at once.
+    /// The executor holds the deadline it was last told, and a renewal's reply can be lost. If a
+    /// renewal under a `shard_lease_duration` reduced across a restart stored the shorter deadline,
+    /// the executor would admit to the old one while the manager reaped from the new one - and no
+    /// reply the executor never receives can correct that. So the outstanding deadline is kept, and
+    /// the configured length takes over only once `now + length` passes it.
     #[test]
-    fn a_regrant_is_never_shorter_than_the_lease_the_executor_was_told() {
-        // granted at t0 for 60 s
+    fn a_renewal_never_shortens_an_outstanding_lease_because_its_reply_may_be_lost() {
+        // granted at t0 for 60 s: the executor may hold t0 + 60 s
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
-        let restarted = t0() + chrono::Duration::seconds(15);
         let shortened = std::time::Duration::from_secs(30);
 
-        let regranted =
-            shard_state.regrant_leases(&HashSet::from([executor(1)]), restarted, shortened);
+        let early = t0() + chrono::Duration::seconds(20);
+        assert!(shard_state.renew_lease(executor(1), early, shortened));
+        assert_eq!(
+            shard_state.executor_leases[&executor(1)].expires_at,
+            t0() + chrono::Duration::seconds(60),
+            "an early renewal must keep the deadline the executor may still be holding"
+        );
 
+        let late = t0() + chrono::Duration::seconds(35);
+        assert!(shard_state.renew_lease(executor(1), late, shortened));
+        assert_eq!(
+            shard_state.executor_leases[&executor(1)].expires_at,
+            late + chrono::Duration::seconds(30),
+            "once now + the configured length passes the outstanding deadline, it applies"
+        );
+    }
+
+    /// A registration retried with the same id - the client retries a lost reply - is the one
+    /// other writer of a lease, and it must keep an outstanding deadline for the same reason.
+    #[test]
+    fn a_retried_registration_never_shortens_an_outstanding_lease() {
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
+        let retried = t0() + chrono::Duration::seconds(10);
+
+        let replaced = shard_state.add_executor(
+            executor(1),
+            addr(1),
+            None,
+            retried,
+            std::time::Duration::from_secs(30),
+        );
+
+        assert_eq!(replaced, None);
+        assert_eq!(
+            shard_state.executor_leases[&executor(1)].expires_at,
+            t0() + chrono::Duration::seconds(60)
+        );
+    }
+
+    /// The startup re-grant is a renewal, so a shard manager coming back with a shorter
+    /// `shard_lease_duration` keeps every outstanding deadline too; a longer one applies at once.
+    #[test]
+    fn a_regrant_never_shortens_an_outstanding_lease() {
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
+        let restarted = t0() + chrono::Duration::seconds(15);
+
+        let regranted = shard_state.regrant_leases(
+            &HashSet::from([executor(1)]),
+            restarted,
+            std::time::Duration::from_secs(30),
+        );
         assert_eq!(regranted, 1);
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            restarted + chrono::Duration::seconds(60),
-            "the re-grant must keep the length the executor was told"
+            t0() + chrono::Duration::seconds(60)
         );
 
-        // the next renewal is where the configured length takes over
-        let renewed = restarted + chrono::Duration::seconds(20);
-        assert!(shard_state.renew_lease(executor(1), renewed, shortened));
-        assert_eq!(
-            shard_state.executor_leases[&executor(1)].expires_at,
-            renewed + chrono::Duration::seconds(30)
+        shard_state.regrant_leases(
+            &HashSet::from([executor(1)]),
+            restarted,
+            std::time::Duration::from_secs(90),
         );
-
-        // a longer configured length applies at once
-        let lengthened = std::time::Duration::from_secs(90);
-        shard_state.regrant_leases(&HashSet::from([executor(1)]), renewed, lengthened);
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            renewed + chrono::Duration::seconds(90)
+            restarted + chrono::Duration::seconds(90)
         );
     }
 

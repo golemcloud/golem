@@ -1091,16 +1091,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return Ok(());
         }
 
-        // Latched before the receipt path runs, so a grant that revives the lease meanwhile
-        // cannot read it clear and leave a deferred recovery to the next cadence. A recovery that
-        // ran clears it, and one run more than needed is idempotent.
-        self.shard_manager_service().recovery_deferred();
-        if let RecoveryOutcome::Recovered = Self::apply_shard_assignment_effects(self).await? {
-            // This push has recovered the agents for the set it delivered, so a recovery that
-            // failed on an earlier renewal no longer needs repeating.
-            self.shard_manager_service().recovery_succeeded();
-        }
-
+        Self::apply_shard_assignment_effects(self).await?;
         Ok(())
     }
 
@@ -1114,12 +1105,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     /// executor starts nothing, so a push that lands after the local lease
     /// lapsed - the first one after a manager outage does - reports the
     /// recovery deferred, and the grant that revives the lease runs it.
+    ///
+    /// The owed-recovery ticket is taken here, before anything runs, and handed
+    /// back only after a recovery ran, so the startup registration and the push
+    /// cannot disagree about it and a grant that revives the lease meanwhile
+    /// cannot find nothing owed. An error keeps it owed, which is what a retry
+    /// needs, and an attempt that completes after a newer delivery deferred its
+    /// own does not retire that one. One run more than needed is idempotent.
     pub(crate) async fn apply_shard_assignment_effects<T>(
         this: &T,
     ) -> Result<RecoveryOutcome, anyhow::Error>
     where
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
+        let ticket = this.shard_manager_service().recovery_deferred();
+
         // Pure set membership on purpose: a lapsed lease must not restart every
         // running agent: a lapsed lease refuses new work and leaves running work alone.
         for (agent_id, worker_details) in this.active_agents().snapshot().await {
@@ -1141,6 +1141,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return Ok(RecoveryOutcome::DeferredUntilLeaseIsLive);
         }
         Ctx::on_shard_assignment_changed(this).await?;
+        this.shard_manager_service().recovery_succeeded(ticket);
         Ok(RecoveryOutcome::Recovered)
     }
 

@@ -669,10 +669,11 @@ impl ShardAssignment {
     /// manager is correcting a push this executor never received, and the
     /// caller sweeps and recovers agents exactly as it would for a push.
     ///
-    /// The expiry is written, never maxed against the current one: a manager
-    /// whose lease length was reduced across a restart holds the shorter
-    /// expiry, and grants arrive in the order they were asked for (the renewal
-    /// loop awaits each one), so a later grant is always anchored later.
+    /// The expiry is written as is, not maxed against the current one: each
+    /// grant is the manager's current word, and the manager's own deadline for
+    /// this executor never moves earlier, so a later grant is never the shorter
+    /// one. Grants arrive in the order they were asked for (the renewal loop
+    /// awaits each one), so a later grant is always anchored later.
     pub fn adopt_grant(
         &mut self,
         number_of_shards: Option<usize>,
@@ -2639,9 +2640,10 @@ mod shard_assignment_tests {
         );
     }
 
-    /// The lease clock is written, never maxed: a manager whose lease length was
-    /// reduced across a restart holds the shorter expiry, and an executor that
-    /// kept the longer one would admit work past the manager's reap.
+    /// The executor takes each grant as the manager's current word and keeps
+    /// no older, longer deadline of its own. The manager never issues a
+    /// shorter one, so this pins which side would ever be the one extending a
+    /// lease: neither.
     #[test]
     fn a_grant_with_a_shorter_lease_shortens_it() {
         let mut assignment = ShardAssignment::default();
