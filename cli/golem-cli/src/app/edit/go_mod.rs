@@ -182,13 +182,13 @@ mod tests {
     #[test]
     fn sets_version_in_a_block_and_adds_replace() {
         let src = format!(
-            "module app\n\ngo 1.25.5\n\nrequire (\n\t{MOD} v0.0.0\n\tgithub.com/bytecodealliance/componentize-go v0.4.0\n)\n\ntool github.com/bytecodealliance/componentize-go\n"
+            "module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.0.0\n\tgithub.com/bytecodealliance/componentize-go v0.4.3\n)\n\ntool github.com/bytecodealliance/componentize-go\n"
         );
         let out = reconcile_sdk_dependency(&src, MOD, "v0.0.0", Some("/abs/sdks/go/golem"));
         assert!(out.contains(&format!("\t{MOD} v0.0.0\n")));
         assert!(out.contains(&format!("replace {MOD} => /abs/sdks/go/golem")));
         // componentize-go untouched
-        assert!(out.contains("github.com/bytecodealliance/componentize-go v0.4.0"));
+        assert!(out.contains("github.com/bytecodealliance/componentize-go v0.4.3"));
     }
 
     #[test]

@@ -175,7 +175,7 @@ const GO_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             args: &["version"],
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::GO_MIN)),
-        install_hint: "Install Go 1.25.5 or newer: https://go.dev/dl/",
+        install_hint: "Install Go 1.27.1 or newer: https://go.dev/dl/",
     },
     // Used by the release preset's `wasm-tools strip` step.
     ToolRequirement {

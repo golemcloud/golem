@@ -848,7 +848,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          # Tracks the version pinned in the module (currently go 1.25.5); stock
+          # Tracks the version pinned in the module (currently go 1.27.1); stock
           # Go only — the SDK deliberately does not use TinyGo.
           go-version-file: sdks/go/golem/go.mod
           cache-dependency-path: sdks/go/golem/go.sum

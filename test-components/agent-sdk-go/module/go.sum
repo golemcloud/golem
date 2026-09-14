@@ -1,7 +1,7 @@
 github.com/apparentlymart/go-userdirs v0.0.0-20200915174352-b0c018a67c13 h1:JtuelWqyixKApmXm3qghhZ7O96P6NKpyrlSIe8Rwnhw=
 github.com/apparentlymart/go-userdirs v0.0.0-20200915174352-b0c018a67c13/go.mod h1:7kfpUbyCdGJ9fDRCp3fopPQi5+cKNHgTE4ZuNrO71Cw=
-github.com/bytecodealliance/componentize-go v0.4.0 h1:rzNC0pnrXl2PGaTlXkVnAvw9IH6JLMN5K49SYBcYEdU=
-github.com/bytecodealliance/componentize-go v0.4.0/go.mod h1:w1QFtPLGI9o38epvMOPyCKbMc7q7GJ7yZhIvhGTpzA0=
+github.com/bytecodealliance/componentize-go v0.4.3 h1:4UvACRj01HSsHDLA/8bNdNh+FC3jGO0en+0wa9Q5VWg=
+github.com/bytecodealliance/componentize-go v0.4.3/go.mod h1:XIR4nMdyNjTIKgqkKe/F/ih8BOR/H2iZZgp2XTCMdjs=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/gofrs/flock v0.13.0 h1:95JolYOvGMqeH31+FC7D2+uULf6mG61mEZ/A8dRYMzw=

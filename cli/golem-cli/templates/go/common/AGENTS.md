@@ -154,7 +154,7 @@ anywhere in the module (e.g. an `internal/` directory).
 
 ## Prerequisites
 
-- Go toolchain: https://go.dev/dl/ (Go 1.25.5 or newer)
+- Go toolchain: https://go.dev/dl/ (Go 1.27.1 or newer)
 - Golem CLI (`golem`) version 1.5.x: https://github.com/golemcloud/golem/releases
 - `wasm-tools`: https://github.com/bytecodealliance/wasm-tools
 
