@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::{Display, Formatter};
 use std::fs::{File, OpenOptions, create_dir_all};
-use std::io::{BufReader, BufWriter};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 use std::time::Duration;
@@ -225,9 +225,17 @@ pub struct ProfileConfig {
     pub default_format: Format,
 }
 
+/// How many times replacing the config file is retried, see `Config::store_file`.
+const STORE_FILE_REPLACE_ATTEMPTS: usize = 5;
+const STORE_FILE_REPLACE_RETRY_DELAY: Duration = Duration::from_millis(20);
+
 impl Config {
     fn config_path(config_dir: &Path) -> PathBuf {
         config_dir.join("config-v4.json")
+    }
+
+    fn lock_path(config_dir: &Path) -> PathBuf {
+        config_dir.join("config-v4.json.lock")
     }
 
     pub fn default_profile_name(&self) -> ProfileName {
@@ -278,41 +286,94 @@ impl Config {
         self
     }
 
+    /// Writes the config atomically: it is serialized into a temporary file next to the config
+    /// file, which then replaces it, so readers never see a partially written file and a crash
+    /// mid-write leaves the previous config intact.
     fn store_file(&self, config_dir: &Path) -> anyhow::Result<()> {
         create_dir_all(config_dir)
             .map_err(|err| anyhow!("Can't create config directory: {err}"))?;
 
-        let file = OpenOptions::new()
+        let config_path = Self::config_path(config_dir);
+        let mut temporary = tempfile::NamedTempFile::new_in(config_dir).map_err(|err| {
+            anyhow!(
+                "Can't create temporary config file in {}: {err}",
+                config_dir.display()
+            )
+        })?;
+        serde_json::to_writer_pretty(temporary.as_file_mut(), self)
+            .map_err(|err| anyhow!("Can't save config to file: {err}"))?;
+        temporary
+            .as_file_mut()
+            .sync_all()
+            .map_err(|err| anyhow!("Can't flush config file: {err}"))?;
+
+        // On Windows the replace fails while another process has the config file open (e.g. a
+        // concurrent read), so it is retried a few times.
+        let mut attempt = 0;
+        loop {
+            match temporary.persist(&config_path) {
+                Ok(_) => return Ok(()),
+                Err(err) if attempt < STORE_FILE_REPLACE_ATTEMPTS => {
+                    attempt += 1;
+                    temporary = err.file;
+                    std::thread::sleep(STORE_FILE_REPLACE_RETRY_DELAY);
+                }
+                Err(err) => {
+                    bail!(
+                        "Can't replace config file {}: {}",
+                        config_path.display(),
+                        err.error
+                    )
+                }
+            }
+        }
+    }
+
+    /// Runs a read-modify-write of the config file under a lock shared by all CLI processes
+    /// using the same config directory, so concurrent invocations (e.g. two commands logging in
+    /// at the same time) do not lose each other's changes. The lock is a separate file, as the
+    /// config file itself is replaced on every write.
+    fn with_locked<R>(
+        config_dir: &Path,
+        f: impl FnOnce(&mut Config) -> anyhow::Result<R>,
+    ) -> anyhow::Result<R> {
+        create_dir_all(config_dir)
+            .map_err(|err| anyhow!("Can't create config directory: {err}"))?;
+
+        let lock_path = Self::lock_path(config_dir);
+        let lock_file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
-            .truncate(true)
-            .open(Self::config_path(config_dir))
-            .map_err(|err| anyhow!("Can't open config file: {err}"))?;
-        let writer = BufWriter::new(file);
+            .open(&lock_path)
+            .map_err(|err| anyhow!("Can't open config lock file {}: {err}", lock_path.display()))?;
+        let mut lock = fd_lock::RwLock::new(lock_file);
+        let _guard = lock
+            .write()
+            .map_err(|err| anyhow!("Can't lock config file {}: {err}", lock_path.display()))?;
 
-        serde_json::to_writer_pretty(writer, self)
-            .map_err(|err| anyhow!("Can't save config to file: {err}"))
+        let mut config = Self::from_dir(config_dir)?;
+        let result = f(&mut config)?;
+        config.store_file(config_dir)?;
+        Ok(result)
     }
 
     pub fn set_active_profile_name(
         profile_name: ProfileName,
         config_dir: &Path,
     ) -> anyhow::Result<()> {
-        let mut config = Self::from_dir(config_dir)?;
+        Self::with_locked(config_dir, |config| {
+            if !config.profiles.contains_key(&profile_name) {
+                bail!(
+                    "No profile {profile_name} in configuration. Available profiles: [{}]",
+                    config.profiles.keys().map(|n| &n.0).join(", ")
+                );
+            };
 
-        if !config.profiles.contains_key(&profile_name) {
-            bail!(
-                "No profile {profile_name} in configuration. Available profiles: [{}]",
-                config.profiles.keys().map(|n| &n.0).join(", ")
-            );
-        };
-
-        config.default_profile = Some(profile_name);
-
-        config.store_file(config_dir)?;
-
-        Ok(())
+            config.default_profile = Some(profile_name);
+            Ok(())
+        })
     }
 
     pub fn get_default_profile(config_dir: &Path) -> anyhow::Result<NamedProfile> {
@@ -336,20 +397,48 @@ impl Config {
         }))
     }
 
-    pub fn set_profile(
+    /// Creates a new profile and optionally makes it the active one, as one locked write.
+    pub fn add_profile(
         name: ProfileName,
         profile: Profile,
+        set_active: bool,
         config_dir: &Path,
     ) -> anyhow::Result<()> {
-        let mut config = Self::from_dir(config_dir)?;
-        config.profiles.insert(name, profile);
-        config.store_file(config_dir)
+        Self::with_locked(config_dir, |config| {
+            config.profiles.insert(name.clone(), profile);
+            if set_active {
+                config.default_profile = Some(name);
+            }
+            Ok(())
+        })
     }
 
-    pub fn delete_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<()> {
-        let mut config = Self::from_dir(config_dir)?;
-        config.profiles.remove(name);
-        config.store_file(config_dir)
+    /// Modifies an existing profile in place. Returns `Ok(false)` without writing when the
+    /// profile does not exist.
+    pub fn update_profile(
+        name: &ProfileName,
+        config_dir: &Path,
+        f: impl FnOnce(&mut Profile),
+    ) -> anyhow::Result<bool> {
+        Self::with_locked(config_dir, |config| match config.profiles.get_mut(name) {
+            Some(profile) => {
+                f(profile);
+                Ok(true)
+            }
+            None => Ok(false),
+        })
+    }
+
+    /// Deletes a profile unless it is the active one, in which case `Ok(false)` is returned
+    /// and nothing is written.
+    pub fn delete_inactive_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<bool> {
+        Self::with_locked(config_dir, |config| {
+            if config.default_profile_name() == *name {
+                return Ok(false);
+            }
+            config.profiles.remove(name);
+            Ok(true)
+        })
     }
 
     pub fn application_environment(
@@ -369,16 +458,19 @@ impl Config {
             .remove(&env_id.to_hashed_key()))
     }
 
-    pub fn set_application_environment(
+    /// Modifies the config of an application environment in place, creating it when missing.
+    pub fn update_application_environment(
         env_id: &ApplicationEnvironmentConfigId,
-        app_env_config: ApplicationEnvironmentConfig,
         config_dir: &Path,
+        f: impl FnOnce(&mut ApplicationEnvironmentConfig),
     ) -> anyhow::Result<()> {
-        let mut config = Self::from_dir(config_dir)?;
-        config
-            .application_environments
-            .insert(env_id.to_hashed_key(), app_env_config);
-        config.store_file(config_dir)
+        Self::with_locked(config_dir, |config| {
+            f(config
+                .application_environments
+                .entry(env_id.to_hashed_key())
+                .or_default());
+            Ok(())
+        })
     }
 }
 
@@ -555,6 +647,43 @@ mod tests {
         assert_eq!(client.registry_url, custom_url);
         assert_eq!(client.worker_url, custom_url);
     }
+
+    #[test]
+    fn concurrent_profile_updates_are_not_lost() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let profile_names = (0..8)
+            .map(|i| ProfileName(format!("profile-{i}")))
+            .collect::<Vec<_>>();
+
+        // Each thread adds its own profile and then repeatedly switches the active profile, so
+        // a lost update would show up as a missing profile or a torn config file.
+        std::thread::scope(|scope| {
+            for name in &profile_names {
+                let config_dir = config_dir.path();
+                scope.spawn(move || {
+                    Config::add_profile(name.clone(), Profile::default(), false, config_dir)
+                        .unwrap();
+                    for _ in 0..10 {
+                        Config::set_active_profile_name(name.clone(), config_dir).unwrap();
+                    }
+                });
+            }
+        });
+
+        let config = Config::from_dir(config_dir.path()).unwrap();
+        for name in &profile_names {
+            assert!(config.profiles.contains_key(name), "missing profile {name}");
+        }
+        assert!(profile_names.contains(&config.default_profile_name()));
+
+        // Only the config file and its lock file are left behind, no temporary files
+        let mut entries = std::fs::read_dir(config_dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(entries, vec!["config-v4.json", "config-v4.json.lock"]);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -656,7 +785,7 @@ impl Default for AuthenticationConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuth2AuthenticationConfig {
     pub data: Option<OAuth2AuthenticationData>,
@@ -700,7 +829,7 @@ pub struct StaticAuthenticationConfig {
     pub secret: AuthSecret,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationEnvironmentConfig {
     pub auth: OAuth2AuthenticationConfig,

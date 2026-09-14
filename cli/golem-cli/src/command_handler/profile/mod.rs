@@ -118,8 +118,6 @@ impl ProfileCommandHandler {
             "Creating",
             format!("new profile: {}", name.0.log_color_highlight()),
         );
-        Config::set_profile(name.clone(), profile, self.ctx.config_dir())?;
-
         if set_active {
             log_action(
                 "Setting ",
@@ -128,8 +126,8 @@ impl ProfileCommandHandler {
                     name.0.log_color_highlight()
                 ),
             );
-            Config::set_active_profile_name(name.clone(), self.ctx.config_dir())?;
-        };
+        }
+        Config::add_profile(name.clone(), profile, set_active, self.ctx.config_dir())?;
 
         self.ctx.log_handler().log_output(ProfileCreateResult {
             created: true,
@@ -255,19 +253,16 @@ impl ProfileCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        // Check if we're trying to delete the currently active profile
-        let config = Config::from_dir(self.ctx.config_dir())?;
-        let current_active_profile = config.default_profile_name();
-
-        if profile_name == current_active_profile {
+        // The active profile cannot be deleted; the check is part of the locked update, so a
+        // concurrent switch cannot slip in between the check and the delete.
+        let deleted = Config::delete_inactive_profile(&profile_name, self.ctx.config_dir())?;
+        if !deleted {
             log_error(format!(
                 "Cannot delete currently active profile: {}. Switch to another profile first.",
                 profile_name.0.log_color_error_highlight()
             ));
             bail!(NonSuccessfulExit);
         }
-
-        Config::delete_profile(&profile_name, self.ctx.config_dir())?;
 
         self.ctx.log_handler().log_output(ProfileDeleteView {
             deleted: true,

@@ -112,6 +112,7 @@ evicting_cache_map = "0.4.0"
 expectrl = "0.8.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
+fd-lock = "4.0.4"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 fmt = "0.1.0"
 flate2 = "1.1.0"
