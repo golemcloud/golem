@@ -757,7 +757,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             let parent = parent.clone();
             let invocation_context_stack = invocation_context_stack.clone();
             let principal = principal.clone();
-            async move {
+            Box::pin(async move {
                 let worker = Worker::new(
                     &deps,
                     self.card_interest_index.clone(),
@@ -778,7 +778,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     Worker::start_durable_stream_attachment_reconciler(&worker);
                     Arc::new(ActiveAgent::new(worker))
                 })
-            }
+            })
         };
         Ok(
             get_or_insert_create_or_load(&self.agents, &cache_key, initialize)
