@@ -1217,6 +1217,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <p>The rule is therefore: <code>claim_start_matching</code> claims the <em>first unclaimed matching</em> <code>Start</code> between the cursor and the replay target. Scanning ahead exists only to route concurrent completions to the right awaiter; it does not let the guest make <em>different</em> calls. The scan is also bounded by the next <code>CompletionDelivered</code> marker, so a call can never claim a <code>Start</code> that was recorded after a result the guest has not yet observed in this replay; guest-visible order is preserved exactly. When no matching <code>Start</code> exists in that window, replay stops with a divergence error, which is how nondeterminism in guest code or a host-function bug surfaces instead of being silently absorbed. The one exception is entries inside a region deleted by a <code>Jump</code>, which are never candidates.</p>
 
+<p id="primary-atomic-begin">Primary <code>mark_begin_operation</code> uses <code>get_primary_atomic_begin</code>: a pending <code>Start</code> stays unconsumed while its parent ancestry reaches an active historical reconstruction body in another Store. Cursor progress or body settlement wakes the reader. Unrelated or settled ancestry returns the unconsumed mismatch for strict validation; same-Store work is not waited on. This specialized reader does not change <code>mark_end_operation</code> or <code>get_oplog_index</code>.</p>
+
 <h3>Three facts that are not the same</h3>
 <ol>
   <li><strong>Cursor exhaustion</strong> — the recorded history has been consumed. An observation only.</li>

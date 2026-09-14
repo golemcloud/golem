@@ -780,8 +780,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 ));
             Ok(begin_index.into())
         } else {
-            let (begin_index, _) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::BeginAtomicRegion)?;
+            let (begin_index, _) = if self.entity_parent_start_index().is_none() {
+                get_oplog_entry!(@reader self.state.replay_state.get_primary_atomic_begin(); OplogEntry::BeginAtomicRegion)?
+            } else {
+                get_oplog_entry!(self.state.replay_state, OplogEntry::BeginAtomicRegion)?
+            };
 
             match self
                 .state
