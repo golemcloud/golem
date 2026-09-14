@@ -31,7 +31,7 @@ Only these are authoritative:
 
 - The **producer's own oplog** holds `StreamRegistered`, `StreamItems`, `StreamEnd` and
   `StreamCancel` (`DurableStreamProducer::{register, write_items, end, cancel_open}` in
-  `durable_host/durable_stream.rs`). Each `StreamItemsRecord` carries `first_sequence`, per-item
+  `durable_host/durable_stream/mod.rs`). Each `StreamItemsRecord` carries `first_sequence`, per-item
   `StreamOffset { oplog index, sub_index }` and `producer_fingerprint`. Records are committed
   first and only then published to `DurableLiveStreamBus` (`durable_host/stream_bus.rs`), which is
   documented as a "bounded live-tail optimization for events that have already committed to the
@@ -75,7 +75,7 @@ oplog and resumes writing after the last committed sequence.
 Producer identity is checked wherever a durable stream identity crosses a boundary:
 `validate_forwarded_mapping` (`durable_session.rs`) requires the attachment's session key,
 consumer and expected producer fingerprint to match the durable session, and producer-side record
-application (`durable_stream.rs`) rejects records naming another producer incarnation as
+application (`durable_stream/mod.rs`) rejects records naming another producer incarnation as
 `CorruptHistory`. A recreated agent fails these checks and is never reattached to.
 
 Randomness is allowed where it is recorded before it is observed: `caller_attempt_id` calls

@@ -117,7 +117,7 @@ path. This is status reconstruction, not replay tolerance.
 | RPC | `durable_host/wasm_rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Cut points | `worker/cut_point.rs` | Rejects revert/fork cuts that split a paired durable construct |
-| Durable streams | `durable_host/{durable_stream.rs,durable_session.rs,stream_session.rs,stream_bus.rs,stream_transport.rs,schema_value_stream.rs}` | Producer-oplog stream records, consumer session journal, exactly-once item delivery, protocol terminals |
+| Durable streams | `durable_host/{durable_stream/mod.rs,durable_session.rs,stream_session.rs,stream_bus.rs,stream_transport.rs,schema_value_stream.rs}` | Producer-oplog stream records, consumer session journal, exactly-once item delivery, protocol terminals |
 | Tool invocations | `durable_host/tool/{mod.rs,operation.rs,attachment.rs}`, `durable_host/entity.rs`, `worker/{entity_slot.rs,owner_lane.rs,entity_invocation.rs,instance.rs}` | Discovery/authorization, owner-oplog boundary for entity bodies, shared replay cursor, lane serialization, attachment memory admission |
 
 ## Worker lifecycle and reconstruction
@@ -406,7 +406,7 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 (`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
 
 - **Two journals are authoritative, nothing else.** The producer's oplog holds
-  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` (`durable_stream.rs`), committed
+  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` (`durable_stream/mod.rs`), committed
   *before* publication to `DurableLiveStreamBus` (a bounded live-tail optimization). The
   consumer's `StreamSession` journal (`durable_session.rs`) holds attempts, offset mappings,
   terminals and `Finished`. All are hints. Buses, readers, sockets and attachments are recreated.
@@ -461,7 +461,7 @@ Tests: `tests/tool_streaming.rs::deterministic_stream_crash_checkpoint_matrix` a
 Four exactly-once contracts coexist and must not be conflated: RPC exactly-once (one logical
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
 exactly-once (each `StreamOffset` consumed once per consumer session, owned by
-`durable_stream.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
+`durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
 
@@ -480,7 +480,7 @@ satisfies one does not imply the others.
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |
-| "A stream reference stays valid as long as the target agent id exists." | Liveness is bound to the durable `AgentFingerprint`; a recreated agent is a different producer. | Fingerprint-mismatch unit tests in `durable_session.rs` / `durable_stream.rs` |
+| "A stream reference stays valid as long as the target agent id exists." | Liveness is bound to the durable `AgentFingerprint`; a recreated agent is a different producer. | Fingerprint-mismatch unit tests in `durable_session.rs` / `durable_stream/mod.rs` |
 | "A completed tool replay either skips the body entirely, or must redo its external effects." | The body's guest export is re-executed; its durable host calls replay from the owner oplog; the recorded terminal is validated and released. No repeated external effect. | `completed_tool_replay_bypasses_current_attachment_memory_pressure`, `deterministic_stream_crash_checkpoint_matrix` |
 | "An entity body has its own oplog and cursor." | Bodies record into the owner oplog under `parent_start_index` and share the owner's cursor. | `concurrent_tool_attempt_identity_survives_reordered_admission_and_replay` |
 | "`AttemptId::fresh()` in a replay-sensitive path breaks determinism." | Randomness is fine when appended and committed before observation and read back on replay. | Consumer-journal replay in `durable_session.rs` |
