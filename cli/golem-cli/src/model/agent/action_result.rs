@@ -28,6 +28,7 @@ use crate::model::masking::Masked;
 use crate::model::text_format::*;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,11 +148,16 @@ impl StructuredOutput for AgentCancelInvocationResult {
     const KIND: &'static str = "agent.cancel-invocation";
 }
 
+/// Result of redeploying agents. Redeploying is best-effort: `agents` lists the agents that were
+/// redeployed and `errors` the ones that failed, so `redeployed` is only true when there are no
+/// errors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRedeployResult {
     pub redeployed: bool,
     pub agents: Vec<AgentRedeploymentMeta>,
+    /// Per-agent redeploy errors, keyed by the (environment-unique) agent id.
+    pub errors: BTreeMap<String, String>,
 }
 
 impl NoTextOutput for AgentRedeployResult {}
@@ -177,8 +183,11 @@ pub struct AgentRedeploymentMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteAllView {
+    /// True when every agent was deleted, i.e. `errors` is empty.
     pub deleted: bool,
     pub agents: Vec<AgentDeletionMeta>,
+    /// Per-agent delete errors, keyed by the (environment-unique) agent id.
+    pub errors: BTreeMap<String, String>,
 }
 
 impl TextOutput for AgentDeleteAllView {
@@ -196,6 +205,20 @@ impl TextOutput for AgentDeleteAllView {
         }
 
         log_table(table);
+
+        if !self.errors.is_empty() {
+            logln("");
+            logln(format!("Failed to delete {} agent(s)", self.errors.len()));
+
+            let mut table =
+                new_table_full_condensed(vec![Column::new("Agent ID"), Column::new("Error")]);
+
+            for (agent_id, error) in &self.errors {
+                table.add_row(vec![agent_id.to_string(), error.to_string()]);
+            }
+
+            log_table(table);
+        }
     }
 }
 

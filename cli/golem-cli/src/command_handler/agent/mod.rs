@@ -85,7 +85,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -96,6 +96,22 @@ use terminal_size::terminal_size;
 use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
+
+/// Outcome of a best-effort bulk agent action: what succeeded, and the error for each agent it
+/// failed on, keyed by the (environment-unique) agent id.
+pub struct BulkAgentActionResult<T> {
+    pub succeeded: Vec<T>,
+    pub errors: BTreeMap<String, String>,
+}
+
+impl<T> Default for BulkAgentActionResult<T> {
+    fn default() -> Self {
+        Self {
+            succeeded: Vec::new(),
+            errors: BTreeMap::new(),
+        }
+    }
+}
 
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
@@ -2140,13 +2156,14 @@ impl AgentCommandHandler {
         }
     }
 
-    /// Redeploys all agents of a component, returning each redeployed agent's id and the revision it
-    /// was running at before (its "from" revision).
+    /// Redeploys all agents of a component. Like updating, this is best-effort: a failure on one
+    /// agent does not stop the others, it is reported in the result instead. Successful agents
+    /// are returned with the revision they were running at before (their "from" revision).
     pub async fn redeploy_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
-    ) -> anyhow::Result<Vec<(RawAgentId, ComponentRevision)>> {
+    ) -> anyhow::Result<BulkAgentActionResult<(RawAgentId, ComponentRevision)>> {
         let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2156,7 +2173,7 @@ impl AgentCommandHandler {
                 "Skipping",
                 format!("redeploying agents for component {component_name}, no agent found"),
             );
-            return Ok(Vec::new());
+            return Ok(BulkAgentActionResult::default());
         }
 
         log_action(
@@ -2177,24 +2194,39 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut redeployed = Vec::with_capacity(agents.len());
+        let mut result = BulkAgentActionResult::default();
         for agent in agents {
-            let agent_id: RawAgentId = agent.agent_id.agent_id.as_str().into();
+            let agent_id = agent.agent_id.agent_id.clone();
             let from_revision = agent.component_revision;
-            self.redeploy_agent(component_name, agent).await?;
-            redeployed.push((agent_id, from_revision));
+            match self.redeploy_agent(component_name, agent).await {
+                Ok(()) => result
+                    .succeeded
+                    .push((agent_id.as_str().into(), from_revision)),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "redeploying agent {}/{}: {error:#}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.insert(agent_id, format!("{error:#}"));
+                }
+            }
         }
 
-        Ok(redeployed)
+        Ok(result)
     }
 
-    /// Deletes all agents of a component, returning the ids of the agents that were deleted.
+    /// Deletes all agents of a component. Best-effort: a failure on one agent does not stop the
+    /// others, it is reported in the result instead.
     pub async fn delete_component_agents(
         &self,
         component_name: &ComponentName,
         component_id: &ComponentId,
         show_skip: bool,
-    ) -> anyhow::Result<Vec<RawAgentId>> {
+    ) -> anyhow::Result<BulkAgentActionResult<RawAgentId>> {
         let (agents, _) = self
             .list_component_agents(component_name, component_id, None, None, None, None, false)
             .await?;
@@ -2206,7 +2238,7 @@ impl AgentCommandHandler {
                     format!("deleting agents for component {component_name}, no agent found"),
                 );
             }
-            return Ok(Vec::new());
+            return Ok(BulkAgentActionResult::default());
         }
 
         log_action(
@@ -2227,15 +2259,30 @@ impl AgentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut deleted = Vec::with_capacity(agents.len());
+        let mut result = BulkAgentActionResult::default();
         for agent in &agents {
-            self.delete_agent(component_name, agent).await?;
-            deleted.push(agent.agent_id.agent_id.as_str().into());
+            let agent_id = &agent.agent_id.agent_id;
+            match self.delete_agent(component_name, agent).await {
+                Ok(()) => result.succeeded.push(agent_id.as_str().into()),
+                Err(error) => {
+                    log_error_action(
+                        "Failed",
+                        format!(
+                            "deleting agent {}/{}: {error:#}",
+                            component_name.0.bold().blue(),
+                            agent_id.bold().green(),
+                        ),
+                    );
+                    result.errors.insert(agent_id.clone(), format!("{error:#}"));
+                }
+            }
         }
 
-        Ok(deleted)
+        Ok(result)
     }
 
+    /// Redeploys an agent by deleting and recreating it. The error says which of the two steps
+    /// failed, as a failed recreation leaves the agent deleted.
     async fn redeploy_agent(
         &self,
         component_name: &ComponentName,
@@ -2251,7 +2298,9 @@ impl AgentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        self.delete_agent(component_name, &agent_metadata).await?;
+        self.delete_agent(component_name, &agent_metadata)
+            .await
+            .context("failed to delete the agent")?;
 
         log_action(
             "Recreating",
@@ -2267,7 +2316,8 @@ impl AgentCommandHandler {
             agent_metadata.env,
             agent_metadata.config,
         )
-        .await?;
+        .await
+        .context("the agent was deleted, but failed to recreate it")?;
         log_action("Recreated", "agent");
 
         Ok(())

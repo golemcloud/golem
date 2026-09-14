@@ -1503,13 +1503,14 @@
     },
     "agent.delete-all": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`).",
+      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`). Deleting is best-effort: `agents` lists the deleted agents, `errors` the per-agent failures keyed by agent id, and `deleted` is true only when there are no errors.",
       "x-golem-output-mode": "single",
       "x-golem-command": "deploy",
       "required": [
         "$type",
         "deleted",
-        "agents"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
@@ -1522,6 +1523,12 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/AgentDeletionMeta"
+          }
+        },
+        "errors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
           }
         }
       },
@@ -1835,14 +1842,15 @@
     },
     "agent.redeploy": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent redeploy`.",
+      "description": "Single structured output document emitted by `golem agent redeploy`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the per-agent failures keyed by agent id, and `redeployed` is true only when there are no errors.",
       "x-golem-output-mode": "single",
       "x-golem-command": "agent redeploy",
       "x-golem-commands": ["agent redeploy","redeploy-agents","component redeploy-agents"],
       "required": [
         "$type",
         "redeployed",
-        "agents"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
@@ -1855,6 +1863,12 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/AgentRedeploymentMeta"
+          }
+        },
+        "errors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
           }
         }
       },
