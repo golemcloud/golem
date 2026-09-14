@@ -21,7 +21,7 @@ use super::{body_response, response};
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{ReadStreamSlotSuccess, stream_slot_item};
 use golem_common::model::OplogIndex;
-use golem_common::model::durable_stream::StreamOffsetV1;
+use golem_common::model::durable_stream::StreamOffset;
 use golem_common::schema::SchemaValue;
 use golem_schema::schema::render::to_json_value;
 use http::{HeaderName, StatusCode};
@@ -30,12 +30,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn offset_text(v: &[u8]) -> Result<String, RequestHandlerError> {
     let offset = if v.is_empty() {
-        StreamOffsetV1::new(OplogIndex::NONE, 0)
+        StreamOffset::new(OplogIndex::NONE, 0)
     } else {
         let bytes = v
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid internal stream offset length"))?;
-        StreamOffsetV1::from_bytes(bytes).map_err(anyhow::Error::msg)?
+        StreamOffset::from_bytes(bytes).map_err(anyhow::Error::msg)?
     };
     Ok(offset.to_string())
 }
@@ -406,7 +406,7 @@ mod tests {
     fn empty_stream_cursor_is_canonical_and_not_a_request_sentinel() {
         let empty = offset_text(&[]).unwrap();
         assert_eq!(empty.len(), 48);
-        assert!(StreamOffsetV1::from_str(&empty).is_ok());
+        assert!(StreamOffset::from_str(&empty).is_ok());
         assert_ne!(empty, "-1");
         assert_ne!(empty, "now");
     }
@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn head_includes_content_type_and_tail_without_body() {
         let mut batch = binary_batch();
-        batch.head_offset = StreamOffsetV1::new(OplogIndex::from_u64(23), 7)
+        batch.head_offset = StreamOffset::new(OplogIndex::from_u64(23), 7)
             .as_bytes()
             .to_vec();
         let result = metadata_response(&batch, true).unwrap();

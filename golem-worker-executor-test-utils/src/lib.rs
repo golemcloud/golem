@@ -3753,7 +3753,7 @@ impl Oplog for TestOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> golem_worker_executor::services::oplog::RawDurableStreamSessionStatus {
         self.oplog
             .raw_durable_stream_session_status(session_key)

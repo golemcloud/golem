@@ -153,19 +153,19 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
     use crate::durable_host::durable_stream::tests::registration;
     use crate::services::oplog::{CommitLevel, Oplog};
     use golem_common::base_model::durable_stream::{
-        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSourceKindV1,
+        StreamRegistrationCoordinate, StreamRootKind, StreamSourceKind,
     };
 
     let slot = Arc::new(DurableStreamProducerSlot::default());
     let identity = identity();
     let request = registration(
         &identity,
-        StreamRegistrationCoordinateV1::Root {
+        StreamRegistrationCoordinate::Root {
             invocation_id: identity.invocation.clone(),
-            root_kind: StreamRootKindV1::MethodResult,
+            root_kind: StreamRootKind::MethodResult,
             recursive_value_path: vec![],
         },
-        StreamSourceKindV1::InvocationOutput,
+        StreamSourceKind::InvocationOutput,
     );
     let oplog = Arc::new(TestOplog::default());
     let reached = Arc::new(tokio::sync::Notify::new());

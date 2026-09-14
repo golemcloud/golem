@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::worker::{
     CompleteParameters, InvocationRequest, InvocationResponse, UpdateMode,
 };
 use golem_common::base_model::durable_stream::{
-    DurableStreamReadRequestV1, StreamAttachmentControlRequestV1,
+    DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
@@ -137,7 +137,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn control_durable_stream_attachment(
         &self,
-        _request: StreamAttachmentControlRequestV1,
+        _request: StreamAttachmentControlRequest,
         _auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
@@ -149,7 +149,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn read_durable_stream_segment(
         &self,
-        _request: DurableStreamReadRequestV1,
+        _request: DurableStreamReadRequest,
         _auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<WorkerProxyError>> {
         Err(
@@ -580,7 +580,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn control_durable_stream_attachment(
         &self,
-        request: StreamAttachmentControlRequestV1,
+        request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         let key = request.operation.key();
@@ -629,11 +629,11 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn read_durable_stream_segment(
         &self,
-        request: DurableStreamReadRequestV1,
+        request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<WorkerProxyError>> {
         let (producer_agent_id, producer_environment_id, consumer) = match &request {
-            DurableStreamReadRequestV1::AttachedConsumer(request) => {
+            DurableStreamReadRequest::AttachedConsumer(request) => {
                 let key = &request.attachment;
                 (
                     key.producer.clone(),
@@ -645,7 +645,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     )),
                 )
             }
-            DurableStreamReadRequestV1::AuthorizedExport(request) => (
+            DurableStreamReadRequest::AuthorizedExport(request) => (
                 request.handle.producer.clone(),
                 request.handle.producer_environment_id,
                 None,
@@ -1254,7 +1254,7 @@ mod tests {
         let proxy = Arc::new(RemoteWorkerProxy::new(&config));
         let rpc = RemoteInvocationRpc::new(proxy.clone(), Arc::new(ShardServiceDefault::new()));
         let identity = identity();
-        let handle = DurableStreamHandleV1 {
+        let handle = DurableStreamHandle {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: identity.environment_id,
@@ -1264,23 +1264,21 @@ mod tests {
             component_revision: ComponentRevision::INITIAL,
             element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),
         };
-        let after = Some(StreamOffsetV1::new(OplogIndex::from_u64(41), 3));
+        let after = Some(StreamOffset::new(OplogIndex::from_u64(41), 3));
         for request in [
-            DurableStreamReadRequestV1::AttachedConsumer(Box::new(
-                AttachedStreamSegmentRequestV1 {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    attachment: attachment_key(&identity, handle.stream_id),
-                    mapping: StreamSessionMappingRecordV1 {
-                        transport_stream_id: 17,
-                        handle: handle.clone(),
-                        role: SessionStreamRoleV1::Input,
-                    },
-                    after,
-                    through: Some(StreamOffsetV1::new(OplogIndex::from_u64(59), 7)),
-                    wait_for_events: false,
+            DurableStreamReadRequest::AttachedConsumer(Box::new(AttachedStreamSegmentRequest {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                attachment: attachment_key(&identity, handle.stream_id),
+                mapping: StreamSessionMappingRecord {
+                    transport_stream_id: 17,
+                    handle: handle.clone(),
+                    role: SessionStreamRole::Input,
                 },
-            )),
-            DurableStreamReadRequestV1::AuthorizedExport(Box::new(StreamHandleReadRequestV1 {
+                after,
+                through: Some(StreamOffset::new(OplogIndex::from_u64(59), 7)),
+                wait_for_events: false,
+            })),
+            DurableStreamReadRequest::AuthorizedExport(Box::new(StreamHandleReadRequest {
                 handle: handle.clone(),
                 after,
                 max_items: 7,
@@ -1359,7 +1357,7 @@ mod tests {
                 );
                 assert_eq!(
                     actual.consumer_agent_id.is_some(),
-                    matches!(request, DurableStreamReadRequestV1::AttachedConsumer(_))
+                    matches!(request, DurableStreamReadRequest::AttachedConsumer(_))
                 );
             }
             assert!(responses.lock().unwrap().is_empty());

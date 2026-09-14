@@ -64,7 +64,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     resolve_revert_last_invocations_response,
 };
 use golem_common::base_model::durable_stream::{
-    DurableStreamReadRequestV1, StreamAttachmentControlRequestV1,
+    DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -498,7 +498,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 durable_stream_attachment_control_response::Result::ExportResult(result.into()),
             );
         }
-        let control: StreamAttachmentControlRequestV1 =
+        let control: StreamAttachmentControlRequest =
             golem_common::serialization::deserialize(&request.payload)
                 .map_err(WorkerExecutorError::invalid_request)?;
         let consumer_agent_id: AgentId = request
@@ -568,11 +568,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .into());
         }
-        let read: DurableStreamReadRequestV1 =
+        let read: DurableStreamReadRequest =
             golem_common::serialization::deserialize(&request.payload)
                 .map_err(WorkerExecutorError::invalid_request)?;
         match &read {
-            DurableStreamReadRequestV1::AttachedConsumer(read) => {
+            DurableStreamReadRequest::AttachedConsumer(read) => {
                 let consumer_agent_id: AgentId = request
                     .consumer_agent_id
                     .ok_or_else(|| {
@@ -610,7 +610,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .into());
                 }
             }
-            DurableStreamReadRequestV1::AuthorizedExport(read) => {
+            DurableStreamReadRequest::AuthorizedExport(read) => {
                 auth_ctx
                     .authorize_system_only("read authorized durable stream export")
                     .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
@@ -636,13 +636,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         match read {
-            DurableStreamReadRequestV1::AttachedConsumer(read) => {
+            DurableStreamReadRequest::AttachedConsumer(read) => {
                 let events = worker.read_durable_stream_segment(*read).await?;
                 golem_common::serialization::serialize(&events)
                     .map_err(WorkerExecutorError::runtime)
                     .map_err(Into::into)
             }
-            DurableStreamReadRequestV1::AuthorizedExport(read) => {
+            DurableStreamReadRequest::AuthorizedExport(read) => {
                 worker.read_durable_stream_by_handle(*read).await
             }
         }

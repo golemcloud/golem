@@ -47,7 +47,7 @@ use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentId};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::{StreamInvocationIdV1, StreamSessionKeyV1};
+use golem_common::model::durable_stream::{StreamInvocationId, StreamSessionKey};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
@@ -2395,13 +2395,13 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
         .state
         .get_current_idempotency_key()
         .ok_or_else(|| anyhow::anyhow!("durable streaming RPC requires a caller invocation key"))?;
-    let session_key = StreamSessionKeyV1 {
+    let session_key = StreamSessionKey {
         callee_environment_id: remote_agent_id.environment_id,
         callee: remote_agent_id.agent_id(),
         callee_fingerprint: remote_fingerprint,
         idempotency_key: child_key,
     };
-    let consumer_invocation = StreamInvocationIdV1 {
+    let consumer_invocation = StreamInvocationId {
         callee_environment_id: caller.environment_id,
         callee: caller.agent_id,
         callee_fingerprint: caller.fingerprint,

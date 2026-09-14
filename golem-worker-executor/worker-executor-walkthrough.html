@@ -1466,8 +1466,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 </figure>
 
 <ul>
-  <li><strong>Producer journal</strong> (<code>DurableStreamProducer::{register, write_items, end, cancel_open}</code>, <code>durable_host/durable_stream.rs</code>). Each <code>StreamItemsRecordV1</code> carries <code>first_sequence</code>, per-item <code>StreamOffsetV1 { oplog index, sub_index }</code> and <code>producer_fingerprint</code>.</li>
-  <li><strong>Consumer <code>StreamSession</code> journal</strong> (<code>StreamSessionRecordV1</code>): caller attempts, attach/detach, mappings, topology, <code>ConsumerItemValue { source_offset, consumer_read_ordinal }</code>, cancel intent, terminals, the invocation result, and <code>Finished</code>.</li>
+  <li><strong>Producer journal</strong> (<code>DurableStreamProducer::{register, write_items, end, cancel_open}</code>, <code>durable_host/durable_stream.rs</code>). Each <code>StreamItemsRecord</code> carries <code>first_sequence</code>, per-item <code>StreamOffset { oplog index, sub_index }</code> and <code>producer_fingerprint</code>.</li>
+  <li><strong>Consumer <code>StreamSession</code> journal</strong> (<code>StreamSessionRecord</code>): caller attempts, attach/detach, mappings, topology, <code>ConsumerItemValue { source_offset, consumer_read_ordinal }</code>, cancel intent, terminals, the invocation result, and <code>Finished</code>.</li>
   <li>All stream entries are <strong>hints</strong> in the oplog-entry sense: they take part in no <code>Start</code>/terminal pairing and never satisfy a claim. "Hint" does <em>not</em> mean "not replayed" — see below.</li>
 </ul>
 
@@ -1603,7 +1603,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
     <tr><td><strong>Durable Golem agent</strong> (RPC)</td><td><span class="pill ok">exactly-once</span> logical invocation and result</td><td>Target's durable queue (<code>PendingAgentInvocation</code>) + the shared, replay-stable idempotency key</td></tr>
     <tr><td><strong>Ephemeral Golem agent</strong> (RPC)</td><td><span class="pill warn">at-most-once</span> per accepted invocation; no resumption after target loss</td><td>Fail-stop target; deterministic phantom id (UUIDv5 of the key)</td></tr>
     <tr><td><strong>Tool / entity body</strong></td><td><span class="pill ok">exactly-once external effects</span>; body code itself may run again</td><td>Owner oplog under <code>parent_start_index</code>; recorded terminal validated on reconstruction</td></tr>
-    <tr><td><strong>Streaming session</strong></td><td><span class="pill ok">exactly-once item delivery</span> and one terminal per stream</td><td>Producer + consumer journals, <code>StreamOffsetV1</code>, fingerprint checks, protocol terminal fencing</td></tr>
+    <tr><td><strong>Streaming session</strong></td><td><span class="pill ok">exactly-once item delivery</span> and one terminal per stream</td><td>Producer + consumer journals, <code>StreamOffset</code>, fingerprint checks, protocol terminal fencing</td></tr>
     <tr><td><strong>Oplog-processor plugin</strong></td><td><span class="pill ok">exactly-once</span> delivery of each oplog batch</td><td>Deterministic batch key + per-plugin checkpoints (<a href="#s-processors">§16</a>)</td></tr>
     <tr><td><strong>Arbitrary external service</strong> (HTTP/TCP/DB/…)</td><td><span class="pill bad">exactly-once only if the peer deduplicates</span>; otherwise a retry in the ambiguous crash window is visible</td><td>Golem attaches an <code>idempotency-key</code> header to outgoing HTTP (<code>http/policy.rs</code>, from <code>derive_idempotency_key(begin_index)</code>, unless the guest set one) and offers <code>golem:api/host.generate-idempotency-key</code>; the peer must honour it; atomic regions group calls</td></tr>
   </tbody>
@@ -1622,7 +1622,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <div class="grid2">
   <div class="card"><h4>1. RPC exactly-once</h4><p>One logical target invocation per key. Owner: caller's <code>Start</code> + target's durable queue.</p></div>
   <div class="card"><h4>2. Oplog-processor delivery</h4><p>One delivery per batch. Owner: batch key + <code>confirmed_up_to</code>/<code>sending_up_to</code> checkpoints.</p></div>
-  <div class="card"><h4>3. Stream-item exactly-once</h4><p>Each <code>StreamOffsetV1</code> consumed once per consumer session. Owner: <code>durable_stream.rs</code> / <code>durable_session.rs</code>.</p></div>
+  <div class="card"><h4>3. Stream-item exactly-once</h4><p>Each <code>StreamOffset</code> consumed once per consumer session. Owner: <code>durable_stream.rs</code> / <code>durable_session.rs</code>.</p></div>
   <div class="card"><h4>4. Exactly-once finalisation</h4><p>One terminal per stream; protocol terminals fence guest terminals.</p></div>
 </div>
 <p>A change that satisfies one of these does not imply the others.</p>

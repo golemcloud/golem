@@ -49,7 +49,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
-    DurableStreamReadRequestV1, StreamAttachmentControlRequestV1,
+    DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -157,7 +157,7 @@ pub trait Rpc: Send + Sync {
 
     async fn control_durable_stream_attachment(
         &self,
-        _request: StreamAttachmentControlRequestV1,
+        _request: StreamAttachmentControlRequest,
         _auth_ctx: &AuthCtx,
     ) -> Result<bool, RpcError> {
         Err(RpcError::ProtocolError {
@@ -169,7 +169,7 @@ pub trait Rpc: Send + Sync {
 
     async fn read_durable_stream_segment(
         &self,
-        _request: DurableStreamReadRequestV1,
+        _request: DurableStreamReadRequest,
         _auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         Err(RpcError::ProtocolError {
@@ -710,7 +710,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn control_durable_stream_attachment(
         &self,
-        request: StreamAttachmentControlRequestV1,
+        request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.worker_proxy
@@ -721,7 +721,7 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn read_durable_stream_segment(
         &self,
-        request: DurableStreamReadRequestV1,
+        request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         self.worker_proxy
@@ -1655,7 +1655,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn control_durable_stream_attachment(
         &self,
-        request: StreamAttachmentControlRequestV1,
+        request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, RpcError> {
         let key = request.operation.key();
@@ -1705,15 +1705,15 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn read_durable_stream_segment(
         &self,
-        request: DurableStreamReadRequestV1,
+        request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
         let producer = match &request {
-            DurableStreamReadRequestV1::AttachedConsumer(request) => OwnedAgentId::new(
+            DurableStreamReadRequest::AttachedConsumer(request) => OwnedAgentId::new(
                 request.attachment.producer_environment_id,
                 &request.attachment.producer,
             ),
-            DurableStreamReadRequestV1::AuthorizedExport(request) => OwnedAgentId::new(
+            DurableStreamReadRequest::AuthorizedExport(request) => OwnedAgentId::new(
                 request.handle.producer_environment_id,
                 &request.handle.producer,
             ),
@@ -1733,7 +1733,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         debug!(producer = %producer, "Routing durable stream segment read within the local shard");
 
         match &request {
-            DurableStreamReadRequestV1::AttachedConsumer(_) => {
+            DurableStreamReadRequest::AttachedConsumer(_) => {
                 self.direct_invocation_auth
                     .check(
                         auth_ctx.actor_account_id(),
@@ -1744,7 +1744,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     )
                     .await?;
             }
-            DurableStreamReadRequestV1::AuthorizedExport(_) => auth_ctx
+            DurableStreamReadRequest::AuthorizedExport(_) => auth_ctx
                 .authorize_system_only("read authorized durable stream export")
                 .map_err(|error| RpcError::Denied {
                     details: error.to_string(),
@@ -1768,7 +1768,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         .await
         .map_err(RpcError::from)?;
         match request {
-            DurableStreamReadRequestV1::AttachedConsumer(request) => {
+            DurableStreamReadRequest::AttachedConsumer(request) => {
                 let events = worker
                     .read_durable_stream_segment(*request)
                     .await
@@ -1778,7 +1778,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     .map_err(RpcError::from)
                     .map_err(Into::into)
             }
-            DurableStreamReadRequestV1::AuthorizedExport(request) => worker
+            DurableStreamReadRequest::AuthorizedExport(request) => worker
                 .read_durable_stream_by_handle(*request)
                 .await
                 .map_err(|error| error.map_other(RpcError::from)),

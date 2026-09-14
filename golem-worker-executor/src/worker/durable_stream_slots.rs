@@ -14,8 +14,8 @@
 
 use super::*;
 use crate::durable_host::durable_stream::{
-    CommittedProducerStreamEventPayloadV1, DurableStreamProducerError, ExternalAppendOutcomeV1,
-    ExternalProducerV1, StreamHandleReadResultV1,
+    CommittedProducerStreamEventPayload, DurableStreamProducerError, ExternalAppendOutcome,
+    ExternalProducer, StreamHandleReadResult,
 };
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -25,8 +25,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     append_to_stream_slot_request, append_to_stream_slot_response, stream_slot_item,
 };
 use golem_common::model::durable_stream::{
-    DurableStreamHandleV1, DurableStreamReadRequestV1, ExternalProducerIdV1,
-    StreamHandleReadRequestV1, StreamItemsPayloadV1, StreamOffsetV1, StreamSessionKeyV1,
+    DurableStreamHandle, DurableStreamReadRequest, ExternalProducerId, StreamHandleReadRequest,
+    StreamItemsPayload, StreamOffset, StreamSessionKey,
 };
 use golem_common::model::invocation_session_public::validate_durable_stream_session_id;
 use golem_common::schema::{
@@ -37,7 +37,7 @@ use golem_schema::schema::validation::validate_value;
 use prost::Message;
 
 struct Slot {
-    session: StreamSessionKeyV1,
+    session: StreamSessionKey,
     name: String,
     slots: Vec<String>,
     graph: SchemaGraph,
@@ -47,8 +47,8 @@ struct Slot {
 }
 
 enum SlotSource {
-    Stream(DurableStreamHandleV1),
-    Value(Vec<u8>, StreamOffsetV1),
+    Stream(DurableStreamHandle),
+    Value(Vec<u8>, StreamOffset),
     Pending { finished: bool },
     Tombstoned,
 }
@@ -135,8 +135,8 @@ fn slot_schema(
 fn slot_handle(
     encoded: &[u8],
     field: Option<usize>,
-    handles: &[DurableStreamHandleV1],
-) -> Result<DurableStreamHandleV1, WorkerExecutorError> {
+    handles: &[DurableStreamHandle],
+) -> Result<DurableStreamHandle, WorkerExecutorError> {
     let mut value = ProtoValue::decode(encoded)
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
     if let Some(index) = field {
@@ -282,7 +282,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(prepared_index) = status.first_prepared else {
             return Ok(None);
         };
-        let StreamSessionRecordV1::Prepared(prepared) =
+        let StreamSessionRecord::Prepared(prepared) =
             self.read_stream_session_record(prepared_index).await?
         else {
             return Err(WorkerExecutorError::runtime(
@@ -355,7 +355,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &descriptor.stream_handles,
             )?)
         } else if let Some(result_index) = status.invocation_result {
-            let StreamSessionRecordV1::InvocationResult(result) =
+            let StreamSessionRecord::InvocationResult(result) =
                 self.read_stream_session_record(result_index).await?
             else {
                 return Err(WorkerExecutorError::runtime(
@@ -365,7 +365,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if is_stream {
                 SlotSource::Stream(slot_handle(&result.result, field, &result.output_streams)?)
             } else {
-                SlotSource::Value(result.result, StreamOffsetV1::new(result_index, 0))
+                SlotSource::Value(result.result, StreamOffset::new(result_index, 0))
             }
         } else {
             SlotSource::Pending {
@@ -415,7 +415,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 WorkerExecutorError::invalid_request("offset must contain 24 bytes")
             })?;
             Some(
-                StreamOffsetV1::from_bytes(bytes)
+                StreamOffset::from_bytes(bytes)
                     .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
             )
         };
@@ -478,7 +478,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         match slot.source {
             SlotSource::Stream(handle) => {
-                let read = StreamHandleReadRequestV1 {
+                let read = StreamHandleReadRequest {
                     handle,
                     after,
                     max_items: request.max_items,
@@ -490,16 +490,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let bytes = self
                     .rpc()
                     .read_durable_stream_segment(
-                        DurableStreamReadRequestV1::AuthorizedExport(Box::new(read)),
+                        DurableStreamReadRequest::AuthorizedExport(Box::new(read)),
                         &AuthCtx::System,
                     )
                     .await
                     .map_err(|error| {
                         error.map_other(|error| WorkerExecutorError::runtime(error.to_string()))
                     })?;
-                let read: StreamHandleReadResultV1 =
-                    golem_common::serialization::deserialize(&bytes)
-                        .map_err(WorkerExecutorError::runtime)?;
+                let read: StreamHandleReadResult = golem_common::serialization::deserialize(&bytes)
+                    .map_err(WorkerExecutorError::runtime)?;
                 response.next_offset = read
                     .next_offset
                     .map(|offset| offset.0.to_vec())
@@ -513,10 +512,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 response.up_to_date = read.next_offset >= read.head_offset;
                 for event in read.events {
                     let content = match event.payload {
-                        CommittedProducerStreamEventPayloadV1::Value(value) => {
+                        CommittedProducerStreamEventPayload::Value(value) => {
                             Some(stream_slot_item::Content::Value(value))
                         }
-                        CommittedProducerStreamEventPayloadV1::PackedU8(byte) => {
+                        CommittedProducerStreamEventPayload::PackedU8(byte) => {
                             Some(stream_slot_item::Content::PackedU8(vec![byte]))
                         }
                         _ => None,
@@ -622,9 +621,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         SlotSource::Stream(handle) => Some((
                             handle,
                             if slot.writable {
-                                SessionStreamRoleV1::Input
+                                SessionStreamRole::Input
                             } else {
-                                SessionStreamRoleV1::Output
+                                SessionStreamRole::Output
                             },
                         )),
                         SlotSource::Value(..) | SlotSource::Pending { .. } => None,
@@ -690,7 +689,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let payload = match request.payload {
             Some(append_to_stream_slot_request::Payload::PackedU8(bytes)) if slot.bytes => {
-                Some(StreamItemsPayloadV1::PackedU8(bytes))
+                Some(StreamItemsPayload::PackedU8(bytes))
             }
             Some(append_to_stream_slot_request::Payload::Values(values)) if !slot.bytes => {
                 for encoded in &values.values {
@@ -705,7 +704,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ))
                     })?;
                 }
-                Some(StreamItemsPayloadV1::Values(values.values))
+                Some(StreamItemsPayload::Values(values.values))
             }
             None => None,
             _ => {
@@ -724,8 +723,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 handle.stream_id,
                 payload,
                 request.close,
-                request.producer.map(|producer| ExternalProducerV1 {
-                    id: ExternalProducerIdV1::Client(producer.id),
+                request.producer.map(|producer| ExternalProducer {
+                    id: ExternalProducerId::Client(producer.id),
                     epoch: producer.epoch,
                     sequence: producer.sequence,
                 }),
@@ -734,24 +733,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(append_error)?;
         Ok(AppendToStreamSlotResponse {
             result: Some(match result {
-                ExternalAppendOutcomeV1::Accepted(offset) => Outcome::Accepted(AppendAccepted {
+                ExternalAppendOutcome::Accepted(offset) => Outcome::Accepted(AppendAccepted {
                     offset: offset.0.to_vec(),
                 }),
-                ExternalAppendOutcomeV1::Duplicate {
+                ExternalAppendOutcome::Duplicate {
                     offset,
                     highest_sequence,
                 } => Outcome::Duplicate(AppendDuplicate {
                     offset: offset.0.to_vec(),
                     highest_sequence,
                 }),
-                ExternalAppendOutcomeV1::EpochFenced(current_epoch) => {
+                ExternalAppendOutcome::EpochFenced(current_epoch) => {
                     Outcome::EpochFenced(AppendEpochFenced { current_epoch })
                 }
-                ExternalAppendOutcomeV1::SeqGap { expected, received } => {
+                ExternalAppendOutcome::SeqGap { expected, received } => {
                     Outcome::SequenceGap(AppendSequenceGap { expected, received })
                 }
-                ExternalAppendOutcomeV1::Closed => Outcome::Closed(empty()),
-                ExternalAppendOutcomeV1::NotFound => Outcome::NotFound(empty()),
+                ExternalAppendOutcome::Closed => Outcome::Closed(empty()),
+                ExternalAppendOutcome::NotFound => Outcome::NotFound(empty()),
             }),
         })
     }
@@ -822,7 +821,7 @@ mod tests {
 
     #[test]
     fn canonical_slot_reference_is_not_a_transport_id_or_field_index() {
-        use golem_common::model::durable_stream::{StreamId, StreamInvocationIdV1};
+        use golem_common::model::durable_stream::{StreamId, StreamInvocationId};
         let id = AgentId {
             component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(2)),
             agent_id: "source".into(),
@@ -830,13 +829,13 @@ mod tests {
         let environment =
             golem_common::base_model::environment::EnvironmentId(uuid::Uuid::from_u128(3));
         let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(4));
-        let source = StreamInvocationIdV1 {
+        let source = StreamInvocationId {
             callee_environment_id: environment,
             callee: id.clone(),
             callee_fingerprint: fingerprint,
             idempotency_key: IdempotencyKey::new("source-session".into()),
         };
-        let first = DurableStreamHandleV1 {
+        let first = DurableStreamHandle {
             format_version: 1,
             stream_id: StreamId(uuid::Uuid::from_u128(101)),
             producer_environment_id: environment,

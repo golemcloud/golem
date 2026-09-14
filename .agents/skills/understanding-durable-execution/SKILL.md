@@ -460,7 +460,7 @@ Tests: `tests/tool_streaming.rs::deterministic_stream_crash_checkpoint_matrix` a
 
 Four exactly-once contracts coexist and must not be conflated: RPC exactly-once (one logical
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
-exactly-once (each `StreamOffsetV1` consumed once per consumer session, owned by
+exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 `durable_stream.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.

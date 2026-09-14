@@ -2069,11 +2069,11 @@ async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
 #[test]
 async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        DurableStreamHandleV1, StreamCancelReasonV1, StreamCancelRecordV1, StreamCancelRoleV1,
-        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamItemsPayloadV1,
-        StreamItemsRecordV1, StreamOffsetV1, StreamRegisteredRecordV1,
-        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSessionFinishedRecordV1,
-        StreamSessionRecordV1, StreamSourceKindV1, StreamTerminalAuthorV1,
+        DurableStreamHandle, StreamCancelReason, StreamCancelRecord, StreamCancelRole,
+        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamItemsPayload,
+        StreamItemsRecord, StreamOffset, StreamRegisteredRecord, StreamRegistrationCoordinate,
+        StreamRootKind, StreamSessionFinishedRecord, StreamSessionRecord, StreamSourceKind,
+        StreamTerminalAuthor,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -2108,7 +2108,7 @@ async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &T
         .await;
     let stream_id = StreamId(Uuid::new_v4());
     let producer_fingerprint = AgentFingerprint(Uuid::new_v4());
-    let invocation_id = StreamInvocationIdV1 {
+    let invocation_id = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: agent_id.clone(),
         callee_fingerprint: producer_fingerprint,
@@ -2123,15 +2123,15 @@ async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &T
                 vec![
                     DurableStreamOplogRecord::Registered(
                         None,
-                        StreamRegisteredRecordV1 {
+                        StreamRegisteredRecord {
                             format_version: 1,
-                            coordinate: StreamRegistrationCoordinateV1::Root {
+                            coordinate: StreamRegistrationCoordinate::Root {
                                 invocation_id: invocation_id.clone(),
-                                root_kind: StreamRootKindV1::MethodResult,
+                                root_kind: StreamRootKind::MethodResult,
                                 recursive_value_path: Vec::new(),
                             },
                             registration_oplog_index: registration_index,
-                            handle: DurableStreamHandleV1 {
+                            handle: DurableStreamHandle {
                                 format_version: 1,
                                 stream_id,
                                 producer_environment_id: environment_id,
@@ -2141,58 +2141,56 @@ async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &T
                                 component_revision: ComponentRevision::INITIAL,
                                 element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
                             },
-                            source_kind: StreamSourceKindV1::InvocationOutput,
+                            source_kind: StreamSourceKind::InvocationOutput,
                             session_mapping: None,
                         },
                     ),
                     DurableStreamOplogRecord::Items(
                         None,
-                        StreamItemsRecordV1 {
+                        StreamItemsRecord {
                             format_version: 1,
                             stream_id,
                             producer_fingerprint,
                             first_sequence: 0,
                             nested_stream_ids: Vec::new(),
                             newly_registered_stream_ids: Vec::new(),
-                            payload: StreamItemsPayloadV1::Values(vec![vec![42; 1024]]),
-                            offsets: vec![StreamOffsetV1::new(item_index, 0)],
+                            payload: StreamItemsPayload::Values(vec![vec![42; 1024]]),
+                            offsets: vec![StreamOffset::new(item_index, 0)],
                         },
                     ),
                     DurableStreamOplogRecord::End(
                         None,
-                        StreamEndRecordV1 {
+                        StreamEndRecord {
                             format_version: 1,
                             stream_id,
                             producer_fingerprint,
                             sequence: 1,
-                            offset: StreamOffsetV1::new(end_index, 0),
-                            authored_by: StreamTerminalAuthorV1::Guest,
-                            result: StreamEndResultV1::Ok,
+                            offset: StreamOffset::new(end_index, 0),
+                            authored_by: StreamTerminalAuthor::Guest,
+                            result: StreamEndResult::Ok,
                         },
                     ),
                     DurableStreamOplogRecord::Cancel(
                         None,
-                        StreamCancelRecordV1 {
+                        StreamCancelRecord {
                             format_version: 1,
                             stream_id,
                             producer_fingerprint,
                             sequence: 1,
-                            offset: StreamOffsetV1::new(cancel_index, 0),
-                            authored_by: StreamTerminalAuthorV1::Protocol,
-                            role: StreamCancelRoleV1::OutputConsumer,
-                            reason: StreamCancelReasonV1::Protocol,
+                            offset: StreamOffset::new(cancel_index, 0),
+                            authored_by: StreamTerminalAuthor::Protocol,
+                            role: StreamCancelRole::OutputConsumer,
+                            reason: StreamCancelReason::Protocol,
                             details: Some("test cancellation".to_string()),
                         },
                     ),
                     DurableStreamOplogRecord::Session(
                         None,
-                        Box::new(StreamSessionRecordV1::Finished(
-                            StreamSessionFinishedRecordV1 {
-                                format_version: 1,
-                                session_key: invocation_id,
-                                result: Err(vec![57; 1024]),
-                            },
-                        )),
+                        Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                            format_version: 1,
+                            session_key: invocation_id,
+                            result: Err(vec![57; 1024]),
+                        })),
                     ),
                 ]
                 .into_iter(),
@@ -2220,7 +2218,7 @@ async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &T
                 let record = oplog.download_payload(record).await.unwrap();
                 assert_eq!(
                     record.payload,
-                    StreamItemsPayloadV1::Values(vec![vec![42; 1024]])
+                    StreamItemsPayload::Values(vec![vec![42; 1024]])
                 );
             }
             OplogEntry::StreamEnd { record, .. } => {
@@ -2245,7 +2243,7 @@ async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &T
                         ..
                     }
                 ));
-                let StreamSessionRecordV1::Finished(record) =
+                let StreamSessionRecord::Finished(record) =
                     oplog.download_payload(record).await.unwrap()
                 else {
                     panic!("expected finished session");
@@ -2260,7 +2258,7 @@ async fn lazy_durable_stream_batch_externalizes_every_record_family(_tracing: &T
 #[test]
 async fn lazy_durable_stream_batch_upload_failure_appends_no_references(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamOffsetV1, StreamTerminalAuthorV1,
+        StreamEndRecord, StreamEndResult, StreamId, StreamOffset, StreamTerminalAuthor,
     };
 
     let blob_storage = Arc::new(ReadCountingBlobStorage::failing_on_put(2));
@@ -2299,17 +2297,17 @@ async fn lazy_durable_stream_batch_upload_failure_appends_no_references(_tracing
                 produced.fetch_add(1, Ordering::SeqCst);
                 DurableStreamOplogRecord::End(
                     None,
-                    StreamEndRecordV1 {
+                    StreamEndRecord {
                         format_version: 1,
                         stream_id: StreamId(Uuid::new_v4()),
                         producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
                         sequence: 0,
-                        offset: StreamOffsetV1::new(
+                        offset: StreamOffset::new(
                             OplogIndex::from_u64(index.as_u64() + position),
                             0,
                         ),
-                        authored_by: StreamTerminalAuthorV1::Guest,
-                        result: StreamEndResultV1::Ok,
+                        authored_by: StreamTerminalAuthor::Guest,
+                        result: StreamEndResult::Ok,
                     },
                 )
             }))
@@ -2326,8 +2324,8 @@ async fn lazy_durable_stream_batch_upload_failure_appends_no_references(_tracing
 #[test_r::timeout("30s")]
 async fn ephemeral_lazy_durable_stream_batch_externalizes_terminals_atomically(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamOffsetV1,
-        StreamSessionFinishedRecordV1, StreamSessionRecordV1, StreamTerminalAuthorV1,
+        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamOffset,
+        StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
     };
     use golem_common::model::component::ComponentRevision;
 
@@ -2385,7 +2383,7 @@ async fn ephemeral_lazy_durable_stream_batch_externalizes_terminals_atomically(_
         )
         .await;
     let stream_id = StreamId(Uuid::new_v4());
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: agent_id,
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
@@ -2398,25 +2396,23 @@ async fn ephemeral_lazy_durable_stream_batch_externalizes_terminals_atomically(_
                 vec![
                     DurableStreamOplogRecord::End(
                         None,
-                        StreamEndRecordV1 {
+                        StreamEndRecord {
                             format_version: 1,
                             stream_id,
                             producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
                             sequence: 0,
-                            offset: StreamOffsetV1::new(first_index, 0),
-                            authored_by: StreamTerminalAuthorV1::Guest,
-                            result: StreamEndResultV1::Ok,
+                            offset: StreamOffset::new(first_index, 0),
+                            authored_by: StreamTerminalAuthor::Guest,
+                            result: StreamEndResult::Ok,
                         },
                     ),
                     DurableStreamOplogRecord::Session(
                         None,
-                        Box::new(StreamSessionRecordV1::Finished(
-                            StreamSessionFinishedRecordV1 {
-                                format_version: 1,
-                                session_key,
-                                result: Err(vec![91; 1024]),
-                            },
-                        )),
+                        Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                            format_version: 1,
+                            session_key,
+                            result: Err(vec![91; 1024]),
+                        })),
                     ),
                 ]
                 .into_iter(),
@@ -2448,7 +2444,7 @@ async fn ephemeral_lazy_durable_stream_batch_externalizes_terminals_atomically(_
     let OplogEntry::StreamSession { record, .. } = &persisted[&added[1].0] else {
         panic!("persisted terminal batch must end with a session record");
     };
-    let StreamSessionRecordV1::Finished(finished) =
+    let StreamSessionRecord::Finished(finished) =
         oplog.download_payload(record.clone()).await.unwrap()
     else {
         panic!("persisted terminal batch must end with Finished");
@@ -2471,7 +2467,7 @@ async fn ephemeral_lazy_durable_stream_batch_externalizes_terminals_atomically(_
         } => payload.clone(),
         other => panic!("expected cached external Finished session, got {other:?}"),
     };
-    let StreamSessionRecordV1::Finished(finished) =
+    let StreamSessionRecord::Finished(finished) =
         oplog.download_payload(session_payload).await.unwrap()
     else {
         panic!("expected finished session");
@@ -2485,8 +2481,8 @@ async fn blocked_lazy_durable_stream_batch_prepares_before_atomic_commit_and_app
     _tracing: &Tracing,
 ) {
     use golem_common::base_model::durable_stream::{
-        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamOffsetV1,
-        StreamSessionFinishedRecordV1, StreamSessionRecordV1, StreamTerminalAuthorV1,
+        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamOffset,
+        StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
     };
 
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
@@ -2522,7 +2518,7 @@ async fn blocked_lazy_durable_stream_batch_prepares_before_atomic_commit_and_app
         .await;
     let generated = Arc::new(AtomicUsize::new(0));
     let produced = generated.clone();
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: owned_agent_id.agent_id.clone(),
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
@@ -2537,17 +2533,17 @@ async fn blocked_lazy_durable_stream_batch_prepares_before_atomic_commit_and_app
                     produced.fetch_add(1, Ordering::SeqCst);
                     DurableStreamOplogRecord::End(
                         None,
-                        StreamEndRecordV1 {
+                        StreamEndRecord {
                             format_version: 1,
                             stream_id: StreamId(Uuid::new_v4()),
                             producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
                             sequence: position,
-                            offset: StreamOffsetV1::new(
+                            offset: StreamOffset::new(
                                 OplogIndex::from_u64(first_index.as_u64() + position),
                                 0,
                             ),
-                            authored_by: StreamTerminalAuthorV1::Guest,
-                            result: StreamEndResultV1::Ok,
+                            authored_by: StreamTerminalAuthor::Guest,
+                            result: StreamEndResult::Ok,
                         },
                     )
                 });
@@ -2555,13 +2551,11 @@ async fn blocked_lazy_durable_stream_batch_prepares_before_atomic_commit_and_app
                     finished_produced.fetch_add(1, Ordering::SeqCst);
                     DurableStreamOplogRecord::Session(
                         None,
-                        Box::new(StreamSessionRecordV1::Finished(
-                            StreamSessionFinishedRecordV1 {
-                                format_version: 1,
-                                session_key,
-                                result: Err(vec![73; 1024]),
-                            },
-                        )),
+                        Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                            format_version: 1,
+                            session_key,
+                            result: Err(vec![73; 1024]),
+                        })),
                     )
                 })))
             }))
@@ -2618,11 +2612,11 @@ async fn blocked_lazy_durable_stream_batch_prepares_before_atomic_commit_and_app
 #[test]
 async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: &Tracing) {
     use crate::durable_host::durable_stream::{
-        CommittedProducerStreamEventPayloadV1, DurableStreamProducer, ProducerRegistrationRequestV1,
+        CommittedProducerStreamEventPayload, DurableStreamProducer, ProducerRegistrationRequest,
     };
     use golem_common::base_model::durable_stream::{
-        StreamEndResultV1, StreamInvocationIdV1, StreamItemsPayloadV1,
-        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSourceKindV1,
+        StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
+        StreamRootKind, StreamSourceKind,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -2646,22 +2640,22 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let producer_fingerprint = AgentFingerprint(Uuid::new_v4());
-    let invocation_id = StreamInvocationIdV1 {
+    let invocation_id = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: agent_id.clone(),
         callee_fingerprint: producer_fingerprint,
         idempotency_key: IdempotencyKey::new("durable-stream-invocation".to_string()),
     };
-    let registration = ProducerRegistrationRequestV1 {
-        coordinate: StreamRegistrationCoordinateV1::Root {
+    let registration = ProducerRegistrationRequest {
+        coordinate: StreamRegistrationCoordinate::Root {
             invocation_id: invocation_id.clone(),
-            root_kind: StreamRootKindV1::MethodResult,
+            root_kind: StreamRootKind::MethodResult,
             recursive_value_path: Vec::new(),
         },
         source_invocation: invocation_id,
         component_revision: ComponentRevision::INITIAL,
         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
-        source_kind: StreamSourceKindV1::InvocationOutput,
+        source_kind: StreamSourceKind::InvocationOutput,
         session_mapping: None,
         entity_parent_start_index: None,
     };
@@ -2701,12 +2695,12 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
         .write_items(
             handle.stream_id,
             0,
-            StreamItemsPayloadV1::Values(vec![vec![42]]),
+            StreamItemsPayload::Values(vec![vec![42]]),
         )
         .await
         .unwrap();
     producer
-        .end(handle.stream_id, 1, StreamEndResultV1::Ok)
+        .end(handle.stream_id, 1, StreamEndResult::Ok)
         .await
         .unwrap();
     drop(producer);
@@ -2748,7 +2742,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
             .write_items(
                 handle.stream_id,
                 0,
-                StreamItemsPayloadV1::Values(vec![vec![42]]),
+                StreamItemsPayload::Values(vec![vec![42]]),
             )
             .await
             .unwrap()
@@ -2756,7 +2750,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     );
     assert!(
         restarted
-            .end(handle.stream_id, 1, StreamEndResultV1::Ok)
+            .end(handle.stream_id, 1, StreamEndResult::Ok)
             .await
             .unwrap()
             .replayed
@@ -2769,11 +2763,11 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     let mut reader = restarted.catch_up(handle, None).await.unwrap();
     assert_eq!(
         reader.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayloadV1::Value(vec![42])
+        CommittedProducerStreamEventPayload::Value(vec![42])
     );
     assert_eq!(
         reader.next().await.unwrap().unwrap().payload,
-        CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
     );
     assert!(reader.next().await.unwrap().is_none());
 }

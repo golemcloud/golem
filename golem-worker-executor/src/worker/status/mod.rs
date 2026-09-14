@@ -1,7 +1,7 @@
 use crate::services::oplog::OplogServiceOps;
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
-use golem_common::base_model::durable_stream::StreamSessionRecordV1;
+use golem_common::base_model::durable_stream::StreamSessionRecord;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
@@ -398,7 +398,7 @@ where
         else {
             continue;
         };
-        let StreamSessionRecordV1::Attached(attached) = record.as_ref() else {
+        let StreamSessionRecord::Attached(attached) = record.as_ref() else {
             continue;
         };
         let Some(status) = baseline
@@ -574,7 +574,7 @@ fn update_status_with_precomputed_regions(
         } = entry
         {
             match record.as_ref() {
-                StreamSessionRecordV1::ConsumerCancelIntent(intent) => {
+                StreamSessionRecord::ConsumerCancelIntent(intent) => {
                     if !pending_durable_stream_cancellations.iter().any(|existing| {
                         existing.session_key == intent.session_key
                             && existing.stream_id == intent.stream_id
@@ -582,7 +582,7 @@ fn update_status_with_precomputed_regions(
                         pending_durable_stream_cancellations.insert(intent.clone());
                     }
                 }
-                StreamSessionRecordV1::ConsumerCancelApplied(receipt) => {
+                StreamSessionRecord::ConsumerCancelApplied(receipt) => {
                     pending_durable_stream_cancellations.remove(&receipt.intent);
                 }
                 _ => {}

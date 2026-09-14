@@ -23,7 +23,9 @@ async fn reference_client_reads_json_and_bytes_in_all_ds3_modes(
 
 #[test]
 #[timeout("10 minutes")]
-async fn reference_client_export_protocol_compatibility(#[dimension(db)] context: &HttpTestContext) {
+async fn reference_client_export_protocol_compatibility(
+    #[dimension(db)] context: &HttpTestContext,
+) {
     run_reference_client(context, include_str!("durable_streams_client.mjs")).await;
 }
 

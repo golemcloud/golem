@@ -31,12 +31,12 @@ Only these are authoritative:
 
 - The **producer's own oplog** holds `StreamRegistered`, `StreamItems`, `StreamEnd` and
   `StreamCancel` (`DurableStreamProducer::{register, write_items, end, cancel_open}` in
-  `durable_host/durable_stream.rs`). Each `StreamItemsRecordV1` carries `first_sequence`, per-item
-  `StreamOffsetV1 { oplog index, sub_index }` and `producer_fingerprint`. Records are committed
+  `durable_host/durable_stream.rs`). Each `StreamItemsRecord` carries `first_sequence`, per-item
+  `StreamOffset { oplog index, sub_index }` and `producer_fingerprint`. Records are committed
   first and only then published to `DurableLiveStreamBus` (`durable_host/stream_bus.rs`), which is
   documented as a "bounded live-tail optimization for events that have already committed to the
   producer oplog": losing the bus, a reader or a socket loses nothing.
-- The **consumer's `StreamSession` journal** (`StreamSessionRecordV1` in
+- The **consumer's `StreamSession` journal** (`StreamSessionRecord` in
   `golem-common/src/base_model/durable_stream.rs`) records caller attempts, attach/detach,
   mappings, topology, `ConsumerItemValue { source_offset, consumer_read_ordinal }`, cancel intent,
   terminals, the invocation result and `Finished`.
@@ -100,7 +100,7 @@ epoch/sequence and commits `ExternalProducerState`, items and optional terminal 
 batch before publishing to the existing live bus. WebSocket input shares that history.
 
 JSON batches emit one `StreamItems` record per value in a single atomic commit. The
-`ExternalProducerIdV1` identity distinguishes HTTP `Client(String)` from `Attached`, so a client
+`ExternalProducerId` identity distinguishes HTTP `Client(String)` from `Attached`, so a client
 cannot claim the WebSocket's producer identity. Attached sequences count only WebSocket items
 (including packed bytes), continuously across attachment epochs. The producer assigns global
 sequences under its index guard and commits the transport-sequence-to-offset mapping alongside

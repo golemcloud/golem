@@ -26,7 +26,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::durable_stream::StreamSessionRecordV1;
+use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId};
@@ -1336,9 +1336,9 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
             {
                 if let PublicOplogEntry::StreamSession(session) = entry.entry
                     && matches!(
-                        StreamSessionRecordV1::from_value(session.record.value())
+                        StreamSessionRecord::from_value(session.record.value())
                             .map_err(anyhow::Error::msg)?,
-                        StreamSessionRecordV1::Detached(record)
+                        StreamSessionRecord::Detached(record)
                             if record.epoch == first_accepted.epoch
                     )
                 {

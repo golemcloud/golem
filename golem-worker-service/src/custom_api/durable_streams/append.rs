@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn duplicate_reports_original_offset_and_highest_sequence_not_current_tail() {
-        let original = golem_common::model::durable_stream::StreamOffsetV1::new(
+        let original = golem_common::model::durable_stream::StreamOffset::new(
             golem_common::model::OplogIndex::from_u64(31),
             2,
         );

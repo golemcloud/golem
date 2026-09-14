@@ -14,8 +14,7 @@
 
 use async_broadcast::{Receiver, RecvError, Sender, TrySendError, broadcast};
 use golem_common::base_model::durable_stream::{
-    MAX_LIVE_JOIN_BUFFER_SIZE, MAX_LIVE_READERS_PER_STREAM, MIN_LIVE_JOIN_BUFFER_SIZE,
-    StreamOffsetV1,
+    MAX_LIVE_JOIN_BUFFER_SIZE, MAX_LIVE_READERS_PER_STREAM, MIN_LIVE_JOIN_BUFFER_SIZE, StreamOffset,
 };
 use std::collections::HashMap;
 use std::future::Future;
@@ -27,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DurableLiveStreamEvent<T> {
-    pub(crate) offset: StreamOffsetV1,
+    pub(crate) offset: StreamOffset,
     pub(crate) payload: T,
 }
 
@@ -37,13 +36,13 @@ type TerminalLoad<T> = Pin<Box<dyn Future<Output = Result<T, DurableLiveStreamBu
 pub(crate) enum QueuedDurableEvent<T> {
     Ready(DurableLiveStreamEvent<T>),
     Terminal {
-        offset: StreamOffsetV1,
-        load: Arc<dyn Fn(StreamOffsetV1) -> TerminalLoad<T> + Send + Sync>,
+        offset: StreamOffset,
+        load: Arc<dyn Fn(StreamOffset) -> TerminalLoad<T> + Send + Sync>,
     },
 }
 
 impl<T> QueuedDurableEvent<T> {
-    fn offset(&self) -> StreamOffsetV1 {
+    fn offset(&self) -> StreamOffset {
         match self {
             Self::Ready(event) => event.offset,
             Self::Terminal { offset, .. } => *offset,
@@ -103,7 +102,7 @@ struct PublicationOrder {
 }
 
 struct DeferredTerminal {
-    offset: StreamOffsetV1,
+    offset: StreamOffset,
     replayed: bool,
     previous: Option<PublicationStatus>,
     completed: watch::Sender<Option<Result<(), DurableLiveStreamBusError>>>,
@@ -128,7 +127,7 @@ impl DeferredTerminal {
 }
 
 struct DurableLiveStreamBusState<T> {
-    high_water: Option<StreamOffsetV1>,
+    high_water: Option<StreamOffset>,
     readers: HashMap<u64, mpsc::Sender<QueuedDurableEvent<T>>>,
 }
 
@@ -193,7 +192,7 @@ impl<T: Clone> DurableLiveStreamBus<T> {
 
     pub(crate) fn from_committed_high_water(
         capacity: usize,
-        high_water: Option<StreamOffsetV1>,
+        high_water: Option<StreamOffset>,
     ) -> Result<Self, DurableLiveStreamBusError> {
         let mut bus = Self::new(capacity)?;
         bus.state.get_mut().high_water = high_water;
@@ -365,7 +364,7 @@ impl<T: Clone + Send + 'static> DurableLiveStreamBus<T> {
     /// payload or spawning a task. The producer dispatcher supplies the payload when ready.
     pub(crate) fn defer_terminal(
         &self,
-        offset: StreamOffsetV1,
+        offset: StreamOffset,
         replayed: bool,
         progress: Arc<Notify>,
     ) -> Result<PublicationReceipt, DurableLiveStreamBusError> {
@@ -400,7 +399,7 @@ impl<T: Clone + Send + 'static> DurableLiveStreamBus<T> {
     /// Avoids loading a terminal payload while its predecessors or any reader are blocked.
     pub(crate) fn ready_deferred_terminal(
         &self,
-    ) -> Result<Option<StreamOffsetV1>, DurableLiveStreamBusError> {
+    ) -> Result<Option<StreamOffset>, DurableLiveStreamBusError> {
         self.ensure_available()?;
         let order = self
             .publication_order
@@ -534,7 +533,7 @@ impl<T: Clone + Send + 'static> DurableLiveStreamBus<T> {
 
 pub(crate) struct DurableLiveStreamSubscription<T> {
     reader_id: u64,
-    pub(crate) high_water: Option<StreamOffsetV1>,
+    pub(crate) high_water: Option<StreamOffset>,
     receiver: mpsc::Receiver<QueuedDurableEvent<T>>,
     pending: Option<QueuedDurableEvent<T>>,
     publication_progress: Arc<OnceLock<Arc<Notify>>>,
@@ -874,7 +873,7 @@ mod tests {
         live_output_stream_bus, live_stream_bus,
     };
     use golem_common::base_model::OplogIndex;
-    use golem_common::base_model::durable_stream::StreamOffsetV1;
+    use golem_common::base_model::durable_stream::StreamOffset;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
@@ -890,7 +889,7 @@ mod tests {
         let mut right = bus.subscribe().await.unwrap();
         let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let release = Arc::new(Notify::new());
-        let offset = StreamOffsetV1::new(OplogIndex::from_u64(17), 0);
+        let offset = StreamOffset::new(OplogIndex::from_u64(17), 0);
         let receipt = bus
             .defer_terminal(offset, false, Arc::new(Notify::new()))
             .unwrap();
@@ -944,7 +943,7 @@ mod tests {
         let bus = Arc::new(DurableLiveStreamBus::new(1).unwrap());
         let mut reader = bus.subscribe().await.unwrap();
         let event = |index| DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(index), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(index), 0),
             payload: index,
         };
         bus.publish_committed(event(7)).await.unwrap();
@@ -984,7 +983,7 @@ mod tests {
         let publication = bus.enqueue_batch(vec![], false, keepalive);
         let terminal = bus
             .defer_terminal(
-                StreamOffsetV1::new(OplogIndex::from_u64(19), 0),
+                StreamOffset::new(OplogIndex::from_u64(19), 0),
                 false,
                 Arc::new(Notify::new()),
             )
@@ -1016,7 +1015,7 @@ mod tests {
         let mut left = bus.subscribe().await.unwrap();
         let mut right = bus.subscribe().await.unwrap();
         let event = |index, value| DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(index), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(index), 0),
             payload: value,
         };
         // Both batches exceed each reader's capacity; the first receipt is abandoned.
@@ -1050,7 +1049,7 @@ mod tests {
         let mut left = bus.subscribe().await.unwrap();
         let mut right = bus.subscribe().await.unwrap();
         let event = |index, value| DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(index), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(index), 0),
             payload: value,
         };
         let data = bus.enqueue_batch(vec![event(10, 3), event(11, 7)], false, ());
@@ -1093,7 +1092,7 @@ mod tests {
     #[timeout("30s")]
     async fn deferred_terminal_failure_fences_successors_and_retry_receipts() {
         let bus = Arc::new(DurableLiveStreamBus::<u8>::new(1).unwrap());
-        let offset = StreamOffsetV1::new(OplogIndex::from_u64(12), 0);
+        let offset = StreamOffset::new(OplogIndex::from_u64(12), 0);
         let progress = Arc::new(Notify::new());
         let terminal = bus.defer_terminal(offset, false, progress.clone()).unwrap();
         bus.fail_deferred_terminal(DurableLiveStreamBusError::PublicationAborted);
@@ -1111,7 +1110,7 @@ mod tests {
         assert_eq!(
             bus.enqueue_batch(
                 vec![DurableLiveStreamEvent {
-                    offset: StreamOffsetV1::new(OplogIndex::from_u64(13), 0),
+                    offset: StreamOffset::new(OplogIndex::from_u64(13), 0),
                     payload: 7,
                 }],
                 false,
@@ -1129,7 +1128,7 @@ mod tests {
     async fn publication_failure_fences_later_batches() {
         let bus = Arc::new(DurableLiveStreamBus::new(1).unwrap());
         let event = |index| DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(index), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(index), 0),
             payload: index,
         };
         bus.enqueue_batch(vec![event(10)], false, ())
@@ -1146,14 +1145,14 @@ mod tests {
         );
         assert_eq!(
             bus.subscribe().await.unwrap().high_water,
-            Some(StreamOffsetV1::new(OplogIndex::from_u64(10), 0))
+            Some(StreamOffset::new(OplogIndex::from_u64(10), 0))
         );
     }
 
     #[test]
     async fn durable_bus_supports_zero_readers_and_subscribe_high_water() {
         let bus = DurableLiveStreamBus::new(2).unwrap();
-        let first = StreamOffsetV1::new(OplogIndex::from_u64(10), 0);
+        let first = StreamOffset::new(OplogIndex::from_u64(10), 0);
         bus.publish_committed(DurableLiveStreamEvent {
             offset: first,
             payload: "historical",
@@ -1163,7 +1162,7 @@ mod tests {
 
         let mut subscription = bus.subscribe().await.unwrap();
         assert_eq!(subscription.high_water, Some(first));
-        let second = StreamOffsetV1::new(OplogIndex::from_u64(11), 0);
+        let second = StreamOffset::new(OplogIndex::from_u64(11), 0);
         bus.publish_committed(DurableLiveStreamEvent {
             offset: second,
             payload: "live",
@@ -1181,7 +1180,7 @@ mod tests {
         let first = bus.high_water_changed();
         let second = bus.high_water_changed();
         bus.publish_committed(DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(10), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(10), 0),
             payload: 1,
         })
         .await
@@ -1196,7 +1195,7 @@ mod tests {
 
         let changed = bus.high_water_changed();
         let blocked = bus.publish_committed(DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(11), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(11), 0),
             payload: 2,
         });
         tokio::pin!(blocked);
@@ -1222,7 +1221,7 @@ mod tests {
     async fn publication_observers_wake_for_advancing_replay_and_deferred_terminal() {
         let bus = DurableLiveStreamBus::new(1).unwrap();
         let event = DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(20), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(20), 0),
             payload: 7,
         };
         let changed = bus.high_water_changed();
@@ -1232,7 +1231,7 @@ mod tests {
         bus.republish_committed(event).await.unwrap();
         tokio::pin!(changed);
         assert!(futures::poll!(&mut changed).is_pending());
-        let end = StreamOffsetV1::new(OplogIndex::from_u64(21), 0);
+        let end = StreamOffset::new(OplogIndex::from_u64(21), 0);
         let receipt = bus
             .defer_terminal(end, false, Arc::new(Notify::new()))
             .unwrap();
@@ -1259,7 +1258,7 @@ mod tests {
         ));
 
         bus.publish_committed(DurableLiveStreamEvent {
-            offset: StreamOffsetV1::new(OplogIndex::from_u64(10), 0),
+            offset: StreamOffset::new(OplogIndex::from_u64(10), 0),
             payload: 1,
         })
         .await
@@ -1268,7 +1267,7 @@ mod tests {
             let bus = bus.clone();
             async move {
                 bus.publish_committed(DurableLiveStreamEvent {
-                    offset: StreamOffsetV1::new(OplogIndex::from_u64(11), 0),
+                    offset: StreamOffset::new(OplogIndex::from_u64(11), 0),
                     payload: 2,
                 })
                 .await
@@ -1286,7 +1285,7 @@ mod tests {
     #[test]
     async fn durable_bus_rejects_non_increasing_committed_offsets() {
         let bus = DurableLiveStreamBus::new(1).unwrap();
-        let offset = StreamOffsetV1::new(OplogIndex::from_u64(10), 0);
+        let offset = StreamOffset::new(OplogIndex::from_u64(10), 0);
         bus.publish_committed(DurableLiveStreamEvent { offset, payload: 1 })
             .await
             .unwrap();
@@ -1301,8 +1300,8 @@ mod tests {
     #[test]
     async fn durable_bus_allows_repair_publication_without_moving_high_water_backwards() {
         let bus = DurableLiveStreamBus::new(2).unwrap();
-        let first = StreamOffsetV1::new(OplogIndex::from_u64(10), 0);
-        let second = StreamOffsetV1::new(OplogIndex::from_u64(11), 0);
+        let first = StreamOffset::new(OplogIndex::from_u64(10), 0);
+        let second = StreamOffset::new(OplogIndex::from_u64(11), 0);
         bus.publish_committed(DurableLiveStreamEvent {
             offset: first,
             payload: 1,

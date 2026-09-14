@@ -16,7 +16,7 @@ use super::{WorkerExecutorImpl, extract_owned_agent_id};
 use crate::durable_host::durable_session::{
     DurableSessionStreams, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };
-use crate::durable_host::durable_stream::ProducerRegistrationRequestV1;
+use crate::durable_host::durable_stream::ProducerRegistrationRequest;
 use crate::durable_host::stream_session::{
     decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
     encode_recursive_stream_value_with_schema,
@@ -39,9 +39,9 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
-    MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptorV1,
-    StreamCancelReasonV1, StreamCancelRoleV1, StreamItemsPayloadV1, StreamResumeCursorV1,
-    StreamResumeOperationV1,
+    MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptor,
+    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamResumeCursor,
+    StreamResumeOperation,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -50,10 +50,9 @@ use golem_common::model::agent::{
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
-    AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, PersistedStreamInvocationDescriptorV1,
-    SessionStreamRoleV1, StartAttemptDescriptorV1, StreamInvocationIdV1,
-    StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSessionMappingV1, StreamSourceKindV1,
-    StreamValuePathStepV1,
+    AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, PersistedStreamInvocationDescriptor,
+    SessionStreamRole, StartAttemptDescriptor, StreamInvocationId, StreamRegistrationCoordinate,
+    StreamRootKind, StreamSessionMapping, StreamSourceKind, StreamValuePathStep,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
@@ -153,7 +152,7 @@ fn publish_acceptance(
 struct AcceptedInvocation {
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<DurableSessionStreams>,
-    prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecordV1>,
+    prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,
     durable_replayed: bool,
 }
 
@@ -1524,7 +1523,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .as_ref()
                             .and_then(|offset| offset.as_slice().try_into().ok())
                             .and_then(|offset| {
-                                golem_common::model::durable_stream::StreamOffsetV1::from_bytes(
+                                golem_common::model::durable_stream::StreamOffset::from_bytes(
                                     offset,
                                 )
                                 .ok()
@@ -1591,7 +1590,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let known_output_mapping_ids = acceptance
             .mappings
             .iter()
-            .filter(|mapping| mapping.role == SessionStreamRoleV1::Output)
+            .filter(|mapping| mapping.role == SessionStreamRole::Output)
             .map(|mapping| mapping.transport_stream_id)
             .collect::<Vec<_>>();
         let high_waters = match streams.input_high_waters().await {
@@ -1972,7 +1971,7 @@ pub(crate) fn build_durable_streaming_request(
             ));
         }
     };
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: callee.clone(),
         callee_fingerprint,
@@ -1980,10 +1979,10 @@ pub(crate) fn build_durable_streaming_request(
     };
     let attachment_id = AttachmentId::primary(environment_id, &callee, &idempotency_key)
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-    let session_mapping = StreamSessionMappingV1 {
+    let session_mapping = StreamSessionMapping {
         session_key: session_key.clone(),
         attachment_id,
-        role: SessionStreamRoleV1::Input,
+        role: SessionStreamRole::Input,
     };
     if input_encoded_len > MAX_DURABLE_STREAM_ITEM_SIZE {
         return Err(WorkerExecutorError::invalid_request(
@@ -2000,7 +1999,7 @@ pub(crate) fn build_durable_streaming_request(
         .map_err(WorkerExecutorError::invalid_request)?;
     if foreign_mappings
         .iter()
-        .any(|mapping| mapping.role != SessionStreamRoleV1::Input)
+        .any(|mapping| mapping.role != SessionStreamRole::Input)
     {
         return Err(WorkerExecutorError::invalid_request(
             "durable invocation input mapping has a non-input role",
@@ -2035,14 +2034,14 @@ pub(crate) fn build_durable_streaming_request(
             if foreign_mappings.is_empty() {
                 registrations.push((
                     transport_stream_id,
-                    ProducerRegistrationRequestV1 {
+                    ProducerRegistrationRequest {
                         entity_parent_start_index: None,
-                        coordinate: StreamRegistrationCoordinateV1::Root {
+                        coordinate: StreamRegistrationCoordinate::Root {
                             invocation_id: session_key.clone(),
-                            root_kind: StreamRootKindV1::MethodInput,
+                            root_kind: StreamRootKind::MethodInput,
                             recursive_value_path: path.to_vec(),
                         },
-                        source_kind: StreamSourceKindV1::ExternalInlineInput,
+                        source_kind: StreamSourceKind::ExternalInlineInput,
                         source_invocation: session_key.clone(),
                         component_revision,
                         element_schema_fingerprint,
@@ -2133,13 +2132,13 @@ pub(crate) fn build_durable_streaming_request(
         golem_common::serialization::serialize(&(execution.encode_to_vec(), environment))
             .map_err(WorkerExecutorError::runtime)?;
     let effective_identity = effective_session_identity(&request.auth_ctx, &request.principal)?;
-    let attempt = StartAttemptDescriptorV1 {
+    let attempt = StartAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: session_key.clone(),
         attachment_id,
         expected_callee_fingerprint: callee_fingerprint,
         attempt_id,
-        invocation: PersistedStreamInvocationDescriptorV1 {
+        invocation: PersistedStreamInvocationDescriptor {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key,
             target_component_revision: component_revision,
@@ -2166,7 +2165,7 @@ pub(crate) fn build_durable_streaming_request(
 }
 
 fn resumed_input_schema(
-    prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecordV1,
+    prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
     component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), WorkerExecutorError> {
     let parsed_agent_id = ParsedAgentId::parse(
@@ -2206,7 +2205,7 @@ fn resumed_input_schema(
     let input_mappings = prepared
         .stream_mappings
         .iter()
-        .filter(|mapping| mapping.role == SessionStreamRoleV1::Input)
+        .filter(|mapping| mapping.role == SessionStreamRole::Input)
         .collect::<Vec<_>>();
     let mut input_element_types = Vec::with_capacity(input_mappings.len());
     decode_recursive_stream_value_with_schema(
@@ -2241,7 +2240,7 @@ fn resumed_input_schema(
 fn build_resume_attempt(
     request: &ResumeAttach,
     live_join_buffer_events: usize,
-) -> Result<ResumeAttemptDescriptorV1, WorkerExecutorError> {
+) -> Result<ResumeAttemptDescriptor, WorkerExecutorError> {
     let callee: AgentId = request
         .agent_id
         .clone()
@@ -2268,7 +2267,7 @@ fn build_resume_attempt(
             })?
             .into(),
     );
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee,
         callee_fingerprint: expected_callee_fingerprint,
@@ -2296,8 +2295,8 @@ fn build_resume_attempt(
         ));
     }
     let operation = match request.operation() {
-        ResumeOperation::Resume => StreamResumeOperationV1::Resume,
-        ResumeOperation::Takeover => StreamResumeOperationV1::Takeover,
+        ResumeOperation::Resume => StreamResumeOperation::Resume,
+        ResumeOperation::Takeover => StreamResumeOperation::Takeover,
         ResumeOperation::Unspecified => {
             return Err(WorkerExecutorError::invalid_request(
                 "resume operation is unspecified",
@@ -2325,11 +2324,11 @@ fn build_resume_attempt(
                             "resume cursor offset must contain 24 bytes",
                         )
                     })?;
-                    golem_common::model::durable_stream::StreamOffsetV1::from_bytes(offset)
+                    golem_common::model::durable_stream::StreamOffset::from_bytes(offset)
                         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))
                 })
                 .transpose()?;
-            Ok(StreamResumeCursorV1 {
+            Ok(StreamResumeCursor {
                 stream_id,
                 last_observed_offset,
             })
@@ -2344,7 +2343,7 @@ fn build_resume_attempt(
             "resume contains duplicate stream cursors",
         ));
     }
-    Ok(ResumeAttemptDescriptorV1 {
+    Ok(ResumeAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         operation,
         session_key,
@@ -2416,7 +2415,7 @@ fn require_expected_callee_fingerprint(
 fn stream_element_schema<'a>(
     graph: &'a SchemaGraph,
     root: &'a SchemaType,
-    path: &[StreamValuePathStepV1],
+    path: &[StreamValuePathStep],
 ) -> Result<Option<&'a SchemaType>, String> {
     let mut current = root;
     for step in path {
@@ -2424,52 +2423,51 @@ fn stream_element_schema<'a>(
             .resolve_ref(current)
             .map_err(|error| error.to_string())?;
         current = match (step, current) {
-            (StreamValuePathStepV1::RecordField(index), SchemaType::Record { fields, .. }) => {
+            (StreamValuePathStep::RecordField(index), SchemaType::Record { fields, .. }) => {
                 &fields
                     .get(*index as usize)
                     .ok_or_else(|| "stream record path is out of range".to_string())?
                     .body
             }
-            (
-                StreamValuePathStepV1::VariantCasePayload(index),
-                SchemaType::Variant { cases, .. },
-            ) => cases
-                .get(*index as usize)
-                .and_then(|case| case.payload.as_ref())
-                .ok_or_else(|| "stream variant path has no payload".to_string())?,
-            (StreamValuePathStepV1::TupleElement(index), SchemaType::Tuple { elements, .. }) => {
+            (StreamValuePathStep::VariantCasePayload(index), SchemaType::Variant { cases, .. }) => {
+                cases
+                    .get(*index as usize)
+                    .and_then(|case| case.payload.as_ref())
+                    .ok_or_else(|| "stream variant path has no payload".to_string())?
+            }
+            (StreamValuePathStep::TupleElement(index), SchemaType::Tuple { elements, .. }) => {
                 elements
                     .get(*index as usize)
                     .ok_or_else(|| "stream tuple path is out of range".to_string())?
             }
-            (StreamValuePathStepV1::ListElement(_), SchemaType::List { element, .. })
-            | (StreamValuePathStepV1::FixedListElement(_), SchemaType::FixedList { element, .. }) => {
+            (StreamValuePathStep::ListElement(_), SchemaType::List { element, .. })
+            | (StreamValuePathStep::FixedListElement(_), SchemaType::FixedList { element, .. }) => {
                 element
             }
             (
-                StreamValuePathStepV1::MapEntry {
-                    side: golem_common::model::durable_stream::StreamMapSideV1::Key,
+                StreamValuePathStep::MapEntry {
+                    side: golem_common::model::durable_stream::StreamMapSide::Key,
                     ..
                 },
                 SchemaType::Map { key, .. },
             ) => key,
             (
-                StreamValuePathStepV1::MapEntry {
-                    side: golem_common::model::durable_stream::StreamMapSideV1::Value,
+                StreamValuePathStep::MapEntry {
+                    side: golem_common::model::durable_stream::StreamMapSide::Value,
                     ..
                 },
                 SchemaType::Map { value, .. },
             ) => value,
-            (StreamValuePathStepV1::OptionSome, SchemaType::Option { inner, .. }) => inner,
-            (StreamValuePathStepV1::ResultOk, SchemaType::Result { spec, .. }) => spec
+            (StreamValuePathStep::OptionSome, SchemaType::Option { inner, .. }) => inner,
+            (StreamValuePathStep::ResultOk, SchemaType::Result { spec, .. }) => spec
                 .ok
                 .as_deref()
                 .ok_or_else(|| "stream result ok path has no payload".to_string())?,
-            (StreamValuePathStepV1::ResultErr, SchemaType::Result { spec, .. }) => spec
+            (StreamValuePathStep::ResultErr, SchemaType::Result { spec, .. }) => spec
                 .err
                 .as_deref()
                 .ok_or_else(|| "stream result error path has no payload".to_string())?,
-            (StreamValuePathStepV1::UnionBranch(index), SchemaType::Union { spec, .. }) => {
+            (StreamValuePathStep::UnionBranch(index), SchemaType::Union { spec, .. }) => {
                 &spec
                     .branches
                     .get(*index as usize)
@@ -2727,18 +2725,18 @@ async fn route_durable_request(
                     item.transport_stream_id,
                     item.durable_stream_id,
                     item.epoch,
-                    SessionStreamRoleV1::Input,
+                    SessionStreamRole::Input,
                 )
                 .await?;
             let payload = match item.payload {
                 Some(golem_api_grpc::proto::golem::worker::input_stream_item::Payload::Value(
                     value,
-                )) => StreamItemsPayloadV1::Values(vec![value.encode_to_vec()]),
+                )) => StreamItemsPayload::Values(vec![value.encode_to_vec()]),
                 Some(
                     golem_api_grpc::proto::golem::worker::input_stream_item::Payload::PackedU8(
                         bytes,
                     ),
-                ) => StreamItemsPayloadV1::PackedU8(bytes),
+                ) => StreamItemsPayload::PackedU8(bytes),
                 None => return Err("durable input item has no payload".to_string()),
             };
             streams
@@ -2772,7 +2770,7 @@ async fn route_durable_request(
                     end.transport_stream_id,
                     end.durable_stream_id,
                     end.epoch,
-                    SessionStreamRoleV1::Input,
+                    SessionStreamRole::Input,
                 )
                 .await?;
             let resulting_offset = streams
@@ -2790,22 +2788,18 @@ async fn route_durable_request(
         }
         invocation_request::Request::StreamCancel(cancel) => {
             let (role, stream_role) = match cancel.role() {
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputProducer => (
-                    StreamCancelRoleV1::InputProducer,
-                    SessionStreamRoleV1::Input,
-                ),
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer => (
-                    StreamCancelRoleV1::InputConsumer,
-                    SessionStreamRoleV1::Input,
-                ),
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputProducer => (
-                    StreamCancelRoleV1::OutputProducer,
-                    SessionStreamRoleV1::Output,
-                ),
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputConsumer => (
-                    StreamCancelRoleV1::OutputConsumer,
-                    SessionStreamRoleV1::Output,
-                ),
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputProducer => {
+                    (StreamCancelRole::InputProducer, SessionStreamRole::Input)
+                }
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer => {
+                    (StreamCancelRole::InputConsumer, SessionStreamRole::Input)
+                }
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputProducer => {
+                    (StreamCancelRole::OutputProducer, SessionStreamRole::Output)
+                }
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputConsumer => {
+                    (StreamCancelRole::OutputConsumer, SessionStreamRole::Output)
+                }
                 golem_api_grpc::proto::golem::worker::StreamCancelRole::System => {
                     return Err(
                         "system-authored durable stream cancellation is internal".to_string()
@@ -2825,13 +2819,13 @@ async fn route_durable_request(
                 .await?;
             let reason = match cancel.reason() {
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Cancelled => {
-                    StreamCancelReasonV1::Cancelled
+                    StreamCancelReason::Cancelled
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Protocol => {
-                    StreamCancelReasonV1::Protocol
+                    StreamCancelReason::Protocol
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::ConsumerDrop => {
-                    StreamCancelReasonV1::GuestDrop
+                    StreamCancelReason::GuestDrop
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Transport => {
                     return Err(
@@ -2840,9 +2834,9 @@ async fn route_durable_request(
                     );
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
-                    if role == StreamCancelRoleV1::InputProducer =>
+                    if role == StreamCancelRole::InputProducer =>
                 {
-                    StreamCancelReasonV1::SourceUnavailable
+                    StreamCancelReason::SourceUnavailable
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
                 | golem_api_grpc::proto::golem::worker::StreamCancelReason::ProducerDeleting
@@ -2910,9 +2904,9 @@ mod freshness_tests {
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
     use golem_common::base_model::component_metadata::{ComponentMetadata, KnownExports};
     use golem_common::base_model::durable_stream::{
-        DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1, MAX_DURABLE_STREAM_ITEM_SIZE,
-        SessionStreamRoleV1, StreamId, StreamInvocationIdV1, StreamMapSideV1,
-        StreamSessionMappingRecordV1, StreamValuePathStepV1,
+        DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, MAX_DURABLE_STREAM_ITEM_SIZE,
+        SessionStreamRole, StreamId, StreamInvocationId, StreamMapSide, StreamSessionMappingRecord,
+        StreamValuePathStep,
     };
     use golem_common::base_model::environment::EnvironmentId;
     use golem_common::model::agent::{
@@ -3166,44 +3160,44 @@ mod freshness_tests {
                 (
                     101,
                     vec![
-                        StreamValuePathStepV1::RecordField(0),
-                        StreamValuePathStepV1::MapEntry {
+                        StreamValuePathStep::RecordField(0),
+                        StreamValuePathStep::MapEntry {
                             index: 0,
-                            side: StreamMapSideV1::Key,
+                            side: StreamMapSide::Key,
                         },
                     ],
                 ),
                 (
                     7,
                     vec![
-                        StreamValuePathStepV1::RecordField(0),
-                        StreamValuePathStepV1::MapEntry {
+                        StreamValuePathStep::RecordField(0),
+                        StreamValuePathStep::MapEntry {
                             index: 0,
-                            side: StreamMapSideV1::Value,
+                            side: StreamMapSide::Value,
                         },
                     ],
                 ),
                 (
                     55,
                     vec![
-                        StreamValuePathStepV1::RecordField(1),
-                        StreamValuePathStepV1::VariantCasePayload(1),
-                        StreamValuePathStepV1::OptionSome,
+                        StreamValuePathStep::RecordField(1),
+                        StreamValuePathStep::VariantCasePayload(1),
+                        StreamValuePathStep::OptionSome,
                     ],
                 ),
                 (
                     300,
                     vec![
-                        StreamValuePathStepV1::RecordField(2),
-                        StreamValuePathStepV1::ResultErr,
+                        StreamValuePathStep::RecordField(2),
+                        StreamValuePathStep::ResultErr,
                     ],
                 ),
                 (
                     2,
                     vec![
-                        StreamValuePathStepV1::RecordField(3),
-                        StreamValuePathStepV1::UnionBranch(1),
-                        StreamValuePathStepV1::RecordField(1),
+                        StreamValuePathStep::RecordField(3),
+                        StreamValuePathStep::UnionBranch(1),
+                        StreamValuePathStep::RecordField(1),
                     ],
                 ),
             ]
@@ -3302,15 +3296,15 @@ mod freshness_tests {
         transport_stream_id: u64,
         element_schema_fingerprint: SchemaFingerprintV1,
         request: &InvocationStart,
-    ) -> StreamSessionMappingRecordV1 {
+    ) -> StreamSessionMappingRecord {
         let environment_id: EnvironmentId = request.environment_id.unwrap().try_into().unwrap();
         let callee: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
         let callee_fingerprint =
             AgentFingerprint(request.expected_callee_fingerprint.unwrap().into());
         let idempotency_key = request.idempotency_key.clone().unwrap().into();
-        StreamSessionMappingRecordV1 {
+        StreamSessionMappingRecord {
             transport_stream_id,
-            handle: DurableStreamHandleV1 {
+            handle: DurableStreamHandle {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 stream_id: StreamId(uuid::Uuid::from_u128(
                     1_000 + u128::from(transport_stream_id),
@@ -3318,7 +3312,7 @@ mod freshness_tests {
                 producer_environment_id: environment_id,
                 producer: callee.clone(),
                 expected_producer_fingerprint: callee_fingerprint,
-                source_invocation: StreamInvocationIdV1 {
+                source_invocation: StreamInvocationId {
                     callee_environment_id: environment_id,
                     callee,
                     callee_fingerprint,
@@ -3327,7 +3321,7 @@ mod freshness_tests {
                 component_revision: ComponentRevision::INITIAL,
                 element_schema_fingerprint,
             },
-            role: SessionStreamRoleV1::Input,
+            role: SessionStreamRole::Input,
         }
     }
 
@@ -3429,20 +3423,20 @@ mod freshness_tests {
         .unwrap();
         let expected_paths = [
             vec![
-                StreamValuePathStepV1::RecordField(0),
-                StreamValuePathStepV1::MapEntry {
+                StreamValuePathStep::RecordField(0),
+                StreamValuePathStep::MapEntry {
                     index: 0,
-                    side: StreamMapSideV1::Key,
+                    side: StreamMapSide::Key,
                 },
             ],
             vec![
-                StreamValuePathStepV1::RecordField(0),
-                StreamValuePathStepV1::MapEntry {
+                StreamValuePathStep::RecordField(0),
+                StreamValuePathStep::MapEntry {
                     index: 0,
-                    side: StreamMapSideV1::Value,
+                    side: StreamMapSide::Value,
                 },
             ],
-            vec![StreamValuePathStepV1::RecordField(1)],
+            vec![StreamValuePathStep::RecordField(1)],
         ];
         assert_eq!(
             built
@@ -3450,7 +3444,7 @@ mod freshness_tests {
                 .iter()
                 .map(|(transport_stream_id, registration)| {
                     let path = match &registration.coordinate {
-                        super::StreamRegistrationCoordinateV1::Root {
+                        super::StreamRegistrationCoordinate::Root {
                             recursive_value_path,
                             ..
                         } => recursive_value_path.clone(),

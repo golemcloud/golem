@@ -40,9 +40,9 @@ use crate::durable_host::durable_session::{
     DurableSessionStreams, DurableStreamConsumerJournal, SessionControlMetadata,
 };
 use crate::durable_host::durable_stream::{
-    AttachedStreamSegmentSource, CommittedProducerStreamEventV1, ConsumerAttachmentStatus,
+    AttachedStreamSegmentSource, CommittedProducerStreamEvent, ConsumerAttachmentStatus,
     DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamProducer,
-    ProducerRegistrationRequestV1, RoutedStreamAttachmentControl, StreamAttachmentConsumerProbe,
+    ProducerRegistrationRequest, RoutedStreamAttachmentControl, StreamAttachmentConsumerProbe,
     StreamAttachmentControl,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
@@ -102,12 +102,12 @@ use futures::FutureExt;
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::durable_stream::{
-    AttachedStreamSegmentRequestV1, AttemptId, DURABLE_STREAM_FORMAT_VERSION,
-    PersistedStreamInvocationDescriptorV1, ResumeAttemptDescriptorV1, SessionStreamRoleV1,
-    StartAttemptDescriptorV1, StreamAttachmentControlOperationV1, StreamAttachmentControlRequestV1,
-    StreamAttachmentFinalizationReasonV1, StreamAttachmentKeyV1, StreamConsumerDeletingRecordV1,
-    StreamSessionAttachedRecordV1, StreamSessionKeyV1, StreamSessionMappingRecordV1,
-    StreamSessionPreparedRecordV1, StreamSessionRecordV1, StreamSessionResumeAttemptRecordV1,
+    AttachedStreamSegmentRequest, AttemptId, DURABLE_STREAM_FORMAT_VERSION,
+    PersistedStreamInvocationDescriptor, ResumeAttemptDescriptor, SessionStreamRole,
+    StartAttemptDescriptor, StreamAttachmentControlOperation, StreamAttachmentControlRequest,
+    StreamAttachmentFinalizationReason, StreamAttachmentKey, StreamConsumerDeletingRecord,
+    StreamSessionAttachedRecord, StreamSessionKey, StreamSessionMappingRecord,
+    StreamSessionPreparedRecord, StreamSessionRecord, StreamSessionResumeAttemptRecord,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::QueuedCardEvent;
@@ -180,9 +180,9 @@ struct ReadOnlyContext {
 }
 
 pub(crate) struct DurableStreamingInvocationRequest {
-    pub(crate) attempt: StartAttemptDescriptorV1,
-    pub(crate) registrations: Vec<(u64, ProducerRegistrationRequestV1)>,
-    pub(crate) foreign_mappings: Vec<StreamSessionMappingRecordV1>,
+    pub(crate) attempt: StartAttemptDescriptor,
+    pub(crate) registrations: Vec<(u64, ProducerRegistrationRequest)>,
+    pub(crate) foreign_mappings: Vec<StreamSessionMappingRecord>,
     pub(crate) input_schema: Arc<golem_schema::schema::SchemaGraph>,
     pub(crate) input_element_types: Vec<(u64, golem_schema::schema::SchemaType)>,
     pub(crate) invocation: AgentInvocation,
@@ -190,14 +190,14 @@ pub(crate) struct DurableStreamingInvocationRequest {
 }
 
 pub(crate) struct DurableStreamingInvocationAcceptance {
-    pub(crate) prepared: StreamSessionPreparedRecordV1,
+    pub(crate) prepared: StreamSessionPreparedRecord,
     pub(crate) streams: DurableSessionStreams,
     pub(crate) replayed: bool,
 }
 
 pub(crate) struct DurableStreamingResumeAcceptance {
-    pub(crate) prepared: StreamSessionPreparedRecordV1,
-    pub(crate) mappings: Vec<StreamSessionMappingRecordV1>,
+    pub(crate) prepared: StreamSessionPreparedRecord,
+    pub(crate) mappings: Vec<StreamSessionMappingRecord>,
     pub(crate) streams: DurableSessionStreams,
     pub(crate) epoch: u64,
     pub(crate) replayed: bool,
@@ -549,12 +549,12 @@ pub(crate) struct DurableTopologyRecoveryCache {
     initialized: bool,
     covered_through: OplogIndex,
     consumer_deleting: bool,
-    pub(crate) sessions: HashMap<StreamSessionKeyV1, SessionControlMetadata>,
-    pub(crate) dirty: HashSet<StreamSessionKeyV1>,
+    pub(crate) sessions: HashMap<StreamSessionKey, SessionControlMetadata>,
+    pub(crate) dirty: HashSet<StreamSessionKey>,
 }
 
 impl DurableTopologyRecoveryCache {
-    fn acknowledge_recovery(&mut self, key: &StreamSessionKeyV1, covered_through: OplogIndex) {
+    fn acknowledge_recovery(&mut self, key: &StreamSessionKey, covered_through: OplogIndex) {
         if self
             .sessions
             .get(key)
@@ -604,7 +604,7 @@ impl DurableTopologyRecoveryCache {
                         "unsupported or malformed durable Stream Session record version".into(),
                     );
                 }
-                if let StreamSessionRecordV1::ConsumerDeleting(record) = &record
+                if let StreamSessionRecord::ConsumerDeleting(record) = &record
                     && record.consumer_environment_id == owner.environment_id
                     && record.consumer == owner.agent_id
                     && record.consumer_fingerprint == fingerprint
@@ -613,23 +613,23 @@ impl DurableTopologyRecoveryCache {
                 }
                 if !matches!(
                     record,
-                    StreamSessionRecordV1::Prepared(_)
-                        | StreamSessionRecordV1::Attached(_)
-                        | StreamSessionRecordV1::ResumeAttempt(_)
-                        | StreamSessionRecordV1::Detached(_)
-                        | StreamSessionRecordV1::TopologyPrepared(_)
-                        | StreamSessionRecordV1::TopologyActivated(_)
-                        | StreamSessionRecordV1::AttachmentFinalized(_)
-                        | StreamSessionRecordV1::ConsumerTerminal(_)
-                        | StreamSessionRecordV1::SourceUnavailable(_)
-                        | StreamSessionRecordV1::Finished(_)
-                        | StreamSessionRecordV1::ConsumerCancelIntent(_)
-                        | StreamSessionRecordV1::ConsumerCancelApplied(_)
-                        | StreamSessionRecordV1::CancelRequested(_)
-                        | StreamSessionRecordV1::Tombstoned(_)
-                        | StreamSessionRecordV1::Mapping(_)
-                        | StreamSessionRecordV1::InvocationResult(_)
-                        | StreamSessionRecordV1::ConsumerItemValue(_)
+                    StreamSessionRecord::Prepared(_)
+                        | StreamSessionRecord::Attached(_)
+                        | StreamSessionRecord::ResumeAttempt(_)
+                        | StreamSessionRecord::Detached(_)
+                        | StreamSessionRecord::TopologyPrepared(_)
+                        | StreamSessionRecord::TopologyActivated(_)
+                        | StreamSessionRecord::AttachmentFinalized(_)
+                        | StreamSessionRecord::ConsumerTerminal(_)
+                        | StreamSessionRecord::SourceUnavailable(_)
+                        | StreamSessionRecord::Finished(_)
+                        | StreamSessionRecord::ConsumerCancelIntent(_)
+                        | StreamSessionRecord::ConsumerCancelApplied(_)
+                        | StreamSessionRecord::CancelRequested(_)
+                        | StreamSessionRecord::Tombstoned(_)
+                        | StreamSessionRecord::Mapping(_)
+                        | StreamSessionRecord::InvocationResult(_)
+                        | StreamSessionRecord::ConsumerItemValue(_)
                 ) {
                     continue;
                 }
@@ -721,7 +721,7 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
 
     async fn committed_finished_index(
         &self,
-        session: &StreamSessionKeyV1,
+        session: &StreamSessionKey,
     ) -> Result<Option<OplogIndex>, String> {
         let status = self.status.load_full();
         self.worker_service
@@ -2011,7 +2011,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map_err(WorkerExecutorError::runtime)?;
                 validate_stream_session_record(&record)?;
                 match record {
-                    StreamSessionRecordV1::ConsumerDeleting(record)
+                    StreamSessionRecord::ConsumerDeleting(record)
                         if record.consumer_environment_id == self.owned_agent_id.environment_id
                             && record.consumer == self.owned_agent_id.agent_id
                             && record.consumer_fingerprint
@@ -2019,7 +2019,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         deleting_recorded = true;
                     }
-                    StreamSessionRecordV1::TopologyPrepared(record)
+                    StreamSessionRecord::TopologyPrepared(record)
                         if record.attachment.consumer_environment_id
                             == self.owned_agent_id.environment_id
                             && record.attachment.consumer == self.owned_agent_id.agent_id
@@ -2033,14 +2033,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             record.attachment.stream_id,
                         );
                         if dependencies.get(&slot).is_none_or(
-                            |(key, _): &(StreamAttachmentKeyV1, StreamSessionMappingRecordV1)| {
+                            |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
                                 key.epoch <= record.attachment.epoch
                             },
                         ) {
                             dependencies.insert(slot, (record.attachment, record.mapping));
                         }
                     }
-                    StreamSessionRecordV1::TopologyActivated(record)
+                    StreamSessionRecord::TopologyActivated(record)
                         if record.attachment.consumer_environment_id
                             == self.owned_agent_id.environment_id
                             && record.attachment.consumer == self.owned_agent_id.agent_id
@@ -2054,7 +2054,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             record.attachment.stream_id,
                         );
                         if dependencies.get(&slot).is_none_or(
-                            |(key, _): &(StreamAttachmentKeyV1, StreamSessionMappingRecordV1)| {
+                            |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
                                 key.epoch <= record.attachment.epoch
                             },
                         ) {
@@ -2067,8 +2067,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if !deleting_recorded {
             producer
-                .append_session_record(StreamSessionRecordV1::ConsumerDeleting(
-                    StreamConsumerDeletingRecordV1 {
+                .append_session_record(StreamSessionRecord::ConsumerDeleting(
+                    StreamConsumerDeletingRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         consumer_environment_id: self.owned_agent_id.environment_id,
                         consumer: self.owned_agent_id.agent_id.clone(),
@@ -2087,7 +2087,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             RoutedStreamAttachmentControl::new(self.rpc(), mapping, auth_ctx.clone())
                 .finalize_attachment(
                     key,
-                    StreamAttachmentFinalizationReasonV1::ConsumerDeleted,
+                    StreamAttachmentFinalizationReason::ConsumerDeleted,
                     Timestamp::now_utc().to_millis(),
                 )
                 .await
@@ -4164,7 +4164,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let session_key = request.attempt.session_key.clone();
         let records = self.stream_session_records(&session_key, None).await?;
         let mut prepared_records = records.iter().filter_map(|record| match record {
-            StreamSessionRecordV1::Prepared(prepared) => Some(prepared.clone()),
+            StreamSessionRecord::Prepared(prepared) => Some(prepared.clone()),
             _ => None,
         });
         let existing_prepared = prepared_records.next();
@@ -4258,13 +4258,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .iter()
                     .map(|(transport_stream_id, _)| *transport_stream_id)
                     .zip(requested_handles)
-                    .map(
-                        |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
-                            transport_stream_id,
-                            handle,
-                            role: SessionStreamRoleV1::Input,
-                        },
-                    )
+                    .map(|(transport_stream_id, handle)| StreamSessionMappingRecord {
+                        transport_stream_id,
+                        handle,
+                        role: SessionStreamRole::Input,
+                    })
                     .collect()
             } else {
                 foreign_mappings.clone()
@@ -4289,13 +4287,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .iter()
                 .map(|mapping| mapping.handle.clone())
                 .collect();
-            let prepared = StreamSessionPreparedRecordV1 {
+            let prepared = StreamSessionPreparedRecord {
                 format_version: 1,
                 attempt,
                 stream_mappings: foreign_mappings.clone(),
             };
             producer
-                .append_session_record(StreamSessionRecordV1::Prepared(prepared.clone()))
+                .append_session_record(StreamSessionRecord::Prepared(prepared.clone()))
                 .await
                 .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
             prepared
@@ -4319,17 +4317,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let mut attempt = attempt;
                         attempt.invocation.stream_handles =
                             bindings.iter().map(|(_, handle)| handle.clone()).collect();
-                        StreamSessionPreparedRecordV1 {
+                        StreamSessionPreparedRecord {
                             format_version: 1,
                             stream_mappings: bindings
                                 .into_iter()
-                                .map(
-                                    |(transport_stream_id, handle)| StreamSessionMappingRecordV1 {
-                                        transport_stream_id,
-                                        handle,
-                                        role: SessionStreamRoleV1::Input,
-                                    },
-                                )
+                                .map(|(transport_stream_id, handle)| StreamSessionMappingRecord {
+                                    transport_stream_id,
+                                    handle,
+                                    role: SessionStreamRole::Input,
+                                })
                                 .collect(),
                             attempt,
                         }
@@ -4342,7 +4338,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         let mut attached_records = records.iter().filter_map(|record| match record {
-            StreamSessionRecordV1::Attached(attached) => Some(attached),
+            StreamSessionRecord::Attached(attached) => Some(attached),
             _ => None,
         });
         let attached = attached_records.next();
@@ -4371,7 +4367,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let foreign_mappings = if foreign_mappings.is_empty()
             || records
                 .iter()
-                .any(|record| matches!(record, StreamSessionRecordV1::Finished(_)))
+                .any(|record| matches!(record, StreamSessionRecord::Finished(_)))
         {
             &[][..]
         } else {
@@ -4428,8 +4424,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Box::new(move |pending_invocation_oplog_index| {
                         OplogEntry::stream_session(
                             None,
-                            OplogPayload::Inline(Box::new(StreamSessionRecordV1::Attached(
-                                StreamSessionAttachedRecordV1 {
+                            OplogPayload::Inline(Box::new(StreamSessionRecord::Attached(
+                                StreamSessionAttachedRecord {
                                     format_version: 1,
                                     session_key: attached_attempt.session_key,
                                     attachment_id: attached_attempt.attachment_id,
@@ -4501,7 +4497,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance_guard);
         if !records
             .iter()
-            .any(|record| matches!(record, StreamSessionRecordV1::Finished(_)))
+            .any(|record| matches!(record, StreamSessionRecord::Finished(_)))
         {
             Worker::start_if_needed(self.clone()).await?;
         }
@@ -4514,11 +4510,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn resume_durable_streaming_invocation(
         self: &Arc<Self>,
-        attempt: ResumeAttemptDescriptorV1,
+        attempt: ResumeAttemptDescriptor,
     ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
         let operation = match attempt.operation {
-            golem_common::model::durable_stream::StreamResumeOperationV1::Resume => "resume",
-            golem_common::model::durable_stream::StreamResumeOperationV1::Takeover => "takeover",
+            golem_common::model::durable_stream::StreamResumeOperation::Resume => "resume",
+            golem_common::model::durable_stream::StreamResumeOperation::Takeover => "takeover",
         };
         let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
             Some(
@@ -4557,7 +4553,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn resume_durable_streaming_invocation_unmetered(
         self: &Arc<Self>,
-        attempt: ResumeAttemptDescriptorV1,
+        attempt: ResumeAttemptDescriptor,
     ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
         {
             let instance = self.lock_non_stopping_worker().await;
@@ -4587,7 +4583,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let prepared = records
             .iter()
             .find_map(|record| match record {
-                StreamSessionRecordV1::Prepared(record) => Some(record.clone()),
+                StreamSessionRecord::Prepared(record) => Some(record.clone()),
                 _ => None,
             })
             .ok_or_else(|| {
@@ -4604,29 +4600,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut mappings = prepared.stream_mappings.clone();
         for record in &records {
             match record {
-                StreamSessionRecordV1::Mapping(record) => {
+                StreamSessionRecord::Mapping(record) => {
                     if !mappings.contains(&record.mapping) {
                         mappings.push(record.mapping.clone());
                     }
                 }
-                StreamSessionRecordV1::InvocationResult(record) => {
+                StreamSessionRecord::InvocationResult(record) => {
                     for mapping in &record.stream_mappings {
                         if !mappings.contains(mapping) {
                             mappings.push(mapping.clone());
                         }
                     }
                 }
-                StreamSessionRecordV1::TopologyPrepared(record) => {
+                StreamSessionRecord::TopologyPrepared(record) => {
                     if !mappings.contains(&record.mapping) {
                         mappings.push(record.mapping.clone());
                     }
                 }
-                StreamSessionRecordV1::TopologyActivated(record) => {
+                StreamSessionRecord::TopologyActivated(record) => {
                     if !mappings.contains(&record.mapping) {
                         mappings.push(record.mapping.clone());
                     }
                 }
-                StreamSessionRecordV1::ConsumerItemValue(record) => {
+                StreamSessionRecord::ConsumerItemValue(record) => {
                     for mapping in &record.recursive_mappings {
                         if !mappings.contains(mapping) {
                             mappings.push(mapping.clone());
@@ -4658,7 +4654,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
 
         for record in &records {
-            if let StreamSessionRecordV1::ResumeAttempt(existing) = record
+            if let StreamSessionRecord::ResumeAttempt(existing) = record
                 && existing.attempt.attempt_id == attempt.attempt_id
             {
                 if existing.attempt != attempt {
@@ -4670,7 +4666,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if streams.ensure_current_attachment().await.is_ok() {
                     for mapping in &mappings {
                         if !producer.owns_handle_identity(&mapping.handle) {
-                            if mapping.role == SessionStreamRoleV1::Input
+                            if mapping.role == SessionStreamRole::Input
                                 && streams
                                     .has_journaled_consumer_terminal(mapping)
                                     .await
@@ -4730,8 +4726,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )));
         }
         match (attempt.operation, attached) {
-            (golem_common::model::durable_stream::StreamResumeOperationV1::Resume, false)
-            | (golem_common::model::durable_stream::StreamResumeOperationV1::Takeover, true) => {}
+            (golem_common::model::durable_stream::StreamResumeOperation::Resume, false)
+            | (golem_common::model::durable_stream::StreamResumeOperation::Takeover, true) => {}
             _ => {
                 return Err(WorkerExecutorError::invalid_request(
                     "InvalidAttachmentState: resume requires Detached and takeover requires Attached",
@@ -4750,7 +4746,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
         })?;
         current_streams
-            .commit_resume_attempt(StreamSessionResumeAttemptRecordV1 {
+            .commit_resume_attempt(StreamSessionResumeAttemptRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 attempt: attempt.clone(),
                 accepted_epoch,
@@ -4761,7 +4757,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
         for mapping in &mappings {
             if !producer.owns_handle_identity(&mapping.handle) {
-                if mapping.role == SessionStreamRoleV1::Input
+                if mapping.role == SessionStreamRole::Input
                     && streams
                         .has_journaled_consumer_terminal(mapping)
                         .await
@@ -4791,9 +4787,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn stream_session_records(
         &self,
-        session_key: &golem_common::base_model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::base_model::durable_stream::StreamSessionKey,
         attempt: Option<AttemptId>,
-    ) -> Result<Vec<StreamSessionRecordV1>, WorkerExecutorError> {
+    ) -> Result<Vec<StreamSessionRecord>, WorkerExecutorError> {
         let service = self.worker_service();
         let mut metadata = service
             .lookup_durable_stream_control_metadata(
@@ -4831,7 +4827,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .download_payload(record)
                         .await
                         .map_err(WorkerExecutorError::runtime)?;
-                    if let StreamSessionRecordV1::ResumeAttempt(record) = &record
+                    if let StreamSessionRecord::ResumeAttempt(record) = &record
                         && &record.attempt.session_key == session_key
                         && Some(record.attempt.attempt_id) == attempt
                     {
@@ -4875,8 +4871,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .acceptance_mappings()
             .map_err(WorkerExecutorError::runtime)?
         {
-            records.push(StreamSessionRecordV1::Mapping(
-                golem_common::base_model::durable_stream::StreamSessionMappingUpdateRecordV1 {
+            records.push(StreamSessionRecord::Mapping(
+                golem_common::base_model::durable_stream::StreamSessionMappingUpdateRecord {
                     format_version: 1,
                     session_key: session_key.clone(),
                     mapping,
@@ -4905,7 +4901,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn read_stream_session_record(
         &self,
         index: OplogIndex,
-    ) -> Result<StreamSessionRecordV1, WorkerExecutorError> {
+    ) -> Result<StreamSessionRecord, WorkerExecutorError> {
         let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await else {
             return Err(WorkerExecutorError::runtime(format!(
                 "stream session index refers to a non-session entry at {index}"
@@ -4923,7 +4919,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn prepared_stream_session(
         &self,
         idempotency_key: &IdempotencyKey,
-    ) -> Result<Option<StreamSessionPreparedRecordV1>, WorkerExecutorError> {
+    ) -> Result<Option<StreamSessionPreparedRecord>, WorkerExecutorError> {
         let Some(index) = self
             .durable_stream_session_status(idempotency_key)
             .await?
@@ -4932,7 +4928,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(None);
         };
         match self.read_stream_session_record(index).await? {
-            StreamSessionRecordV1::Prepared(record) => Ok(Some(record)),
+            StreamSessionRecord::Prepared(record) => Ok(Some(record)),
             _ => Err(WorkerExecutorError::runtime(
                 "stream session index does not refer to Prepared",
             )),
@@ -4988,7 +4984,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .decode_initial(
                 value,
                 &prepared.attempt.invocation.stream_handles,
-                SessionStreamRoleV1::Input,
+                SessionStreamRole::Input,
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
@@ -5068,7 +5064,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(index) = status.prepared else {
             return Ok(());
         };
-        let StreamSessionRecordV1::Prepared(prepared) =
+        let StreamSessionRecord::Prepared(prepared) =
             self.read_stream_session_record(index).await?
         else {
             return Err(WorkerExecutorError::runtime(
@@ -5077,7 +5073,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let result_mappings = match status.invocation_result {
             Some(index) => match self.read_stream_session_record(index).await? {
-                StreamSessionRecordV1::InvocationResult(record) => record.stream_mappings,
+                StreamSessionRecord::InvocationResult(record) => record.stream_mappings,
                 _ => {
                     return Err(WorkerExecutorError::runtime(
                         "stream session index does not refer to InvocationResult",
@@ -5361,8 +5357,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     })?)
                     .await?;
                 let (
-                    StreamSessionRecordV1::Prepared(prepared),
-                    StreamSessionRecordV1::Attached(attached),
+                    StreamSessionRecord::Prepared(prepared),
+                    StreamSessionRecord::Attached(attached),
                 ) = (prepared, attached)
                 else {
                     return Err(WorkerExecutorError::runtime(
@@ -5445,7 +5441,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn control_durable_stream_attachment(
         &self,
-        request: StreamAttachmentControlRequestV1,
+        request: StreamAttachmentControlRequest,
     ) -> Result<bool, WorkerExecutorError> {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
@@ -5453,7 +5449,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let key = request.operation.key();
-        if let StreamAttachmentControlOperationV1::SourceUnavailable {
+        if let StreamAttachmentControlOperation::SourceUnavailable {
             key,
             source_offset,
             consumer_read_ordinal,
@@ -5508,14 +5504,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
-        let consumer_status = if let StreamAttachmentControlOperationV1::Cancel {
+        let consumer_status = if let StreamAttachmentControlOperation::Cancel {
             role,
             reason,
             details,
             ..
         } = &request.operation
         {
-            let intent = golem_common::model::durable_stream::StreamConsumerCancelIntentRecordV1 {
+            let intent = golem_common::model::durable_stream::StreamConsumerCancelIntentRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: key.session_key.clone(),
                 stream_id: key.stream_id,
@@ -5532,21 +5528,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         let authorized = match &request.operation {
-            StreamAttachmentControlOperationV1::Prepare { .. } => matches!(
+            StreamAttachmentControlOperation::Prepare { .. } => matches!(
                 consumer_status,
                 ConsumerAttachmentStatus::Prepared | ConsumerAttachmentStatus::Active
             ),
-            StreamAttachmentControlOperationV1::Activate { .. }
-            | StreamAttachmentControlOperationV1::Detach { .. }
-            | StreamAttachmentControlOperationV1::Renew { .. }
-            | StreamAttachmentControlOperationV1::Cancel { .. } => {
+            StreamAttachmentControlOperation::Activate { .. }
+            | StreamAttachmentControlOperation::Detach { .. }
+            | StreamAttachmentControlOperation::Renew { .. }
+            | StreamAttachmentControlOperation::Cancel { .. } => {
                 consumer_status == ConsumerAttachmentStatus::Active
             }
-            StreamAttachmentControlOperationV1::Finalize { reason, .. } => {
-                *reason == StreamAttachmentFinalizationReasonV1::ConsumerDeleted
+            StreamAttachmentControlOperation::Finalize { reason, .. } => {
+                *reason == StreamAttachmentFinalizationReason::ConsumerDeleted
                     && consumer_status == ConsumerAttachmentStatus::Deleting
             }
-            StreamAttachmentControlOperationV1::SourceUnavailable { .. } => {
+            StreamAttachmentControlOperation::SourceUnavailable { .. } => {
                 unreachable!("source-unavailable controls return before producer authorization")
             }
         };
@@ -5557,37 +5553,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let producer_now_millis = Timestamp::now_utc().to_millis();
         let replayed = match request.operation {
-            StreamAttachmentControlOperationV1::Prepare { key, .. } => producer
+            StreamAttachmentControlOperation::Prepare { key, .. } => producer
                 .prepare_attachment(key, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::Activate { key, .. } => producer
+            StreamAttachmentControlOperation::Activate { key, .. } => producer
                 .activate_attachment(key, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::Detach { key } => {
+            StreamAttachmentControlOperation::Detach { key } => {
                 producer.detach_attachment(&key).await.map(|_| false)
             }
-            StreamAttachmentControlOperationV1::Renew { key, .. } => producer
+            StreamAttachmentControlOperation::Renew { key, .. } => producer
                 .renew_attachment(key, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::Cancel {
+            StreamAttachmentControlOperation::Cancel {
                 key,
                 role,
                 reason,
                 details,
             } => {
                 let role_matches = match mapping.role {
-                    SessionStreamRoleV1::Input => matches!(
+                    SessionStreamRole::Input => matches!(
                         role,
-                        golem_common::model::durable_stream::StreamCancelRoleV1::InputProducer
-                            | golem_common::model::durable_stream::StreamCancelRoleV1::InputConsumer
+                        golem_common::model::durable_stream::StreamCancelRole::InputProducer
+                            | golem_common::model::durable_stream::StreamCancelRole::InputConsumer
                     ),
-                    SessionStreamRoleV1::Output => matches!(
+                    SessionStreamRole::Output => matches!(
                         role,
-                        golem_common::model::durable_stream::StreamCancelRoleV1::OutputProducer
-                            | golem_common::model::durable_stream::StreamCancelRoleV1::OutputConsumer
+                        golem_common::model::durable_stream::StreamCancelRole::OutputProducer
+                            | golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
                     ),
                 };
                 if !role_matches {
@@ -5600,13 +5596,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await
                     .map(|_| false)
             }
-            StreamAttachmentControlOperationV1::Finalize { key, reason, .. } => producer
+            StreamAttachmentControlOperation::Finalize { key, reason, .. } => producer
                 .finalize_attachment(key, reason, producer_now_millis)
                 .await
                 .map(|outcome| outcome.replayed),
-            StreamAttachmentControlOperationV1::SourceUnavailable { .. } => unreachable!(
-                "source-unavailable controls return before producer execution"
-            ),
+            StreamAttachmentControlOperation::SourceUnavailable { .. } => {
+                unreachable!("source-unavailable controls return before producer execution")
+            }
         }
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         Ok(replayed)
@@ -5614,7 +5610,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn read_durable_stream_by_handle(
         &self,
-        request: golem_common::model::durable_stream::StreamHandleReadRequestV1,
+        request: golem_common::model::durable_stream::StreamHandleReadRequest,
     ) -> Result<Vec<u8>, DurableStreamReadError<WorkerExecutorError>> {
         let handle = &request.handle;
         if handle.producer_environment_id != self.owned_agent_id.environment_id
@@ -5645,8 +5641,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     #[tracing::instrument(name = "durable_stream.read_request", level = "debug", skip_all)]
     pub(crate) async fn read_durable_stream_segment(
         &self,
-        request: AttachedStreamSegmentRequestV1,
-    ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamReadError<WorkerExecutorError>>
+        request: AttachedStreamSegmentRequest,
+    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamReadError<WorkerExecutorError>>
     {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
@@ -9379,13 +9375,13 @@ mod tests {
             agent_id: "callee".to_string(),
         };
         let fingerprint = AgentFingerprint(Uuid::from_u128(3));
-        let session_key = golem_common::base_model::durable_stream::StreamInvocationIdV1 {
+        let session_key = golem_common::base_model::durable_stream::StreamInvocationId {
             callee_environment_id: environment_id,
             callee: agent_id.clone(),
             callee_fingerprint: fingerprint,
             idempotency_key: IdempotencyKey::new("invocation".to_string()),
         };
-        let attempt = StartAttemptDescriptorV1 {
+        let attempt = StartAttemptDescriptor {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: session_key.clone(),
             attachment_id: golem_common::base_model::durable_stream::AttachmentId::primary(
@@ -9396,7 +9392,7 @@ mod tests {
             .unwrap(),
             expected_callee_fingerprint: fingerprint,
             attempt_id: golem_common::base_model::durable_stream::AttemptId::fresh(),
-            invocation: PersistedStreamInvocationDescriptorV1 {
+            invocation: PersistedStreamInvocationDescriptor {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key,
                 target_component_revision: ComponentRevision::INITIAL,
@@ -9911,8 +9907,8 @@ enum DurableStreamingAcceptanceMatch {
 }
 
 fn stream_slot_session_matches(
-    persisted: &StartAttemptDescriptorV1,
-    requested: &StartAttemptDescriptorV1,
+    persisted: &StartAttemptDescriptor,
+    requested: &StartAttemptDescriptor,
 ) -> bool {
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
@@ -9929,8 +9925,8 @@ fn stream_slot_session_matches(
 }
 
 fn stream_slot_mappings_match(
-    persisted: &[StreamSessionMappingRecordV1],
-    requested: &[StreamSessionMappingRecordV1],
+    persisted: &[StreamSessionMappingRecord],
+    requested: &[StreamSessionMappingRecord],
 ) -> bool {
     persisted.len() == requested.len()
         && persisted
@@ -9942,8 +9938,8 @@ fn stream_slot_mappings_match(
 }
 
 fn stream_attempt_matches(
-    persisted: &StartAttemptDescriptorV1,
-    requested: &StartAttemptDescriptorV1,
+    persisted: &StartAttemptDescriptor,
+    requested: &StartAttemptDescriptor,
 ) -> bool {
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
@@ -9956,8 +9952,8 @@ fn stream_attempt_matches(
 }
 
 fn persisted_stream_descriptor_matches(
-    persisted: &PersistedStreamInvocationDescriptorV1,
-    requested: &PersistedStreamInvocationDescriptorV1,
+    persisted: &PersistedStreamInvocationDescriptor,
+    requested: &PersistedStreamInvocationDescriptor,
 ) -> bool {
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
@@ -10001,42 +9997,38 @@ fn stream_effective_identity_is_agent(effective_identity: &[u8]) -> bool {
 }
 
 pub(crate) fn stream_session_record_key(
-    record: &StreamSessionRecordV1,
-) -> Option<&golem_common::base_model::durable_stream::StreamSessionKeyV1> {
+    record: &StreamSessionRecord,
+) -> Option<&golem_common::base_model::durable_stream::StreamSessionKey> {
     match record {
-        StreamSessionRecordV1::CallerAttempt(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Prepared(record) => Some(&record.attempt.session_key),
-        StreamSessionRecordV1::Attached(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ResumeAttempt(record) => Some(&record.attempt.session_key),
-        StreamSessionRecordV1::Detached(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Mapping(record) => Some(&record.session_key),
-        StreamSessionRecordV1::AttachmentPrepared(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::AttachmentActivated(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::AttachmentRenewed(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::AttachmentFinalized(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::CascadeOutbox(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::SourceUnavailable(record) => Some(&record.key.session_key),
-        StreamSessionRecordV1::TopologyPrepared(record) => Some(&record.session_key),
-        StreamSessionRecordV1::TopologyActivated(record) => Some(&record.session_key),
-        StreamSessionRecordV1::InputHighWater(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ExternalProducerState(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ConsumerItemValue(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ConsumerCancelIntent(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ConsumerCancelApplied(record) => Some(&record.intent.session_key),
-        StreamSessionRecordV1::ConsumerTerminal(record) => Some(&record.session_key),
-        StreamSessionRecordV1::InvocationResult(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Finished(record) => Some(&record.session_key),
-        StreamSessionRecordV1::Tombstoned(record) => Some(&record.session_key),
-        StreamSessionRecordV1::CancelRequested(record) => Some(&record.session_key),
-        StreamSessionRecordV1::ProducerDeleting(_) | StreamSessionRecordV1::ConsumerDeleting(_) => {
-            None
-        }
+        StreamSessionRecord::CallerAttempt(record) => Some(&record.session_key),
+        StreamSessionRecord::Prepared(record) => Some(&record.attempt.session_key),
+        StreamSessionRecord::Attached(record) => Some(&record.session_key),
+        StreamSessionRecord::ResumeAttempt(record) => Some(&record.attempt.session_key),
+        StreamSessionRecord::Detached(record) => Some(&record.session_key),
+        StreamSessionRecord::Mapping(record) => Some(&record.session_key),
+        StreamSessionRecord::AttachmentPrepared(record) => Some(&record.key.session_key),
+        StreamSessionRecord::AttachmentActivated(record) => Some(&record.key.session_key),
+        StreamSessionRecord::AttachmentRenewed(record) => Some(&record.key.session_key),
+        StreamSessionRecord::AttachmentFinalized(record) => Some(&record.key.session_key),
+        StreamSessionRecord::CascadeOutbox(record) => Some(&record.key.session_key),
+        StreamSessionRecord::SourceUnavailable(record) => Some(&record.key.session_key),
+        StreamSessionRecord::TopologyPrepared(record) => Some(&record.session_key),
+        StreamSessionRecord::TopologyActivated(record) => Some(&record.session_key),
+        StreamSessionRecord::InputHighWater(record) => Some(&record.session_key),
+        StreamSessionRecord::ExternalProducerState(record) => Some(&record.session_key),
+        StreamSessionRecord::ConsumerItemValue(record) => Some(&record.session_key),
+        StreamSessionRecord::ConsumerCancelIntent(record) => Some(&record.session_key),
+        StreamSessionRecord::ConsumerCancelApplied(record) => Some(&record.intent.session_key),
+        StreamSessionRecord::ConsumerTerminal(record) => Some(&record.session_key),
+        StreamSessionRecord::InvocationResult(record) => Some(&record.session_key),
+        StreamSessionRecord::Finished(record) => Some(&record.session_key),
+        StreamSessionRecord::Tombstoned(record) => Some(&record.session_key),
+        StreamSessionRecord::CancelRequested(record) => Some(&record.session_key),
+        StreamSessionRecord::ProducerDeleting(_) | StreamSessionRecord::ConsumerDeleting(_) => None,
     }
 }
 
-fn validate_stream_session_record(
-    record: &StreamSessionRecordV1,
-) -> Result<(), WorkerExecutorError> {
+fn validate_stream_session_record(record: &StreamSessionRecord) -> Result<(), WorkerExecutorError> {
     if record.has_supported_format() {
         Ok(())
     } else {

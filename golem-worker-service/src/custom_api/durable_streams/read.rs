@@ -29,7 +29,7 @@ use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ReadStreamSlotRequest, ReadStreamSlotSuccess,
 };
-use golem_common::model::durable_stream::StreamOffsetV1;
+use golem_common::model::durable_stream::StreamOffset;
 use golem_common::model::{AgentId, OplogIndex};
 use golem_service_base::model::auth::AuthCtx;
 use http::{HeaderName, Method, StatusCode};
@@ -101,8 +101,8 @@ impl DurableStreamsHandler {
                 tail = Some(head);
                 from
             }
-            value => match StreamOffsetV1::from_str(value) {
-                Ok(v) if v == StreamOffsetV1::new(OplogIndex::NONE, 0) => Vec::new(),
+            value => match StreamOffset::from_str(value) {
+                Ok(v) if v == StreamOffset::new(OplogIndex::NONE, 0) => Vec::new(),
                 Ok(v) => v.as_bytes().to_vec(),
                 Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
             },

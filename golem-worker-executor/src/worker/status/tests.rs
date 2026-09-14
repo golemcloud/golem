@@ -31,9 +31,9 @@ use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
-    AttachmentId, AttemptId, PersistedStreamInvocationDescriptorV1, StartAttemptDescriptorV1,
-    StreamInvocationIdV1, StreamSessionAttachedRecordV1, StreamSessionPreparedRecordV1,
-    StreamSessionRecordV1,
+    AttachmentId, AttemptId, PersistedStreamInvocationDescriptor, StartAttemptDescriptor,
+    StreamInvocationId, StreamSessionAttachedRecord, StreamSessionPreparedRecord,
+    StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -59,7 +59,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     let test_case = TestCase::builder(0).build();
     let key = IdempotencyKey::fresh();
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: test_case.owned_agent_id.environment_id,
         callee: test_case.owned_agent_id.agent_id().clone(),
         callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
@@ -82,7 +82,7 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
                 ..Default::default()
             },
         );
-        let attached = StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+        let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session_key.clone(),
             attachment_id: AttachmentId::primary(
@@ -144,12 +144,12 @@ fn update_status_with_new_entries(
 #[test]
 fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     use golem_common::model::durable_stream::{
-        StreamCancelReasonV1, StreamCancelRoleV1, StreamConsumerCancelAppliedRecordV1,
-        StreamConsumerCancelIntentRecordV1,
+        StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
+        StreamConsumerCancelIntentRecord,
     };
-    let intent = StreamConsumerCancelIntentRecordV1 {
+    let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
-        session_key: StreamInvocationIdV1 {
+        session_key: StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
             callee: AgentId {
                 component_id: ComponentId::new(),
@@ -160,8 +160,8 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
         },
         stream_id: golem_common::model::StreamId(Uuid::new_v4()),
         epoch: 7,
-        role: StreamCancelRoleV1::OutputConsumer,
-        reason: StreamCancelReasonV1::Cancelled,
+        role: StreamCancelRole::OutputConsumer,
+        reason: StreamCancelReason::Cancelled,
         details: Some("cancel requested".into()),
     };
     let entry = |record| OplogEntry::StreamSession {
@@ -181,7 +181,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     let pending = fold(
         AgentStatusRecord::default(),
         2,
-        StreamSessionRecordV1::ConsumerCancelIntent(intent.clone()),
+        StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
     );
     assert!(pending.durable_stream_sessions.iter().next().is_none());
     assert_eq!(
@@ -195,7 +195,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     let pending = fold(
         pending,
         3,
-        StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+        StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
             format_version: 1,
             intent: wrong,
         }),
@@ -207,7 +207,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     let applied = fold(
         pending,
         4,
-        StreamSessionRecordV1::ConsumerCancelApplied(StreamConsumerCancelAppliedRecordV1 {
+        StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
             format_version: 1,
             intent,
         }),
@@ -1921,7 +1921,7 @@ async fn run_test_case(test_case: TestCase) {
 #[test]
 async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
     let mut test_case = TestCase::builder(1).build();
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: test_case.owned_agent_id.environment_id,
         callee: test_case.owned_agent_id.agent_id.clone(),
         callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
@@ -1933,15 +1933,15 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
         &session_key.idempotency_key,
     )
     .unwrap();
-    let record = StreamSessionRecordV1::Prepared(StreamSessionPreparedRecordV1 {
+    let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
-        attempt: StartAttemptDescriptorV1 {
+        attempt: StartAttemptDescriptor {
             format_version: 1,
             session_key: session_key.clone(),
             attachment_id,
             expected_callee_fingerprint: session_key.callee_fingerprint,
             attempt_id: AttemptId::fresh(),
-            invocation: PersistedStreamInvocationDescriptorV1 {
+            invocation: PersistedStreamInvocationDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
                 target_component_revision: ComponentRevision::INITIAL,

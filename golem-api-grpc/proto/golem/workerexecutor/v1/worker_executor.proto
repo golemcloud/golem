@@ -556,7 +556,7 @@ message CreateStreamSessionResponse {
 
 // A read-only, unattached view of one root stream in a durable invocation session.
 // `from_offset` is empty at the start of the stream and otherwise contains the
-// canonical 24-byte StreamOffsetV1 representation. A zero max_items performs a
+// canonical 24-byte StreamOffset representation. A zero max_items performs a
 // metadata-only HEAD operation. Implementations cap both limits independently.
 message ReadStreamSlotRequest {
   golem.worker.AgentId agent_id = 1;
