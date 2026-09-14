@@ -3495,6 +3495,21 @@ async fn interrupt_while_parked_in_p3_sleep(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    // Loading the worker does not wait for initialization to finish. Keep its Finished entry
+    // before the baseline so it cannot be counted as completion of the interrupted sleep.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if entries
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
     let before_invocation = executor.oplog_max_index(&worker_id).await?;
 
     let executor_clone = executor.clone();
