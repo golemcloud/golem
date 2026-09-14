@@ -41,7 +41,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
     LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
     PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
     SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
     StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
@@ -331,6 +331,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 ..
             }
             | OplogEntry::Restart { .. }
+            | OplogEntry::Resumed { .. }
             | OplogEntry::ActivatePlugin { .. }
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
@@ -1156,6 +1157,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             })),
             OplogEntry::Restart { timestamp } => {
                 Ok(PublicOplogEntry::Restart(RestartParams { timestamp }))
+            }
+            OplogEntry::Resumed { timestamp } => {
+                Ok(PublicOplogEntry::Resumed(ResumedParams { timestamp }))
             }
             OplogEntry::ActivatePlugin {
                 timestamp,

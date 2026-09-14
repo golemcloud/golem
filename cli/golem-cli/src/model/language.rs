@@ -38,6 +38,7 @@ use strum_macros::EnumIter;
 pub enum GuestLanguage {
     #[value(alias = "ts")]
     TypeScript,
+    Effect,
     Rust,
     Scala,
     MoonBit,
@@ -48,6 +49,7 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
+            "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
@@ -58,6 +60,7 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" => Some(GuestLanguage::TypeScript),
+            "effect" => Some(GuestLanguage::Effect),
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             _ => None,
@@ -76,6 +79,7 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "rust",
             GuestLanguage::TypeScript => "ts",
+            GuestLanguage::Effect => "effect",
             GuestLanguage::Scala => "scala",
             GuestLanguage::MoonBit => "moonbit",
         }
@@ -85,6 +89,7 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
+            GuestLanguage::Effect => "Effect",
             GuestLanguage::Scala => "Scala",
             GuestLanguage::MoonBit => "MoonBit",
         }
@@ -129,6 +134,10 @@ mod tests {
         assert_eq!(
             GuestLanguage::from_component_template_name("ts-agent-tool-middleware"),
             Some(GuestLanguage::TypeScript)
+        );
+        assert_eq!(
+            GuestLanguage::from_component_template_name("effect-agent"),
+            Some(GuestLanguage::Effect)
         );
         assert_eq!(
             GuestLanguage::from_component_template_name("scala-tool-middleware"),

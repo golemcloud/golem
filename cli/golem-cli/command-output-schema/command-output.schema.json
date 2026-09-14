@@ -4680,6 +4680,7 @@
         { "$ref": "#/definitions/PublicOplogEntryDropResource" },
         { "$ref": "#/definitions/PublicOplogEntryLog" },
         { "$ref": "#/definitions/PublicOplogEntryRestart" },
+        { "$ref": "#/definitions/PublicOplogEntryResumed" },
         { "$ref": "#/definitions/PublicOplogEntryActivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryDeactivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryRevert" },
@@ -4843,6 +4844,7 @@
     "PublicOplogEntryExited": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Exited" } } }] },
     "PublicOplogEntryBeginAtomicRegion": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginAtomicRegion" } } }] },
     "PublicOplogEntryRestart": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Restart" } } }] },
+    "PublicOplogEntryResumed": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Resumed" } } }] },
     "PublicOplogEntryError": {
       "type": "object",
       "required": ["type", "timestamp", "kind", "error", "retryFrom", "insideAtomicRegion"],

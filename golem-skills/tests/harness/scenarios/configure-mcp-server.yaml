@@ -10,21 +10,34 @@ steps:
       build: true
 
   - id: "add-agent-with-mcp"
-    prompt: >
-      In the test-app project, modify the existing CounterAgent so that:
+    prompt:
+      effect: >
+        In the Effect-based test-app project, modify the existing Counter agent so that:
 
-      1. It has a `description` annotation (e.g., "A stateful counter agent").
-      2. Replace the existing `increment` method with an `increment_by` method that takes
-         a `u32` / `number` / `Int` parameter called `n`, adds it to the counter, and returns
-         the new count. Add a `description` annotation to this method as well
-         (e.g., "Increments the counter by the given amount").
+        1. It has a `description` field (e.g., "A stateful counter agent").
+        2. Replace the existing `increment` method with an `incrementBy` method that takes
+           a number parameter called `n`, adds it to the counter, and returns the new count.
+           Add a `description` field to this method as well.
 
-      Then configure the application to expose CounterAgent through MCP by adding an `mcp`
-      section to `golem.yaml`. Deploy it on the local MCP deployment subdomain `test-app`,
-      which resolves to `test-app.localhost:9007`.
-      Do not add any security scheme — just expose it without authentication.
+        Then configure the application to expose Counter through MCP by adding an `mcp` section
+        to `golem.yaml`. Preserve the `Counter` runtime name. Deploy it on the local MCP deployment
+        subdomain `test-app`, which resolves to `test-app.localhost:{{mcp_port}}`. Do not add any security
+        scheme. Make sure the project builds and deploys successfully.
+      rust: &configure-mcp-prompt >
+        In the test-app project, modify the existing CounterAgent so that:
 
-      Make sure the project builds and deploys successfully.
+        1. It has a `description` annotation (e.g., "A stateful counter agent").
+        2. Replace the existing `increment` method with an `increment_by` method that takes
+           a `u32` / `number` / `Int` parameter called `n`, adds it to the counter, and returns
+           the new count. Add a `description` annotation to this method as well.
+
+        Then configure the application to expose CounterAgent through MCP by adding an `mcp`
+        section to `golem.yaml`. Deploy it on the local MCP deployment subdomain `test-app`,
+        which resolves to `test-app.localhost:{{mcp_port}}`. Do not add any security scheme.
+        Make sure the project builds and deploys successfully.
+      ts: *configure-mcp-prompt
+      scala: *configure-mcp-prompt
+      moonbit: *configure-mcp-prompt
     expectedSkills:
       - "golem-configure-mcp-server"
     allowedExtraSkills:
@@ -39,21 +52,49 @@ steps:
     check_file:
       path: "golem.yaml"
     expect:
-      stdout_matches: "[\\s\\S]*mcp:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*subdomain: test-app[\\s\\S]*CounterAgent:[\\s\\S]*"
+      effect:
+        stdout_matches: "[\\s\\S]*mcp:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*subdomain: test-app[\\s\\S]*Counter:[\\s\\S]*"
+      rust: &non-effect-mcp-config-expect
+        stdout_matches: "[\\s\\S]*mcp:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*subdomain: test-app[\\s\\S]*CounterAgent:[\\s\\S]*"
+      ts: *non-effect-mcp-config-expect
+      scala: *non-effect-mcp-config-expect
+      moonbit: *non-effect-mcp-config-expect
 
   - id: "mcp-list-tools"
     mcp_call:
-      url: "http://test-app.localhost:9007/mcp"
+      url: "http://test-app.localhost:{{mcp_port}}/mcp"
       method: "tools/list"
     expect:
-      body_contains: "increment_by"
+      effect:
+        body_contains: "incrementBy"
+      rust: &non-effect-list-tools-expect
+        body_contains: "increment_by"
+      ts: *non-effect-list-tools-expect
+      scala: *non-effect-list-tools-expect
+      moonbit: *non-effect-list-tools-expect
 
   - id: "mcp-call-increment-by"
+    skip_if:
+      language: "effect"
     mcp_call:
-      url: "http://test-app.localhost:9007/mcp"
+      url: "http://test-app.localhost:{{mcp_port}}/mcp"
       method: "tools/call"
       params:
         name: "CounterAgent-increment_by"
+        arguments:
+          name: "mcp-test"
+          n: 5
+    expect:
+      body_contains: "5"
+
+  - id: "mcp-call-effect-increment-by"
+    only_if:
+      language: "effect"
+    mcp_call:
+      url: "http://test-app.localhost:{{mcp_port}}/mcp"
+      method: "tools/call"
+      params:
+        name: "Counter-incrementBy"
         arguments:
           name: "mcp-test"
           n: 5

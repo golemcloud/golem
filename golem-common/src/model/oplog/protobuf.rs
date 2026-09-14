@@ -63,10 +63,10 @@ use crate::model::oplog::public_oplog_entry::{
     InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    SuccessfulUpdateParams, SuspendParams,
+    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
@@ -1003,6 +1003,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::Restart(restart) => Ok(PublicOplogEntry::Restart(RestartParams {
                 timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
+            oplog_entry::Entry::Resumed(resumed) => Ok(PublicOplogEntry::Resumed(ResumedParams {
+                timestamp: resumed.timestamp.ok_or("Missing timestamp field")?.into(),
+            })),
             oplog_entry::Entry::ActivatePlugin(activate) => {
                 Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
                     timestamp: activate.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1658,6 +1661,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::Restart(
                         golem_api_grpc::proto::golem::worker::TimestampParameter {
                             timestamp: Some(restart.timestamp.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::Resumed(resumed) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Resumed(
+                        golem_api_grpc::proto::golem::worker::TimestampParameter {
+                            timestamp: Some(resumed.timestamp.into()),
                         },
                     )),
                 }
@@ -3334,6 +3346,9 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Restart(p) => Ok(OplogEntry::Restart {
                 timestamp: p.timestamp,
             }),
+            PublicOplogEntry::Resumed(p) => Ok(OplogEntry::Resumed {
+                timestamp: p.timestamp,
+            }),
             PublicOplogEntry::ActivatePlugin(p) => Ok(OplogEntry::ActivatePlugin {
                 timestamp: p.timestamp,
                 plugin_grant_id: p.plugin.environment_plugin_grant_id,
@@ -4197,6 +4212,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 parent_start_index: parent_start_index.map(|index| index.as_u64()),
             }),
             OplogEntry::Restart { .. } => Entry::Restart(RawTimestampOnly {}),
+            OplogEntry::Resumed { .. } => Entry::Resumed(RawTimestampOnly {}),
             OplogEntry::ActivatePlugin {
                 plugin_grant_id, ..
             } => Entry::ActivatePlugin(RawActivatePluginParameters {
@@ -4799,6 +4815,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 })
             }
             Entry::Restart(_) => Ok(OplogEntry::Restart { timestamp }),
+            Entry::Resumed(_) => Ok(OplogEntry::Resumed { timestamp }),
             Entry::ActivatePlugin(p) => {
                 let plugin_grant_id = p
                     .plugin_grant_id
