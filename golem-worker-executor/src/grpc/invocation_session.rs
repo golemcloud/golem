@@ -27,7 +27,7 @@ use crate::worker::invocation::validate_agent_method_invocation;
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
@@ -72,12 +72,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub(super) type InvocationSessionStream =
     Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
+
+type ResponseLease = Arc<std::sync::Mutex<Option<Arc<crate::worker::EphemeralResponseLease>>>>;
 
 pub(super) async fn invoke_agent_session<
     Ctx: WorkerCtx,
@@ -88,6 +89,8 @@ pub(super) async fn invoke_agent_session<
 ) -> Result<Response<InvocationSessionStream>, Status> {
     let inbound = request.into_inner();
     let (responses, receiver) = mpsc::channel(32);
+    let response_lease = ResponseLease::default();
+    let handler_lease = response_lease.clone();
     let executor = (*executor).clone();
     let span = tracing::info_span!(
         "invoke_agent_session",
@@ -96,13 +99,31 @@ pub(super) async fn invoke_agent_session<
     );
     tokio::spawn(
         async move {
-            executor.run_agent_session(inbound, responses).await;
+            executor
+                .run_agent_session(inbound, responses, handler_lease)
+                .await;
         }
         .instrument(span),
     );
-    Ok(Response::new(Box::pin(
-        ReceiverStream::new(receiver).map(Ok),
+    Ok(Response::new(retained_response_stream(
+        receiver,
+        response_lease,
     )))
+}
+
+fn retained_response_stream(
+    receiver: mpsc::Receiver<InvocationResponse>,
+    response_lease: ResponseLease,
+) -> InvocationSessionStream {
+    Box::pin(futures::stream::unfold(
+        (receiver, response_lease),
+        |(mut receiver, lease)| async move {
+            receiver
+                .recv()
+                .await
+                .map(|response| (Ok(response), (receiver, lease)))
+        },
+    ))
 }
 
 fn decode_invocation_freshness_disposition(value: i32) -> InvocationFreshnessDisposition {
@@ -153,6 +174,18 @@ async fn detach_durable_attachment(streams: Option<DurableSessionStreams>) {
         && let Err(error) = streams.detach_current().await
     {
         tracing::warn!(%error, "failed to persist durable invocation transport detach");
+    }
+}
+
+async fn until_response_closed<T>(
+    outward: &mpsc::Sender<InvocationResponse>,
+    forwarder_stopped: &tokio_util::sync::CancellationToken,
+    operation: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        result = operation => Some(result),
+        _ = outward.closed() => None,
+        _ = forwarder_stopped.cancelled() => None,
     }
 }
 
@@ -349,14 +382,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ));
             }
             let inv_status = match self.get_or_create_pending_for_lookup(request).await? {
-                Some(worker) => match worker.lookup_invocation_result(&ik).await {
-                    crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
-                    crate::model::LookupResult::Complete(Err(err)) => return Err(err),
-                    crate::model::LookupResult::Pending => InvocationStatus::Pending,
-                    crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
-                        InvocationStatus::Unknown
+                Some((worker, _response_lease)) => {
+                    match worker.lookup_invocation_result(&ik).await {
+                        crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Err(err)) => return Err(err),
+                        crate::model::LookupResult::Pending => InvocationStatus::Pending,
+                        crate::model::LookupResult::New
+                        | crate::model::LookupResult::Interrupted => InvocationStatus::Unknown,
                     }
-                },
+                }
                 None => InvocationStatus::Unknown,
             };
             publish_acceptance(acceptance_committed, accepted, None)?;
@@ -424,7 +458,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                let worker = self
+                let (worker, _response_lease) = self
                     .get_or_create_pending_with_freshness(request, freshness_disposition)
                     .await?;
                 let status = worker.get_last_known_status().await;
@@ -609,7 +643,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 creation_principal: Box::new(worker_creation_principal),
                             }
                         } else {
-                            let worker = self
+                            let (worker, _response_lease) = self
                                 .get_or_create_pending_with_freshness(
                                     request,
                                     freshness_disposition,
@@ -644,7 +678,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         })
                     }
                     None => {
-                        let worker = self
+                        let (worker, _response_lease) = self
                             .get_or_create_pending_with_freshness(request, freshness_disposition)
                             .await?;
                         let result = worker.clone().invoke(invocation).await?;
@@ -690,6 +724,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         mut inbound: tonic::Streaming<InvocationRequest>,
         outward: mpsc::Sender<InvocationResponse>,
+        response_lease: ResponseLease,
     ) {
         let mut state = InvocationSessionState::default();
         let first = match inbound.message().await {
@@ -741,7 +776,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut start = match first {
             invocation_request::Request::Start(start) => start,
             invocation_request::Request::ResumeAttach(resume) => {
-                self.run_resumed_agent_session(resume, inbound, outward, state)
+                self.run_resumed_agent_session(resume, inbound, outward, state, response_lease)
                     .await;
                 return;
             }
@@ -754,7 +789,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let response_state_changed = Arc::new(tokio::sync::Notify::new());
         let forwarder_state_changed = response_state_changed.clone();
         let outward_forwarder = outward.clone();
+        let forwarder_stopped = tokio_util::sync::CancellationToken::new();
+        let forwarder_guard = forwarder_stopped.clone().drop_guard();
         let forwarder = tokio::spawn(async move {
+            let _guard = forwarder_guard;
             while let Some(response) = response_rx.recv().await {
                 if let Err(error) = response_state.lock().await.validate_response(&response) {
                     tracing::error!(error, ?response, "Invalid invocation session response");
@@ -804,14 +842,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             accepted_tx,
         );
         tokio::pin!(invocation);
-        let (accepted, early_output, mut early_inbound) = match race_invocation_acceptance(
+        let acceptance = race_invocation_acceptance(
             &mut accepted_rx,
             &mut acceptance_committed_rx,
             invocation.as_mut(),
-            inbound.message(),
+            async {
+                tokio::select! {
+                    request = inbound.message() => request,
+                    _ = outward.closed() => Ok(None),
+                    _ = forwarder_stopped.cancelled() => Ok(None),
+                }
+            },
         )
-        .await
-        {
+        .await;
+        let (accepted, early_output, mut early_inbound) = match acceptance {
             AcceptanceRace::Accepted {
                 acceptance,
                 early_output,
@@ -854,7 +898,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         let durable_attachment = accepted.durable_streams.clone();
-        async {
+        *response_lease.lock().unwrap() = durable_attachment
+            .as_ref()
+            .and_then(DurableSessionStreams::response_lease);
+        until_response_closed(&outward, &forwarder_stopped, async {
         let high_waters = if let Some(durable_streams) = &accepted.durable_streams {
             match durable_streams.input_high_waters().await {
                 Ok(high_waters) => high_waters,
@@ -1373,7 +1420,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )),
             })
             .await;
-        }
+        })
         .await;
         detach_durable_attachment(durable_attachment).await;
     }
@@ -1388,6 +1435,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         mut inbound: tonic::Streaming<InvocationRequest>,
         outward: mpsc::Sender<InvocationResponse>,
         mut protocol_state: InvocationSessionState,
+        response_lease: ResponseLease,
     ) {
         let rejection_identity = (resume.idempotency_key.clone(), resume.agent_id.clone());
         let result = async {
@@ -1409,14 +1457,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
                 ..Default::default()
             };
-            let worker = self
+            let (worker, _response_lease) = self
                 .get_or_create_pending_for_lookup(&lookup)
                 .await?
                 .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "NotFound: durable Stream Session worker was not found",
-                    )
-                })?;
+                WorkerExecutorError::invalid_request(
+                    "NotFound: durable Stream Session worker was not found",
+                )
+            })?;
             worker.resume_durable_streaming_invocation(attempt).await
         }
         .await;
@@ -1441,7 +1489,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
         let durable_attachment = acceptance.streams.clone();
-        async {
+        *response_lease.lock().unwrap() = durable_attachment.response_lease();
+        let forwarder_stopped = tokio_util::sync::CancellationToken::new();
+        until_response_closed(&outward, &forwarder_stopped, async {
             let result = async {
                 let component_revision = acceptance
                     .prepared
@@ -1520,7 +1570,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (responses, mut response_rx) = mpsc::channel(32);
         let response_state = state.clone();
         let outward_forwarder = outward.clone();
+        let forwarder_guard = forwarder_stopped.clone().drop_guard();
         let forwarder = tokio::spawn(async move {
+            let _guard = forwarder_guard;
             while let Some(response) = response_rx.recv().await {
                 if let Err(error) = response_state.lock().await.validate_response(&response) {
                     tracing::error!(
@@ -1809,7 +1861,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
         drop(responses);
         let _ = forwarder.await;
-        }
+        })
         .await;
         detach_durable_attachment(Some(durable_attachment)).await;
     }
@@ -2884,6 +2936,54 @@ mod freshness_tests {
     use std::collections::BTreeMap;
     use std::task::Poll;
     use test_r::test;
+
+    #[test]
+    async fn response_retention_survives_queued_frames_until_drain_or_drop() {
+        use futures::StreamExt;
+        for drain in [true, false] {
+            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            let retention = super::ResponseLease::default();
+            let weak = std::sync::Arc::downgrade(&retention);
+            let mut response = super::retained_response_stream(receiver, retention);
+            sender.send(Default::default()).await.unwrap();
+            drop(sender);
+            assert!(weak.upgrade().is_some());
+            if drain {
+                assert!(response.next().await.is_some());
+                assert!(weak.upgrade().is_some());
+                assert!(response.next().await.is_none());
+                assert!(weak.upgrade().is_none());
+            }
+            drop(response);
+            assert!(weak.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    async fn closed_response_cancels_parked_work_before_detach() {
+        for close_transport in [true, false] {
+            let (outward, receiver) = tokio::sync::mpsc::channel(1);
+            let stopped = tokio_util::sync::CancellationToken::new();
+            let work_dropped = tokio_util::sync::CancellationToken::new();
+            let guard = work_dropped.clone().drop_guard();
+            let mut operation = Box::pin(super::until_response_closed(
+                &outward,
+                &stopped,
+                async move {
+                    let _guard = guard;
+                    future::pending::<()>().await;
+                },
+            ));
+            assert!(futures::poll!(operation.as_mut()).is_pending());
+            if close_transport {
+                drop(receiver);
+            } else {
+                stopped.cancel();
+            }
+            assert!(operation.await.is_none());
+            assert!(work_dropped.is_cancelled());
+        }
+    }
 
     #[test]
     fn invocation_input_decode_moves_binary_payload() {

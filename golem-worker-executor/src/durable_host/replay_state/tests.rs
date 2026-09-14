@@ -1005,6 +1005,85 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
     assert_eq!(claimed_again.handle.start_idx(), OplogIndex::from_u64(2));
 }
 
+#[test]
+#[test_r::timeout("10s")]
+async fn primary_atomic_begin_waits_only_for_active_reconstruction_ancestry() {
+    for (related, settle) in [(true, false), (true, true), (false, false)] {
+        let parent = OplogIndex::from_u64(1);
+        let root = OplogIndex::from_u64(2);
+        let (entity, identity) = rejected_tool_reconstruction_start(parent);
+        let scope_name = HostFunctionName::Custom("<scope:batched-write>".into());
+        let scope_type = DurableFunctionType::WriteRemoteBatched(None);
+        let scope_parent = if related { root } else { parent };
+        let replay = replay_state_over(vec![
+            noop(),
+            entity,
+            OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: Some(scope_parent),
+                function_name: scope_name.clone(),
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: scope_type.clone(),
+            },
+            begin_atomic_region(),
+            end_for(3, 0),
+            end_for(2, 0),
+        ])
+        .await;
+        let mut marker = Box::pin(replay.get_primary_atomic_begin());
+        let mut entity = replay
+            .with_tx(async |tx| {
+                assert!(futures::poll!(marker.as_mut()).is_pending());
+                match tx
+                    .claim_start(&StartClaim::owned_tool_invocation(
+                        &HostFunctionName::GolemEntityInvoke,
+                        &HostFunctionName::GolemToolInvocationRejected,
+                        &DurableFunctionType::WriteLocal,
+                        parent,
+                        &identity,
+                    ))
+                    .await?
+                {
+                    StartClaimAttempt::Claimed(handle, _) => Ok(handle),
+                    _ => panic!("expected reconstruction claim"),
+                }
+            })
+            .await
+            .unwrap();
+        let mut body = entity.take_historical_reconstruction().unwrap();
+        if related {
+            assert!(futures::poll!(marker.as_mut()).is_pending());
+            assert_eq!(replay.last_replayed_index(), root);
+            if settle {
+                body.body_settled();
+            } else {
+                let _scope = replay
+                    .claim_scope_start(&scope_name, &scope_type, Some(root))
+                    .await
+                    .unwrap();
+            }
+        }
+        let (index, entry) = marker.await.unwrap();
+        if related && !settle {
+            assert_eq!(index, OplogIndex::from_u64(4));
+            assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+            assert!(
+                replay
+                    .cursor
+                    .reconstruction_claims
+                    .active_bodies()
+                    .contains(&root)
+            );
+        } else {
+            assert_eq!(index, OplogIndex::from_u64(3));
+            assert!(matches!(entry, OplogEntry::Start { .. }));
+            assert_eq!(replay.last_replayed_index(), root);
+        }
+    }
+}
+
 fn begin_atomic_region() -> OplogEntry {
     OplogEntry::BeginAtomicRegion {
         timestamp: Timestamp::now_utc(),

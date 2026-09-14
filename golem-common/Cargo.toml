@@ -61,6 +61,7 @@ full = [
     "dep:tracing-opentelemetry",
     "dep:tracing-subscriber",
     "dep:tracing-serde",
+    "dep:ulid",
     "dep:wasmtime",
     "dep:wasmtime-wasi",
     "dep:wasmtime-wasi-http",
@@ -135,6 +136,7 @@ tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-serde = { workspace = true, optional = true }
 typed-path = { workspace = true }
+ulid = { workspace = true, optional = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }

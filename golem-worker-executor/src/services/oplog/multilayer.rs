@@ -23,9 +23,9 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 };
 use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
-    downcast_oplog, scan_modes,
+    CommitLevel, DurableStreamBatchBuilder, DurableStreamBatchIterBuilder,
+    IndexedReservedStartBuilder, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -654,6 +654,7 @@ impl OplogService for MultiLayerOplogService {
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
         }
+        self.oplogs.forget(&owned_agent_id.agent_id).await;
     }
 
     async fn read_exact(
@@ -793,6 +794,17 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<RawOplogPayload, String> {
         self.primary
             .upload_raw_payload(owned_agent_id, agent_mode, data)
+            .await
+    }
+
+    async fn upload_raw_payload_external(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        data: Vec<u8>,
+    ) -> Result<RawOplogPayload, String> {
+        self.primary
+            .upload_raw_payload_external(owned_agent_id, agent_mode, data)
             .await
     }
 
@@ -1119,6 +1131,20 @@ impl Oplog for MultiLayerOplog {
         make_batch: DurableStreamBatchBuilder,
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let result = self.primary.add_durable_stream_batch(make_batch).await?;
+        if let Some((last_index, _)) = result.last() {
+            self.last_oplog_index.set(*last_index);
+        }
+        Ok(result)
+    }
+
+    async fn add_durable_stream_batch_iter(
+        &self,
+        make_batch: DurableStreamBatchIterBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        let result = self
+            .primary
+            .add_durable_stream_batch_iter(make_batch)
+            .await?;
         if let Some((last_index, _)) = result.last() {
             self.last_oplog_index.set(*last_index);
         }

@@ -4031,7 +4031,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
         let stream_runtime_teardown = self.stream_runtime_teardown.clone();
-        Arc::new(move || stream_runtime_teardown.load(Ordering::Acquire))
+        let invocation_loops = self
+            .public_state
+            .worker()
+            .active_agents()
+            .invocation_loops();
+        Arc::new(move || {
+            stream_runtime_teardown.load(Ordering::Acquire) || invocation_loops.is_shut_down()
+        })
     }
 
     pub(crate) fn begin_stream_runtime_teardown(&self) {
