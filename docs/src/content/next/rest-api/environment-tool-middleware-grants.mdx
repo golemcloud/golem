@@ -1,15 +1,10 @@
 # Environment Tool Middleware Grants API
 
 ## List active tool_middleware grants in an environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/tool-middlewares`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -523,13 +518,10 @@ Path|Method|Protected
 ```
 
 ## Grant an exact published tool_middleware release to an environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/tool-middlewares`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -1298,13 +1290,10 @@ Path|Method|Protected
 ```
 
 ## Validate environment tool_middleware grants and publications without changing them
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/tool-middlewares/validate`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -1967,15 +1956,10 @@ Path|Method|Protected
 ```
 
 ## Get an active environment tool_middleware grant
+
 Path|Method|Protected
 ---|---|---
 `/v1/environment-tool-middleware-grants/{grant_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -2733,13 +2717,10 @@ Path|Method|Protected
 ```
 
 ## Delete an environment tool_middleware grant
+
 Path|Method|Protected
 ---|---|---
 `/v1/environment-tool-middleware-grants/{grant_id}`|DELETE|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -2748,18 +2729,11 @@ Path|Method|Protected
 }
 ```
 
-
-
 ## Restore a deleted environment tool_middleware grant
+
 Path|Method|Protected
 ---|---|---
 `/v1/environment-tool-middleware-grants/{grant_id}/restore`|POST|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
