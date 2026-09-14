@@ -1,13 +1,10 @@
 # Environment API
 
 ## Upload a content-addressed initial agent file for deployment in this environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/initial-agent-files`|POST|Yes
-
-
-
-
 
 **Request Form**: `multipart/form-data`
 
@@ -25,15 +22,10 @@ Path|Method|Protected
 ```
 
 ## List all application environments
+
 Path|Method|Protected
 ---|---|---
 `/v1/apps/{application_id}/envs`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -64,13 +56,10 @@ Path|Method|Protected
 ```
 
 ## Create an application environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/apps/{application_id}/envs`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -107,15 +96,10 @@ Path|Method|Protected
 ```
 
 ## Get application environment by name
+
 Path|Method|Protected
 ---|---|---
 `/v1/apps/{application_id}/envs/{environment_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -142,15 +126,10 @@ Path|Method|Protected
 ```
 
 ## Get environment by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -177,11 +156,10 @@ Path|Method|Protected
 ```
 
 ## Delete environment by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
@@ -189,18 +167,11 @@ Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
 
-
-
-
-
 ## Update environment by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -238,15 +209,10 @@ Path|Method|Protected
 ```
 
 ## Get the current deployment plan
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/plan`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -450,13 +416,10 @@ Path|Method|Protected
 ```
 
 ## Rollback an environment to a previous deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/current-deployment`|PUT|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -480,19 +443,16 @@ Path|Method|Protected
 ```
 
 ## List all deployments in this environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments`|GET|Yes
-
-
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 version|string|No|-
-
-
 
 **Example Response JSON**
 
@@ -510,13 +470,10 @@ version|string|No|-
 ```
 
 ## Deploy the current staging area of this environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -588,15 +545,10 @@ Path|Method|Protected
 ```
 
 ## Get the deployment summary of a deployed deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_id}/summary`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -800,15 +752,10 @@ Path|Method|Protected
 ```
 
 ## List all registered agent types in a deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_id}/agent-types`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -1265,15 +1212,10 @@ Path|Method|Protected
 ```
 
 ## Get a registered agent type in a deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_id}/agent-types/{agent_type_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -1728,15 +1670,10 @@ Path|Method|Protected
 ```
 
 ## List all registered tools in a deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_id}/tools`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -2195,15 +2132,10 @@ Path|Method|Protected
 ```
 
 ## Get a registered tool in a deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_id}/tools/{tool_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

@@ -514,22 +514,37 @@ pub const API_DOMAIN_DELETE: &str = "Examples:
 
 pub const PLUGIN_LIST: &str = "Examples:
   # List all plugins registered for the current account
-  golem-cli plugin list";
+  golem-cli plugin list
+
+  # List plugins owned by another account
+  golem-cli plugin list --account owner@example.com
+
+  # Account IDs are also accepted
+  golem-cli plugin list --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211";
 
 pub const PLUGIN_GET: &str = "Examples:
-  # Show details of a registered plugin
-  golem-cli plugin get 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+  # Show details by name and version
+  golem-cli plugin get my-plugin 1.0.0
+
+  # Show details by ID
+  golem-cli plugin get --id 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
 
 pub const PLUGIN_REGISTER: &str = "Examples:
   # Register a plugin from a manifest file on disk
   golem-cli plugin register ./my-plugin.json
 
   # Read the manifest from stdin (e.g. piped from a generator)
-  cat my-plugin.json | golem-cli plugin register -";
+  cat my-plugin.json | golem-cli plugin register -
+
+  # Register for an explicitly selected account
+  golem-cli plugin register ./my-plugin.json --account owner@example.com";
 
 pub const PLUGIN_UNREGISTER: &str = "Examples:
-  # Unregister a plugin by ID (use `plugin list` / `plugin get` to find IDs)
-  golem-cli plugin unregister 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
+  # Unregister by name and version
+  golem-cli plugin unregister my-plugin 1.0.0
+
+  # Unregister by ID
+  golem-cli plugin unregister --id 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890";
 
 // Profile commands ---------------------------------------------------------------------------------
 
@@ -608,14 +623,17 @@ pub const ACCOUNT_GET: &str = "Examples:
   golem-cli account get
 
   # Show details of a specific account by ID
-  golem-cli account get --account-id acc-12345";
+  golem-cli account get --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211
+
+  # Show details by email
+  golem-cli account get --account owner@example.com";
 
 pub const ACCOUNT_UPDATE: &str = "Examples:
    # Update the current account's name
    golem-cli account update 'Alice Smith'
 
-   # Update a specific account by ID
-   golem-cli account update 'Alice Smith' --account-id acc-12345";
+   # Update a specific account by email
+   golem-cli account update 'Alice Smith' --account owner@example.com";
 
 pub const ACCOUNT_NEW: &str = "Examples:
   # Add a new account
@@ -625,15 +643,38 @@ pub const ACCOUNT_DELETE: &str = "Examples:
   # Delete the current account
   golem-cli account delete
 
-  # Delete a specific account by ID
-  golem-cli account delete --account-id acc-12345";
+  # Delete a specific account by email
+  golem-cli account delete --account owner@example.com";
+
+pub const ACCOUNT_USAGE_SHOW: &str = "Examples:
+  golem-cli account usage show
+  golem-cli account usage show --period 2026-08 --account owner@example.com";
+
+pub const ACCOUNT_USAGE_HISTORY: &str = "Examples:
+  golem-cli account usage history
+  golem-cli account usage history --last 3 --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211";
+
+pub const ACCOUNT_LIMITS_SHOW: &str = "Examples:
+  golem-cli account limits show
+  golem-cli account limits show --account owner@example.com";
+
+pub const ACCOUNT_LIMITS_SET: &str = "Examples:
+  golem-cli account limits set 1048576
+  golem-cli account limits set --max-memory-per-agent 2097152 --account owner@example.com";
+
+pub const ACCOUNT_LIMITS_UNSET: &str = "Examples:
+  golem-cli account limits unset
+  golem-cli account limits unset --max-memory-per-agent --account owner@example.com";
 
 pub const ACCOUNT_PERMISSION_SHARE_LIST: &str = "Examples:
   # List permission shares owned by the current account
   golem-cli account permission-share list
 
   # List permission shares received by the current account
-  golem-cli account permission-share list --received";
+  golem-cli account permission-share list --received
+
+  # List shares owned by another account
+  golem-cli account permission-share list --account owner@example.com";
 
 pub const ACCOUNT_PERMISSION_SHARE_GET: &str = "Examples:
   # Get a permission share by ID
@@ -641,7 +682,10 @@ pub const ACCOUNT_PERMISSION_SHARE_GET: &str = "Examples:
 
 pub const ACCOUNT_PERMISSION_SHARE_GET_BY_NAME: &str = "Examples:
   # Get a permission share by name from the current account
-  golem-cli account permission-share get-by-name staging-access";
+  golem-cli account permission-share get-by-name staging-access
+
+  # Select its owner by email
+  golem-cli account permission-share get-by-name staging-access --account owner@example.com";
 
 pub const ACCOUNT_PERMISSION_SHARE_NEW: &str = "Examples:
   # Share permissions with another account
@@ -652,7 +696,10 @@ pub const ACCOUNT_PERMISSION_SHARE_NEW: &str = "Examples:
   # Add a lower negative grant by repeating the flag
   golem-cli account permission-share new target@example.com staging-access \
     --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
-    --lower-negative 'component(my-account/my-app/staging) @ target@example.com : delete : *'";
+    --lower-negative 'component(my-account/my-app/staging) @ target@example.com : delete : *'
+
+  # Create the share for an explicitly selected owner
+  golem-cli account permission-share new target@example.com staging-access --account owner@example.com";
 
 pub const ACCOUNT_PERMISSION_SHARE_UPDATE: &str = "Examples:
   # Replace lower permission grants on an existing share
@@ -676,6 +723,9 @@ pub const CARD_LIST: &str = "Examples:
 
   # List cards owned by a specific account
   golem-cli card list --account-id 2f6b30d9-bac2-4c67-9d4f-12ea89ba2211
+
+  # Account email is also accepted
+  golem-cli card list --account owner@example.com
 
   # List only environment-default and agent-initial account cards
   golem-cli card list --include-environment-defaults --include-agent-initials

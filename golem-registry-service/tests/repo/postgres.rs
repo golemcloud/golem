@@ -32,6 +32,7 @@ use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
 use golem_registry_service::repo::tool_middleware_release::DbToolMiddlewareReleaseRepo;
 use golem_registry_service::repo::tool_release::DbToolReleaseRepo;
 use golem_registry_service::services::registry_change_notifier::{
@@ -220,6 +221,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
             pool.clone(),
         )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
+        retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
         environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(pool.clone())),
@@ -442,6 +444,13 @@ async fn test_agent_secret_get_revision_include_deleted(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_agent_secret_get_revision_include_deleted(deps).await;
+}
+
+#[test]
+async fn test_retry_policy_and_agent_secret_natural_key_lookups(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
 }
 
 #[test]
