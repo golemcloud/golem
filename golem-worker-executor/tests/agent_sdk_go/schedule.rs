@@ -55,7 +55,12 @@ async fn go_scheduled_invocation_runs(
     let scheduler_id = agent_id!("SchedulerAgent", "go-sched-1");
     let counter_id = agent_id!("CounterAgent", "go-sched-target-1");
     executor
-        .start_agent_with(&component.id, scheduler_id.clone(), HashMap::new(), Vec::new())
+        .start_agent_with(
+            &component.id,
+            scheduler_id.clone(),
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor
@@ -107,7 +112,12 @@ async fn go_scheduled_invocation_can_be_cancelled(
     let scheduler_id = agent_id!("SchedulerAgent", "go-sched-2");
     let counter_id = agent_id!("CounterAgent", "go-sched-target-2");
     executor
-        .start_agent_with(&component.id, scheduler_id.clone(), HashMap::new(), Vec::new())
+        .start_agent_with(
+            &component.id,
+            scheduler_id.clone(),
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor

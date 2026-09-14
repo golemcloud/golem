@@ -386,6 +386,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 
 				variant19 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
+			case 34:
+
+				variant19 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
 			default:
 				panic("unreachable")
 			}
@@ -3012,6 +3016,11 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
+					case golem_core_types.SchemaValueNodeStreamValue:
+						payload := element.StreamValue()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
 					default:
 						panic("unreachable")
 					}
@@ -3328,6 +3337,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 			case 33:
 
 				variant19 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
+			case 34:
+
+				variant19 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 			default:
 				panic("unreachable")
@@ -3840,6 +3853,11 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodePermissionCardHandle:
 						payload := element.PermissionCardHandle()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
+					case golem_core_types.SchemaValueNodeStreamValue:
+						payload := element.StreamValue()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 					default:
@@ -6350,6 +6368,11 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodePermissionCardHandle:
 						payload := element.PermissionCardHandle()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
+					case golem_core_types.SchemaValueNodeStreamValue:
+						payload := element.StreamValue()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 					default:
@@ -19810,6 +19833,11 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaValueNodePermissionCardHandle:
 					payload := element.PermissionCardHandle()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+					*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
+				case golem_core_types.SchemaValueNodeStreamValue:
+					payload := element.StreamValue()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 				default:

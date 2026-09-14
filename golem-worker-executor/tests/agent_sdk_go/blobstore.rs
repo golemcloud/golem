@@ -95,7 +95,12 @@ async fn go_blobstore_round_trip(
         .await?
         .into_typed::<i64>()?;
     let listed = executor
-        .invoke_and_await_agent(&component, &agent_id, "list", data_value!(container.clone()))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "list",
+            data_value!(container.clone()),
+        )
         .await?
         .into_typed::<Vec<String>>()?;
 
@@ -109,11 +114,21 @@ async fn go_blobstore_round_trip(
         .await?;
 
     let after_delete = executor
-        .invoke_and_await_agent(&component, &agent_id, "list", data_value!(container.clone()))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "list",
+            data_value!(container.clone()),
+        )
         .await?
         .into_typed::<Vec<String>>()?;
     let missing = executor
-        .invoke_and_await_agent(&component, &agent_id, "read", data_value!(container, "gone"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "read",
+            data_value!(container, "gone"),
+        )
         .await?
         .into_typed::<String>()?;
 

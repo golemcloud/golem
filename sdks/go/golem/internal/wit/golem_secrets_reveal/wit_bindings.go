@@ -2365,6 +2365,10 @@ func Reveal(s *golem_core_types.Secret, expected golem_core_types.SchemaGraph) w
 
 				variant142 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
+			case 34:
+
+				variant142 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
 			default:
 				panic("unreachable")
 			}

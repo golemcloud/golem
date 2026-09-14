@@ -102,7 +102,12 @@ async fn go_atomic_region_with_outgoing_http(
         .await?;
 
     let body = executor
-        .invoke_and_await_agent(&component, &agent_id, "atomic-callback", data_value!("inside"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "atomic-callback",
+            data_value!("inside"),
+        )
         .await?
         .into_typed::<String>()?;
 
@@ -137,7 +142,12 @@ async fn go_atomic_region_with_rpc(
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
     let total = executor
-        .invoke_and_await_agent(&component, &agent_id, "atomic-call", data_value!("eu", 5i64))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "atomic-call",
+            data_value!("eu", 5i64),
+        )
         .await?
         .into_typed::<i64>()?;
     executor.check_oplog_is_queryable(&worker_id).await?;

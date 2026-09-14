@@ -42,23 +42,7 @@ inherit_test_dep!(
 /// oplog; after a restart the worker recovers from a snapshot and the counter —
 /// held in an unexported field, so only reachable through the SDK's Save/Load —
 /// is intact.
-///
-/// IGNORED — enabling snapshotting on a Go agent makes the worker fail to start.
-/// Observed:
-///   - The worker fails with "Failed to instantiate primary executable" (a wasm
-///     trap with no guest stderr), and no Snapshot oplog entries are recorded.
-///   - Every other Go agent in the same component keeps working, and the Rust
-///     control test `durability::automatic_snapshot_every_2nd_invocation` passes
-///     under the same executor snapshot policy.
-///   - It is NOT the Snapshotter path: replacing the custom Save/Load with a
-///     plain exported-field state (the reflective JSON snapshot) fails
-///     identically, and the failure is at worker CREATION, before any invocation.
-///   - The SDK side that can be checked natively is correct: the policy reaches
-///     the agent type (`TestSnapshotPolicyMapsToWit` covers all four variants),
-///     `saveState`/`loadState` round-trip in unit tests, and the built component
-///     does export `golem:api/save-snapshot` and `load-snapshot` (wasm-tools).
 #[test]
-#[ignore = "GOL-485: enabling snapshotting on a go agent breaks worker creation — go-guest replay divergence"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_custom_snapshot_round_trips_unexported_state(
@@ -107,6 +91,9 @@ async fn go_custom_snapshot_round_trips_unexported_state(
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    assert_eq!(value, 10, "unexported counter must survive snapshot recovery");
+    assert_eq!(
+        value, 10,
+        "unexported counter must survive snapshot recovery"
+    );
     Ok(())
 }
