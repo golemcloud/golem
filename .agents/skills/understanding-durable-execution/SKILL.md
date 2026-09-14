@@ -352,6 +352,17 @@ revision-scoped and ignored once the revision changes.
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.
 
+A revert may cross a completed snapshot-based update only when its cut is before that update's
+`PendingUpdate`, so both the pending record and its `SuccessfulUpdate` are deleted together. The
+status fold then removes that migration's skipped-history contribution and derives the surviving
+component revision and snapshot baseline normally. A cut that keeps `PendingUpdate` but deletes
+its outcome is rejected. Revert validation reconstructs skip provenance: removing a migration
+baseline must not remove overlapping `Jump` or earlier `Revert` regions, and the resulting mask is
+also used to detect durable constructs spanning the cut. Before committing, the executor verifies
+that the restored component, retained manual snapshot payload, replay metadata and initial files
+are available. This is input preflight, not speculative replay; a later replay failure does not
+undo the committed `Revert`.
+
 ## Concurrency and guest completion delivery
 
 p3 `Accessor` host calls run concurrently inside one `Store`; p2 `&mut self` calls are serialized
