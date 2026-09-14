@@ -42,7 +42,7 @@ async fn reference_client_export_protocol_compatibility() {
     run_reference_client(include_str!("durable_streams_client.mjs")).await;
 }
 
-async fn run_reference_client(driver: &str) {
+async fn deploy_fixture() -> TestContext {
     let mut ctx = TestContext::new();
     let fixture = workspace_path().join("test-components/golem_it_agent_sdk_rust_release.wasm");
     assert!(
@@ -83,7 +83,11 @@ async fn run_reference_client(driver: &str) {
     ctx.start_server().await;
     let deployed = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(deployed.success_or_dump());
+    ctx
+}
 
+async fn run_reference_client(driver: &str) {
+    let ctx = deploy_fixture().await;
     let driver_dir = ctx.cwd_path_join("reference-client");
     fs::create_dir_all(&driver_dir).unwrap();
     fs::write_str(
@@ -111,6 +115,112 @@ async fn run_reference_client(driver: &str) {
     assert_success(
         run(&mut node, Duration::from_secs(180)).await,
         "reference client driver",
+    );
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn generated_openapi_client_creates_appends_and_reads() {
+    let ctx = deploy_fixture().await;
+    let origin = format!("http://localhost:{}", ctx.custom_request_port());
+    let directory = ctx.cwd_path_join("generated-client");
+    fs::create_dir_all(&directory).unwrap();
+    let http = reqwest::Client::new();
+    let mut documents = Vec::new();
+    for format in ["json", "yaml"] {
+        let text = http
+            .get(format!("{origin}/openapi.{format}"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let document: serde_json::Value = if format == "json" {
+            serde_json::from_str(&text).unwrap()
+        } else {
+            serde_yaml::from_str(&text).unwrap()
+        };
+        assert_eq!(document["openapi"], "3.1.0");
+        documents.push(document);
+        fs::write_str(directory.join(format!("openapi.{format}")), text).unwrap();
+    }
+    assert_eq!(
+        documents[0], documents[1],
+        "JSON and YAML deployment specs differ"
+    );
+    fs::write_str(
+        directory.join("package.json"),
+        r#"{
+      "private": true, "type": "module",
+      "dependencies": {
+        "openapi-typescript": "7.10.1", "openapi-fetch": "0.14.1",
+        "@apidevtools/swagger-parser": "12.1.0",
+        "typescript": "5.9.3", "@types/node": "22.19.1"
+      }
+    }"#,
+    )
+    .unwrap();
+    fs::write_str(
+        directory.join("generate.mjs"),
+        r#"
+      import SwaggerParser from '@apidevtools/swagger-parser';
+      import openapiTS, { astToString } from 'openapi-typescript';
+      import { writeFile } from 'node:fs/promises';
+      await SwaggerParser.validate('openapi.json');
+      await SwaggerParser.validate('openapi.yaml');
+      const ast = await openapiTS(new URL('./openapi.json', import.meta.url));
+      await writeFile('schema.ts', astToString(ast));
+    "#,
+    )
+    .unwrap();
+    fs::write_str(
+        directory.join("driver.ts"),
+        include_str!("durable_streams_openapi_client.ts"),
+    )
+    .unwrap();
+    fs::write_str(
+        directory.join("tsconfig.json"),
+        r#"{
+      "compilerOptions": {
+        "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
+        "strict": true, "outDir": "dist"
+      },
+      "include": ["driver.ts", "schema.ts"]
+    }"#,
+    )
+    .unwrap();
+    let mut npm = Command::new("npm");
+    npm.args(["install", "--ignore-scripts", "--no-audit", "--no-fund"])
+        .current_dir(&directory);
+    assert_success(
+        run(&mut npm, Duration::from_secs(120)).await,
+        "install pinned OpenAPI tools",
+    );
+    let mut generate = Command::new("node");
+    generate.arg("generate.mjs").current_dir(&directory);
+    assert_success(
+        run(&mut generate, Duration::from_secs(60)).await,
+        "validate deployment specs and generate client types",
+    );
+    let mut compile = Command::new("node");
+    compile
+        .args(["node_modules/typescript/bin/tsc", "-p", "tsconfig.json"])
+        .current_dir(&directory);
+    assert_success(
+        run(&mut compile, Duration::from_secs(60)).await,
+        "compile generated OpenAPI client",
+    );
+    let mut driver = Command::new("node");
+    driver
+        .arg("dist/driver.js")
+        .arg(origin)
+        .current_dir(&directory);
+    assert_success(
+        run(&mut driver, Duration::from_secs(180)).await,
+        "generated OpenAPI client smoke test",
     );
 }
 
