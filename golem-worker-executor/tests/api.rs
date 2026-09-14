@@ -84,6 +84,51 @@ struct DeletionStageHook {
     claim_events: tokio::sync::Semaphore,
 }
 
+struct BeforeDeletionClaimHook {
+    target: OwnedAgentId,
+    gated_once: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl BeforeDeletionClaimHook {
+    fn new(target: OwnedAgentId) -> Self {
+        Self {
+            target,
+            gated_once: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    async fn wait_until_gated(&self) {
+        self.entered.acquire().await.unwrap().forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
+
+#[async_trait]
+impl WorkerDeletionHook for BeforeDeletionClaimHook {
+    async fn before_claim(&self, owned_agent_id: &OwnedAgentId) {
+        if owned_agent_id != &self.target || self.gated_once.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.entered.add_permits(1);
+        self.release.acquire().await.unwrap().forget();
+    }
+
+    async fn before_stage(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+}
+
 impl DeletionStageHook {
     fn new(
         target: OwnedAgentId,
@@ -3312,6 +3357,109 @@ async fn concurrent_deletes_share_worker_owned_completion(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn delete_reacquires_the_same_generation_retired_before_claim(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "delete-reacquires-retired-generation");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    executor
+        .invoke_agent(&component, &agent_id, "sleep", data_value!(30u64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+    let hook = Arc::new(BeforeDeletionClaimHook::new(owned_agent_id.clone()));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let deleting_executor = executor.clone();
+    let deleting_worker_id = worker_id.clone();
+    let deleting =
+        tokio::spawn(async move { deleting_executor.delete_worker(&deleting_worker_id).await });
+    hook.wait_until_gated().await;
+
+    executor.interrupt(&worker_id).await?;
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    hook.release();
+    deleting.await??;
+
+    assert!(!executor.worker_is_cached(&owned_agent_id).await);
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn stale_delete_does_not_follow_its_agent_id_to_a_replacement_generation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "stale-delete-replacement");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    let original = executor.get_worker_metadata(&worker_id).await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let hook = Arc::new(BeforeDeletionClaimHook::new(owned_agent_id));
+    executor.set_worker_deletion_hook(hook.clone());
+
+    let stale_executor = executor.clone();
+    let stale_worker_id = worker_id.clone();
+    let stale_delete =
+        tokio::spawn(async move { stale_executor.delete_worker(&stale_worker_id).await });
+    hook.wait_until_gated().await;
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(
+        !executor
+            .worker_is_cached(&OwnedAgentId::new(
+                context.default_environment_id,
+                &worker_id,
+            ))
+            .await
+    );
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    let replacement = executor.get_worker_metadata(&worker_id).await?;
+    assert_ne!(replacement.fingerprint, original.fingerprint);
+
+    hook.release();
+    stale_delete.await??;
+
+    let after_stale_delete = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(after_stale_delete.fingerprint, replacement.fingerprint);
+    let result = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn failed_delete_is_shared_and_one_retry_resumes_completed_stages(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3450,6 +3598,71 @@ async fn cold_existing_only_acquisition_preserves_persisted_identity_without_sta
     assert_eq!(after.config, before.config);
     assert_eq!(after.fingerprint, before.fingerprint);
     assert_eq!(after.status, AgentStatus::Interrupted);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn existing_only_hydration_repairs_initialization_after_create_only_crash(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "existing-only-initialization-repair");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: counter_id.to_string(),
+    };
+    let mut gate = executor
+        .gate_next_agent_initialization_enqueue(&worker_id)
+        .await;
+
+    let starting_executor = executor.clone();
+    let component_id = component.id;
+    let starting_counter_id = counter_id.clone();
+    let starting = tokio::spawn(async move {
+        starting_executor
+            .start_agent(&component_id, starting_counter_id)
+            .await
+    });
+    gate.entered().await;
+    starting.abort();
+    assert!(starting.await.unwrap_err().is_cancelled());
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    executor.interrupt(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 1);
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initialization_count = entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::PendingAgentInvocation(params)
+                    if matches!(
+                        params.invocation,
+                        PublicAgentInvocation::AgentInitialization(_)
+                    )
+            )
+        })
+        .count();
+    assert_eq!(initialization_count, 1);
     Ok(())
 }
 

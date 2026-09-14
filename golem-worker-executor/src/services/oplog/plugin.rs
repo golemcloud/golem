@@ -767,6 +767,7 @@ impl OplogService for ForwardingOplogService {
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.oplogs.remove(&owned_agent_id.agent_id).await;
         self.inner.delete(owned_agent_id, agent_mode).await
     }
 

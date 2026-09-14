@@ -899,6 +899,7 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
 <!-- ===================== 6. LIFECYCLE ===================== -->
 <h2 id="s-lifecycle"><span class="num">6</span>Worker lifecycle</h2>
 <p>A <code>Worker</code> (<code>worker/mod.rs</code>) is the resident object for one agent on one executor. It receives invocations, persists them, and processes them in order through the <strong>invocation loop</strong> (<code>worker/invocation_loop.rs::run</code>). The loop has two levels, and understanding them is most of understanding recovery.</p>
+<p>Control operations acquire that resident object through an <strong>existing-only</strong> path: a cold persisted worker may be hydrated, but an absent agent is never created as a side effect of interrupt, delete, resume, update, revert, or plugin changes. Deletion is then owned by the acquired <code>Worker</code>. Concurrent callers share one retained attempt result; after a failed attempt, the next delete resumes at its first unfinished cleanup stage. Successful cleanup retires active-worker and open-oplog cache entries only when they still belong to the deleted generation, so stale worker references cannot affect a replacement that reuses the same <code>AgentId</code>.</p>
 
 <figure>
 <svg class="dg" viewBox="0 0 900 520" role="img" aria-labelledby="loop-title loop-desc">

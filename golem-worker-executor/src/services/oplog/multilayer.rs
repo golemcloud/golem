@@ -650,6 +650,7 @@ impl OplogService for MultiLayerOplogService {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         self.abort_transfer(&owned_agent_id.agent_id).await;
+        self.oplogs.remove(&owned_agent_id.agent_id).await;
         self.primary.delete(owned_agent_id, agent_mode).await;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await

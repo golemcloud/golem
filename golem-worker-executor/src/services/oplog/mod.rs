@@ -1075,13 +1075,15 @@ impl<O: OplogService + ?Sized> OplogServiceOps for O {}
 struct OpenOplogEntry {
     pub oplog: Weak<dyn Oplog>,
     pub initial: Arc<AtomicBool>,
+    generation: Arc<()>,
 }
 
 impl OpenOplogEntry {
-    pub fn new(oplog: Arc<dyn Oplog>) -> Self {
+    pub fn new(oplog: Arc<dyn Oplog>, generation: Arc<()>) -> Self {
         Self {
             oplog: Arc::downgrade(&oplog),
             initial: Arc::new(AtomicBool::new(true)),
+            generation,
         }
     }
 }
@@ -1110,7 +1112,14 @@ impl OpenOplogs {
     ) -> Arc<dyn Oplog> {
         loop {
             let constructor_clone = constructor.clone();
-            let close = Box::new(self.oplogs.create_weak_remover(agent_id.clone()));
+            let generation = Arc::new(());
+            let expected_generation = generation.clone();
+            let close = Box::new(
+                self.oplogs
+                    .create_weak_remover_if(agent_id.clone(), move |entry| {
+                        Arc::ptr_eq(&entry.generation, &expected_generation)
+                    }),
+            );
 
             let entry = self
                 .oplogs
@@ -1127,7 +1136,7 @@ impl OpenOplogs {
                             Arc::increment_strong_count(ptr);
                             Arc::from_raw(ptr)
                         };
-                        Ok(OpenOplogEntry::new(result))
+                        Ok(OpenOplogEntry::new(result, generation))
                     },
                 )
                 .await
@@ -1149,6 +1158,10 @@ impl OpenOplogs {
                 continue;
             }
         }
+    }
+
+    pub async fn remove(&self, agent_id: &AgentId) {
+        self.oplogs.remove(agent_id).await;
     }
 }
 

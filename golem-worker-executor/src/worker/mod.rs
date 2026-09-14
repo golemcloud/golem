@@ -491,6 +491,8 @@ pub enum WorkerDeletionStage {
 #[doc(hidden)]
 #[async_trait::async_trait]
 pub trait WorkerDeletionHook: Send + Sync {
+    async fn before_claim(&self, _owned_agent_id: &OwnedAgentId) {}
+
     fn claimed(&self, _owned_agent_id: &OwnedAgentId, _started: bool) {}
 
     async fn before_stage(
@@ -1191,6 +1193,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         card_interest_index: Arc<CardInterestIndex>,
         owned_agent_id: OwnedAgentId,
+        principal: Principal,
     ) -> Result<Self, WorkerExecutorError> {
         let start = std::time::Instant::now();
         let metadata = Self::get_existing_worker_metadata(deps, &owned_agent_id)
@@ -1205,7 +1208,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_agent_id,
             start,
             metadata,
-            None,
+            Some((InvocationContextStack::fresh(), principal)),
         )
         .await
     }
@@ -1774,12 +1777,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// callers share the retained result; after failure, the next explicit call claims one retry.
     pub(crate) async fn start_deletion(
         self: &Arc<Self>,
-    ) -> Result<DeleteOutcome, WorkerExecutorError> {
+    ) -> Result<Option<DeleteOutcome>, WorkerExecutorError> {
+        if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
+            hook.before_claim(&self.owned_agent_id).await;
+        }
         // The lifecycle-to-cache lock order serializes the claim with ordinary retirement. The
         // cache lookup itself never takes a worker lifecycle lock.
         let mut lifecycle = self.instance.lock().await;
         if !self.active_agents().contains_worker_generation(self).await {
-            return Err(WorkerExecutorError::worker_not_found(self.agent_id()));
+            return Ok(None);
         }
         let outcome = lifecycle.deletion.claim();
         let started = matches!(outcome, DeleteOutcome::Started(_));
@@ -1789,7 +1795,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let handle = match &outcome {
             DeleteOutcome::Started(handle) => handle.clone(),
-            DeleteOutcome::AlreadyDeleting(_) => return Ok(outcome),
+            DeleteOutcome::AlreadyDeleting(_) => return Ok(Some(outcome)),
         };
 
         let worker = self.clone();
@@ -1813,7 +1819,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             guard.finish(result);
         });
 
-        Ok(outcome)
+        Ok(Some(outcome))
     }
 
     /// Runs monotonic cleanup. A retry skips every stage already completed by an earlier attempt.

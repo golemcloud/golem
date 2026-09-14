@@ -677,11 +677,28 @@ impl<
     }
 
     pub fn create_weak_remover(&self, key: K) -> impl FnOnce() + use<K, V, PV, E> {
+        self.create_weak_remover_if(key, |_| true)
+    }
+
+    pub fn create_weak_remover_if<F>(
+        &self,
+        key: K,
+        predicate: F,
+    ) -> impl FnOnce() + use<K, V, PV, E, F>
+    where
+        F: FnOnce(&V) -> bool,
+    {
         let weak_state = Arc::downgrade(&self.state);
         let name = self.name;
         move || {
             if let Some(state) = weak_state.upgrade() {
-                let removed = state.items.remove_sync(&key).is_some();
+                let removed = state
+                    .items
+                    .remove_if_sync(&key, |item| match item {
+                        Item::Cached { value, .. } => predicate(value),
+                        Item::Pending { .. } => false,
+                    })
+                    .is_some();
                 if removed {
                     let count = state.count.fetch_sub(1, Ordering::Relaxed);
                     record_cache_size(name, count.saturating_sub(1));
@@ -2061,6 +2078,25 @@ mod tests {
 
         // Should not panic
         remover();
+    }
+
+    #[test]
+    async fn conditional_weak_remover_does_not_remove_replacement() {
+        let cache = test_cache("conditional_weak_remover");
+        cache
+            .get_or_insert_simple(&1, || async { Ok(42u64) })
+            .await
+            .unwrap();
+        let remover = cache.create_weak_remover_if(1, |value| *value == 42);
+
+        cache.remove(&1).await;
+        cache
+            .get_or_insert_simple(&1, || async { Ok(43u64) })
+            .await
+            .unwrap();
+        remover();
+
+        assert_eq!(cache.get(&1).await, Some(43));
     }
 
     // ---- Multiple keys / isolation ----

@@ -137,6 +137,14 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
+interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
+is owned by that worker: concurrent callers share its retained attempt result, a later call retries
+only unfinished cleanup stages after failure, and successful cleanup retires active-worker and
+open-oplog cache entries only for the generation being deleted. A stale `Arc<Worker>` therefore
+cannot continue deletion against, or evict cache state belonging to, a replacement with the same
+`AgentId`.
+
 ## Oplog model
 
 Entries are positional or hints (`OplogEntry::is_hint()`). Replay consumes positional entries in

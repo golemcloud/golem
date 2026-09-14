@@ -107,37 +107,53 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
+        principal: Principal,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id)
+            .get_existing(deps, owned_agent_id, principal)
             .await
     }
 
     pub async fn delete<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        _principal: Principal,
+        principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
-        worker.start_deletion().await?.handle().wait().await
+        let mut worker =
+            Self::get_existing_suspended(deps, owned_agent_id, principal.clone()).await?;
+        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        loop {
+            if let Some(outcome) = worker.start_deletion().await? {
+                return outcome.handle().wait().await;
+            }
+            worker = match Self::get_existing_suspended(deps, owned_agent_id, principal.clone())
+                .await
+            {
+                Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
+                    worker
+                }
+                Ok(_) | Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
+                Err(error) => return Err(error),
+            };
+        }
     }
 
     pub async fn interrupt<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
-        _principal: Principal,
+        principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id, principal).await {
             Ok(worker) => worker,
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
@@ -186,12 +202,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         force: bool,
-        _principal: Principal,
+        principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         let metadata = worker.get_latest_worker_metadata().await;
 
         match resume_decision(&metadata.last_known_status.status, force) {
@@ -242,12 +258,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         mode: UpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
-        _principal: Principal,
+        principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         let metadata = worker.get_latest_worker_metadata().await;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
@@ -395,12 +411,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
-        _principal: Principal,
+        principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         worker.revert_internal(target, resolved_revert).await
     }
 
@@ -482,13 +498,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        _principal: Principal,
+        principal: Principal,
         activate: bool,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
         let metadata = worker.get_latest_worker_metadata().await;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(

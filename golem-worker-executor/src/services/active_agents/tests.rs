@@ -1,17 +1,71 @@
 use super::concurrent_agents_scheduler::ConcurrentAgentsScheduler;
 use super::concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
-use super::is_loaded_idle_filesystem_pressure_candidate;
+use super::{get_or_insert_create_or_load, is_loaded_idle_filesystem_pressure_candidate};
 use crate::services::resource_limits::AtomicResourceEntry;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{non_flaky, test, timeout};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
 test_r::enable!();
+
+#[test]
+async fn create_or_load_retries_once_after_joining_an_existing_only_miss() {
+    let cache = Cache::new(
+        None,
+        FullCacheEvictionMode::None,
+        BackgroundEvictionMode::None,
+        "mixed_acquisition_policy",
+    );
+    let entered = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let existing_cache = cache.clone();
+    let existing_entered = entered.clone();
+    let existing_release = release.clone();
+    let existing_only = tokio::spawn(async move {
+        existing_cache
+            .get_or_insert_simple(&1, || async move {
+                existing_entered.add_permits(1);
+                existing_release.acquire().await.unwrap().forget();
+                Err::<u64, _>(golem_service_base::error::worker_executor::WorkerExecutorError::worker_not_found(
+                    AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "absent".to_string(),
+                    },
+                ))
+            })
+            .await
+    });
+    entered.acquire().await.unwrap().forget();
+
+    let creation_calls = Arc::new(AtomicUsize::new(0));
+    let creator_cache = cache.clone();
+    let creator_calls = creation_calls.clone();
+    let creator = tokio::spawn(async move {
+        get_or_insert_create_or_load(&creator_cache, &1, || {
+            let creator_calls = creator_calls.clone();
+            async move {
+                creator_calls.fetch_add(1, Ordering::AcqRel);
+                Ok(42u64)
+            }
+        })
+        .await
+    });
+
+    release.add_permits(1);
+    assert!(matches!(
+        existing_only.await.unwrap(),
+        Err(golem_service_base::error::worker_executor::WorkerExecutorError::AgentNotFound { .. })
+    ));
+    assert_eq!(creator.await.unwrap().unwrap(), 42);
+    assert_eq!(creation_calls.load(Ordering::Acquire), 1);
+}
 
 #[test]
 fn filesystem_pressure_eligibility_accepts_only_loaded_idle_agents() {

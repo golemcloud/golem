@@ -921,6 +921,18 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Pauses immediately before the first initialization invocation for this agent is appended.
+    /// The `Create` entry is already durable at this point, allowing a test to reproduce a crash
+    /// between logical agent creation and initialization enqueueing.
+    pub async fn gate_next_agent_initialization_enqueue(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_agent_initialization_enqueue(agent_id.clone())
+            .await
+    }
+
     /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
     /// `Start` is appended for `agent_id`.
     pub async fn gate_next_consume_body_scope_start(
@@ -3539,6 +3551,32 @@ impl TestOplog {
         permit.forget();
     }
 
+    async fn pause_before_agent_initialization_enqueue(&self, entry: &OplogEntry) {
+        let OplogEntry::PendingAgentInvocation {
+            idempotency_key, ..
+        } = entry
+        else {
+            return;
+        };
+        if !idempotency_key.value.starts_with("init-") {
+            return;
+        }
+        let Some(gate) = self
+            .additional_test_deps
+            .agent_initialization_enqueue_gate(&self.owned_agent_id.agent_id)
+            .await
+        else {
+            return;
+        };
+        if !gate.armed.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+            let _ = entered_tx.send(());
+        }
+        gate.release.acquire().await.unwrap().forget();
+    }
+
     fn is_consume_body_scope_start(entry: &OplogEntry) -> bool {
         matches!(entry, OplogEntry::Start {
             function_name: HostFunctionName::Custom(function_name),
@@ -3666,6 +3704,7 @@ impl TestOplog {
 #[async_trait]
 impl Oplog for TestOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        self.pause_before_agent_initialization_enqueue(&entry).await;
         if Self::is_consume_body_scope_start(&entry)
             && self.pause_before_consume_body_scope_start().await
         {
@@ -4145,6 +4184,8 @@ pub struct AdditionalTestDeps {
     /// to deterministically race a guest-side body-reader drop against an
     /// already-persisted chunk delivery.
     consume_body_chunk_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyChunkEndGate>>>,
+    agent_initialization_enqueue_gates:
+        Arc<scc::HashMap<AgentId, Arc<AgentInitializationEnqueueGate>>>,
     consume_body_scope_start_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeStartGate>>>,
     consume_body_scope_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeEndGate>>>,
     consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
@@ -4185,6 +4226,7 @@ impl AdditionalTestDeps {
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
+            agent_initialization_enqueue_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_end_gates: Arc::new(scc::HashMap::new()),
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
@@ -4400,6 +4442,33 @@ impl AdditionalTestDeps {
         agent_id: &AgentId,
     ) -> Option<Arc<ConsumeBodyChunkEndGate>> {
         self.consume_body_chunk_end_gates
+            .read_async(agent_id, |_, gate| gate.clone())
+            .await
+    }
+
+    pub async fn gate_next_agent_initialization_enqueue(
+        &self,
+        agent_id: AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(AgentInitializationEnqueueGate {
+            armed: AtomicBool::new(true),
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.agent_initialization_enqueue_gates
+            .entry_async(agent_id)
+            .await
+            .and_modify(|existing| *existing = gate.clone())
+            .or_insert_with(|| gate.clone());
+        AgentInitializationEnqueueGateHandle { entered_rx, gate }
+    }
+
+    async fn agent_initialization_enqueue_gate(
+        &self,
+        agent_id: &AgentId,
+    ) -> Option<Arc<AgentInitializationEnqueueGate>> {
+        self.agent_initialization_enqueue_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
     }
@@ -4620,6 +4689,31 @@ struct ConsumeBodyChunkEndGate {
     armed: AtomicBool,
     appended_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
+}
+
+struct AgentInitializationEnqueueGate {
+    armed: AtomicBool,
+    entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+pub struct AgentInitializationEnqueueGateHandle {
+    entered_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<AgentInitializationEnqueueGate>,
+}
+
+impl AgentInitializationEnqueueGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered_rx)
+            .await
+            .expect("the agent initialization enqueue gate was dropped without firing");
+    }
+}
+
+impl Drop for AgentInitializationEnqueueGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
 }
 
 /// Test-facing side of a [`ConsumeBodyChunkEndGate`]: await [`Self::appended`]

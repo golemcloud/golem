@@ -615,6 +615,7 @@ impl OplogService for PrimaryOplogService {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         record_oplog_call("delete");
+        self.oplogs.remove(&owned_agent_id.agent_id).await;
 
         {
             let is = self.indexed_storage.clone();

@@ -82,6 +82,26 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
+#[allow(clippy::redundant_closure)] // Adapts a reusable `Fn() -> Future` to `AsyncFnOnce`.
+async fn get_or_insert_create_or_load<K, V, F, Fut>(
+    cache: &Cache<K, (), V, WorkerExecutorError>,
+    key: &K,
+    initialize: F,
+) -> Result<V, WorkerExecutorError>
+where
+    K: Eq + std::hash::Hash + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<V, WorkerExecutorError>>,
+{
+    let result = cache.get_or_insert_simple(key, || initialize()).await;
+    if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. })) {
+        cache.get_or_insert_simple(key, || initialize()).await
+    } else {
+        result
+    }
+}
+
 /// Capability proving that per-account concurrent-agent state has been registered
 /// in this executor and can be used for subsequent permit acquires.
 #[derive(Clone)]
@@ -729,34 +749,42 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let cache_key = owned_agent_id.clone();
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
-        let active_agent = self
-            .agents
-            .get_or_insert_simple(&cache_key, || {
-                Box::pin(async move {
-                    let worker = Worker::new(
-                        &deps,
-                        self.card_interest_index.clone(),
-                        owned_agent_id.clone(),
-                        worker_env,
-                        worker_agent_config,
-                        component_revision,
-                        parent,
-                        invocation_context_stack,
-                        principal,
-                        freshness_disposition,
-                    )
-                    .in_current_span()
-                    .await;
+        let initialize = || {
+            let owned_agent_id = owned_agent_id.clone();
+            let deps = deps.clone();
+            let worker_env = worker_env.clone();
+            let worker_agent_config = worker_agent_config.clone();
+            let parent = parent.clone();
+            let invocation_context_stack = invocation_context_stack.clone();
+            let principal = principal.clone();
+            async move {
+                let worker = Worker::new(
+                    &deps,
+                    self.card_interest_index.clone(),
+                    owned_agent_id,
+                    worker_env,
+                    worker_agent_config,
+                    component_revision,
+                    parent,
+                    invocation_context_stack,
+                    principal,
+                    freshness_disposition,
+                )
+                .in_current_span()
+                .await;
 
-                    worker.map(|worker| {
-                        let worker = Arc::new(worker);
-                        Worker::start_durable_stream_attachment_reconciler(&worker);
-                        Arc::new(ActiveAgent::new(worker))
-                    })
+                worker.map(|worker| {
+                    let worker = Arc::new(worker);
+                    Worker::start_durable_stream_attachment_reconciler(&worker);
+                    Arc::new(ActiveAgent::new(worker))
                 })
-            })
-            .await?;
-        Ok(active_agent.primary())
+            }
+        };
+        Ok(
+            get_or_insert_create_or_load(&self.agents, &cache_key, initialize)
+                .await?
+                .primary(),
+        )
     }
 
     /// Acquires a cached or persisted worker without ever creating a logical agent.
@@ -766,6 +794,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -777,14 +806,19 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .agents
             .get_or_insert_simple(&cache_key, || {
                 Box::pin(async move {
-                    Worker::load_existing(&deps, self.card_interest_index.clone(), owned_agent_id)
-                        .in_current_span()
-                        .await
-                        .map(|worker| {
-                            let worker = Arc::new(worker);
-                            Worker::start_durable_stream_attachment_reconciler(&worker);
-                            Arc::new(ActiveAgent::new(worker))
-                        })
+                    Worker::load_existing(
+                        &deps,
+                        self.card_interest_index.clone(),
+                        owned_agent_id,
+                        principal,
+                    )
+                    .in_current_span()
+                    .await
+                    .map(|worker| {
+                        let worker = Arc::new(worker);
+                        Worker::start_durable_stream_attachment_reconciler(&worker);
+                        Arc::new(ActiveAgent::new(worker))
+                    })
                 })
             })
             .await?;
