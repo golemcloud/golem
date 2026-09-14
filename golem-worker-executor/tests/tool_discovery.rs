@@ -114,6 +114,7 @@ fn binding(
         account_id: tool.owner_account_id,
         account_email: tool.owner_account_email.clone(),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -570,14 +571,15 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
             "tool_rpc_invoke_and_await_result",
             data_value!(tool_name.as_str(), Vec::<String>::new(), String::new()),
         )
-        .await?
-        .into_typed::<Result<(), String>>()?;
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(
-        host_result.as_ref().is_err_and(|error| {
-            error.contains("RemoteInternalError")
-                && error.contains("host tool dispatch is not implemented by the executor")
-                && !error.contains("Denied")
-        }),
+        host_result.contains("native-search")
+            && host_result.contains("2026.08.28")
+            && host_result.contains("is not installed")
+            && !host_result.contains("Denied")
+            && !host_result.contains("panicked"),
         "host source must pass shared admission and reach tagged dispatch: {host_result:?}"
     );
     assert_eq!(service.tool_activation_calls(), 2);

@@ -192,6 +192,17 @@ Do not run `cargo make fix` by default. It mutates the entire root and `dev-tool
 
 Load the `pre-pr-checklist` skill for the change-scope matrix and escalation rules. Repository-wide CI remains the final broad safety net; local verification must still cover the affected code and behavior before opening a PR.
 
+### Deployment diff model versioning
+
+Changes to the deployment diff representation or hashing under
+`golem-common/src/model/diff/` or `golem-common/src/base_model/diff/` require bumping
+`DIFF_MODEL_VERSION` in `golem-common/src/base_model/diff/mod.rs`. Generate a new
+`golem-common/tests/goldenfiles/diff_model_fingerprint_v<N>.txt` with
+`diff_model_version_matches_diff_module_fingerprint`, then rerun that test without golden-file
+updates enabled. Do not overwrite an existing version's fingerprint to make the test pass;
+preserve historical fingerprints. This version identifies the CLI/server diff contract and does
+not require compatibility parsing or migration support.
+
 ## Code Style
 
 - Follow existing code conventions in the file you're editing

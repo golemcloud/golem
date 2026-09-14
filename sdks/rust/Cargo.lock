@@ -620,9 +620,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99e561700fe8c3a51189d8f8b5e83344fb1747b88cc0343e14d3c22842459624"
+checksum = "ac6b6856f399753c591dcdb7b57fd651eee3e07787672392cf551b8ba1725bdd"
 dependencies = [
  "bigdecimal",
  "bytes",
@@ -640,9 +640,9 @@ dependencies = [
 
 [[package]]
 name = "desert_macro"
-version = "0.1.9"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e622883bc90493a0921717f5363f8adf7cb5307419abda5126bfd624379ca785"
+checksum = "4573798d7c0123902a9fc19f43c1c0dd2daf587c121119fd5ebcdab46f4e984a"
 dependencies = [
  "bytes",
  "desert_core",
@@ -654,9 +654,9 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.9"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94677f3ac0a0b303a8b3dd01576348652c85e55da1b71a60f6b92f25180b66dd"
+checksum = "88084a4ce8019c315bcc0142f2fa97c1d7b389a96cfadea6f07a5607126667a0"
 dependencies = [
  "desert_core",
  "desert_macro",
@@ -919,6 +919,7 @@ dependencies = [
  "ctor",
  "golem-rust-macro",
  "golem-schema",
+ "golem-tool-metadata",
  "http",
  "log",
  "mac_address",
@@ -988,6 +989,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "golem-tool-metadata"
+version = "0.0.0"
+dependencies = [
+ "golem-schema",
 ]
 
 [[package]]

@@ -27,6 +27,21 @@ belonging to one owner": entity Stores clone the primary's `ReplayState`, which 
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs
 one entity export and then destroys the body `Store`.
 
+### Native bodies
+
+Native tools use the same owner-oplog entity boundary with a retained worker context instead of
+a guest Store. Their implementations call the existing durable host helpers. After the body,
+`invoke_native_tool` attempts parent settlement and checks pending attachment admission rejection
+before encoding a terminal: catching the host error cannot turn a rejected admission into success.
+Otherwise an infrastructure/body error takes precedence over a simultaneous settlement error;
+settlement errors replace only successfully executed bodies, including declared tool-error results.
+
+The native authoring macro injects `golem_native_tool::NativeToolCancellation` separately from
+command input. `NativeToolAdapter` forwards the caller's cancellation signal through an
+observation-only handle (`is_cancelled`, `cancelled`). It cannot cancel the caller or siblings,
+does not undo effects, and does not guarantee cleanup will run. Completed replay has no live
+cancellation source: the handle reports false and its cancellation future stays pending.
+
 ### Why completed bodies re-execute
 
 A tool body is not a plain host call whose result can be replayed from its `End`. The entity
@@ -94,4 +109,3 @@ deterministic_stream_crash_checkpoint_matrix,
 capable_terminal_lane_return_and_delayed_publication_survive_crash}` and
 `tests/tool_discovery.rs`. These use an in-process tokio crash-checkpoint server
 (`start_crash_checkpoint_server`), so they stay within the no-external-process rule.
-
