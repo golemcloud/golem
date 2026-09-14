@@ -26,7 +26,7 @@ export const Counter = defineAgent({
       http: [Http.post("/increment")],
     }),
   },
-}).implement({
+}).implement<Ref.Ref<{ count: number }>>({
   init: ({ name }) =>
     Effect.gen(function* () {
       const state = yield* Ref.make({ count: 0 });
