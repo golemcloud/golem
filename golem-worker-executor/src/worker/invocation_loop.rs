@@ -941,14 +941,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         err
                     } else {
                         self.parent.record_recovery_failure(&err).await;
-                        if matches!(err, WorkerExecutorError::FailedToResumeAgent { .. }) {
-                            err
-                        } else {
-                            WorkerExecutorError::failed_to_resume_worker(
-                                self.owned_agent_id.agent_id.clone(),
-                                err,
-                            )
-                        }
+                        err
                     };
                     self.parent
                         .complete_startup(self.start_attempt, Err(err.clone()));

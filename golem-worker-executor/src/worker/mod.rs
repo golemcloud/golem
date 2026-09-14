@@ -33,6 +33,7 @@ use self::agent_config::{
     effective_agent_config, ensure_required_agent_secrets_are_configured,
     parse_worker_creation_agent_config,
 };
+use crate::durable_host::durability::evaluate_named_policy_step_resetting_on_invalid_state;
 use crate::durable_host::durable_session::{
     DurableSessionStreams, DurableStreamConsumerJournal, SessionControlMetadata,
 };
@@ -131,9 +132,9 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, Timestamp,
-    TimestampedAgentInvocation,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, NamedRetryPolicy,
+    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryContext,
+    RetryPolicyState, RetryVerdict, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -1790,7 +1791,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
-        let retry_from = self.oplog.current_oplog_index().await;
+        let latest_status = self.get_non_detached_last_known_status().await;
+        let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
+            Ctx::get_last_error_and_retry_count(
+                self.all(),
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &latest_status,
+            )
+            .await
+        } else {
+            None
+        };
+        let retry_from = previous_error
+            .as_ref()
+            .map(|error| error.retry_from)
+            .unwrap_or(self.oplog.current_oplog_index().await);
+        let config = self.config();
+        let retry_config = latest_status
+            .overridden_retry_config
+            .as_ref()
+            .unwrap_or(&config.retry);
+        let retry_policy = NamedRetryPolicy::default_from_config(retry_config);
+        let retry_properties = RetryContext::trap("recovery", None);
+        let current_retry_state = latest_status.current_retry_state.get(&retry_from);
+        let retry_policy_state = match evaluate_named_policy_step_resetting_on_invalid_state(
+            &retry_policy,
+            &retry_properties,
+            current_retry_state,
+        ) {
+            Ok((state, RetryVerdict::Retry(_))) => state,
+            Ok((state, RetryVerdict::GiveUp)) => state.exhausted(),
+            Ok((_, RetryVerdict::Error(_))) | Err(_) => RetryPolicyState::Terminal,
+        };
         let error = match error {
             WorkerExecutorError::FailedToResumeAgent { reason, .. } => reason.to_string(),
             error => error.to_string(),
@@ -1798,10 +1831,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.add_and_commit_oplog(OplogEntry::error(
             None,
             OplogErrorKind::Recovery,
-            AgentError::InternalError(error),
+            AgentError::Unknown(error),
             retry_from,
             false,
-            Some(RetryPolicyState::Terminal),
+            Some(retry_policy_state),
         ))
         .await;
     }

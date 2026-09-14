@@ -978,11 +978,25 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
     assert_snapshot_recovery_failed(&mut events, "load-snapshot returned error").await;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
+    assert_eq!(
         oplog
             .iter()
-            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
-        "Snapshot replay infrastructure failure must not append an oplog Error"
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(params)
+                    if params.kind == OplogErrorKind::Recovery
+            ))
+            .count(),
+        1,
+        "The failed startup must append one durable recovery error"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_)))
+            .count(),
+        0,
+        "Recovery must remain unresolved until a startup succeeds"
     );
     assert!(
         executor.worker_is_cached(&owned).await,
@@ -1024,11 +1038,25 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
     assert_eq!(loaded_index, periodic_index);
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
+    assert_eq!(
         oplog
             .iter()
-            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
-        "Successful retry must not require a durable oplog rejection/error"
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(params)
+                    if params.kind == OplogErrorKind::Recovery
+            ))
+            .count(),
+        1,
+        "Successful recovery must retain the failure history"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_)))
+            .count(),
+        1,
+        "Successful startup must resolve the durable recovery error"
     );
     Ok(())
 }

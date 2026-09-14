@@ -77,9 +77,10 @@ fn resume_decision(
         }
         AgentStatus::Failed => ResumeDecision::PreviousFailed,
         AgentStatus::Exited => ResumeDecision::PreviousExited,
-        AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
-            ResumeDecision::Start
-        }
+        AgentStatus::Suspended
+        | AgentStatus::Interrupted
+        | AgentStatus::Idle
+        | AgentStatus::Retrying => ResumeDecision::Start,
         _ if force => ResumeDecision::ForceStart,
         _ => ResumeDecision::Reject,
     }
@@ -293,7 +294,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(())
             }
             ResumeDecision::Reject => Err(WorkerExecutorError::invalid_request(format!(
-                "Worker {agent_id} is not suspended, interrupted or idle",
+                "Worker {agent_id} is not suspended, interrupted, idle, or retrying",
                 agent_id = owned_agent_id.agent_id
             ))),
         }
@@ -660,7 +661,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::Start,
             ResumeDecision::Start,
-            ResumeDecision::Reject,
+            ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
         ];
@@ -669,7 +670,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::Start,
             ResumeDecision::Start,
-            ResumeDecision::ForceStart,
+            ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
         ];
