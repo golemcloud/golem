@@ -1009,7 +1009,9 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
         }
     })
     .await?;
-    executor.resume(&worker_id, false).await?;
+    // The unavailable periodic snapshot is retryable, but this startup ultimately failed on the
+    // invalid manual baseline, so explicitly force the next attempt after fixing that baseline.
+    executor.resume(&worker_id, true).await?;
 
     let result = executor
         .invoke_and_await_agent(
@@ -2276,6 +2278,7 @@ async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
 }
 
 /// How the manual-update snapshot is made unreadable on restart.
+#[derive(Clone, Copy)]
 enum ManualSnapshotLoadFailure {
     /// The oplog entry at the snapshot index is not the update that wrote it.
     InvalidEntry,
@@ -2284,11 +2287,11 @@ enum ManualSnapshotLoadFailure {
     PayloadDownload,
 }
 
-/// A manual-update snapshot that cannot be read on restart. The oplog before
-/// that update was recorded against a build the current one is incompatible
-/// with, so there is no full replay to fall back to: the start attempt has to
-/// fail and leave the baseline in place for the next one.
-async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_baseline(
+/// A manual-update snapshot that cannot be read on restart. The oplog before that update was
+/// recorded against a build the current one is incompatible with, so there is no full replay to
+/// fall back to. The baseline stays in place while permanent failures require a forced retry and
+/// transient download failures can use the ordinary recovery retry path.
+async fn assert_manual_snapshot_load_failure_keeps_the_baseline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     agent_update_v1: &PrecompiledComponent,
@@ -2379,8 +2382,12 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
     );
     assert_snapshot_recovery_failed(&mut events, expected_error).await;
 
+    let expected_status = match failure {
+        ManualSnapshotLoadFailure::InvalidEntry => AgentStatus::Failed,
+        ManualSnapshotLoadFailure::PayloadDownload => AgentStatus::Retrying,
+    };
     let failed_metadata = executor.get_worker_metadata(&worker_id).await?;
-    assert_eq!(failed_metadata.status, AgentStatus::Failed);
+    assert_eq!(failed_metadata.status, expected_status);
     assert_eq!(
         failed_metadata.last_error_kind,
         Some(OplogErrorKind::Recovery)
@@ -2400,26 +2407,31 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
         .iter()
         .find(|metadata| metadata.agent_id == failed_metadata.agent_id)
         .expect("failed agent must be present in list metadata");
-    assert_eq!(listed.status, AgentStatus::Failed);
+    assert_eq!(listed.status, expected_status);
     assert_eq!(listed.last_error_kind, failed_metadata.last_error_kind);
     assert_eq!(listed.last_error, failed_metadata.last_error);
 
-    let repeated_failure = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "loaded_snapshot_revision",
-            data_value!(),
-        )
-        .await
-        .expect_err("an unresolved recovery failure must reject invocation");
-    let repeated_failure = repeated_failure.to_string();
-    assert!(repeated_failure.contains("Failed to resume"));
-    assert!(repeated_failure.contains(expected_error));
+    if matches!(failure, ManualSnapshotLoadFailure::InvalidEntry) {
+        let repeated_failure = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "loaded_snapshot_revision",
+                data_value!(),
+            )
+            .await
+            .expect_err("an unresolved terminal recovery failure must reject invocation");
+        let repeated_failure = repeated_failure.to_string();
+        assert!(repeated_failure.contains("Failed to resume"));
+        assert!(repeated_failure.contains(expected_error));
+    }
 
-    // A failed start stays on the worker until it is resumed or unloaded, like any other
-    // instance-creation failure; the resume is the next start attempt.
-    executor.resume(&worker_id, true).await?;
+    executor
+        .resume(
+            &worker_id,
+            matches!(failure, ManualSnapshotLoadFailure::InvalidEntry),
+        )
+        .await?;
     let after_retry = executor
         .invoke_and_await_agent(
             &component,
@@ -2459,7 +2471,7 @@ async fn manual_snapshot_invalid_entry_fails_the_start_and_keeps_the_baseline(
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_baseline(
+    assert_manual_snapshot_load_failure_keeps_the_baseline(
         last_unique_id,
         deps,
         agent_update_v1,
@@ -2471,13 +2483,13 @@ async fn manual_snapshot_invalid_entry_fails_the_start_and_keeps_the_baseline(
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn manual_snapshot_download_failure_fails_the_start_and_keeps_the_baseline(
+async fn manual_snapshot_download_failure_is_retryable_and_keeps_the_baseline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_baseline(
+    assert_manual_snapshot_load_failure_keeps_the_baseline(
         last_unique_id,
         deps,
         agent_update_v1,

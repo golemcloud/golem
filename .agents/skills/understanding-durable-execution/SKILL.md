@@ -144,10 +144,12 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
-A terminal failure while creating or preparing the instance is durable health state, not only a
-resident-worker error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading;
-the ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes
-the kind with the failed/retrying status, so metadata and invocation admission agree after unload or
+A failure while creating or preparing the instance is durable health state, not only a resident-worker
+error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
+underlying classification: transient infrastructure failures advance the effective retry policy,
+while invalid components, exports, snapshot baselines, and other permanent failures are terminal. The
+ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
+kind with the failed/retrying status, so metadata and invocation admission agree after unload or
 reassignment. A later startup appends `RecoverySucceeded` only when it fully completes
 `prepare_instance` and an unresolved recovery error exists. Routine suspend/recovery writes no
 success marker.

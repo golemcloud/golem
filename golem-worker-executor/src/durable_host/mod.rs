@@ -6061,7 +6061,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 store, &error,
                             )))
                         } else {
-                            Err(error)
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
                         }
                     }
                     SnapshotRecoveryResult::Unavailable(error) => Err(error),

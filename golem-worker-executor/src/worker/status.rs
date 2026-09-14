@@ -721,7 +721,9 @@ fn calculate_latest_worker_status(
             } = entry
         {
             last_error_kind = Some(*kind);
-            if matches!(error, AgentError::PermissionDenied(_)) {
+            if *kind == OplogErrorKind::Invocation
+                && matches!(error, AgentError::PermissionDenied(_))
+            {
                 current_status = AgentStatus::Idle;
                 last_error_kind = None;
                 current_retry_state.clear();
@@ -2311,6 +2313,33 @@ mod test {
                 move |mut status| {
                     status.status = AgentStatus::Failed;
                     status.last_error_kind = Some(OplogErrorKind::Invocation);
+                    status
+                        .current_retry_state
+                        .insert(retry_from, RetryPolicyState::Terminal);
+                    status
+                },
+            )
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() {
+        let retry_from = OplogIndex::from_u64(1);
+        let test_case = TestCase::builder(0)
+            .add(
+                OplogEntry::error(
+                    None,
+                    OplogErrorKind::Recovery,
+                    AgentError::PermissionDenied("startup denied".to_string()),
+                    retry_from,
+                    false,
+                    Some(RetryPolicyState::Terminal),
+                ),
+                move |mut status| {
+                    status.status = AgentStatus::Failed;
+                    status.last_error_kind = Some(OplogErrorKind::Recovery);
                     status
                         .current_retry_state
                         .insert(retry_from, RetryPolicyState::Terminal);
