@@ -62,13 +62,29 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
+/// The agent an RPC caller invokes, which is *not* the agent the driver invokes
+/// (GOL-368).
+///
+/// The suffix is not the driver's choice. `Counter::increment_through_rpc`
+/// builds its client as `CounterClient::get(format!("{}-inner", self.id))`, so
+/// the callee's id follows from the caller's. The driver reproduces that
+/// derivation rather than passing a target in, which is what lets it decide
+/// *before* the run which executor will own each half of the pair.
+///
+/// Free rather than a method on [`WorkloadContext`] because it depends on
+/// nothing about the run — only on what the component does — and because that
+/// is what makes the coupling testable without standing up a platform.
+pub fn rpc_callee_name(caller: &str) -> String {
+    format!("{caller}-inner")
+}
+
 /// Agent type names exported by the counters component.
-const COUNTER_AGENT: &str = "Counter";
+pub(crate) const COUNTER_AGENT: &str = "Counter";
 const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
-const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
-const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
+pub(crate) const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
+pub(crate) const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
 const PROMISE_AGENT: &str = "PromiseAgent";
-const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
+pub(crate) const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
 
 /// How far ahead scheduled polls are registered. Long enough that registration
 /// and firing are distinct events (so a fault can land between them), short
@@ -112,6 +128,10 @@ const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Generous, because read-back happens on a cluster that has just been through
 /// a fault and a slow answer is still an answer.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ceiling on one fire-log read. Larger than [`READ_TIMEOUT`] because the
+/// answer carries every fire the target recorded rather than one number.
+const FIRE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Payload written when completing a promise.
 const PROMISE_PAYLOAD: &[u8] = b"chaos";
@@ -177,6 +197,12 @@ impl WorkloadContext {
         format!("{}-scheduled-target-{index:04}", self.key_prefix)
     }
 
+    /// The suspended-waiter scenario's agent, in the promise component rather
+    /// than the counters one (GOL-377).
+    pub fn waiter_name(&self, index: u32) -> String {
+        format!("{}-promise-waiter-{index:04}", self.key_prefix)
+    }
+
     /// The deterministic key for one operation. Same inputs, same key — that is
     /// what makes a retry the same operation rather than a new one.
     pub fn idempotency_key(&self, agent: &str, seq: u64) -> String {
@@ -190,6 +216,28 @@ struct AttemptResult {
     error: Option<anyhow::Error>,
     /// Absent when the attempt succeeded.
     class: Option<ErrorClass>,
+}
+
+/// What one operation ended up as.
+///
+/// Returned rather than only recorded because one scenario has to chain on it:
+/// [`crate::chaos::reverts`] judges a revert by the value the *next* increment
+/// reports, so it needs each operation's answer in hand rather than having to
+/// go looking for its own record in a history every other emitter is also
+/// appending to.
+#[derive(Debug, Clone)]
+pub struct OperationOutcome {
+    pub outcome: Outcome,
+    /// The value the operation returned, for the methods that return one.
+    pub value: Option<u32>,
+    /// The last error, verbatim, for callers that need to tell one refusal from
+    /// another. [`crate::chaos::deletions`] does: a delete refused because the
+    /// agent was not there means something quite different from any other
+    /// refusal.
+    ///
+    /// Only ever `Some` on a failure, so the clone costs nothing on the path
+    /// every scenario actually runs.
+    pub error: Option<String>,
 }
 
 /// Runs one operation with the configured bounded, same-key retry, and records
@@ -207,7 +255,8 @@ pub(crate) async fn run_operation<F, Fut>(
     method: &str,
     key: String,
     invoke: F,
-) where
+) -> OperationOutcome
+where
     F: Fn(IdempotencyKey) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<Option<u32>>>,
 {
@@ -309,6 +358,7 @@ pub(crate) async fn run_operation<F, Fut>(
         );
     }
 
+    let error = last.error.as_ref().map(|e| format!("{e:#}"));
     ctx.history.record(OperationRecord {
         op_id,
         stream,
@@ -323,10 +373,49 @@ pub(crate) async fn run_operation<F, Fut>(
         duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         returned_value: last.value,
         first_attempt_value,
-        error: last.error.as_ref().map(|e| format!("{e:#}")),
+        error: error.clone(),
         error_class: last.class,
         attempt_log,
     });
+
+    OperationOutcome {
+        outcome,
+        value: last.value,
+        error,
+    }
+}
+
+/// One `Counter.increment`, recorded under `stream`.
+///
+/// Split out of [`submit_one`] so [`crate::chaos::reverts`] can drive
+/// increments on its own stream through exactly the same retry rule and
+/// classification, rather than growing a second copy of them.
+pub(crate) async fn increment_counter(
+    ctx: &WorkloadContext,
+    stream: Stream,
+    agent: &str,
+    key: String,
+) -> OperationOutcome {
+    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    let ctx2 = ctx.clone();
+    run_operation(ctx, stream, agent.to_string(), "increment", key, |k| {
+        let ctx = ctx2.clone();
+        let parsed = parsed.clone();
+        async move {
+            let value = ctx
+                .user
+                .invoke_and_await_agent_with_key(
+                    &ctx.counters,
+                    &parsed,
+                    &k,
+                    "increment",
+                    data_value!(),
+                )
+                .await?;
+            Ok(as_u32(value))
+        }
+    })
+    .await
 }
 
 /// Extracts a `u32` return value, if the agent returned one. Absent values are
@@ -384,6 +473,7 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
         (Stream::Scheduled, config.scheduled_agents),
         (Stream::Promise, config.promise_agents),
         (Stream::Quota, config.quota_agents),
+        (Stream::Rpc, config.rpc_agents),
     ]
     .into_iter()
     .filter(|(_, agents)| *agents > 0)
@@ -481,6 +571,25 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
         Stream::PinnedHttp => {
             warn!("Chaos mixed workload cannot drive the pinned stream; see chaos::pinned");
         }
+        // Driven by `crate::chaos::waiters` for the same reason: its agents run
+        // a round at their own pace rather than at a shared rate, and each one
+        // is blocked until its promise resolves.
+        Stream::PromiseWait => {
+            warn!("Chaos mixed workload cannot drive the waiter stream; see chaos::waiters");
+        }
+        // Driven by `crate::chaos::deletions`: a round builds an agent up and
+        // then deletes it outright, and the value the *next* round's first
+        // increment returns says whether it stayed deleted.
+        Stream::Delete => {
+            warn!("Chaos mixed workload cannot drive the delete stream; see chaos::deletions");
+        }
+        // Driven by `crate::chaos::reverts`: a round is a run of increments
+        // followed by a revert that takes some of them back, and the value the
+        // *next* round's first increment returns is what says whether that
+        // revert landed. A shared rate cannot express that ordering.
+        Stream::Revert => {
+            warn!("Chaos mixed workload cannot drive the revert stream; see chaos::reverts");
+        }
         Stream::Durable => {
             let agent = ctx.agent_name(Stream::Durable, index);
             let key = ctx.idempotency_key(&agent, seq);
@@ -504,6 +613,43 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
                     Ok(as_u32(value))
                 }
             })
+            .await;
+        }
+        Stream::Rpc => {
+            // The driver invokes the caller; the caller invokes the callee.
+            // Only the second hop is the one under test, and it is the hop the
+            // driver cannot address directly — which is the whole point, since
+            // an agent-to-agent call is the only traffic that chooses its own
+            // executor rather than being routed to one.
+            let agent = ctx.agent_name(Stream::Rpc, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Rpc,
+                agent.clone(),
+                "increment_through_rpc",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let value = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "increment_through_rpc",
+                                data_value!(),
+                            )
+                            .await?;
+                        Ok(as_u32(value))
+                    }
+                },
+            )
             .await;
         }
         Stream::Ephemeral => {
@@ -671,15 +817,24 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
 /// A timeout is reported as an unreadable agent rather than propagated: the
 /// read-back already models "could not be read" as a verdict of its own, and an
 /// agent that will not answer is exactly that.
-async fn read_with_timeout<F>(what: &str, agent: &str, read: F) -> Result<u64, String>
+async fn read_with_timeout<T, F>(what: &str, agent: &str, read: F) -> Result<T, String>
 where
-    F: std::future::Future<Output = Result<u64, String>>,
+    F: std::future::Future<Output = Result<T, String>>,
 {
-    match tokio::time::timeout(READ_TIMEOUT, read).await {
+    read_within(what, agent, READ_TIMEOUT, read).await
+}
+
+/// [`read_with_timeout`] with the ceiling named by the caller, for reads whose
+/// answer is much bigger than a counter.
+async fn read_within<T, F>(what: &str, agent: &str, timeout: Duration, read: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(timeout, read).await {
         Ok(result) => result,
         Err(_) => {
-            warn!("Chaos: reading {what} on {agent} timed out after {READ_TIMEOUT:?}");
-            Err(format!("{what} timed out after {READ_TIMEOUT:?}"))
+            warn!("Chaos: reading {what} on {agent} timed out after {timeout:?}");
+            Err(format!("{what} timed out after {timeout:?}"))
         }
     }
 }
@@ -780,6 +935,34 @@ pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u6
     .await
 }
 
+/// Reads back the fire log of a scheduled target (GOL-378).
+///
+/// One `(token, scheduledMillis, observedMillis)` per fire. Bounded more
+/// generously than the counter reads: this answer is the whole run's worth of
+/// fires for one agent rather than a single number, and a slow answer after a
+/// fault is still an answer. A target that times out here becomes *unverifiable*
+/// in [`crate::chaos::fires`] rather than a target that lost work.
+pub async fn read_fires(
+    ctx: &WorkloadContext,
+    agent: &str,
+) -> Result<Vec<(String, u64, u64)>, String> {
+    read_within("fires", agent, FIRE_READ_TIMEOUT, async {
+        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "fires", data_value!())
+            .await
+        {
+            Ok(value) => value
+                .into_return_value()
+                .and_then(|v| Vec::<(String, u64, u64)>::from_value(v).ok())
+                .ok_or_else(|| "fires returned no readable value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
 /// Reads back how many scheduled polls actually fired on a target agent.
 pub async fn read_polls(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
     read_with_timeout("polls", agent, async {
@@ -811,6 +994,24 @@ mod tests {
         let target = format!("{key_prefix}-scheduled-target-0007");
         let key = format!("{agent}-00000042");
         (agent, target, key)
+    }
+
+    /// The callee's id is fixed by the component, not by the driver.
+    ///
+    /// `Counter::increment_through_rpc` builds its client as
+    /// `CounterClient::get(format!("{}-inner", self.id))` in
+    /// `test-components/agent-counters/src/lib.rs`, and the driver reproduces
+    /// that derivation to decide which executor owns each half of a pair
+    /// *before* the run. Nothing in the type system links the two sides, and
+    /// they live in different crates, so a change to that suffix would silently
+    /// leave S2 pairing agents that never call each other — a run that then
+    /// reports a clean control while testing nothing.
+    #[test]
+    fn the_rpc_callee_name_matches_what_the_component_derives() {
+        assert_eq!(
+            rpc_callee_name("chaos-s2-1234-1-rpc-0007"),
+            "chaos-s2-1234-1-rpc-0007-inner"
+        );
     }
 
     #[test]

@@ -185,7 +185,8 @@ pub struct CellConfig {
 }
 
 impl CellConfig {
-    /// The cell's name, used in S3 paths and result identifiers. Encodes the
+    /// The cell's name, used in `golem-bench-results` keys and result identifiers.
+    /// Encodes the
     /// full axis set in human-readable terms (no cryptic single letters).
     pub fn cell_name(&self) -> String {
         let mut parts = vec![
