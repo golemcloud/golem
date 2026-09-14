@@ -15,6 +15,12 @@
 // Type-only coverage for the complete canonical grep and git command trees. Checked by
 // the package typecheck script; NOT executed by vitest (`.test-d.ts` suffix).
 
+import type {
+  InvocationResult as WireInvocationResult,
+  Tool as WireTool,
+  TypedSchemaValue as WireTypedSchemaValue,
+} from 'golem:tool/common@0.1.0';
+import * as middlewareEntry from '@golemcloud/golem-ts-sdk/middleware';
 import { z } from 'zod/v4';
 import {
   KeyValue,
@@ -23,11 +29,20 @@ import {
   command,
   err,
   ok,
+  ToolInvokeError,
   s,
   toolDefinition,
+  universalToolMiddleware,
+  type ImplementedToolMiddleware,
+  type Principal,
   type ToolClient,
   type ToolClientErrors,
+  type ToolErr,
   type ToolImplementation,
+  type ToolMiddlewareImplementation,
+  type ToolMiddlewareOptions,
+  type ToolUnderlying,
+  type ToolUnderlyingErrors,
 } from '../dist/index.mjs';
 
 type Equal<Left, Right> =
@@ -594,7 +609,8 @@ const wrongRootKey: ToolImplementation<typeof grepDef> = { grepTool: async () =>
 void wrongRootKey;
 
 declare const grepClient: ToolClient<typeof grepDef>;
-declare const clientStdin: AsyncIterable<number>;
+declare const clientStdin: ReadableStream<Uint8Array>;
+declare const legacyClientStdin: AsyncIterable<number>;
 const grepCall = grepClient.grep({
   pattern: 'TODO',
   files: ['./src'],
@@ -603,17 +619,15 @@ const grepCall = grepClient.grep({
   color: 'auto',
   stdin: clientStdin,
 });
-const grepResult: Promise<{
-  result: Array<{ file: unknown; line: number; text: string }>;
-  stdout: AsyncIterable<number>;
-}> = grepCall;
+const grepResult: import('../src/bridge/tool').StartedToolInvocation<
+  Array<{ file: unknown; line: number; text: string }>
+> = grepCall;
 type GrepClientResult = Expect<
   Equal<
     typeof grepCall,
-    Promise<{
-      result: Array<{ file: unknown; line: number; text: string }>;
-      stdout: AsyncIterable<number>;
-    }>
+    import('../src/bridge/tool').StartedToolInvocation<
+      Array<{ file: unknown; line: number; text: string }>
+    >
   >
 >;
 void grepResult;
@@ -697,11 +711,12 @@ const requiredStdoutDef = toolDefinition('required-stdout').body((body) =>
   body.stdout({ required: true }).returns(z.void()),
 );
 declare const requiredStdoutClient: ToolClient<typeof requiredStdoutDef>;
-const requiredStdout: Promise<AsyncIterable<number>> = requiredStdoutClient['required-stdout']({});
+const requiredStdout: import('../src/bridge/tool').StartedToolInvocation<undefined> =
+  requiredStdoutClient['required-stdout']({});
 type RequiredStdoutResult = Expect<
   Equal<
     ReturnType<(typeof requiredStdoutClient)['required-stdout']>,
-    Promise<AsyncIterable<number>>
+    import('../src/bridge/tool').StartedToolInvocation<undefined>
   >
 >;
 void requiredStdout;
@@ -713,13 +728,12 @@ const optionalStdoutDef = toolDefinition('optional-stdout').body((body) =>
   body.stdout({ required: false }).returns(z.void()),
 );
 declare const optionalStdoutClient: ToolClient<typeof optionalStdoutDef>;
-const optionalStdout: Promise<AsyncIterable<number> | undefined> = optionalStdoutClient[
-  'optional-stdout'
-]({});
+const optionalStdout: import('../src/bridge/tool').StartedToolInvocation<undefined> =
+  optionalStdoutClient['optional-stdout']({});
 type OptionalStdoutResult = Expect<
   Equal<
     ReturnType<(typeof optionalStdoutClient)['optional-stdout']>,
-    Promise<AsyncIterable<number> | undefined>
+    import('../src/bridge/tool').StartedToolInvocation<undefined>
   >
 >;
 void optionalStdout;
@@ -729,14 +743,12 @@ const optionalStructuredStdoutDef = toolDefinition('optional-structured-stdout')
   body.stdout({ required: false }).returns(z.string()),
 );
 declare const optionalStructuredStdoutClient: ToolClient<typeof optionalStructuredStdoutDef>;
-const optionalStructuredStdout: Promise<{
-  result: string;
-  stdout?: AsyncIterable<number>;
-}> = optionalStructuredStdoutClient['optional-structured-stdout']({});
+const optionalStructuredStdout: import('../src/bridge/tool').StartedToolInvocation<string> =
+  optionalStructuredStdoutClient['optional-structured-stdout']({});
 type OptionalStructuredStdoutResult = Expect<
   Equal<
     ReturnType<(typeof optionalStructuredStdoutClient)['optional-structured-stdout']>,
-    Promise<{ result: string; stdout?: AsyncIterable<number> }>
+    import('../src/bridge/tool').StartedToolInvocation<string>
   >
 >;
 void optionalStructuredStdout;
@@ -758,8 +770,8 @@ requiredStdinClient['required-stdin']({ stdin: clientStdin });
 // @ts-expect-error required stdin must be supplied by the caller
 requiredStdinClient['required-stdin']({});
 requiredStdinClient['required-stdin']({
-  // @ts-expect-error caller-side typed clients accept Preview 3 byte async iterables
-  stdin: new ReadableStream<Uint8Array>(),
+  // @ts-expect-error caller-side stdin must support cancellation of a pending read
+  stdin: legacyClientStdin,
 });
 
 const clientSubtreeDef = toolDefinition('client-subtree')
@@ -849,3 +861,272 @@ nonTransitiveClient['non-transitive-middle']['non-transitive-leaf']({
 });
 // @ts-expect-error a removed middle declaration does not propagate its child-only alias
 nonTransitiveClient['non-transitive-middle']['non-transitive-leaf']({ tenant: 'root' });
+
+const grepMiddlewareImplementation: ToolMiddlewareImplementation<typeof grepDef> = {
+  grep: async (args, context) => {
+    const principal: Principal = context.principal;
+    const stdin: AsyncIterable<number> | undefined = context.stdin;
+    void principal;
+    // @ts-expect-error middleware stdout is returned by the caller-side projection
+    void context.stdout;
+    return context.underlying.grep({ ...args, stdin });
+  },
+  replace: async (args, { underlying }) => underlying.replace(args),
+};
+const grepMiddleware: ImplementedToolMiddleware<'grep-middleware'> = grepDef.middleware({
+  name: 'grep-middleware',
+  aliases: ['grep-policy'],
+  doc: 'Transparent grep policy',
+  implementation: grepMiddlewareImplementation,
+});
+void grepMiddleware;
+
+const inferredGrepMiddleware = grepDef.middleware({
+  name: 'inferred-grep-middleware',
+  implementation: {
+    grep: async (args, context) => {
+      const pattern: string = args.pattern;
+      const stdin: AsyncIterable<number> | undefined = context.stdin;
+      void pattern;
+      // @ts-expect-error transparent middleware arguments follow the presented definition
+      void args.unknownArgument;
+      // @ts-expect-error middleware stdin is caller-side, not a web ReadableStream
+      const webStdin: ReadableStream<Uint8Array> | undefined = context.stdin;
+      // @ts-expect-error middleware has no writable stdout context
+      void context.stdout;
+      // @ts-expect-error typed underlying calls enforce presented command arguments
+      void context.underlying.replace({ pattern: args.pattern });
+      return context.underlying.grep({ ...args, stdin });
+    },
+    replace: async (args, { underlying }) => underlying.replace(args),
+  },
+});
+const inferredGrepMiddlewareName: 'inferred-grep-middleware' = inferredGrepMiddleware.name;
+void inferredGrepMiddlewareName;
+
+const secondGrepMiddleware: ImplementedToolMiddleware<'second-grep-middleware'> =
+  grepDef.middleware({
+    name: 'second-grep-middleware',
+    implementation: grepMiddlewareImplementation,
+  });
+void secondGrepMiddleware;
+
+const invalidMiddlewareResult: ToolMiddlewareImplementation<typeof projectedResultDef> = {
+  // @ts-expect-error middleware handlers return caller-side results, not leaf ok(...) wrappers
+  'projected-result': async () => ok('unexpected-wrapper'),
+};
+void invalidMiddlewareResult;
+
+const requiredStdinMiddleware: ToolMiddlewareImplementation<typeof requiredStdinDef> = {
+  'required-stdin': async (args, context) => {
+    const stdin: AsyncIterable<number> = context.stdin;
+    return context.underlying['required-stdin']({ ...args, stdin });
+  },
+};
+void requiredStdinMiddleware;
+
+type OptionalMiddlewareContext = Parameters<
+  ToolMiddlewareImplementation<typeof optionalStreamDef>['optional-stream']
+>[1];
+const optionalMiddlewareContextWithoutStdin: OptionalMiddlewareContext = {
+  principal: undefined as never,
+  underlying: undefined as never,
+};
+void optionalMiddlewareContextWithoutStdin;
+
+const graftedMiddlewareImplementation: ToolMiddlewareImplementation<typeof subtreeParentDef> = {
+  'subtree-remote': async (args, { underlying }) => underlying['subtree-remote'](args),
+};
+void graftedMiddlewareImplementation;
+// @ts-expect-error middleware owns the complete presented tree, including grafted commands
+const missingGraftedMiddlewareImplementation: ToolMiddlewareImplementation<
+  typeof subtreeParentDef
+> = {};
+void missingGraftedMiddlewareImplementation;
+
+const nestedGraftedMiddlewareImplementation: ToolMiddlewareImplementation<typeof clientParentDef> =
+  {
+    'client-subtree': command(async (args, { underlying }) => underlying['client-subtree'](args), {
+      nested: async (args, { underlying }) => underlying['client-subtree'].nested(args),
+    }),
+  };
+void nestedGraftedMiddlewareImplementation;
+
+const expectedAdapterDef = toolDefinition('expected-adapter')
+  .body((body) =>
+    body
+      .positional('path', z.string())
+      .returns(z.number())
+      .error('backend-failed', {
+        kind: 'runtime',
+        exitCode: 1,
+        payload: z.object({ code: z.number() }),
+      }),
+  )
+  .command('status', (status) => status.body((body) => body.returns(z.boolean())));
+const presentedAdapterDef = toolDefinition('presented-adapter')
+  .body((body) =>
+    body
+      .positional('path', z.string())
+      .returns(z.string())
+      .error('denied', { kind: 'usage', exitCode: 2 }),
+  )
+  .command('status', (status) => status.body((body) => body.returns(z.string())));
+
+const adapterMiddlewareImplementation: ToolMiddlewareImplementation<
+  typeof presentedAdapterDef,
+  typeof expectedAdapterDef
+> = {
+  'presented-adapter': async (args, { underlying }) => {
+    const result: number = await underlying['expected-adapter']({ path: args.path });
+    return String(result);
+  },
+  status: async (_args, { underlying }) => String(await underlying.status({})),
+};
+const adapterMiddleware = presentedAdapterDef.middleware({
+  name: 'adapter-middleware',
+  wraps: expectedAdapterDef,
+  implementation: adapterMiddlewareImplementation,
+});
+const adapterMiddlewareName: 'adapter-middleware' = adapterMiddleware.name;
+void adapterMiddlewareName;
+
+const inferredAdapterMiddleware = presentedAdapterDef.middleware({
+  name: 'inferred-adapter-middleware',
+  wraps: expectedAdapterDef,
+  implementation: {
+    'presented-adapter': async (args, { underlying }) => {
+      const presentedPath: string = args.path;
+      const expectedResult: number = await underlying['expected-adapter']({
+        path: presentedPath,
+      });
+      // @ts-expect-error adapter underlying exposes the expected definition, not the presented one
+      void underlying['presented-adapter'];
+      // @ts-expect-error adapter underlying arguments follow the expected definition
+      void underlying['expected-adapter']({ path: 42 });
+      return String(expectedResult);
+    },
+    status: async (_args, { underlying }) => String(await underlying.status({})),
+  },
+});
+const inferredAdapterMiddlewareName: 'inferred-adapter-middleware' = inferredAdapterMiddleware.name;
+void inferredAdapterMiddlewareName;
+
+// @ts-expect-error an expected-definition implementation requires the matching wraps definition
+const adapterOptionsWithoutWraps: ToolMiddlewareOptions<
+  'adapter-without-wraps',
+  typeof presentedAdapterDef,
+  typeof expectedAdapterDef
+> = {
+  name: 'adapter-without-wraps',
+  implementation: adapterMiddlewareImplementation,
+};
+void adapterOptionsWithoutWraps;
+
+declare const expectedUnderlying: ToolUnderlying<typeof expectedAdapterDef>;
+type ExpectedUnderlyingErrors = ToolUnderlyingErrors<
+  (typeof expectedUnderlying)['expected-adapter']
+>;
+const expectedUnderlyingError: ExpectedUnderlyingErrors = err('backend-failed', { code: 1 });
+// @ts-expect-error typed underlying methods retain only expected-definition errors
+const invalidExpectedUnderlyingError: ExpectedUnderlyingErrors = err('denied');
+void expectedUnderlyingError;
+void invalidExpectedUnderlyingError;
+expectedUnderlying['expected-adapter']({
+  path: '/tmp',
+  // @ts-expect-error principal is bound by the runtime and cannot be replaced
+  principal: undefined as never,
+});
+
+const mappedAdapterError = ToolInvokeError.tool(err('backend-failed', { code: 1 })).mapTool(() =>
+  err('denied'),
+);
+const mappedAdapterCause:
+  | { readonly tag: 'tool'; readonly error: ToolErr<'denied'> }
+  | { readonly tag: 'invalid-tool-name'; readonly val: string }
+  | { readonly tag: 'invalid-command-path'; readonly val: string[] }
+  | { readonly tag: 'invalid-input'; readonly val: string }
+  | { readonly tag: 'constraint-violation'; readonly val: string }
+  | { readonly tag: 'invalid-result'; readonly val: string } = mappedAdapterError.cause;
+void mappedAdapterCause;
+
+const protocolMiddlewareError = new ToolInvokeError<never>({
+  tag: 'invalid-input',
+  val: 'bad input',
+});
+const protocolErrorWithMappedToolType: ToolInvokeError<ToolErr<'denied'>> =
+  protocolMiddlewareError.mapTool(() => err('denied'));
+void protocolErrorWithMappedToolType;
+
+// @ts-expect-error command aliases remain metadata-only on typed underlying proxies
+void (undefined as unknown as ToolUnderlying<typeof gitDef>).ci;
+
+const aliasedMiddlewareDef = toolDefinition('aliased-middleware').command('canonical', (child) =>
+  child.aliases('alias').body((body) => body.returns(z.void())),
+);
+aliasedMiddlewareDef.middleware({
+  name: 'canonical-implementation-keys',
+  implementation: {
+    canonical: async () => undefined,
+    // @ts-expect-error command aliases are not middleware implementation keys
+    alias: async () => undefined,
+  },
+});
+
+const universalMiddleware = universalToolMiddleware({
+  name: 'universal-audit',
+  aliases: ['audit-all'],
+  doc: 'Audit every raw invocation',
+  invoke: async (
+    { toolName, toolMetadata, commandPath, input, stdin, principal },
+    { underlying },
+  ) => {
+    const name: string = toolName;
+    const version: string = toolMetadata.version;
+    const path: readonly string[] = commandPath;
+    const stream: AsyncIterable<number> | undefined = stdin;
+    const sdkPrincipal: Principal = principal;
+    const wireTool: WireTool = toolMetadata;
+    const wireInput: WireTypedSchemaValue = input;
+    const wireResult: Promise<WireInvocationResult> = underlying.invoke(
+      commandPath,
+      wireInput,
+      stdin,
+    );
+    type UniversalUnderlyingErrors = Expect<
+      Equal<ToolUnderlyingErrors<typeof underlying.invoke>, WireTypedSchemaValue>
+    >;
+    void name;
+    void version;
+    void path;
+    void stream;
+    void sdkPrincipal;
+    void wireTool;
+    void (undefined as unknown as UniversalUnderlyingErrors);
+    // @ts-expect-error the underlying resource does not accept a replacement principal
+    void underlying.invoke(commandPath, input, stdin, principal);
+    return wireResult;
+  },
+});
+const universalMiddlewareName: 'universal-audit' = universalMiddleware.name;
+void universalMiddlewareName;
+
+universalToolMiddleware({
+  name: 'invalid-universal-result',
+  // @ts-expect-error universal middleware must return a raw WIT invocation result
+  invoke: async () => 'invalid',
+});
+
+const middlewareSubpathDefinition = middlewareEntry
+  .toolDefinition('middleware-subpath')
+  .body((body) => body.returns(z.string()));
+middlewareSubpathDefinition.middleware({
+  name: 'middleware-subpath-registration',
+  implementation: {
+    'middleware-subpath': async (_args, { underlying }) => underlying['middleware-subpath']({}),
+  },
+});
+// @ts-expect-error the host-backed ambient client is not exported by the middleware subpath
+void middlewareEntry.client;
+// @ts-expect-error host-backed ToolCallError is not exported by the middleware subpath
+void middlewareEntry.ToolCallError;

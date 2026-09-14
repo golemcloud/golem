@@ -7,6 +7,7 @@ github:adamgfraser
 github:adrianfilip
 github:afsalthaj
 github:andrueandersoncs
+github:baltasarblanco
 github:danieletorelli
 github:Fresheyeball
 github:irach-ramos
@@ -15,6 +16,7 @@ github:JohnSColeman
 github:jupposessho
 github:justcoon
 github:kmatasfp
+github:martinzudergaming-a11y
 github:mschuwalow
 github:Myestery
 github:Nanashi-lab

@@ -35,7 +35,7 @@ pub trait KeyValueService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<()>;
 
     async fn exists(
@@ -62,7 +62,7 @@ pub trait KeyValueService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>>;
 
     async fn set(
@@ -77,7 +77,7 @@ pub trait KeyValueService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
+        key_values: Arc<[(String, Vec<u8>)]>,
     ) -> anyhow::Result<()>;
 }
 
@@ -105,7 +105,7 @@ impl KeyValueService for DefaultKeyValueService {
             .del(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
             )
@@ -118,14 +118,14 @@ impl KeyValueService for DefaultKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<()> {
         self.key_value_storage
             .with("key_value", "delete_many")
             .del_many(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 keys,
             )
@@ -146,7 +146,7 @@ impl KeyValueService for DefaultKeyValueService {
             .exists(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
             )
@@ -167,7 +167,7 @@ impl KeyValueService for DefaultKeyValueService {
             .get_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
             )
@@ -187,7 +187,7 @@ impl KeyValueService for DefaultKeyValueService {
             .with("key_value", "get_keys")
             .keys(KeyValueStorageNamespace::UserDefined {
                 environment_id,
-                bucket,
+                bucket: bucket.into(),
             })
             .await
             .map_err(|err| anyhow!(err))?;
@@ -198,7 +198,7 @@ impl KeyValueService for DefaultKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
         let incoming_values: Vec<Option<Bytes>> = self
             .key_value_storage
@@ -206,7 +206,7 @@ impl KeyValueService for DefaultKeyValueService {
             .get_many_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 keys,
             )
@@ -230,7 +230,7 @@ impl KeyValueService for DefaultKeyValueService {
             .set_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
                 &outgoing_value,
@@ -244,7 +244,7 @@ impl KeyValueService for DefaultKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
+        key_values: Arc<[(String, Vec<u8>)]>,
     ) -> anyhow::Result<()> {
         let key_values: Vec<(&str, &[u8])> = key_values
             .iter()
@@ -255,7 +255,7 @@ impl KeyValueService for DefaultKeyValueService {
             .set_many_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key_values,
             )

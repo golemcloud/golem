@@ -27,7 +27,7 @@ async fn send(
 ) -> Json raise {
   let server = configuration.server
   let url = server.url() + "/v1/agents/" + endpoint
-  let headers : Map[String, String] = {}
+  let headers : @http.Headers = Map([])
   headers["Content-Type"] = "application/json"
   headers["Authorization"] = "Bearer " + server.token()
   match idempotency_key {

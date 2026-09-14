@@ -2,6 +2,7 @@
 /// Saves the component's state into a snapshot with a versioned envelope.
 /// JSON path: {"version":1, "principal":<json>, "state":<json>}
 /// Binary path: [0x02][u32 BE principal_len][principal_json_bytes][state_bytes]
+#warnings("-unused_async")
 pub async fn save(
   _background_group : @async-core.TaskGroup[Unit],
 ) -> @host.Snapshot {
@@ -12,14 +13,14 @@ pub async fn save(
           let state_bytes = s.save_snapshot()
           let state_chars : Array[Char] = []
           for i in 0..<state_bytes.length() {
-            state_chars.push(Char::from_int(state_bytes[i].to_int()))
+            state_chars.push(Int::unsafe_to_char(state_bytes[i].to_int()))
           }
           let state_str = String::from_array(state_chars)
           let state_json = @json.parse(state_str) catch {
             _ => Json::string(state_str)
           }
           let principal_json = @agents.principal_to_json(instance.principal)
-          let envelope : Map[String, Json] = {}
+          let envelope : Map[String, Json] = Map([])
           envelope["version"] = Json::number(1.0)
           envelope["principal"] = principal_json
           envelope["state"] = state_json
@@ -53,7 +54,7 @@ pub async fn save(
           for i in 0..<state_bytes.length() {
             result[5 + principal_len + i] = state_bytes[i]
           }
-          { payload: result, mime_type: "application/octet-stream" }
+          { payload: result, mime_type: "application/octet-stream", }
         }
         (Some(s), None) => {
           let data = s.save_snapshot()
@@ -62,8 +63,8 @@ pub async fn save(
             mime_type: "application/octet-stream",
           }
         }
-        _ => { payload: [], mime_type: "application/octet-stream" }
+        _ => { payload: [], mime_type: "application/octet-stream", }
       }
-    None => { payload: [], mime_type: "application/octet-stream" }
+    None => { payload: [], mime_type: "application/octet-stream", }
   }
 }

@@ -88,7 +88,7 @@ pub trait SchedulerStorage: Debug {
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         shard_id: ShardId,
-        action: &ScheduledAction,
+        action: &[u8],
     ) -> Result<(), SchedulerStorageError>;
 
     async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError>;

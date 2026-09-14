@@ -127,7 +127,7 @@ fn emit_examples(values : Array[ToolExample]) -> String {
 fn emit_doc(description : String, examples : Array[ToolExample]) -> String {
   let lines = description
     .split("\n")
-    .map(line => line.trim().to_string())
+    .map(line => line.trim().to_owned())
     .to_array()
   let mut first = -1
   for i, line in lines {
@@ -145,7 +145,7 @@ fn emit_doc(description : String, examples : Array[ToolExample]) -> String {
   "{ summary: \"" +
   escape_string_lit(summary) +
   "\", description: \"" +
-  escape_string_lit(rest.join("\n").trim().to_string()) +
+  escape_string_lit(rest.join("\n").trim().to_owned()) +
   "\", examples: " +
   emit_examples(examples) +
   " }"
@@ -447,7 +447,7 @@ fn project_command(
   force_globals : Bool,
 ) -> Array[ProjectedToolArg] raise ToolEmitError {
   let projected : Array[ProjectedToolArg] = []
-  let names : Map[String, String] = {}
+  let names : Map[String, String] = Map([])
   let mut optional_positional = false
   let mut saw_tail = false
   if is_unit(command.success_type) && command.result is Some(_) {
@@ -926,7 +926,7 @@ fn emit_option(arg : ProjectedToolArg) -> String {
     "@tool.OptionShapeDef::RepeatableList({ repetition: " +
     emit_repetition(arg.info) +
     ", item_type: " +
-    refined_graph({ ..arg, value_type: Some(item) }) +
+    refined_graph({ ..arg, value_type: Some(item), }) +
     " })"
   } else if arg.info.flat_map(i => i.optional_scalar) == Some(true) {
     "@tool.OptionShapeDef::OptionalScalar(" + refined_graph(arg) + ")"
@@ -1014,7 +1014,7 @@ fn emit_tail(arg : ProjectedToolArg) -> String {
     None => "None"
   }
   let item_arg = match arg.info {
-    Some(info) => { ..arg, info: Some({ ..info, min: None, max: None }) }
+    Some(info) => { ..arg, info: Some({ ..info, min: None, max: None, }), }
     None => arg
   }
   "Some({ name: \"" +
@@ -1276,18 +1276,32 @@ fn emit_body(
 }
 
 ///|
-fn descriptor_name(tool : ToolInfo) -> String {
-  "__golem_tool_def_" + tool.source_name
+fn descriptor_symbol_prefix(symbol_scope : String) -> String {
+  if symbol_scope.is_empty() {
+    "__golem_tool_"
+  } else {
+    "__golem_" + symbol_scope + "_tool_"
+  }
 }
 
 ///|
-fn raw_descriptor_name(tool : ToolInfo) -> String {
-  "__golem_tool_def_raw_" + tool.source_name
+fn descriptor_name(tool : ToolInfo, symbol_scope : String) -> String {
+  descriptor_symbol_prefix(symbol_scope) + "def_" + tool.source_name
 }
 
 ///|
-fn prepared_descriptor_name(tool : ToolInfo) -> String {
-  "__golem_tool_def_prepare_" + tool.source_name
+fn raw_descriptor_name(tool : ToolInfo, symbol_scope : String) -> String {
+  descriptor_symbol_prefix(symbol_scope) + "def_raw_" + tool.source_name
+}
+
+///|
+fn prepared_descriptor_name(tool : ToolInfo, symbol_scope : String) -> String {
+  descriptor_symbol_prefix(symbol_scope) + "def_prepare_" + tool.source_name
+}
+
+///|
+fn descriptor_helper_name(symbol_scope : String, suffix : String) -> String {
+  descriptor_symbol_prefix(symbol_scope) + suffix
 }
 
 ///|
@@ -1347,7 +1361,7 @@ fn validate_subtree_visit(
 
 ///|
 fn validate_subtree_cycles(tools : Array[ToolInfo]) -> Unit raise ToolEmitError {
-  let complete : Map[String, Unit] = {}
+  let complete : Map[String, Unit] = Map([])
   for tool in tools {
     validate_subtree_visit(tools, tool, [], complete)
   }
@@ -1358,7 +1372,7 @@ fn validate_sibling_commands(
   tools : Array[ToolInfo],
   tool : ToolInfo,
 ) -> Unit raise ToolEmitError {
-  let surfaces : Map[String, String] = {}
+  let surfaces : Map[String, String] = Map([])
   for index, command in tool.commands {
     if Some(index) == tool.root_command {
       continue
@@ -1506,7 +1520,7 @@ fn validate_inherited_surfaces(
   let subtree_sources = subtree_tool_sources(tools)
   for tool in tools {
     if !subtree_sources.contains(tool.source_name) {
-      validate_tool_inherited_surfaces(tools, tool, { names: [], shorts: [] })
+      validate_tool_inherited_surfaces(tools, tool, { names: [], shorts: [], })
     }
   }
 }
@@ -1561,79 +1575,86 @@ fn emit_globals(args : Array[ProjectedToolArg]) -> String {
 }
 
 ///|
-fn emit_descriptor_plumbing(buf : StringBuilder) -> Unit {
-  buf.write_string(
-    (
-      #|///|
-      #|fn[T] __golem_tool_concat_array(left : Array[T], right : Array[T]) -> Array[T] {
-      #|  let result = left.copy()
-      #|  for value in right {
-      #|    result.push(value)
-      #|  }
-      #|  result
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_concat_globals(
-      #|  left : @tool.GlobalsDef,
-      #|  right : @tool.GlobalsDef,
-      #|) -> @tool.GlobalsDef {
-      #|  {
-      #|    options: __golem_tool_concat_array(left.options, right.options),
-      #|    flags: __golem_tool_concat_array(left.flags, right.flags),
-      #|  }
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_rebase_node(
-      #|  node : @tool.CommandNodeDef,
-      #|  offset : Int,
-      #|) -> @tool.CommandNodeDef {
-      #|  {
-      #|    name: node.name,
-      #|    aliases: node.aliases,
-      #|    doc: node.doc,
-      #|    globals: node.globals,
-      #|    subcommands: node.subcommands.map(index => index + offset),
-      #|    body: node.body,
-      #|  }
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
-      #|  {
-      #|    version: def.version,
-      #|    commands: def.commands[1:].map(node => {
-      #|      __golem_tool_rebase_node(node, -1)
-      #|    }),
-      #|  }
-      #|}
-      #|
-      #|///|
-      #|fn __golem_tool_append_prepared(
-      #|  def : @tool.ToolDef,
-      #|  child : @tool.ToolDef,
-      #|) -> @tool.ToolDef {
-      #|  let offset = def.commands.length()
-      #|  let commands = def.commands.copy()
-      #|  let root = commands[0]
-      #|  commands[0] = {
-      #|    name: root.name,
-      #|    aliases: root.aliases,
-      #|    doc: root.doc,
-      #|    globals: root.globals,
-      #|    subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
-      #|    body: root.body,
-      #|  }
-      #|  for node in child.commands {
-      #|    commands.push(__golem_tool_rebase_node(node, offset))
-      #|  }
-      #|  { version: def.version, commands }
-      #|}
-      #|
-      #|
-    ),
-  )
+fn emit_descriptor_plumbing(buf : StringBuilder, symbol_scope : String) -> Unit {
+  let source =
+    #|///|
+    #|fn[T] __golem_tool_concat_array(left : Array[T], right : Array[T]) -> Array[T] {
+    #|  let result = left.copy()
+    #|  for value in right {
+    #|    result.push(value)
+    #|  }
+    #|  result
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_concat_globals(
+    #|  left : @tool.GlobalsDef,
+    #|  right : @tool.GlobalsDef,
+    #|) -> @tool.GlobalsDef {
+    #|  {
+    #|    options: __golem_tool_concat_array(left.options, right.options),
+    #|    flags: __golem_tool_concat_array(left.flags, right.flags),
+    #|  }
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_rebase_node(
+    #|  node : @tool.CommandNodeDef,
+    #|  offset : Int,
+    #|) -> @tool.CommandNodeDef {
+    #|  {
+    #|    name: node.name,
+    #|    aliases: node.aliases,
+    #|    doc: node.doc,
+    #|    globals: node.globals,
+    #|    subcommands: node.subcommands.map(index => index + offset),
+    #|    body: node.body,
+    #|  }
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
+    #|  {
+    #|    version: def.version,
+    #|    commands: def.commands[1:].map(node => {
+    #|      __golem_tool_rebase_node(node, -1)
+    #|    }),
+    #|  }
+    #|}
+    #|
+    #|///|
+    #|fn __golem_tool_append_prepared(
+    #|  def : @tool.ToolDef,
+    #|  child : @tool.ToolDef,
+    #|) -> @tool.ToolDef {
+    #|  let offset = def.commands.length()
+    #|  let commands = def.commands.copy()
+    #|  let root = commands[0]
+    #|  commands[0] = {
+    #|    name: root.name,
+    #|    aliases: root.aliases,
+    #|    doc: root.doc,
+    #|    globals: root.globals,
+    #|    subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
+    #|    body: root.body,
+    #|  }
+    #|  for node in child.commands {
+    #|    commands.push(__golem_tool_rebase_node(node, offset))
+    #|  }
+    #|  { version: def.version, commands }
+    #|}
+    #|
+    #|
+  if symbol_scope.is_empty() {
+    buf.write_string(source)
+  } else {
+    buf.write_string(
+      source.replace_all(
+        old="__golem_tool_",
+        new=descriptor_symbol_prefix(symbol_scope),
+      ),
+    )
+  }
 }
 
 ///|
@@ -1641,6 +1662,8 @@ fn emit_descriptor(
   buf : StringBuilder,
   tool : ToolInfo,
   tools : Array[ToolInfo],
+  symbol_scope : String,
+  include_invoker : Bool,
 ) -> Unit raise ToolEmitError {
   let plans : Array[Array[ProjectedToolArg]] = []
   for command in tool.commands {
@@ -1648,7 +1671,7 @@ fn emit_descriptor(
   }
   buf.write_string(
     "///|\nfn " +
-    raw_descriptor_name(tool) +
+    raw_descriptor_name(tool, symbol_scope) +
     "() -> @tool.ToolDef {\n  try {\n    let def : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
     "\", commands: [\n",
@@ -1713,18 +1736,22 @@ fn emit_descriptor(
   let has_subtrees = tool.commands.any(command => command.subtree is Some(_))
   buf.write_string(
     "  ] }\n    def\n  } catch { error => abort(\"invalid generated raw tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
-    prepared_descriptor_name(tool) +
+    prepared_descriptor_name(tool, symbol_scope) +
     "(strict_ancestors : @tool.GlobalsDef, parent_globals : @tool.GlobalsDef, override_name : String?, override_doc : @toolCommon.Doc?, override_aliases : Array[String]?) -> @tool.ToolDef {\n  try {\n    let carrier : @tool.ToolDef = { version: \"" +
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
-    "\", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = __golem_tool_extract_prepared(carrier.graft_subtree(" +
-    raw_descriptor_name(tool) +
+    "\", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = " +
+    descriptor_helper_name(symbol_scope, "extract_prepared") +
+    "(carrier.graft_subtree(" +
+    raw_descriptor_name(tool, symbol_scope) +
     "(), \"" +
     escape_string_lit(tool.name) +
     "\", parent_globals, override_name, override_doc, override_aliases))\n",
   )
   if has_subtrees {
     buf.write_string(
-      "    let descendant_ancestors = __golem_tool_concat_globals(strict_ancestors, prepared.commands[0].globals)\n",
+      "    let descendant_ancestors = " +
+      descriptor_helper_name(symbol_scope, "concat_globals") +
+      "(strict_ancestors, prepared.commands[0].globals)\n",
     )
   }
   buf.write_string("    let def = prepared\n")
@@ -1748,7 +1775,7 @@ fn emit_descriptor(
       }
       buf.write_string(
         "    let child = " +
-        prepared_descriptor_name(child) +
+        prepared_descriptor_name(child, symbol_scope) +
         "(descendant_ancestors, " +
         emit_globals(plans[i]) +
         ", " +
@@ -1757,18 +1784,22 @@ fn emit_descriptor(
         override_doc +
         ", " +
         override_aliases +
-        ")\n    let def = __golem_tool_append_prepared(def, child)\n",
+        ")\n    let def = " +
+        descriptor_helper_name(symbol_scope, "append_prepared") +
+        "(def, child)\n",
       )
     }
   }
   buf.write_string(
     "    def\n  } catch { error => abort(\"invalid generated prepared tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
-    descriptor_name(tool) +
+    descriptor_name(tool, symbol_scope) +
     "() -> @tool.ToolDef {\n  try {\n    " +
-    prepared_descriptor_name(tool) +
+    prepared_descriptor_name(tool, symbol_scope) +
     "({ options: [], flags: [] }, { options: [], flags: [] }, None, None, None).normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
   )
-  emit_invoker(buf, tool, tools, plans, leaves)
+  if include_invoker {
+    emit_invoker(buf, tool, tools, plans, leaves, symbol_scope)
+  }
 }
 
 ///|
@@ -1782,36 +1813,38 @@ fn output_stream_source(command : ToolCommandInfo) -> String? {
 }
 
 ///|
-fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
-  match output_stream_source(command) {
-    Some(_) =>
-      "Ok(@tool.invocation_result_value_with_stdout(" +
-      value +
-      ", __golem_stdout" +
-      ") catch { error => return Err(error) })"
-    None =>
-      "Ok(@tool.invocation_result_value(" +
-      value +
-      ") catch { error => return Err(error) })"
+fn input_stream_source(command : ToolCommandInfo) -> String? {
+  for pair in command.params {
+    if pair.1 == Hidden(InputStream) || pair.1 == LabelledHidden(InputStream) {
+      return Some(pair.0)
+    }
   }
+  None
+}
+
+///|
+fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
+  ignore(command)
+  "Ok(@tool.invocation_result_value(" +
+  value +
+  ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error })"
 }
 
 ///|
 fn emit_empty_invocation(command : ToolCommandInfo) -> String {
-  match output_stream_source(command) {
-    Some(_) => "Ok(@tool.invocation_result_stdout(__golem_stdout))"
-    None => "Ok(@tool.invocation_result_empty())"
-  }
+  ignore(command)
+  "Ok(@tool.invocation_result_empty())"
 }
 
 ///|
 fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String {
   let error_type = command.error_type.map(emit_type).unwrap()
-  "{\nlet payload = match " +
+  "{\n" +
+  "let payload = match " +
   error_type +
   "::to_error_payload_value(" +
   error_value +
-  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @model.typed_schema_value_to_wit(payload) catch { encode_error => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error.to_string())) }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
+  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@toolCommon.ToolError::CustomError(payload))\n}"
 }
 
 ///|
@@ -1896,17 +1929,18 @@ fn emit_invoker(
   tools : Array[ToolInfo],
   plans : Array[Array[ProjectedToolArg]],
   leaves : Array[Int],
+  symbol_scope : String,
 ) -> Unit raise ToolEmitError {
   let name = "__golem_tool_invoke_" + tool.source_name
   let context = "tool " + tool.name + " invocation"
   buf.write_string(
-    "///|\nfn " +
+    "///|\n#warnings(\"-alert_wit_bindgen\")\nasync fn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
-    descriptor_name(tool) +
-    "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderStdout?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
+    descriptor_name(tool, symbol_scope) +
+    "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
-    "\") catch { __golem_error => return Err(__golem_error) }\n",
+    "\") catch { __golem_error => return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error) }\n",
   )
   for command in tool.commands {
     if command.subtree is Some(target) {
@@ -1917,7 +1951,7 @@ fn emit_invoker(
         emit_strings(names) +
         ".contains(__golem_command_path[0]) {\n    return @tool.invoke_registered_subtool(\"" +
         escape_string_lit(child.name) +
-        "\", __golem_command_path[1:].to_array(), __golem_decoded, __golem_stdin, __golem_principal)\n  }\n",
+        "\", __golem_command_path[1:].to_owned(), __golem_decoded, __golem_stdin, __golem_stdout, __golem_principal)\n  }\n",
       )
     }
   }
@@ -1946,27 +1980,15 @@ fn emit_invoker(
     }
     let command_context = "tool " + tool.name + " command " + command.name
     buf.write_string("    " + pair.0.to_string() + " => {\n")
-    let call_args : Array[String] = []
+    if input_stream_source(command) is None {
+      buf.write_string(
+        "      if __golem_stdin is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n      }\n",
+      )
+    }
     for arg in args {
       match arg.placement {
-        Hidden(Principal) => call_args.push("__golem_principal")
-        Hidden(InputStream) => {
-          buf.write_string(
-            "      let " +
-            arg.source +
-            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return Err(@toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
-          )
-          call_args.push(arg.source)
-        }
-        Hidden(OutputStream) => {
-          buf.write_string(
-            "      let (__golem_stdout, " +
-            arg.source +
-            ") = @tool.new_stdout()\n",
-          )
-          call_args.push(arg.source)
-        }
-        _ => {
+        Hidden(_) => ()
+        _ =>
           buf.write_string(
             "      let " +
             arg.source +
@@ -1976,10 +1998,25 @@ fn emit_invoker(
             escape_string_lit(inherited_canonical_name(arg, inherited)) +
             "\", \"" +
             escape_string_lit(command_context) +
-            "\") catch { __golem_error => return Err(__golem_error) }\n",
+            "\") catch { __golem_error => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, __golem_error) }\n",
           )
-          call_args.push(arg.source)
-        }
+      }
+    }
+    for arg in args {
+      match arg.placement {
+        Hidden(InputStream) =>
+          buf.write_string(
+            "      let " +
+            arg.source +
+            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
+          )
+        Hidden(OutputStream) =>
+          buf.write_string(
+            "      let " +
+            arg.source +
+            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
+          )
+        _ => ()
       }
     }
     let invocation = tool.source_name +
@@ -1988,8 +2025,13 @@ fn emit_invoker(
       "(" +
       ({
         let emitted_call_args : Array[String] = []
-        for index, value in call_args {
-          emitted_call_args.push(value + args[index].call_suffix)
+        for arg in args {
+          let value = if arg.placement is Hidden(Principal) {
+            "__golem_principal"
+          } else {
+            arg.source
+          }
+          emitted_call_args.push(value + arg.call_suffix)
         }
         emitted_call_args.join(", ")
       }) +
@@ -1999,7 +2041,7 @@ fn emit_invoker(
     )
   }
   buf.write_string(
-    "    _ => Err(@toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n}\n\n",
+    "    _ => @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n}\n\n",
   )
 }
 
@@ -2011,11 +2053,11 @@ fn emit_tool_error_schema(
 ) -> Unit {
   let type_name = emit_type(error_type)
   buf.write_string(
-    "///|\npub impl @tool.ToolErrorSchema for " +
+    "///|\n#warnings(\"-unused_try\")\npub impl @tool.ToolErrorSchema for " +
     type_name +
     " with error_cases() {\n  try {\n    Ok(" +
     emit_error_cases(errors) +
-    ")\n  } catch { __golem_error => Err(@tool.ToolBuildError::schema_model(__golem_error.to_string())) }\n}\n\n",
+    ")\n  } catch {\n    __golem_error => Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))\n  }\n}\n\n",
   )
   buf.write_string(
     "///|\npub impl @tool.ToolErrorSchema for " +
@@ -2060,6 +2102,11 @@ fn emit_tool_error_schema(
   buf.write_string(
     "  Err(\"remote tool error payload did not match any declared error case\")\n}\n\n",
   )
+  buf.write_string(
+    "///|\nextend " +
+    type_name +
+    " with @tool.ToolErrorSchema::{error_cases, to_error_payload_value}\n\n",
+  )
 }
 
 ///|
@@ -2067,7 +2114,7 @@ fn emit_tool_error_schemas(
   buf : StringBuilder,
   tools : Array[ToolInfo],
 ) -> Unit {
-  let emitted : Map[String, Unit] = {}
+  let emitted : Map[String, Unit] = Map([])
   for tool in tools {
     for command in tool.commands {
       if command.error_type is Some(error_type) {
@@ -2085,7 +2132,7 @@ fn emit_tool_error_schemas(
 fn subtree_tool_sources(
   tools : Array[ToolInfo],
 ) -> Map[String, Unit] raise ToolEmitError {
-  let sources : Map[String, Unit] = {}
+  let sources : Map[String, Unit] = Map([])
   for tool in tools {
     for command in tool.commands {
       if command.subtree is Some(target) {
@@ -2100,19 +2147,8 @@ fn subtree_tool_sources(
 pub fn generate_tool_registration(
   tools : Array[ToolInfo],
 ) -> @list.List[@syntax.Impl] raise ToolEmitError {
-  validate_subtree_cycles(tools)
-  validate_inherited_surfaces(tools)
-  for tool in tools {
-    validate_sibling_commands(tools, tool)
-  }
-  let buf = StringBuilder::new()
-  emit_tool_error_schemas(buf, tools)
-  if tools.length() > 0 {
-    emit_descriptor_plumbing(buf)
-  }
-  for tool in tools {
-    emit_descriptor(buf, tool, tools)
-  }
+  let buf = StringBuilder()
+  emit_tool_descriptor_support(buf, tools, "", true, true)
   if tools.length() > 0 {
     let subtree_sources = subtree_tool_sources(tools)
     buf.write_string("///|\nfn init {\n  try {\n")
@@ -2123,7 +2159,7 @@ pub fn generate_tool_registration(
         } else {
           "    @tool.register_tool_def_invoker("
         }) +
-        descriptor_name(tool) +
+        descriptor_name(tool, "") +
         "(), __golem_tool_invoke_" +
         tool.source_name +
         ")\n",
@@ -2137,12 +2173,36 @@ pub fn generate_tool_registration(
 }
 
 ///|
+fn emit_tool_descriptor_support(
+  buf : StringBuilder,
+  tools : Array[ToolInfo],
+  symbol_scope : String,
+  include_invokers : Bool,
+  include_error_schemas : Bool,
+) -> Unit raise ToolEmitError {
+  validate_subtree_cycles(tools)
+  validate_inherited_surfaces(tools)
+  for tool in tools {
+    validate_sibling_commands(tools, tool)
+  }
+  if include_error_schemas {
+    emit_tool_error_schemas(buf, tools)
+  }
+  if tools.length() > 0 {
+    emit_descriptor_plumbing(buf, symbol_scope)
+  }
+  for tool in tools {
+    emit_descriptor(buf, tool, tools, symbol_scope, include_invokers)
+  }
+}
+
+///|
 fn client_args(
   own : Array[ProjectedToolArg],
   inherited : Array[ProjectedToolArg],
 ) -> Array[ProjectedToolArg] {
   let result : Array[ProjectedToolArg] = []
-  let inherited_identities : Map[String, Unit] = {}
+  let inherited_identities : Map[String, Unit] = Map([])
   for arg in inherited {
     for name in projected_arg_identity_names(arg) {
       inherited_identities[name] = ()
@@ -2249,7 +2309,7 @@ fn validate_client_type_names(
   tools : Array[ToolInfo],
   subtree_sources : Map[String, Unit],
 ) -> Unit raise ToolEmitError {
-  let generated : Map[String, Array[String]] = {}
+  let generated : Map[String, Array[String]] = Map([])
   for tool in tools {
     if subtree_sources.contains(tool.source_name) {
       continue
@@ -2286,16 +2346,13 @@ fn emit_tool_client_method(
   let success = command.success_type.map(emit_type).unwrap_or("Unit")
   let has_stdout = output_stream_source(command) is Some(_)
   let client_success = if has_stdout {
-    if is_unit(command.success_type) {
-      "@asyncCore.Stream[Byte]"
-    } else {
-      "(" + success + ", @asyncCore.Stream[Byte])"
-    }
+    "@tool.TypedToolInvocation[" + success + ", " + error + "]"
   } else {
     success
   }
   buf.write_string(
-    "///|\npub async fn " +
+    "///|\npub " +
+    (if has_stdout { "fn " } else { "async fn " }) +
     receiver +
     "::" +
     command.source_name +
@@ -2310,7 +2367,7 @@ fn emit_tool_client_method(
   )
   buf.write_string(
     "  let __golem_def = " +
-    descriptor_name(root) +
+    descriptor_name(root, "") +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(" +
     emit_strings(path) +
     ") {\n    Some(__golem_index) => __golem_index\n    None => return Err(@tool.tool_protocol_error(\"generated command path is missing from descriptor\"))\n  }\n  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch { __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error))) }\n  let __golem_values = " +
@@ -2340,6 +2397,32 @@ fn emit_tool_client_method(
   } else {
     "self.client.invoke_and_await_no_tool_error"
   }
+  if has_stdout {
+    let decode_error = if command.error_type is Some(_) {
+      "fn(__golem_value) { " +
+      error +
+      "::from_error_payload_value(__golem_value) }"
+    } else {
+      "fn(_) { Err(\"remote custom tool error is not declared by this client\") }"
+    }
+    let decode_result = if is_unit(command.success_type) {
+      "@tool.decode_result_empty"
+    } else {
+      "@tool.decode_result_value"
+    }
+    buf.write_string(
+      "  match self.client.start(" +
+      emit_strings(path) +
+      ", __golem_input, " +
+      stdin +
+      ", true, " +
+      decode_error +
+      ") {\n    Err(__golem_error) => Err(__golem_error)\n    Ok(__golem_invocation) => @tool.typed_invocation(__golem_invocation, " +
+      decode_result +
+      ")\n  }\n}\n\n",
+    )
+    return
+  }
   buf.write_string(
     "  match " +
     invoke +
@@ -2348,13 +2431,7 @@ fn emit_tool_client_method(
     ", __golem_input, " +
     stdin +
     ") {\n    Err(__golem_error) => Err(__golem_error)\n    Ok(__golem_result) => @tool." +
-    (if has_stdout {
-      if is_unit(command.success_type) {
-        "decode_result_stdout_only"
-      } else {
-        "decode_result_with_stdout"
-      }
-    } else if is_unit(command.success_type) {
+    (if is_unit(command.success_type) {
       "decode_result_empty"
     } else {
       "decode_result_value"
@@ -2490,7 +2567,7 @@ pub fn generate_tool_client_code(
   }
   let subtree_sources = subtree_tool_sources(tools)
   validate_client_type_names(tools, subtree_sources)
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for tool in tools {
     if subtree_sources.contains(tool.source_name) {
       continue

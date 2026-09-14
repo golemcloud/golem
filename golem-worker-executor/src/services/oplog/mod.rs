@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::ExecutionStatus;
+use crate::services::stream_session_index::StreamSessionIndexService;
 use async_trait::async_trait;
 pub use blob::BlobOplogArchiveService;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
@@ -22,6 +23,10 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::durable_stream::{
+    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
+    StreamSessionRecordV1,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -30,10 +35,10 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    OwnedAgentId, ScanCursor, Timestamp,
+    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, Timestamp,
 };
 use golem_common::read_only_lock;
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 pub use ephemeral::EphemeralOplog;
@@ -55,6 +60,11 @@ mod multilayer;
 pub mod plugin;
 mod primary;
 pub mod rate_limited;
+mod raw_session;
+mod reader;
+
+#[cfg(test)]
+pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};
 
 #[cfg(test)]
 pub mod tests;
@@ -75,6 +85,16 @@ pub mod tests;
 ///
 #[async_trait]
 pub trait OplogService: Debug + Send + Sync {
+    /// Installs the shared index after the complete oplog layer stack has been constructed.
+    /// Primary actors need the index, but reconstruction must read through the outer service so
+    /// archived entries and payloads remain visible. Constructing an index from primary storage
+    /// alone would bypass those layers. The index therefore holds only a Weak reference back to
+    /// the completed service; this dependency does not form an owning Arc cycle. Installation is
+    /// single-shot so actors and worker-status persistence share the same index instance.
+    fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>);
+
+    fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>>;
+
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -127,7 +147,8 @@ pub trait OplogService: Debug + Send + Sync {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
 
-    async fn read(
+    /// Reads exactly `n` contiguous entries starting at `idx`.
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -135,36 +156,18 @@ pub trait OplogService: Debug + Send + Sync {
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
 
-    /// Reads an inclusive range of entries from the oplog
-    async fn read_range(
+    /// Reads the part of the requested range physically present in this service.
+    ///
+    /// Composite services use this to fold their sources. Standalone services use the exact
+    /// logical read by default.
+    async fn read_source(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        start_idx: OplogIndex,
-        last_idx: OplogIndex,
+        idx: OplogIndex,
+        n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        assert!(
-            start_idx <= last_idx,
-            "Invalid range passed to OplogService::read_range: start_idx = {start_idx}, last_idx = {last_idx}"
-        );
-
-        self.read(
-            owned_agent_id,
-            agent_mode,
-            start_idx,
-            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
-        )
-        .await
-    }
-
-    async fn read_prefix(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        last_idx: OplogIndex,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.read_range(owned_agent_id, agent_mode, OplogIndex::INITIAL, last_idx)
-            .await
+        self.read_exact(owned_agent_id, agent_mode, idx, n).await
     }
 
     /// Checks whether the oplog exists in the oplog, without opening it
@@ -399,10 +402,100 @@ pub struct OrderedOplogStart {
     pub pending_upload: PendingUpload,
 }
 
+pub enum DurableStreamOplogRecord {
+    Registered(Option<OplogIndex>, StreamRegisteredRecordV1),
+    Items(Option<OplogIndex>, StreamItemsRecordV1),
+    End(Option<OplogIndex>, StreamEndRecordV1),
+    Cancel(Option<OplogIndex>, StreamCancelRecordV1),
+    Session(Option<OplogIndex>, Box<StreamSessionRecordV1>),
+    InlineEntry(OplogEntry),
+}
+
+impl DurableStreamOplogRecord {
+    fn serialize(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Registered(_, record) => serialize(record),
+            Self::Items(_, record) => serialize(record),
+            Self::End(_, record) => serialize(record),
+            Self::Cancel(_, record) => serialize(record),
+            Self::Session(_, record) => serialize(record),
+            Self::InlineEntry(_) => Ok(Vec::new()),
+        }
+    }
+
+    fn into_entry(self, raw: RawOplogPayload) -> Result<OplogEntry, String> {
+        match self {
+            Self::Registered(entity_parent_start_index, record) => {
+                Ok(OplogEntry::stream_registered(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::new(record))?,
+                ))
+            }
+            Self::Items(entity_parent_start_index, record) => Ok(OplogEntry::stream_items(
+                entity_parent_start_index,
+                raw.into_payload_with_cache(Arc::new(record))?,
+            )),
+            Self::End(entity_parent_start_index, record) => Ok(OplogEntry::stream_end(
+                entity_parent_start_index,
+                raw.into_payload_with_cache(Arc::new(record))?,
+            )),
+            Self::Cancel(entity_parent_start_index, record) => Ok(OplogEntry::stream_cancel(
+                entity_parent_start_index,
+                raw.into_payload_with_cache(Arc::new(record))?,
+            )),
+            Self::Session(entity_parent_start_index, record) => Ok(OplogEntry::stream_session(
+                entity_parent_start_index,
+                raw.into_payload_with_cache(Arc::from(record))?,
+            )),
+            Self::InlineEntry(entry) => Ok(entry),
+        }
+    }
+
+    pub fn into_inline_entry(self) -> OplogEntry {
+        match self {
+            Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::Items(entity_parent_start_index, record) => OplogEntry::stream_items(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::End(entity_parent_start_index, record) => OplogEntry::stream_end(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::Cancel(entity_parent_start_index, record) => OplogEntry::stream_cancel(
+                entity_parent_start_index,
+                OplogPayload::Inline(Box::new(record)),
+            ),
+            Self::Session(entity_parent_start_index, record) => {
+                OplogEntry::stream_session(entity_parent_start_index, OplogPayload::Inline(record))
+            }
+            Self::InlineEntry(entry) => entry,
+        }
+    }
+}
+
+pub type DurableStreamBatchBuilder =
+    Box<dyn FnOnce(OplogIndex) -> Vec<DurableStreamOplogRecord> + Send>;
+
+pub type ReservedRawStartBuilder =
+    Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>;
+
+pub type IndexedReservedStartBuilder =
+    Box<dyn FnOnce(OplogIndex) -> Result<(Vec<u8>, ReservedRawStartBuilder), String> + Send>;
+
 /// A single oplog append that has already been synchronously enqueued in the oplog's ordering
 /// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
 /// index after the append finishes.
 pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawDurableStreamSessionStatus {
+    pub watermark: OplogIndex,
+    pub status: Result<Option<DurableStreamSessionStatus>, String>,
+}
 
 /// An open oplog providing write access
 #[async_trait]
@@ -420,6 +513,34 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// domain as [`Self::add`] before this method returns; they must not implement it by merely
     /// boxing an unpolled call to `add`.
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt;
+
+    /// Atomically appends producer-stream records built from the first assigned index. A production
+    /// leaf externalizes each large record before committing any entry, and commit-threshold checks
+    /// run only after the complete batch is buffered. The checked default is for serialized test
+    /// oplogs only.
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        let first_index = self.current_oplog_index().await.next();
+        let records = make_batch(first_index);
+        let mut result = Vec::with_capacity(records.len());
+        for record in records {
+            let expected_index = result
+                .last()
+                .map_or(first_index, |(index, _): &(OplogIndex, OplogEntry)| {
+                    index.next()
+                });
+            let entry = record.into_inline_entry();
+            let index = self.add(entry.clone()).await;
+            assert_eq!(
+                index, expected_index,
+                "oplog add_durable_stream_batch default observed a concurrent writer"
+            );
+            result.push((index, entry));
+        }
+        Ok(result)
+    }
 
     /// A variant of add that can inject failures in tests. TO BE REMOVED
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
@@ -440,6 +561,18 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
 
+    /// Returns actor-ordered lifecycle metadata including buffered raw appends. Absence is proven
+    /// through the returned watermark; storage failures must not be reported as absence.
+    async fn raw_durable_stream_session_status(
+        &self,
+        _session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> RawDurableStreamSessionStatus {
+        RawDurableStreamSessionStatus {
+            watermark: self.current_oplog_index().await,
+            status: Err("raw stream session metadata is unavailable".into()),
+        }
+    }
+
     /// Returns the index of the last non-hint entry which was added in this session with `add`. If
     /// there is no such entry, returns `None`.
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex>;
@@ -450,11 +583,28 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// otherwise false.
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
 
-    /// Reads the entry at the given oplog index
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry;
+    /// Reads exactly `n` contiguous entries starting at `oplog_index`.
+    async fn read_exact(&self, oplog_index: OplogIndex, n: u64)
+    -> BTreeMap<OplogIndex, OplogEntry>;
 
-    /// Reads the entry at the given oplog index
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
+    /// Reads the part of the requested range physically present in this oplog.
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.read_exact(oplog_index, n).await
+    }
+
+    /// Reads the entry at the given oplog index.
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        self.read_exact(oplog_index, 1)
+            .await
+            .remove(&oplog_index)
+            .unwrap_or_else(|| {
+                panic!("Missing oplog entry {oplog_index} after an exact single-entry read")
+            })
+    }
 
     /// Notifies the oplog implementation that the worker's replay cursor committed a new
     /// position: `last_replayed_index` is the index of the last replayed entry. This fires only
@@ -521,7 +671,16 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
+    ) -> Result<OrderedOplogStart, String>;
+
+    /// Like [`Self::add_start_with_reserved_raw_payload`], but builds the request after the leaf
+    /// oplog has assigned the exact `Start` index. The leaf must invoke `build_request` and append
+    /// the resulting `Start` in the same serialized writer step, so the supplied index is exactly
+    /// the one returned in [`OrderedOplogStart`].
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
     ) -> Result<OrderedOplogStart, String>;
 
     /// Atomically appends a `Start` entry and a second entry (its `End` or
@@ -581,6 +740,18 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
     }
 }
 
+async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
+    bytes: Vec<u8>,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || {
+        golem_common::serialization::try_deserialize(&bytes)?.ok_or_else(|| {
+            "oplog payload has an unsupported or missing serialization version".into()
+        })
+    })
+    .await
+    .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
+}
+
 #[async_trait]
 pub trait OplogOps: Oplog {
     /// Uploads a big oplog payload and returns a reference to it
@@ -595,8 +766,21 @@ pub trait OplogOps: Oplog {
         Ok(payload)
     }
 
+    /// Uploads an owned oplog payload and moves it into the in-memory cache.
+    async fn upload_payload_owned<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
+        &self,
+        data: T,
+    ) -> Result<OplogPayload<T>, String> {
+        let bytes = serialize(&data)?;
+        let raw_payload = self.upload_raw_payload(bytes).await?;
+        let payload = raw_payload.into_payload_with_cache(Arc::new(data))?;
+        Ok(payload)
+    }
+
     /// Downloads a big oplog payload by its reference
-    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
+    async fn download_payload<
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
         &self,
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
@@ -605,7 +789,7 @@ pub trait OplogOps: Oplog {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize(&bytes),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -615,7 +799,7 @@ pub trait OplogOps: Oplog {
                 ..
             } => {
                 let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
-                deserialize(&bytes)
+                deserialize_oplog_payload(bytes).await
             }
         }
     }
@@ -649,6 +833,34 @@ pub trait OplogOps: Oplog {
                     Ok(build_start(payload))
                 }),
             )
+            .await?;
+        Ok((ordered.index, ordered.pending_upload))
+    }
+
+    /// Typed convenience wrapper over
+    /// [`Oplog::add_start_with_indexed_reserved_raw_payload`]. The request builder receives the
+    /// exact index that will identify the durable host call.
+    async fn add_start_with_indexed_reserved_payload<T>(
+        &self,
+        build_request: impl FnOnce(OplogIndex) -> Result<T, String> + Send + 'static,
+        build_start: impl FnOnce(OplogPayload<T>) -> OplogEntry + Send + 'static,
+    ) -> Result<(OplogIndex, PendingUpload), String>
+    where
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    {
+        let ordered = self
+            .add_start_with_indexed_reserved_raw_payload(Box::new(move |start_index| {
+                let request = build_request(start_index)?;
+                let bytes = serialize(&request)?;
+                let cached = Arc::new(request);
+                Ok((
+                    bytes,
+                    Box::new(move |raw| {
+                        let payload = raw.into_payload_with_cache(cached)?;
+                        Ok(build_start(payload))
+                    }),
+                ))
+            }))
             .await?;
         Ok((ordered.index, ordered.pending_upload))
     }
@@ -711,32 +923,41 @@ pub trait OplogOps: Oplog {
         invocation: AgentInvocation,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
-        self.add_agent_invocation_started_with_index(invocation, wallet_pin)
-            .await
-            .map(|(_, entry)| entry)
+        let entry = self
+            .agent_invocation_started_entry(invocation, wallet_pin)
+            .await?;
+        self.add(entry.clone()).await;
+        Ok(entry)
     }
 
     async fn add_agent_invocation_started_with_index(
         &self,
         invocation: AgentInvocation,
         wallet_pin: InvocationWalletPin,
-    ) -> Result<(OplogIndex, OplogEntry), String> {
+    ) -> Result<OplogIndex, String> {
+        let entry = self
+            .agent_invocation_started_entry(invocation, wallet_pin)
+            .await?;
+        Ok(self.add(entry).await)
+    }
+
+    async fn agent_invocation_started_entry(
+        &self,
+        invocation: AgentInvocation,
+        wallet_pin: InvocationWalletPin,
+    ) -> Result<OplogEntry, String> {
         let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
-        let payload = self.upload_payload(&invocation_payload).await?;
-        let trace_id = ctx.trace_id.clone();
-        let trace_states = ctx.trace_states.clone();
+        let payload = self.upload_payload_owned(invocation_payload).await?;
         let invocation_context = ctx.to_oplog_data();
-        let entry = OplogEntry::AgentInvocationStarted {
+        Ok(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             idempotency_key,
             payload,
-            trace_id,
-            trace_states,
+            trace_id: ctx.trace_id,
+            trace_states: ctx.trace_states,
             invocation_context,
             wallet_pin: Some(wallet_pin),
-        };
-        let index = self.add(entry.clone()).await;
-        Ok((index, entry))
+        })
     }
 
     async fn add_agent_invocation_finished(
@@ -770,7 +991,7 @@ pub trait OplogOps: Oplog {
         payload: Vec<u8>,
         mime_type: String,
     ) -> Result<UpdateDescription, String> {
-        let payload = self.upload_payload(&payload).await?;
+        let payload = self.upload_payload_owned(payload).await?;
         Ok(UpdateDescription::SnapshotBased {
             target_revision,
             payload,
@@ -816,7 +1037,9 @@ pub trait OplogServiceOps: OplogService {
     }
 
     /// Downloads a big oplog payload by its reference
-    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
+    async fn download_payload<
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -827,7 +1050,7 @@ pub trait OplogServiceOps: OplogService {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize(&bytes),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -839,7 +1062,7 @@ pub trait OplogServiceOps: OplogService {
                 let bytes = self
                     .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
                     .await?;
-                deserialize(&bytes)
+                deserialize_oplog_payload(bytes).await
             }
         }
     }

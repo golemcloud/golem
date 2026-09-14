@@ -16,11 +16,11 @@ use crate::model::cli_output::StructuredOutput;
 use crate::model::grant::{format_grants, grant_count};
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
+use chrono::SecondsFormat;
 use golem_client::model::{Account, PermissionShare};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
-    MemoryLimit, StorageLimit, StorageUsage, StorageUsageHistory, StorageUsageMetrics,
-    StorageUsagePeriod,
+    AccountUsage, AccountUsageMetrics, MemoryLimit, StorageLimit,
 };
 use golem_common::model::permission_share::PermissionShareId;
 use serde::{Deserialize, Serialize};
@@ -130,44 +130,30 @@ impl StructuredOutput for AccountDeleteView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountUsageView {
-    pub compute_gcu: f64,
-    pub memory_gb_seconds: u64,
-    pub durable_storage_gb_month: f64,
-    pub ephemeral_storage_gb_month: f64,
-    pub period: StorageUsagePeriod,
+    #[serde(flatten)]
+    pub usage: AccountUsageMetrics,
 }
 
 impl Masked for AccountUsageView {}
 
-impl From<StorageUsage> for AccountUsageView {
-    fn from(usage: StorageUsage) -> Self {
-        usage.usage.into()
+impl From<AccountUsage> for AccountUsageView {
+    fn from(usage: AccountUsage) -> Self {
+        Self { usage: usage.usage }
     }
 }
 
-impl From<StorageUsageHistory> for AccountUsageView {
-    fn from(usage: StorageUsageHistory) -> Self {
-        usage.usage.into()
-    }
-}
-
-impl From<StorageUsageMetrics> for AccountUsageView {
-    fn from(usage: StorageUsageMetrics) -> Self {
-        Self {
-            period: usage.period,
-            compute_gcu: usage.compute_gcu,
-            memory_gb_seconds: usage.memory_gb_seconds,
-            durable_storage_gb_month: usage.durable_storage_gb_month,
-            ephemeral_storage_gb_month: usage.ephemeral_storage_gb_month,
-        }
+impl From<AccountUsageMetrics> for AccountUsageView {
+    fn from(usage: AccountUsageMetrics) -> Self {
+        Self { usage }
     }
 }
 
 /// Column headings for the history table, which needs them even when there are no rows
 /// to take them from. Kept in step with [`AccountUsageView::rendered_fields`] by
 /// `account_usage_always_renders_the_same_labels_in_order`.
-const ACCOUNT_USAGE_LABELS: [&str; 5] = [
+const ACCOUNT_USAGE_LABELS: [&str; 6] = [
     "Period",
+    "As of",
     "Compute",
     "Memory",
     "Durable storage",
@@ -179,26 +165,26 @@ impl AccountUsageView {
     /// detail view and the history table render through this, so the same usage can never
     /// be reported two different ways. Each label sits next to the value it names, so a
     /// figure cannot end up under the wrong heading.
-    fn rendered_fields(&self) -> [(&'static str, String); 5] {
+    fn rendered_fields(&self) -> [(&'static str, String); 6] {
         [
-            ("Period", self.period.to_string()),
-            ("Compute", format!("{} GCU", self.compute_gcu)),
-            ("Memory", format!("{} GB-seconds", self.memory_gb_seconds)),
+            ("Period", self.usage.period.to_string()),
             (
-                "Durable storage",
-                format!("{} GB-month", self.durable_storage_gb_month),
+                "As of",
+                self.usage
+                    .as_of
+                    .to_rfc3339_opts(SecondsFormat::Millis, true),
             ),
-            (
-                "Ephemeral storage",
-                format!("{} GB-month", self.ephemeral_storage_gb_month),
-            ),
+            ("Compute", self.usage.format_compute()),
+            ("Memory", self.usage.format_memory()),
+            ("Durable storage", self.usage.format_durable_storage()),
+            ("Ephemeral storage", self.usage.format_ephemeral_storage()),
         ]
     }
 }
 
 impl MessageWithFields for AccountUsageView {
     fn message(&self) -> String {
-        format!("Account usage for {}", self.period)
+        format!("Account usage for {}", self.usage.period)
     }
 
     fn fields(&self) -> Vec<(String, String)> {
@@ -488,7 +474,10 @@ impl StructuredOutput for PermissionShareListView {
 #[cfg(test)]
 mod tests {
     use super::{ACCOUNT_USAGE_LABELS, AccountUsageView, MessageWithFields};
-    use golem_common::model::account_usage::StorageUsagePeriod;
+    use chrono::{TimeZone, Utc};
+    use golem_common::model::account_usage::{
+        AccountUsageMetering, AccountUsageMetrics, AccountUsagePeriod, MeteringStatus,
+    };
     use proptest::prelude::*;
     use test_r::test;
 
@@ -503,8 +492,8 @@ mod tests {
         ]
     }
 
-    fn arb_period() -> impl Strategy<Value = StorageUsagePeriod> {
-        (1970i32..=9999, 1u32..=12).prop_map(|(year, month)| StorageUsagePeriod { year, month })
+    fn arb_period() -> impl Strategy<Value = AccountUsagePeriod> {
+        (1970i32..=9999, 1u32..=12).prop_map(|(year, month)| AccountUsagePeriod { year, month })
     }
 
     fn arb_usage() -> impl Strategy<Value = AccountUsageView> {
@@ -524,11 +513,20 @@ mod tests {
                     period,
                 )| {
                     AccountUsageView {
-                        compute_gcu,
-                        memory_gb_seconds,
-                        durable_storage_gb_month,
-                        ephemeral_storage_gb_month,
-                        period,
+                        usage: AccountUsageMetrics {
+                            compute_gcu,
+                            memory_gb_seconds,
+                            durable_storage_gb_month,
+                            ephemeral_storage_gb_month,
+                            period,
+                            as_of: Utc.with_ymd_and_hms(2026, 4, 2, 3, 4, 5).unwrap(),
+                            metering: AccountUsageMetering {
+                                compute: MeteringStatus::Enabled,
+                                memory: MeteringStatus::Enabled,
+                                durable_storage: MeteringStatus::Enabled,
+                                ephemeral_storage: MeteringStatus::Enabled,
+                            },
+                        },
                     }
                 },
             )
@@ -536,13 +534,22 @@ mod tests {
 
     fn sample_usage() -> AccountUsageView {
         AccountUsageView {
-            compute_gcu: 1.5,
-            memory_gb_seconds: 4,
-            durable_storage_gb_month: 2.5,
-            ephemeral_storage_gb_month: 3.5,
-            period: StorageUsagePeriod {
-                year: 2026,
-                month: 4,
+            usage: AccountUsageMetrics {
+                compute_gcu: 1.5,
+                memory_gb_seconds: 4,
+                durable_storage_gb_month: 2.5,
+                ephemeral_storage_gb_month: 3.5,
+                period: AccountUsagePeriod {
+                    year: 2026,
+                    month: 4,
+                },
+                as_of: Utc.with_ymd_and_hms(2026, 4, 2, 3, 4, 5).unwrap(),
+                metering: AccountUsageMetering {
+                    compute: MeteringStatus::Enabled,
+                    memory: MeteringStatus::Enabled,
+                    durable_storage: MeteringStatus::Enabled,
+                    ephemeral_storage: MeteringStatus::Enabled,
+                },
             },
         }
     }
@@ -555,6 +562,7 @@ mod tests {
             fields,
             vec![
                 ("Period".to_string(), "2026-04".to_string()),
+                ("As of".to_string(), "2026-04-02T03:04:05.000Z".to_string()),
                 ("Compute".to_string(), "1.5 GCU".to_string()),
                 ("Memory".to_string(), "4 GB-seconds".to_string()),
                 ("Durable storage".to_string(), "2.5 GB-month".to_string()),
@@ -605,9 +613,9 @@ mod tests {
         fn account_usage_metrics_round_trip_with_their_units(usage in arb_usage()) {
             let fields = usage.fields();
             let expected: [(&str, &str, f64); 3] = [
-                ("Compute", " GCU", usage.compute_gcu),
-                ("Durable storage", " GB-month", usage.durable_storage_gb_month),
-                ("Ephemeral storage", " GB-month", usage.ephemeral_storage_gb_month),
+                ("Compute", " GCU", usage.usage.compute_gcu),
+                ("Durable storage", " GB-month", usage.usage.durable_storage_gb_month),
+                ("Ephemeral storage", " GB-month", usage.usage.ephemeral_storage_gb_month),
             ];
 
             for (label, unit, value) in expected {
@@ -643,8 +651,8 @@ mod tests {
 
             prop_assert_eq!(year.len(), 4, "year must be zero-padded, got '{}'", period);
             prop_assert_eq!(month.len(), 2, "month must be zero-padded, got '{}'", period);
-            prop_assert_eq!(year.parse::<i32>().ok(), Some(usage.period.year));
-            prop_assert_eq!(month.parse::<u32>().ok(), Some(usage.period.month));
+            prop_assert_eq!(year.parse::<i32>().ok(), Some(usage.usage.period.year));
+            prop_assert_eq!(month.parse::<u32>().ok(), Some(usage.usage.period.month));
         }
     }
 }

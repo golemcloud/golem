@@ -23,9 +23,12 @@ use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
-use golem_common::model::entity::EntityInvocationId;
+use golem_common::model::entity::{
+    AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationRequest,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
@@ -35,56 +38,482 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
+    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
-    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex, OplogScopeProjection,
+    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
-    ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicTypedAgentConfigEntry,
-    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters, UpdateDescription,
+    ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
+    PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
+    PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
+    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::{
-    InputSchema, NamedFieldType, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue,
+    InputSchema, IntoTypedSchemaValue, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
+    SchemaValue, TypedSchemaValue,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct PublicOplogChunk {
-    pub entries: Vec<PublicOplogEntry>,
+    pub entries: Vec<PublicOplogEntryWithIndex>,
     pub next_oplog_index: OplogIndex,
     pub current_component_revision: ComponentRevision,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
 }
 
-/// Projects one entity invocation's transitive durable-call tree from its owner's raw oplog.
-/// Entity histories remain owner records; this is a filtered view, not a child oplog or status.
-pub fn project_entity_oplog_entries(
-    invocation_id: &EntityInvocationId,
-    entries: impl IntoIterator<Item = (OplogIndex, OplogEntry)>,
-) -> Vec<(OplogIndex, OplogEntry)> {
-    let mut projection = OplogScopeProjection::new(invocation_id.start_index());
-    entries
-        .into_iter()
-        .filter(|(index, entry)| projection.includes(*index, entry))
-        .collect()
+#[derive(Clone)]
+struct OplogStartAttributionSource {
+    parent_start_index: Option<OplogIndex>,
+    observational_owner: Option<OplogIndex>,
+    function_name: HostFunctionName,
+    request: Option<golem_common::model::oplog::OplogPayload<HostRequest>>,
+}
+
+impl OplogStartAttributionSource {
+    fn from_entry(entry: &OplogEntry) -> Option<Self> {
+        match entry {
+            OplogEntry::Start {
+                parent_start_index,
+                observational_owner,
+                function_name,
+                request,
+                ..
+            } => Some(Self {
+                parent_start_index: *parent_start_index,
+                observational_owner: *observational_owner,
+                function_name: function_name.clone(),
+                request: request.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn parent(&self) -> Option<OplogIndex> {
+        self.observational_owner.or(self.parent_start_index)
+    }
+}
+
+enum AttributionPathNode {
+    Inherit(OplogIndex),
+    Entity(OplogIndex, PublicEntityInvocation),
+    Agent(OplogIndex),
+}
+
+struct PublicOplogAttributionResolver<'a> {
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &'a OwnedAgentId,
+    agent_mode: AgentMode,
+    starts: HashMap<OplogIndex, Option<OplogStartAttributionSource>>,
+    resolved: HashMap<OplogIndex, Option<PublicEntityInvocationContext>>,
+}
+
+impl<'a> PublicOplogAttributionResolver<'a> {
+    fn new(
+        oplog_service: Arc<dyn OplogService>,
+        owned_agent_id: &'a OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Self {
+        Self {
+            oplog_service,
+            owned_agent_id,
+            agent_mode,
+            starts: HashMap::new(),
+            resolved: HashMap::new(),
+        }
+    }
+
+    fn cache_entry(&mut self, index: OplogIndex, entry: &OplogEntry) {
+        self.starts
+            .insert(index, OplogStartAttributionSource::from_entry(entry));
+    }
+
+    async fn attribution_for_entry(
+        &mut self,
+        index: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<PublicOplogEntryAttribution, String> {
+        if let Some(start_index) = entry.entity_parent_start_index() {
+            if start_index >= index {
+                return Err(format!(
+                    "oplog entry {index} has non-causal entity parent Start index {start_index}"
+                ));
+            }
+            let source = self.load_start(start_index).await?.ok_or_else(|| {
+                format!(
+                    "oplog entry {index} entity parent index {start_index} does not reference a Start"
+                )
+            })?;
+            if source.function_name != HostFunctionName::GolemEntityInvoke {
+                return Err(format!(
+                    "oplog entry {index} entity parent Start {start_index} is not an entity invocation"
+                ));
+            }
+            return self
+                .entity_context_for_start(start_index)
+                .await?
+                .map(PublicOplogEntryAttribution::entity)
+                .ok_or_else(|| {
+                    format!(
+                        "oplog entry {index} entity parent Start {start_index} has no entity attribution"
+                    )
+                });
+        }
+
+        let owner_start_index = match entry {
+            OplogEntry::Start { .. } => Some(index),
+            OplogEntry::End { start_index, .. }
+            | OplogEntry::Cancelled { start_index, .. }
+            | OplogEntry::CompletionDiscarded { start_index, .. }
+            | OplogEntry::CompletionDelivered { start_index, .. } => Some(*start_index),
+            OplogEntry::HostStreamFrame {
+                parent_start_index, ..
+            }
+            | OplogEntry::Log {
+                parent_start_index: Some(parent_start_index),
+                ..
+            }
+            | OplogEntry::StartSpan {
+                parent_start_index: Some(parent_start_index),
+                ..
+            }
+            | OplogEntry::FinishSpan {
+                parent_start_index: Some(parent_start_index),
+                ..
+            }
+            | OplogEntry::SetSpanAttribute {
+                parent_start_index: Some(parent_start_index),
+                ..
+            } => Some(*parent_start_index),
+            OplogEntry::Error {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::NoOp {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::Jump {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::BeginAtomicRegion {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::EndAtomicRegion {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CreateResource {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::DropResource {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::SetRetryPolicy {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::RemoveRetryPolicy {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardEventQueued {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardInstalled {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardInstallFailed {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardRevoked {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardExpired {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardDerived {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferStarted {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferred {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardRevokedCascade {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::CardTransferConfirmed {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamRegistered {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamItems {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamEnd {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamCancel {
+                entity_parent_start_index,
+                ..
+            }
+            | OplogEntry::StreamSession {
+                entity_parent_start_index,
+                ..
+            } => *entity_parent_start_index,
+            OplogEntry::BeginRemoteTransaction {
+                original_begin_index: Some(begin_index),
+                ..
+            } => Some(*begin_index),
+            OplogEntry::BeginRemoteTransaction {
+                original_begin_index: None,
+                ..
+            } => Some(index.previous()),
+            OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
+            | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
+            | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
+            | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => Some(*begin_index),
+            OplogEntry::Create { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::Log {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::StartSpan {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::FinishSpan {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::SetSpanAttribute {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. } => None,
+        };
+
+        match owner_start_index {
+            Some(start_index) => self
+                .entity_context_for_start(start_index)
+                .await
+                .map(|context| {
+                    context.map_or_else(
+                        PublicOplogEntryAttribution::agent,
+                        PublicOplogEntryAttribution::entity,
+                    )
+                }),
+            None => Ok(PublicOplogEntryAttribution::agent()),
+        }
+    }
+
+    async fn entity_context_for_start(
+        &mut self,
+        start_index: OplogIndex,
+    ) -> Result<Option<PublicEntityInvocationContext>, String> {
+        let mut path = Vec::new();
+        let mut visited = HashSet::new();
+        let mut current = start_index;
+        let mut context = loop {
+            if let Some(resolved) = self.resolved.get(&current) {
+                break resolved.clone();
+            }
+            if !visited.insert(current) {
+                return Err(format!("cyclic oplog Start attribution at index {current}"));
+            }
+
+            let Some(source) = self.load_start(current).await? else {
+                break None;
+            };
+            if source.function_name == HostFunctionName::GolemToolInvocationRejected {
+                path.push(AttributionPathNode::Agent(current));
+                break None;
+            }
+            if source.function_name == HostFunctionName::GolemEntityInvoke {
+                let invocation = self.load_public_entity_invocation(current, &source).await?;
+                let parent = source.parent();
+                path.push(AttributionPathNode::Entity(current, invocation));
+                match parent {
+                    Some(parent) => current = parent,
+                    None => break None,
+                }
+            } else {
+                let parent = source.parent();
+                path.push(AttributionPathNode::Inherit(current));
+                match parent {
+                    Some(parent) => current = parent,
+                    None => break None,
+                }
+            }
+        };
+
+        for node in path.into_iter().rev() {
+            let index = match node {
+                AttributionPathNode::Inherit(index) => index,
+                AttributionPathNode::Agent(index) => {
+                    context = None;
+                    index
+                }
+                AttributionPathNode::Entity(index, invocation) => {
+                    let ancestors = context
+                        .as_ref()
+                        .map(|parent| {
+                            let mut ancestors = parent.ancestors.clone();
+                            ancestors.push(parent.invocation.clone());
+                            ancestors
+                        })
+                        .unwrap_or_default();
+                    context = Some(PublicEntityInvocationContext {
+                        invocation,
+                        ancestors,
+                    });
+                    index
+                }
+            };
+            self.resolved.insert(index, context.clone());
+        }
+
+        Ok(context)
+    }
+
+    async fn load_start(
+        &mut self,
+        index: OplogIndex,
+    ) -> Result<Option<OplogStartAttributionSource>, String> {
+        if let Some(start) = self.starts.get(&index) {
+            return Ok(start.clone());
+        }
+
+        let entry = self
+            .oplog_service
+            .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
+            .await
+            .remove(&index);
+        let start = entry
+            .as_ref()
+            .and_then(OplogStartAttributionSource::from_entry);
+        self.starts.insert(index, start.clone());
+        Ok(start)
+    }
+
+    async fn load_public_entity_invocation(
+        &self,
+        start_index: OplogIndex,
+        source: &OplogStartAttributionSource,
+    ) -> Result<PublicEntityInvocation, String> {
+        let request_payload = source
+            .request
+            .clone()
+            .ok_or_else(|| format!("entity invocation Start {start_index} has no request"))?;
+        let request: HostRequest = self
+            .oplog_service
+            .download_payload(self.owned_agent_id, self.agent_mode, request_payload)
+            .await?;
+        let request = match request {
+            HostRequest::EntityInvocation(request) => request,
+            actual => {
+                return Err(format!(
+                    "entity invocation Start {start_index} has unexpected request {actual:?}"
+                ));
+            }
+        };
+        let metadata = desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
+            .map_err(|error| {
+                format!("failed to decode entity invocation Start {start_index}: {error}")
+            })?;
+
+        Ok(public_entity_invocation(start_index, metadata))
+    }
+}
+
+fn public_entity_invocation(
+    start_index: OplogIndex,
+    request: EntityInvocationRequest,
+) -> PublicEntityInvocation {
+    let entity = PublicAgentEntity {
+        kind: match &request.entity {
+            AgentEntity::Tool(_) => PublicAgentEntityKind::Tool,
+            AgentEntity::ToolMiddleware(_) => PublicAgentEntityKind::ToolMiddleware,
+        },
+        name: request.entity.name().to_string(),
+    };
+    let call_mode = match request.call_mode {
+        EntityCallMode::Synchronous => PublicEntityCallMode::Synchronous,
+        EntityCallMode::Asynchronous => PublicEntityCallMode::Asynchronous,
+        EntityCallMode::FireAndForget => PublicEntityCallMode::FireAndForget,
+    };
+    let operation = request.operation.map(|operation| match operation {
+        EntityInvocationDescriptor::Tool(tool) => {
+            PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
+                command_path: tool.command_path,
+                has_stdin: tool.has_stdin,
+                has_stdout: tool.has_stdout,
+                declares_stdout: tool.declares_stdout,
+            })
+        }
+    });
+    PublicEntityInvocation {
+        entity,
+        start_index,
+        call_mode,
+        operation,
+    }
 }
 
 pub async fn get_public_oplog_chunk(
@@ -97,23 +526,34 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
+    let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
+    let last_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let available = if initial_oplog_index <= last_index {
+        last_index.as_u64() - initial_oplog_index.as_u64() + 1
+    } else {
+        0
+    };
     let raw_entries = oplog_service
-        .read(
+        .read_exact(
             owned_agent_id,
             agent_mode,
             initial_oplog_index,
-            count as u64,
+            (count as u64).min(available),
         )
-        .await;
-
-    let last_index = oplog_service
-        .get_last_index(owned_agent_id, agent_mode)
         .await;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
     let mut next_oplog_index = initial_oplog_index;
     let mut first_index_in_chunk = None;
+
+    let mut attribution_resolver =
+        PublicOplogAttributionResolver::new(oplog_service.clone(), owned_agent_id, agent_mode);
+    for (index, raw_entry) in &raw_entries {
+        attribution_resolver.cache_entry(*index, raw_entry);
+    }
 
     for (index, raw_entry) in raw_entries {
         if first_index_in_chunk.is_none() {
@@ -123,6 +563,9 @@ pub async fn get_public_oplog_chunk(
             current_component_revision = revision;
         }
 
+        let attribution = attribution_resolver
+            .attribution_for_entry(index, &raw_entry)
+            .await?;
         let entry = PublicOplogEntry::from_oplog_entry(
             index,
             raw_entry,
@@ -134,7 +577,11 @@ pub async fn get_public_oplog_chunk(
             current_component_revision,
         )
         .await?;
-        entries.push(entry);
+        entries.push(PublicOplogEntryWithIndex {
+            oplog_index: index,
+            attribution,
+            entry,
+        });
         next_oplog_index = index.next();
     }
 
@@ -148,7 +595,7 @@ pub async fn get_public_oplog_chunk(
 }
 
 pub struct PublicOplogSearchResult {
-    pub entries: Vec<(OplogIndex, PublicOplogEntry)>,
+    pub entries: Vec<PublicOplogEntryWithIndex>,
     pub next_oplog_index: OplogIndex,
     pub current_component_revision: ComponentRevision,
     pub last_index: OplogIndex,
@@ -185,12 +632,9 @@ pub async fn search_public_oplog(
         )
         .await?;
 
-        for (idx, entry) in chunk.entries.into_iter().enumerate() {
-            if entry.matches(&query) {
-                results.push((
-                    OplogIndex::from_u64(u64::from(current_index) + idx as u64),
-                    entry,
-                ));
+        for entry in chunk.entries {
+            if entry.entry.matches(&query) {
+                results.push(entry);
             }
         }
 
@@ -198,7 +642,7 @@ pub async fn search_public_oplog(
         current_index = chunk.next_oplog_index;
         current_component_revision = chunk.current_component_revision;
 
-        if current_index >= last_index || results.len() >= count {
+        if current_index > last_index || results.len() >= count {
             break;
         }
     }
@@ -225,11 +669,9 @@ pub async fn find_component_revision_at(
     while current < start && current <= last_oplog_index {
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
-            .read(owned_agent_id, agent_mode, current, 1)
+            .read_exact(owned_agent_id, agent_mode, current, 1)
             .await
-            .iter()
-            .next()
-            .map(|(_, v)| v.clone());
+            .remove(&current);
 
         if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {
             initial_component_revision = revision;
@@ -253,6 +695,17 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String>;
+}
+
+fn host_response_to_public_value(response: HostResponse) -> Result<TypedSchemaValue, String> {
+    match response {
+        HostResponse::EntityInvocation(HostResponseEntityInvocation { result: Ok(value) }) => {
+            Ok(value)
+        }
+        response => response
+            .into_typed_schema_value()
+            .map_err(|error| error.to_string()),
+    }
 }
 
 #[async_trait]
@@ -343,23 +796,25 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .download_payload(owned_agent_id, agent_mode, request_payload)
                         .await?;
 
-                    // Enriching data
-                    let host_request = match host_request {
+                    let request_value = match host_request {
+                        HostRequest::EntityInvocation(request) => request.input,
                         HostRequest::GolemRpcInvoke(inner) => HostRequest::GolemRpcInvoke(
                             enrich_golem_rpc_invoke(components, inner).await,
-                        ),
+                        )
+                        .into_typed_schema_value()
+                        .map_err(|error| error.to_string())?,
                         HostRequest::GolemRpcScheduledInvocation(inner) => {
                             HostRequest::GolemRpcScheduledInvocation(
                                 enrich_golem_rpc_scheduled_invocation(components, inner).await,
                             )
-                        }
-                        other => other,
-                    };
-                    Some(
-                        host_request
                             .into_typed_schema_value()
-                            .map_err(|e| e.to_string())?,
-                    )
+                            .map_err(|error| error.to_string())?
+                        }
+                        other => other
+                            .into_typed_schema_value()
+                            .map_err(|error| error.to_string())?,
+                    };
+                    Some(request_value)
                 } else {
                     None
                 };
@@ -384,11 +839,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, response_payload)
                         .await?;
-                    Some(
-                        host_response
-                            .into_typed_schema_value()
-                            .map_err(|e| e.to_string())?,
-                    )
+                    Some(host_response_to_public_value(host_response)?)
                 } else {
                     None
                 };
@@ -409,11 +860,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     let host_response: HostResponse = oplog_service
                         .download_payload(owned_agent_id, agent_mode, partial_payload)
                         .await?;
-                    Some(
-                        host_response
-                            .into_typed_schema_value()
-                            .map_err(|e| e.to_string())?,
-                    )
+                    Some(host_response_to_public_value(host_response)?)
                 } else {
                     None
                 };
@@ -525,6 +972,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 retry_from,
                 inside_atomic_region,
                 retry_policy_state,
+                ..
             } => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp,
                 error: error.to_string(""),
@@ -532,10 +980,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(Into::into),
             })),
-            OplogEntry::NoOp { timestamp } => Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp })),
-            OplogEntry::Jump { timestamp, jump } => {
-                Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump }))
+            OplogEntry::NoOp { timestamp, .. } => {
+                Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp }))
             }
+            OplogEntry::Jump {
+                timestamp, jump, ..
+            } => Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump })),
             OplogEntry::Interrupted { timestamp } => {
                 Ok(PublicOplogEntry::Interrupted(InterruptedParams {
                     timestamp,
@@ -544,12 +994,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Exited { timestamp } => {
                 Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
             }
-            OplogEntry::BeginAtomicRegion { timestamp } => Ok(PublicOplogEntry::BeginAtomicRegion(
-                BeginAtomicRegionParams { timestamp },
-            )),
+            OplogEntry::BeginAtomicRegion { timestamp, .. } => Ok(
+                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }),
+            ),
             OplogEntry::EndAtomicRegion {
                 timestamp,
                 begin_index,
+                ..
             } => Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
                 timestamp,
                 begin_index,
@@ -661,15 +1112,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     delta,
                 }))
             }
-            OplogEntry::FilesystemStorageUsageUpdate { timestamp, delta } => {
-                Ok(PublicOplogEntry::FilesystemStorageUsageUpdate(
-                    FilesystemStorageUsageUpdateParams { timestamp, delta },
-                ))
-            }
             OplogEntry::CreateResource {
                 timestamp,
                 id,
                 resource_type_id,
+                ..
             } => Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
                 timestamp,
                 id,
@@ -680,6 +1127,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 id,
                 resource_type_id,
+                ..
             } => Ok(PublicOplogEntry::DropResource(DropResourceParams {
                 timestamp,
                 id,
@@ -917,20 +1365,23 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     },
                 ))
             }
-            OplogEntry::SetRetryPolicy { timestamp, policy } => {
-                Ok(PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
-                    timestamp,
-                    policy: policy.into(),
-                }))
-            }
-            OplogEntry::RemoveRetryPolicy { timestamp, name } => Ok(
-                PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams { timestamp, name }),
-            ),
+            OplogEntry::SetRetryPolicy {
+                timestamp, policy, ..
+            } => Ok(PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
+                timestamp,
+                policy: policy.into(),
+            })),
+            OplogEntry::RemoveRetryPolicy {
+                timestamp, name, ..
+            } => Ok(PublicOplogEntry::RemoveRetryPolicy(
+                RemoveRetryPolicyParams { timestamp, name },
+            )),
             OplogEntry::CardRevoked {
                 timestamp,
                 queued_event_index,
                 card_id,
                 wallet_generation,
+                ..
             } => Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
                 timestamp,
                 queued_event_index,
@@ -941,6 +1392,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 card_id,
                 wallet_generation,
+                ..
             } => Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
                 timestamp,
                 card_id,
@@ -965,17 +1417,83 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .map_err(|e| e.to_string())?,
                 }))
             }
-            OplogEntry::CardEventQueued { timestamp, event } => {
-                Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+            OplogEntry::StreamRegistered {
+                timestamp, record, ..
+            } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
                     timestamp,
-                    event: event.into(),
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
                 }))
             }
+            OplogEntry::StreamItems {
+                timestamp, record, ..
+            } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamItems(StreamItemsParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamEnd {
+                timestamp, record, ..
+            } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamCancel {
+                timestamp, record, ..
+            } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::StreamSession {
+                timestamp, record, ..
+            } => {
+                let record = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, record)
+                    .await?;
+                Ok(PublicOplogEntry::StreamSession(StreamSessionParams {
+                    timestamp,
+                    record: record
+                        .into_typed_schema_value()
+                        .map_err(|e| e.to_string())?,
+                }))
+            }
+            OplogEntry::CardEventQueued {
+                timestamp, event, ..
+            } => Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                timestamp,
+                event: event.into(),
+            })),
             OplogEntry::CardInstalled {
                 timestamp,
                 queued_event_index,
                 card,
                 wallet_generation,
+                ..
             } => Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
                 timestamp,
                 queued_event_index,
@@ -987,6 +1505,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 queued_event_index,
                 card_id,
                 reason,
+                ..
             } => Ok(PublicOplogEntry::CardInstallFailed(
                 CardInstallFailedParams {
                     timestamp,
@@ -999,6 +1518,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 card,
                 wallet_generation,
+                ..
             } => Ok(PublicOplogEntry::CardDerived(CardDerivedParams {
                 timestamp,
                 card_id: card.card_id(),
@@ -1055,6 +1575,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 source_card_id,
                 installed_card_id,
                 target_holder,
+                ..
             } => Ok(PublicOplogEntry::CardTransferConfirmed(
                 CardTransferConfirmedParams {
                     timestamp,

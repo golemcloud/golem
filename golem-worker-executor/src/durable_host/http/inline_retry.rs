@@ -127,7 +127,7 @@ pub(crate) fn take_http_background_retry_fallback(
 pub enum InlineRetryIneligible {
     /// Worker is in replay mode (not live).
     NotLive,
-    /// Worker is in snapshotting mode.
+    /// Worker is executing a snapshot load/save function.
     Snapshotting,
     /// Worker is inside a user-defined atomic region; a failure must escalate
     /// to trap+replay so the whole region re-executes.
@@ -268,7 +268,7 @@ async fn reconstruct_outgoing_body_chunks_after(
     // current_oplog_index() returns the index OF the last written entry,
     // so we need +1 to include it in the scan range.
     let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
-    let entries = oplog.read_many(begin_index, n).await;
+    let entries = oplog.read_exact(begin_index, n).await;
     let mut chunks = Vec::new();
 
     let write_fn_name =
@@ -364,7 +364,7 @@ pub async fn count_incoming_body_bytes(
     // current_oplog_index() returns the index OF the last written entry,
     // so we need +1 to include it in the scan range.
     let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
-    let entries = oplog.read_many(begin_index, n).await;
+    let entries = oplog.read_exact(begin_index, n).await;
     let mut total: u64 = 0;
 
     let read_fn_name =
@@ -696,6 +696,7 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
     agent_type: Option<String>,
     max_delay: Duration,
     begin_index: OplogIndex,
+    entity_parent_start_index: Option<OplogIndex>,
 ) -> FutureIncomingResponseHandle {
     // No span: this task waits for the guest to finish its outgoing body, so its
     // duration is decided by guest code rather than by an operation the executor
@@ -734,13 +735,14 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
         );
 
         let current_retry_policy_state = worker
-            .get_non_detached_last_known_status()
+            .get_attached_last_known_status()
             .await
             .current_retry_state
             .get(&begin_index)
             .cloned();
         let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
             retry_point: begin_index,
+            entity_parent_start_index,
             environment_state_service,
             environment_id,
             default_retry_policy,
@@ -932,6 +934,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     retry_properties: RetryProperties,
     max_delay: Duration,
     begin_index: OplogIndex,
+    entity_parent_start_index: Option<OplogIndex>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 ) -> FutureIncomingResponseHandle {
     // Capture config fields individually since OutgoingRequestConfig is not Clone
@@ -983,13 +986,14 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                 Ok(Err(initial_error)) => {
                     let oplog = worker.oplog();
                     let current_retry_policy_state = worker
-                        .get_non_detached_last_known_status()
+                        .get_attached_last_known_status()
                         .await
                         .current_retry_state
                         .get(&begin_index)
                         .cloned();
                     let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: begin_index,
+                        entity_parent_start_index,
                         environment_state_service,
                         environment_id,
                         default_retry_policy,
@@ -1272,6 +1276,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 retry_properties,
                 exec_state.max_in_function_retry_delay,
                 request_state.begin_index(),
+                ctx.entity_parent_start_index(),
                 ctx.execution_status.clone(),
             );
             HostFutureIncomingResponse::pending(retry_handle)
@@ -1550,7 +1555,7 @@ pub(crate) enum StatusRetryOutcome {
 /// This is invoked from `HostFutureIncomingResponse::get` *after* the response has
 /// arrived (so its status is known) but *before* the response is exposed to guest
 /// code or persisted. Behavior:
-/// - In replay mode, snapshotting mode, or inside an atomic region
+/// - In replay mode, unpersisted execution, snapshotting, or inside an atomic region
 ///   the function is a no-op (`NoRetry`) — by design (atomic-region semantics: skip
 ///   in v1, the user-land throw triggers atomic-region replay).
 /// - Otherwise eligibility is checked using the same rules as

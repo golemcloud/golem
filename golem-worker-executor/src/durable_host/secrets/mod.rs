@@ -42,11 +42,13 @@ use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::{SchemaValue, SecretValuePayload};
 use golem_common::schema::validation::subtyping::is_equivalent_cross_graph;
 use golem_common::schema::validation::value::validate_value;
-use golem_schema::schema::wit::wire::{HostSecret, SchemaValueTree};
+use golem_schema::schema::wit::wire::{HostSecretWithStore, SchemaValueTree};
 use golem_schema::schema::wit::{SecretHandleRep, SecretResolver, decode_graph, encode_value_with};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, Resource};
+
+use crate::durable_host::schema_value_stream::CoreTypesHost;
 
 fn secret_entry<'a, Ctx: WorkerCtx>(
     ctx: &'a mut DurableWorkerCtx<Ctx>,
@@ -304,11 +306,17 @@ fn reveal_error_to_wit(error: SecretRevealError) -> SecretError {
     }
 }
 
-impl<Ctx: WorkerCtx> HostSecret for DurableWorkerCtx<Ctx> {
-    async fn drop(&mut self, rep: Resource<SecretHandleRep>) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "golem::core::secret", "drop");
-        self.table().delete(rep)?;
-        Ok(())
+impl<T: Send + 'static, Ctx: WorkerCtx> HostSecretWithStore<T> for CoreTypesHost<Ctx> {
+    async fn drop(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<SecretHandleRep>,
+    ) -> anyhow::Result<()> {
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            DurabilityHost::observe_function_call(ctx, "golem::core::secret", "drop");
+            ctx.table().delete(rep)?;
+            Ok(())
+        })
     }
 }
 

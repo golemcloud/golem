@@ -1,0 +1,45 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+
+manifestVersion: 1.6.0
+
+app: tool-streaming
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:tool-streaming-rust-provider:
+    dir: rust-provider
+    templates: rust, rust-test-component
+  golem-it:tool-streaming-rust-caller:
+    dir: rust-caller
+    templates: rust, rust-test-component
+    dependencies:
+      tools:
+      - golem-it:tool-streaming-rust-provider/streaming
+      - golem-it:tool-streaming-rust-provider/capable-streaming
+
+tools:
+  streaming: {}
+  capable-streaming: {}
+
+agents:
+  ToolStreamingCaller:
+    tools:
+      streaming: {}
+      capable-streaming: {}
+
+bridge:
+  rust:
+    internal:
+      tools:
+      - streaming
+      - capable-streaming
+
+environments:
+  local:
+    server: local
+    componentPresets: release

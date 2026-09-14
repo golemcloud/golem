@@ -23,7 +23,8 @@ test_r::enable!();
 mod app;
 mod bridge_gen;
 
-// Tag for the it-cli `bridge_gen` CI shard (see the it-cli matrix in ci.yaml).
+// Tag for the it-cli `bridge_gen` and `bridge_gen_rust` CI shards (see the it-cli matrix in
+// ci.yaml); `bridge_gen::rust` is additionally tagged `bridge_gen_rust` in bridge_gen/mod.rs.
 tag_suite!(bridge_gen, bridge_gen);
 
 #[derive(Debug)]

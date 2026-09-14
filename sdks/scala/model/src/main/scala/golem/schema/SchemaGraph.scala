@@ -31,7 +31,32 @@ final case class SchemaTypeDef(body: SchemaType, name: Option[String] = None)
  * `defs` is a [[ListMap]] so iteration order is deterministic; the WIT codecs
  * additionally sort by id when flattening.
  */
-final case class SchemaGraph(defs: ListMap[String, SchemaTypeDef], root: SchemaType)
+final case class SchemaGraph(defs: ListMap[String, SchemaTypeDef], root: SchemaType) {
+  def containsStream: Boolean = {
+    import SchemaTypeBody._
+
+    def visit(schemaType: SchemaType, visiting: Set[String]): Boolean =
+      schemaType.body match {
+        case StreamType(_)                => true
+        case RefType(id) if !visiting(id) =>
+          defs.get(id).exists(definition => visit(definition.body, visiting + id))
+        case RecordType(fields)        => fields.exists(field => visit(field.body, visiting))
+        case VariantType(cases)        => cases.exists(_.payload.exists(visit(_, visiting)))
+        case TupleType(elements)       => elements.exists(visit(_, visiting))
+        case ListType(element)         => visit(element, visiting)
+        case FixedListType(element, _) => visit(element, visiting)
+        case MapType(key, value)       => visit(key, visiting) || visit(value, visiting)
+        case OptionType(element)       => visit(element, visiting)
+        case ResultType(ok, err)       => ok.exists(visit(_, visiting)) || err.exists(visit(_, visiting))
+        case UnionType(branches)       => branches.exists(branch => visit(branch.body, visiting))
+        case SecretType(spec)          => visit(spec.inner, visiting)
+        case FutureType(element)       => element.exists(visit(_, visiting))
+        case _                         => false
+      }
+
+    visit(root, Set.empty)
+  }
+}
 
 /** A typed value: a self-contained schema graph paired with a value tree. */
 final case class TypedSchemaValue(graph: SchemaGraph, value: SchemaValue)

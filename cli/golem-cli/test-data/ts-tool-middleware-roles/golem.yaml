@@ -1,0 +1,21 @@
+manifestVersion: 1.6.0
+
+app: ts-tool-middleware-roles
+
+version: v0.0.0
+
+environments:
+  local:
+    server: local
+    version: v0.0.0
+
+components:
+  ts-tool-middleware-roles:ordinary:
+    dir: ordinary
+    templates: ts
+  ts-tool-middleware-roles:middleware:
+    dir: middleware
+    templates: ts-tool-middleware
+  ts-tool-middleware-roles:combined:
+    dir: combined
+    templates: ts-agent-tool-middleware

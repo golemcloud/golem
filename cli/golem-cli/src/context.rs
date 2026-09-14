@@ -37,7 +37,7 @@ use crate::model::config::server::ToFormattedServerContext;
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
-use crate::model::plugin::PluginNameAndVersion;
+use crate::model::plugin::PluginGrantKey;
 use crate::model::repl::ReplLanguage;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
@@ -980,7 +980,7 @@ pub struct Caches {
     pub plugin_grants: Cache<
         EnvironmentId,
         (),
-        HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
+        HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
         Arc<anyhow::Error>,
     >,
 }
@@ -1058,8 +1058,6 @@ mod test {
                 cli: None,
                 deployment: None,
                 version: None,
-                tools_merge_mode: None,
-                tools: None,
             },
         }
     }

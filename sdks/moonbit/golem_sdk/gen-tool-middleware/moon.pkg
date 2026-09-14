@@ -1,0 +1,25 @@
+warnings = "-44"
+
+import {
+  "golemcloud/golem_sdk/gen-tool-middleware/interface/golem/tool/tool-middleware-guest",
+}
+
+supported_targets = "+wasm"
+
+options(
+  link: {
+    "wasm": {
+      "export-memory-name": "memory",
+      "heap-start-address": 16,
+      "exports": [
+        "mbt_ffi_cabi_realloc:cabi_realloc",
+        "wasmExportAsyncInvokeToolMiddleware:[callback][async-lift]golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+        "wasmExportDiscoverToolMiddlewares:golem:tool/tool-middleware-guest@0.1.0#discover-tool-middlewares",
+        "wasmExportDiscoverToolMiddlewaresPostReturn:cabi_post_golem:tool/tool-middleware-guest@0.1.0#discover-tool-middlewares",
+        "wasmExportGetToolMiddleware:golem:tool/tool-middleware-guest@0.1.0#get-tool-middleware",
+        "wasmExportGetToolMiddlewarePostReturn:cabi_post_golem:tool/tool-middleware-guest@0.1.0#get-tool-middleware",
+        "wasmExportInvokeToolMiddleware:[async-lift]golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+      ],
+    },
+  },
+)

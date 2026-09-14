@@ -10,17 +10,25 @@ import {
 }
 
 // Values
-pub fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
+pub async fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
 
-pub fn decode_invocation_input(@types.SchemaValueTree, Int, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
+pub async fn decode_invocation_input(@types.SchemaValueTree, Int, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
 
-pub fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
+pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
 
 pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @common.AgentError
 
+pub async fn decode_snapshot_identity(@types.SchemaValueTree) -> Array[@schema_model.SchemaValue] raise @common.AgentError
+
+pub fn discard_optional_wire_value(@types.SchemaValueTree?) -> Unit
+
+pub fn discard_wire_value(@types.SchemaValueTree) -> Unit
+
 pub fn encode_invocation_input(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree raise @common.AgentError
 
-pub fn[T : @schema.IntoSchema] encode_output(T) -> @types.SchemaValueTree raise @common.AgentError
+pub async fn encode_invocation_input_async(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree
+
+pub async fn[T : @schema.IntoSchema] encode_output(T) -> @types.SchemaValueTree
 
 pub fn get_agent_instance() -> AgentInstance?
 
@@ -35,6 +43,8 @@ pub fn principal_from_json(Json) -> @common.Principal raise JsonCodecError
 pub fn principal_to_json(@common.Principal) -> Json
 
 pub fn register_agent(RegisteredAgent) -> Unit
+
+pub async fn restore_and_set_instance(String, Bytes, SnapshotRestoreContext) -> Result[Unit, String]
 
 pub fn set_agent_instance(AgentInstance) -> Unit
 
@@ -113,13 +123,23 @@ pub(all) enum InputParamSource {
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@types.SchemaValueTree, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
+  construct : async (@types.SchemaValueTree, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
+  load_snapshot : (async (Bytes, SnapshotRestoreContext) -> Result[ConstructedAgent, String])?
 }
 
 pub(all) enum SnapshotFormat {
   Json
   Binary
 } derive(Eq, @debug.Debug)
+
+pub(all) struct SnapshotRestoreContext {
+  agent_id : String
+  agent_type : String
+  identity_fields : Array[@schema_model.SchemaValue]
+  phantom_id : @types.Uuid?
+  principal : @common.Principal
+}
+pub fn[T : @schema.FromSchema] SnapshotRestoreContext::identity(Self, Int) -> T raise @common.AgentError
 
 // Type aliases
 
@@ -130,6 +150,4 @@ pub(open) trait RawAgent {
 
 pub(open) trait Snapshottable {
   fn save_snapshot(Self) -> Bytes
-  fn load_snapshot(Self, Bytes) -> Result[Unit, String]
 }
-

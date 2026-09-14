@@ -19,9 +19,6 @@
 /// `snapshot_save` that is only used when the inherent method doesn't exist.
 pub struct SaveHelper<'a, T>(pub &'a T);
 
-/// Wrapper for load dispatch using the autoref specialization trick.
-pub struct LoadHelper<'a, T>(pub &'a mut T);
-
 // -- Save --
 
 pub trait SnapshotSaveFallback {
@@ -44,27 +41,5 @@ impl<T: serde::Serialize> SaveHelper<'_, T> {
             data,
             mime_type: "application/json".to_string(),
         })
-    }
-}
-
-// -- Load --
-
-pub trait SnapshotLoadFallback {
-    fn snapshot_load(&mut self, bytes: &[u8]) -> Result<(), String>;
-}
-
-// Fallback: trait impl on LoadHelper<T> — lower priority than inherent methods
-impl<T> SnapshotLoadFallback for LoadHelper<'_, T> {
-    fn snapshot_load(&mut self, _bytes: &[u8]) -> Result<(), String> {
-        Err("snapshot not implemented: agent type does not implement serde::Serialize + serde::de::DeserializeOwned".to_string())
-    }
-}
-
-// Serde path: inherent method on LoadHelper<T> when T: DeserializeOwned — higher priority
-impl<T: serde::de::DeserializeOwned> LoadHelper<'_, T> {
-    pub fn snapshot_load(&mut self, bytes: &[u8]) -> Result<(), String> {
-        *self.0 = serde_json::from_slice(bytes)
-            .map_err(|e| format!("Failed to deserialize agent snapshot: {}", e))?;
-        Ok(())
     }
 }

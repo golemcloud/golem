@@ -85,6 +85,29 @@ pub(crate) async fn provision_rate_resource(
     Ok(def)
 }
 
+pub(crate) async fn wait_for_http_request_count(
+    received: &AtomicU64,
+    expected: u64,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        let count = received.load(Ordering::SeqCst);
+        if count == expected {
+            return Ok(());
+        }
+        if count > expected {
+            anyhow::bail!("expected exactly {expected} HTTP requests, received {count}");
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for {expected} HTTP requests; received {count}");
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Reserve `amount` units and commit the exact amount back.  The agent should
 /// return the reserved and committed amounts as a record.
 #[test]
@@ -696,7 +719,7 @@ async fn quota_token_rpc_rust(
     )
     .await?;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    wait_for_http_request_count(received.as_ref(), 4, Duration::from_secs(60)).await?;
 
     user.wait_for_statuses(
         &sender_sys,
@@ -795,7 +818,7 @@ async fn quota_token_rpc_ts(
     .await?;
 
     tracing::warn!("here2");
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    wait_for_http_request_count(received.as_ref(), 4, Duration::from_secs(60)).await?;
 
     user.wait_for_statuses(
         &sender_sys,
@@ -877,10 +900,7 @@ async fn rate_limit_throttle_two_agents(
     let agent_b_sys = user.start_agent(&component.id, agent_b.clone()).await?;
 
     let mut tasks = JoinSet::new();
-    for (agent_id, agent_sys_id) in [
-        (agent_a.clone(), agent_a_sys.clone()),
-        (agent_b.clone(), agent_b_sys.clone()),
-    ] {
+    for agent_id in [agent_a, agent_b] {
         let user = user.clone();
         let component = component.clone();
         let host = host.clone();
@@ -891,21 +911,23 @@ async fn rate_limit_throttle_two_agents(
                 "reserve_in_loop",
                 data_value!("shared-rate".to_string(), 10u64, host, port, 4u64),
             )
-            .await?;
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-
-            user.wait_for_statuses(
-                &agent_sys_id,
-                &[AgentStatus::Idle, AgentStatus::Suspended],
-                Duration::from_secs(60),
-            )
             .await
         });
     }
 
     while let Some(r) = tasks.join_next().await {
         r??;
+    }
+
+    wait_for_http_request_count(received.as_ref(), 4, Duration::from_secs(60)).await?;
+
+    for agent_system_id in [agent_a_sys, agent_b_sys] {
+        user.wait_for_statuses(
+            &agent_system_id,
+            &[AgentStatus::Idle, AgentStatus::Suspended],
+            Duration::from_secs(60),
+        )
+        .await?;
     }
 
     http_server.abort();

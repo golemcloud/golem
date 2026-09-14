@@ -210,7 +210,7 @@ impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
         // adjacently-tagged `SchemaValue` wire form. Render it through the
         // schema graph so it round-trips with
         // `parse_worker_creation_agent_config` (`from_json_value`).
-        let json = crate::schema::render::to_json_value(&graph, &graph.root, &schema_value)
+        let json = golem_schema::schema::render::to_json_value(&graph, &graph.root, &schema_value)
             .expect("SchemaValue in TypedAgentConfigEntry must render to JSON");
         Self {
             path: value.path,

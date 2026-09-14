@@ -3,6 +3,8 @@ import sbt.Keys.*
 import org.portablescala.sbtplatformdeps.PlatformDepsPlugin.autoImport.*
 import sbtcrossproject.CrossPlugin.autoImport.*
 import scalajscrossproject.ScalaJSCrossPlugin.autoImport.*
+import org.scalajs.jsenv.nodejs.NodeJSEnv
+import org.scalajs.linker.interface.ModuleKind
 
 // ---------------------------------------------------------------------------
 // Scala versions
@@ -51,7 +53,7 @@ val scalafmtDynamicVersion    = "3.10.4"
 // zio-blocks dependency helper
 // ---------------------------------------------------------------------------
 
-val zioBlocksVersion = "0.0.32"
+val zioBlocksVersion = "0.0.51"
 
 def zioBlocksDep(name: String) = Def.setting {
   "dev.zio" %%% s"zio-blocks-$name" % zioBlocksVersion
@@ -100,6 +102,8 @@ lazy val root = (project in file("."))
     codegen,
     sbtPlugin,
     testAgents,
+    emptyAutoRegisterFixture,
+    middlewareGuestLinkFixture,
     integrationTests
   )
   .settings(
@@ -153,7 +157,12 @@ lazy val core = project
       "io.github.cquiroz" %%% "scala-java-time-tzdb"       % scalaJavaTimeVersion % Test,
       "io.github.cquiroz" %%% "scala-java-locales"         % "1.5.4"             % Test,
       "io.github.cquiroz" %%% "locales-full-currencies-db" % "1.5.4"             % Test
-    )
+    ),
+    Test / scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.CommonJSModule)),
+    Test / jsEnv := {
+      val moduleLoader = (Test / sourceDirectory).value / "js" / "schema-value-stream-module-loader.cjs"
+      new NodeJSEnv(NodeJSEnv.Config().withArgs(List("--require", moduleLoader.getAbsolutePath)))
+    }
   )
 
 // --- macros (JVM only) -----------------------------------------------------
@@ -202,7 +211,7 @@ lazy val sbtPlugin = project
     scalaVersion       := Scala212,
     crossScalaVersions := Seq(Scala212),
     sbtVersion         := "1.12.0",
-    addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.20.2"),
+    addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.22.0"),
     libraryDependencies += "org.scalameta" %% "scalafmt-dynamic" % scalafmtDynamicVersion
   )
 
@@ -233,6 +242,41 @@ lazy val testAgents = project
       "dev.zio"           %%% "zio-http"              % zioHttpVersion
     ),
     scalacOptions += "-Wconf:cat=unused:s"
+  )
+
+// --- empty auto-registration fixture (JS, not published) -------------------
+
+lazy val emptyAutoRegisterFixture = project
+  .in(file("test-empty-auto-register"))
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+  .settings(
+    name := "golem-scala-empty-auto-register-fixture",
+    golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("emptyfixture"),
+    publish / skip := true,
+    scalaJSUseMainModuleInitializer := false,
+    scalaJSLinkerConfig ~= {
+      _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+    }
+  )
+
+// --- pure middleware guest link fixture (JS, not published) ----------------
+
+lazy val middlewareGuestLinkFixture = project
+  .in(file("test-middleware-guest-link"))
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin)
+  .dependsOn(model.js, macros)
+  .settings(commonSettings)
+  .settings(jsSettings)
+  .settings(
+    name := "golem-scala-middleware-guest-link-fixture",
+    publish / skip := true,
+    Compile / unmanagedSourceDirectories +=
+      (ThisBuild / baseDirectory).value / "core" / "js" / "src" / "main" / "scala",
+    Compile / unmanagedSources / excludeFilter := HiddenFileFilter || "Guest.scala",
+    scalaJSUseMainModuleInitializer := false,
+    scalaJSLinkerConfig ~= {
+      _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+    }
   )
 
 // --- integration-tests (JVM, not published) --------------------------------

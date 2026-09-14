@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_client::api::{RegistryServiceClient, RegistryServiceCreateAccountError};
+use golem_client::api::{
+    RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceGetAccountByEmailError,
+};
 use golem_client::model::AccountUpdate;
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountRevision};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -35,6 +37,23 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         assert_eq!(account.email, user.account_email);
         assert_eq!(account.revision, AccountRevision::INITIAL);
         assert_eq!(account.roles, Vec::new());
+
+        let account_by_email = client
+            .get_account_by_email(user.account_email.as_str())
+            .await?;
+        assert_eq!(account_by_email, account);
+
+        let other_user = deps.user().await?;
+        let other_client = deps.registry_service().client(&other_user.token).await;
+        let result = other_client
+            .get_account_by_email(user.account_email.as_str())
+            .await;
+        assert_matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetAccountByEmailError::Error404(_)
+            ))
+        );
     }
 
     // get account plan

@@ -14,7 +14,7 @@ pub(all) struct GuestPermissionCardHandle {
 pub fn GuestPermissionCardHandle::new(
   handle : @types.PermissionCard,
 ) -> GuestPermissionCardHandle {
-  { cell: Some(handle) }
+  { cell: Some(handle), }
 }
 
 ///|
@@ -55,8 +55,8 @@ impl Eq for GuestPermissionCardHandle with fn equal(self, other) {
 }
 
 ///|
-impl Show for GuestPermissionCardHandle with fn output(self, logger) {
-  logger.write_string(
+impl Debug for GuestPermissionCardHandle with fn to_repr(self) {
+  Repr::literal(
     if self.is_present() {
       "GuestPermissionCardHandle(present)"
     } else {

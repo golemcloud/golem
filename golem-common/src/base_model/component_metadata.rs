@@ -136,6 +136,7 @@ impl Debug for ComponentMetadata {
             .field("root_package_name", &self.data.root_package_name)
             .field("root_package_version", &self.data.root_package_version)
             .field("agent_types", &self.data.agent_types)
+            .field("agent_method_streams", &self.data.agent_method_streams)
             .field(
                 "agent_type_provision_configs",
                 &self.data.agent_type_provision_configs,
@@ -193,6 +194,9 @@ pub struct ComponentMetadataInnerData {
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_types: Vec<AgentTypeSchema>,
 
+    /// Server-derived streaming classification for each declared agent method.
+    pub agent_method_streams: BTreeMap<AgentTypeName, BTreeMap<String, AgentMethodStreamMetadata>>,
+
     /// Per-agent-type provisioning configuration: env, config, plugins, files.
     /// Kept separate from agent type declarations so AgentType stays a pure declaration type.
     #[serde(default)]
@@ -203,6 +207,25 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMethodStreamMetadata {
+    pub input: bool,
+    pub output: bool,
+}
+
+impl AgentMethodStreamMetadata {
+    pub fn uses_streams(self) -> bool {
+        self.input || self.output
+    }
 }
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations

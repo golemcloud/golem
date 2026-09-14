@@ -34,6 +34,8 @@ pub enum DiffError {
     MapStateInvariantViolation { phase: &'static str },
     #[error("Set diff invariant violation at '{phase}'")]
     SetStateInvariantViolation { phase: &'static str },
+    #[error("Remote tool identity invariant violation: {reason}")]
+    RemoteToolIdentityInvariantViolation { reason: String },
     #[error(
         "Typed config entry JSON conversion failed during '{operation}' for '{path}': {reason}"
     )]

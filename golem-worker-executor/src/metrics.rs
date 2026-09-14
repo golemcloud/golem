@@ -339,7 +339,7 @@ pub mod workers {
         .unwrap();
         pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
             "worker_admission_wait_seconds",
-            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory, filesystem_storage). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
             &["executor_id", "phase"],
             crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
         )
@@ -447,6 +447,29 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "invocation_result_resolution_total",
+            "Invocation-result resolutions by the lookup path and outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_chunks_total",
+            "Physical invocation-result index catch-up chunks completed"
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_entries_total",
+            "Oplog entries processed while catching up the physical invocation-result index"
+        )
+        .unwrap();
+        static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
+            "golem_agent_filesystem_lifecycle_seconds",
+            "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
+            &["operation", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -508,6 +531,27 @@ pub mod workers {
         AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_invocation_result_resolution(outcome: &'static str) {
+        INVOCATION_RESULT_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_invocation_result_index_catch_up(entries: usize) {
+        INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
+        INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
+    }
+
+    pub fn record_agent_filesystem_lifecycle(
+        operation: &'static str,
+        success: bool,
+        elapsed: Duration,
+    ) {
+        AGENT_FILESYSTEM_LIFECYCLE_SECONDS
+            .with_label_values(&[operation, if success { "success" } else { "failure" }])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn set_worker_count_by_status(status: &'static str, count: f64) {
@@ -659,7 +703,6 @@ pub mod workers {
         ResolveComponentCharge,
         ConcurrencySlot,
         Memory,
-        FilesystemStorage,
     }
 
     impl AdmissionPhase {
@@ -668,7 +711,6 @@ pub mod workers {
                 AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
                 AdmissionPhase::ConcurrencySlot => "concurrency_slot",
                 AdmissionPhase::Memory => "memory",
-                AdmissionPhase::FilesystemStorage => "filesystem_storage",
             }
         }
     }
@@ -1121,7 +1163,7 @@ pub mod oplog {
         .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
-            "Number of oplog storage operation retries due to transient errors",
+            "Number of oplog storage operation retries due to transient errors or indeterminate writes",
             &["op"]
         )
         .unwrap();
@@ -1307,6 +1349,231 @@ pub mod ephemeral {
 
     pub fn record_inactive_invocation_failure() {
         EPHEMERAL_INACTIVE_INVOCATION_FAILURE_TOTAL.inc();
+    }
+}
+
+pub mod durable_stream {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    const EVENT_COUNT_BUCKETS: &[f64] = &[
+        0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1_024.0, 4_096.0, 16_384.0,
+    ];
+    const EPOCH_BUCKETS: &[f64] = &[
+        0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 256.0, 1_024.0, 65_536.0,
+    ];
+    const LEASE_REMAINING_BUCKETS: &[f64] =
+        &[0.0, 1.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 120.0, 300.0];
+
+    lazy_static! {
+        static ref LIFECYCLE_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_lifecycle_total",
+            "Durable stream registrations and terminal transitions",
+            &["event"]
+        )
+        .unwrap();
+        static ref OPEN_STREAMS: IntGauge = register_int_gauge!(
+            "golem_durable_stream_open",
+            "Open durable streams owned by loaded producers on this executor"
+        )
+        .unwrap();
+        static ref PRODUCER_OPERATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_producer_operation_total",
+            "Durable producer operations by bounded operation and commit outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref CATCH_UP_DISTANCE_EVENTS: Histogram = register_histogram!(
+            "golem_durable_stream_catch_up_distance_events",
+            "Committed events read before a durable reader joins the live tail",
+            EVENT_COUNT_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref LIVE_JOIN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_live_join_total",
+            "Durable live-tail join attempts by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref ACTIVE_READERS: IntGauge = register_int_gauge!(
+            "golem_durable_stream_active_readers",
+            "Active durable live-tail readers on this executor"
+        )
+        .unwrap();
+        static ref BACKPRESSURE_TOTAL: IntCounter = register_int_counter!(
+            "golem_durable_stream_backpressure_total",
+            "Durable event fan-outs that waited on a full live-reader queue"
+        )
+        .unwrap();
+        static ref ATTEMPT_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_attempt_total",
+            "Durable Stream Session start, resume, and takeover attempts by outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref ATTACHMENT_EPOCH: Histogram = register_histogram!(
+            "golem_durable_stream_attachment_epoch",
+            "Accepted durable Stream Session attachment epochs",
+            EPOCH_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
+            "golem_durable_stream_journal_lag_events",
+            "Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption",
+            EVENT_COUNT_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref ATTACHMENT_OPERATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_attachment_operation_total",
+            "Cross-oplog attachment operations by bounded operation and outcome",
+            &["operation", "outcome"]
+        )
+        .unwrap();
+        static ref LEASE_REMAINING_SECONDS: Histogram = register_histogram!(
+            "golem_durable_stream_lease_remaining_seconds",
+            "Remaining attachment lease time when inspected or reconciled",
+            LEASE_REMAINING_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref RECONCILIATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_reconciliation_total",
+            "Attachment reconciliation candidates by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref CASCADE_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_cascade_total",
+            "Producer deletion cascade dependents by durable outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref LIMIT_VIOLATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_durable_stream_limit_violation_total",
+            "Rejected durable Stream Session operations by frozen limit category",
+            &["limit"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_lifecycle(event: &'static str) {
+        LIFECYCLE_TOTAL.with_label_values(&[event]).inc();
+    }
+
+    pub fn add_open_streams(count: usize) {
+        OPEN_STREAMS.add(count as i64);
+    }
+
+    pub fn remove_open_streams(count: usize) {
+        OPEN_STREAMS.sub(count as i64);
+    }
+
+    pub fn record_producer_operation(operation: &'static str, replayed: bool) {
+        PRODUCER_OPERATION_TOTAL
+            .with_label_values(&[operation, if replayed { "replayed" } else { "committed" }])
+            .inc();
+    }
+
+    pub fn record_catch_up(distance: usize) {
+        CATCH_UP_DISTANCE_EVENTS.observe(distance as f64);
+        LIVE_JOIN_TOTAL.with_label_values(&["joined"]).inc();
+    }
+
+    pub fn record_live_join_rejected() {
+        LIVE_JOIN_TOTAL.with_label_values(&["rejected"]).inc();
+    }
+
+    pub fn reader_attached() {
+        ACTIVE_READERS.inc();
+    }
+
+    pub fn reader_detached() {
+        ACTIVE_READERS.dec();
+    }
+
+    pub fn record_backpressure() {
+        BACKPRESSURE_TOTAL.inc();
+    }
+
+    pub fn record_attempt(operation: &'static str, outcome: &'static str, epoch: Option<u64>) {
+        ATTEMPT_TOTAL.with_label_values(&[operation, outcome]).inc();
+        if let Some(epoch) = epoch {
+            ATTACHMENT_EPOCH.observe(epoch as f64);
+        }
+    }
+
+    pub fn record_journal_lag(events: usize) {
+        JOURNAL_LAG_EVENTS.observe(events as f64);
+    }
+
+    pub fn record_attachment_operation(operation: &'static str, outcome: &'static str) {
+        ATTACHMENT_OPERATION_TOTAL
+            .with_label_values(&[operation, outcome])
+            .inc();
+    }
+
+    pub fn record_lease_remaining(millis: u64) {
+        LEASE_REMAINING_SECONDS.observe(millis as f64 / 1_000.0);
+    }
+
+    pub fn record_reconciliation(outcome: &'static str) {
+        RECONCILIATION_TOTAL.with_label_values(&[outcome]).inc();
+    }
+
+    pub fn record_cascade(outcome: &'static str) {
+        CASCADE_TOTAL.with_label_values(&[outcome]).inc();
+    }
+
+    pub fn record_limit_violation(limit: &'static str) {
+        LIMIT_VIOLATION_TOTAL.with_label_values(&[limit]).inc();
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        fn durable_stream_metric_catalogue_is_registered() {
+            record_lifecycle("registered");
+            add_open_streams(1);
+            remove_open_streams(1);
+            record_producer_operation("write", false);
+            record_catch_up(3);
+            reader_attached();
+            reader_detached();
+            record_backpressure();
+            record_attempt("resume", "accepted", Some(2));
+            record_journal_lag(1);
+            record_attachment_operation("renew", "committed");
+            record_lease_remaining(20_000);
+            record_reconciliation("active");
+            record_cascade("complete");
+            record_limit_violation("item_size");
+
+            let names = prometheus::gather()
+                .into_iter()
+                .map(|family| family.name().to_string())
+                .collect::<std::collections::HashSet<_>>();
+            for expected in [
+                "golem_durable_stream_lifecycle_total",
+                "golem_durable_stream_open",
+                "golem_durable_stream_producer_operation_total",
+                "golem_durable_stream_catch_up_distance_events",
+                "golem_durable_stream_live_join_total",
+                "golem_durable_stream_active_readers",
+                "golem_durable_stream_backpressure_total",
+                "golem_durable_stream_attempt_total",
+                "golem_durable_stream_attachment_epoch",
+                "golem_durable_stream_journal_lag_events",
+                "golem_durable_stream_attachment_operation_total",
+                "golem_durable_stream_lease_remaining_seconds",
+                "golem_durable_stream_reconciliation_total",
+                "golem_durable_stream_cascade_total",
+                "golem_durable_stream_limit_violation_total",
+            ] {
+                assert!(names.contains(expected), "missing metric {expected}");
+            }
+        }
     }
 }
 

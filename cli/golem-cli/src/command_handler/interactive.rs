@@ -654,6 +654,14 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_tool_grant_plan_apply(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            "The environment tool grant changes above are a separate setup step required before remote tool metadata can be read and the build or deployment plan can continue. They are committed immediately and are not rolled back if the build fails or the deployment is later cancelled. Do you want to apply them?",
+            None,
+        )
+    }
+
     pub fn confirm_new_app_in_non_empty_dir(&self, path: &Path) -> anyhow::Result<bool> {
         self.confirm(
             false,

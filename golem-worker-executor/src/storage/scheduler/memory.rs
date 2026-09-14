@@ -18,7 +18,8 @@ use super::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
+use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
+use golem_common::serialization::deserialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -33,7 +34,7 @@ pub struct InMemorySchedulerStorage {
 struct ScheduledEntry {
     due_at_ms: i64,
     shard_id: ShardId,
-    action: ScheduledAction,
+    action: Vec<u8>,
     lease_owner: Option<Uuid>,
     lease_until_ms: Option<i64>,
     attempt_count: u32,
@@ -52,7 +53,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         schedule_id: ScheduleId,
         due_at: DateTime<Utc>,
         shard_id: ShardId,
-        action: &ScheduledAction,
+        action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
         self.entries
             .lock()
@@ -61,7 +62,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
             .or_insert_with(|| ScheduledEntry {
                 due_at_ms: datetime_to_millis(due_at),
                 shard_id,
-                action: action.clone(),
+                action: action.to_vec(),
                 lease_owner: None,
                 lease_until_ms: None,
                 attempt_count: 0,
@@ -109,7 +110,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
                 entry.attempt_count += 1;
                 result.push(ClaimedScheduledAction {
                     schedule_id: ScheduleId { id },
-                    action: entry.action.clone(),
+                    action: deserialize(&entry.action)?,
                     due_at: millis_to_datetime(entry.due_at_ms)?,
                     lease_owner,
                     attempt_count: entry.attempt_count,

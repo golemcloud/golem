@@ -4,3 +4,5 @@ import {
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
 }
+
+supported_targets = "+wasm"

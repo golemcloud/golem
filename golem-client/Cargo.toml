@@ -20,6 +20,7 @@ golem-common = { workspace = true, default-features = false, features = ["client
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+futures-util = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
@@ -27,10 +28,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]

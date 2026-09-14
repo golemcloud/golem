@@ -18,14 +18,14 @@
 ///|
 /// A stable, language-independent identifier for a named type definition.
 /// Conventionally a package-qualified dotted type name.
-pub typealias String as TypeId
+pub type TypeId = String
 
 ///|
 /// A schema type node: a structural body plus its metadata envelope.
 pub(all) struct SchemaType {
   body : SchemaTypeBody
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// The structural body of a recursive schema type. Recursive positions hold
@@ -73,24 +73,24 @@ pub(all) enum SchemaTypeBody {
   Secret(SecretSpec)
   QuotaToken(@types.QuotaTokenSpec)
   PermissionCard(@types.PermissionCardSpec)
-  // WASI P3 stubs (parseable only; no semantics yet)
+  // WASI P3 asynchronous values
   Future(SchemaType?)
   Stream(SchemaType?)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct NamedFieldType {
   name : String
   body : SchemaType
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct VariantCaseType {
   name : String
   payload : SchemaType?
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct UnionBranch {
@@ -99,14 +99,14 @@ pub(all) struct UnionBranch {
   body : SchemaType
   discriminator : @types.DiscriminatorRule
   metadata : @types.MetadataEnvelope
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct SecretSpec {
   /// Revealed payload type carried by this secret handle.
   inner : SchemaType
   category : String?
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 // ============================================================
 // Schema graph (recursive, self-contained)
@@ -120,7 +120,7 @@ pub(all) struct SchemaTypeDef {
   /// Optional human-readable qualified name (display only).
   name : String?
   body : SchemaType
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// A self-contained schema graph: an ordered registry of named definitions
@@ -131,7 +131,7 @@ pub(all) struct SchemaTypeDef {
 pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]
   root : SchemaType
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 // ============================================================
 // Schema value (recursive)
@@ -186,15 +186,17 @@ pub(all) enum SchemaValue {
   Secret(GuestSecretHandle)
   // owned `quota-token` resource carried as an opaque, affine handle
   QuotaToken(GuestQuotaTokenHandle)
+  // native stream endpoint, retained without proxying or materialization
+  Stream(GuestSchemaValueStreamHandle)
   // owned `permission-card` resource carried as an opaque, affine handle
   PermissionCard(GuestPermissionCardHandle)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 pub(all) struct SchemaMapEntry {
   key : SchemaValue
   value : SchemaValue
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 // ============================================================
 // Wire carrier (recursive)
@@ -206,7 +208,65 @@ pub(all) struct SchemaMapEntry {
 pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValue
-} derive(Show, Eq)
+} derive(Debug, Eq)
+
+///|
+/// Host-provided cleanup for owned resources rejected at a schema-value
+/// boundary.
+pub(all) struct SchemaValueResourceDrops {
+  drop_secret : (@types.Secret) -> Unit
+  drop_quota_token : (@types.QuotaToken) -> Unit
+  drop_stream : (@types.SchemaValueStream) -> Unit
+  drop_native_stream : (@async-core.Stream[@types.SchemaValueTree]) -> Unit
+}
+
+///|
+/// Release every resource still owned by this value. Handles are take-once, so
+/// resources already transferred out of the value are left alone and repeated
+/// cleanup is harmless.
+pub fn SchemaValue::release_resources(
+  self : SchemaValue,
+  drops : SchemaValueResourceDrops,
+) -> Unit {
+  match self {
+    Record(values) | Tuple(values) | List(values) | FixedList(values) =>
+      for value in values {
+        value.release_resources(drops)
+      }
+    Variant(_, payload)
+    | Option(payload)
+    | ResultOk(payload)
+    | ResultErr(payload) =>
+      match payload {
+        Some(value) => value.release_resources(drops)
+        None => ()
+      }
+    Map(entries) =>
+      for entry in entries {
+        entry.key.release_resources(drops)
+        entry.value.release_resources(drops)
+      }
+    Union(_, body) => body.release_resources(drops)
+    Secret(handle) =>
+      match handle.take() {
+        Some(value) => (drops.drop_secret)(value)
+        None => ()
+      }
+    QuotaToken(handle) =>
+      match handle.take() {
+        Some(value) => (drops.drop_quota_token)(value)
+        None => ()
+      }
+    PermissionCard(handle) =>
+      match handle.take() {
+        Some(value) => value.drop()
+        None => ()
+      }
+    Stream(handle) =>
+      handle.release(drops.drop_stream, drops.drop_native_stream)
+    _ => ()
+  }
+}
 
 // ============================================================
 // Constructors / helpers
@@ -215,7 +275,7 @@ pub(all) struct TypedSchemaValue {
 ///|
 /// An empty metadata envelope (no docs / aliases / examples / deprecation / role).
 pub fn empty_metadata() -> @types.MetadataEnvelope {
-  { doc: None, aliases: [], examples: [], deprecated: None, role: None }
+  { doc: None, aliases: [], examples: [], deprecated: None, role: None, }
 }
 
 ///|
@@ -224,7 +284,7 @@ pub fn schema_type(
   body : SchemaTypeBody,
   metadata? : @types.MetadataEnvelope = empty_metadata(),
 ) -> SchemaType {
-  { body, metadata }
+  { body, metadata, }
 }
 
 ///|
@@ -234,7 +294,7 @@ pub fn field(
   body : SchemaType,
   metadata? : @types.MetadataEnvelope = empty_metadata(),
 ) -> NamedFieldType {
-  { name, body, metadata }
+  { name, body, metadata, }
 }
 
 ///|
@@ -244,5 +304,5 @@ pub fn variant_case(
   payload? : SchemaType,
   metadata? : @types.MetadataEnvelope = empty_metadata(),
 ) -> VariantCaseType {
-  { name, payload, metadata }
+  { name, payload, metadata, }
 }

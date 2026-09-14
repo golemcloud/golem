@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::RoutingTable;
+use crate::ShardLeaseState;
 use crate::error::ShardManagerTraceErrorKind;
 use crate::quota::QuotaService;
+use crate::sharding::ExecutorAddr;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
 use golem_api_grpc::proto::golem;
@@ -40,10 +41,10 @@ impl ShardManagerServiceImpl {
         }
     }
 
-    async fn get_routing_table_internal(&self) -> RoutingTable {
-        let routing_table = self.shard_management.current_snapshot().await;
-        debug!("Providing routing table: {}", routing_table);
-        routing_table
+    async fn get_routing_table_internal(&self) -> ShardLeaseState {
+        let shard_state = self.shard_management.current_snapshot().await;
+        debug!("Providing routing table: {}", shard_state);
+        shard_state
     }
 
     async fn register_internal(
@@ -51,8 +52,12 @@ impl ShardManagerServiceImpl {
         pod: Pod,
         pod_name: Option<String>,
     ) -> Result<(), ShardManagerError> {
-        debug!("Received request to register pod: {}", pod);
-        self.shard_management.register_pod(pod, pod_name).await;
+        debug!("Received request to register executor at: {}", pod);
+        let executor_id = self
+            .shard_management
+            .register_executor(ExecutorAddr::from(pod), pod_name)
+            .await;
+        debug!(executor_id = %executor_id, addr = %pod, "Registered executor");
         Ok(())
     }
 }

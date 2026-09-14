@@ -39,7 +39,7 @@ impl Eq for Coroutine with fn equal(c1, c2) {
 
 ///|
 impl Hash for Coroutine with fn hash_combine(self, hasher) {
-  self.coro_id.hash_combine(hasher)
+  Hash::hash_combine(self.coro_id, hasher)
 }
 
 ///|
@@ -77,7 +77,7 @@ fn Coroutine::cancel(self : Coroutine) -> Unit {
 
 ///|
 async fn suspend() -> Unit {
-  guard scheduler.curr_coro is Some(coro)
+  guard! scheduler.curr_coro is Some(coro)
   if coro.cancelled && !coro.shielded {
     raise Cancelled::Cancelled
   }
@@ -87,7 +87,7 @@ async fn suspend() -> Unit {
     schedule.blocking -= 1
   }
   async_suspend(fn(ok_cont, err_cont) {
-    guard coro.state is Running
+    guard! coro.state is Running
     coro.state = Suspend(ok_cont~, err_cont~)
   })
 }
@@ -148,22 +148,19 @@ fn Coroutine::unwrap(self : Coroutine) -> Unit raise {
 
 ///|
 async fn Coroutine::wait(target : Coroutine) -> Unit {
-  guard scheduler.curr_coro is Some(coro)
-  guard !physical_equal(coro, target)
+  guard! scheduler.curr_coro is Some(coro)
+  guard! !physical_equal(coro, target)
   match target.state {
     Done => return
     Fail(err) => raise err
     Running | Suspend(_) => ()
   }
   target.downstream.add(coro)
-  try suspend() catch {
-    err => {
-      target.downstream.remove(coro)
-      raise err
-    }
-  } noraise {
-    _ => target.unwrap()
+  errdefer {
+    target.downstream.remove(coro)
   }
+  suspend()
+  target.unwrap()
 }
 
 ///|
@@ -179,7 +176,7 @@ pub async fn[X] protect_from_cancel(
   f : async () -> X,
   resume_on_cancel? : Bool = false,
 ) -> X {
-  guard scheduler.curr_coro is Some(coro)
+  guard! scheduler.curr_coro is Some(coro)
   if coro.shielded {
     // already in a shield, do nothing
     f()

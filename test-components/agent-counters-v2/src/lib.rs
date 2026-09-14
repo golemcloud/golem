@@ -1,0 +1,213 @@
+pub mod repository;
+mod snapshot_test;
+
+use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
+
+#[ctor::ctor]
+fn reserve_instantiation_memory_for_growth_counter() {
+    // This constructor runs for every agent exported by the component. Agent IDs
+    // embed the exported type name, so this predicate keeps the extra allocation
+    // from changing the memory footprint of the other agent types.
+    if std::env::var("GOLEM_AGENT_ID")
+        .is_ok_and(|agent_id| agent_id.contains("InstantiationGrowthCounter"))
+    {
+        let previous_pages = core::arch::wasm32::memory_grow::<0>(16);
+        assert_ne!(previous_pages, usize::MAX, "test memory growth failed");
+    }
+}
+
+#[agent_definition]
+trait InstantiationGrowthCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    fn delayed_increment(&mut self, delay_millis: u64) -> u32;
+}
+
+struct InstantiationGrowthCounterImpl {
+    count: u32,
+    _id: String,
+}
+
+#[agent_implementation]
+impl InstantiationGrowthCounter for InstantiationGrowthCounterImpl {
+    fn new(id: String) -> Self {
+        Self { count: 0, _id: id }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn delayed_increment(&mut self, delay_millis: u64) -> u32 {
+        std::thread::sleep(std::time::Duration::from_millis(delay_millis));
+        self.increment()
+    }
+}
+
+#[agent_definition]
+trait Counter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    async fn increment_through_rpc(&mut self) -> u32;
+    async fn increment_through_rpc_to_ephemeral(&mut self) -> u32;
+    async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32;
+    async fn ephemeral_ids_through_rpc(&mut self) -> (String, String);
+}
+
+struct CounterImpl {
+    count: u32,
+    id: String,
+}
+
+#[agent_implementation]
+impl Counter for CounterImpl {
+    fn new(id: String) -> Self {
+        Self { id, count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    async fn increment_through_rpc(&mut self) -> u32 {
+        let mut client = CounterClient::get(format!("{}-inner", self.id));
+        client.increment().await
+    }
+
+    async fn increment_through_rpc_to_ephemeral(&mut self) -> u32 {
+        let mut client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral", self.id));
+        client.increment().await.value
+    }
+
+    async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
+        let mut client = EphemeralSingletonCounterClient::new_phantom();
+        client.increment().await.value
+    }
+
+    async fn ephemeral_ids_through_rpc(&mut self) -> (String, String) {
+        let client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral-ids", self.id));
+        let id1 = client.get_id().await.value;
+        let id2 = client.get_id().await.value;
+        (id1, id2)
+    }
+}
+
+#[agent_definition(ephemeral)]
+trait EphemeralCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    fn get_id(&self) -> String;
+    async fn increment_via_self_rpc(&mut self) -> u32;
+    async fn increment_remote_then_fail(&mut self, target: String) -> u32;
+}
+
+struct EphemeralCounterImpl {
+    count: u32,
+    id: String,
+}
+
+#[agent_implementation]
+impl EphemeralCounter for EphemeralCounterImpl {
+    fn new(id: String) -> Self {
+        Self { id, count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn get_id(&self) -> String {
+        golem_rust::agentic::get_agent_id().agent_id
+    }
+
+    async fn increment_via_self_rpc(&mut self) -> u32 {
+        self.count += 1;
+        let mut client = EphemeralCounterClient::new_phantom(self.id.clone());
+        self.count + client.increment().await.value
+    }
+
+    async fn increment_remote_then_fail(&mut self, target: String) -> u32 {
+        let mut client = CounterClient::get(target);
+        let count = client.increment().await;
+        panic!("failing after remote increment to {count}")
+    }
+}
+
+#[agent_definition(ephemeral)]
+trait EphemeralSingletonCounter {
+    fn new() -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct EphemeralSingletonCounterImpl {
+    count: u32,
+}
+
+#[agent_implementation]
+impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
+    fn new() -> Self {
+        Self { count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
+#[agent_definition(ephemeral)]
+trait HostFunctionTests {
+    fn new(id: String) -> Self;
+    fn generate_idempotency_keys(&mut self) -> (String, String);
+}
+
+struct HostFunctionTestsImpl {
+    _id: String,
+}
+
+#[agent_implementation]
+impl HostFunctionTests for HostFunctionTestsImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id }
+    }
+
+    fn generate_idempotency_keys(&mut self) -> (String, String) {
+        let key1 = generate_idempotency_key();
+        let key2 = generate_idempotency_key();
+        (key1.to_string(), key2.to_string())
+    }
+}
+
+#[agent_definition]
+trait FailingCounter {
+    fn new(id: String) -> Self;
+    fn add(&mut self, value: u64);
+    fn get(&self) -> u64;
+}
+
+struct FailingCounterImpl {
+    total: u64,
+    _id: String,
+}
+
+#[agent_implementation]
+impl FailingCounter for FailingCounterImpl {
+    fn new(id: String) -> Self {
+        Self { total: 0, _id: id }
+    }
+
+    fn add(&mut self, value: u64) {
+        eprintln!("error log message");
+        if value > 10 {
+            panic!("value is too large");
+        }
+        self.total += value;
+    }
+
+    fn get(&self) -> u64 {
+        self.total
+    }
+}

@@ -11,23 +11,22 @@ A **scheduled invocation** enqueues a method call on the target agent to be exec
 
 ## Usage
 
-Every method on a `clientFor(...)` RPC client has a `.schedule()` variant that
+Every method on a definition RPC client has a `.schedule()` variant that
 takes a `Datetime` as the first argument, followed by the method's input record
 (omit the input for methods declared with `input: {}`). It returns a
 `CancellationToken`; ignore the token when cancellation is not needed.
 
 ```typescript
-import { clientFor } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
-const counter = clientFor(Counter)({ name: 'my-counter' });
+const counter = Counter.client.get({ name: 'my-counter' });
 
 // Schedule increment to run 60 seconds from now.
 const nowSecs = BigInt(Math.floor(Date.now() / 1000));
 counter.increment.schedule({ seconds: nowSecs + 60n, nanoseconds: 0 });
 
 // Schedule with arguments.
-const reporter = clientFor(ReportAgent)({ name: 'daily' });
+const reporter = ReportAgent.client.get({ name: 'daily' });
 reporter.generateReport.schedule(
     { seconds: BigInt(tomorrowMidnight), nanoseconds: 0 },
     { kind: 'summary' },

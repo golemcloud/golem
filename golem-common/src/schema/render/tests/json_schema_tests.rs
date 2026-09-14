@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::schema::graph::SchemaGraph;
-use crate::schema::render::json_schema::to_json_schema;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, TextRestrictions,
     UnionBranch, UnionSpec, VariantCaseType,
 };
+use golem_schema::schema::render::json_schema::to_json_schema;
 use serde_json::{Value, json};
 use test_r::test;
 
@@ -810,9 +810,9 @@ mod agent_entry_points {
     };
     use crate::schema::metadata::Role;
     use crate::schema::render::json_schema::{
-        JsonSchemaConfig, input_schema_to_json_schema, output_schema_to_json_schema,
-        to_json_schema_with_config,
+        input_schema_to_json_schema, output_schema_to_json_schema,
     };
+    use golem_schema::schema::render::json_schema::{JsonSchemaConfig, to_json_schema_with_config};
     use test_r::test;
 
     #[test]
@@ -955,6 +955,87 @@ mod agent_entry_points {
                 .expect("some schema");
         assert_eq!(rendered["type"], json!("integer"));
         assert!(rendered.get("$schema").is_none());
+    }
+
+    #[test]
+    fn external_input_schema_rejects_nested_host_managed_capabilities() {
+        let capabilities = SchemaType::record(vec![
+            NamedFieldType {
+                name: "secret".to_string(),
+                body: SchemaType::secret(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "card".to_string(),
+                body: SchemaType::permission_card(Default::default()),
+                metadata: Default::default(),
+            },
+        ]);
+        let input = InputSchema::Parameters(vec![NamedField::user_supplied(
+            "capabilities",
+            capabilities,
+        )]);
+        let doc = input_schema_to_json_schema(
+            &SchemaGraph::empty(),
+            &input,
+            JsonSchemaConfig::WITHOUT_DRAFT_MARKER,
+        );
+        let properties = &doc["properties"]["capabilities"]["properties"];
+
+        for name in ["secret", "quota", "card"] {
+            assert_eq!(
+                properties[name]["not"],
+                json!({}),
+                "external input capability must be unsatisfiable: {doc}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_output_schema_exposes_only_nested_redacted_placeholders() {
+        let capabilities = SchemaType::record(vec![
+            NamedFieldType {
+                name: "secret".to_string(),
+                body: SchemaType::secret(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "quota".to_string(),
+                body: SchemaType::quota_token(Default::default()),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "card".to_string(),
+                body: SchemaType::permission_card(Default::default()),
+                metadata: Default::default(),
+            },
+        ]);
+        let doc = output_schema_to_json_schema(
+            &SchemaGraph::empty(),
+            &OutputSchema::Single(Box::new(capabilities)),
+            JsonSchemaConfig::WITHOUT_DRAFT_MARKER,
+        )
+        .expect("output schema");
+        let properties = &doc["properties"];
+
+        assert_eq!(properties["secret"]["const"], json!("<redacted: secret>"));
+        assert_eq!(
+            properties["quota"]["const"],
+            json!("<redacted: quota-token>")
+        );
+        assert_eq!(
+            properties["card"]["const"],
+            json!("<redacted: permission-card>")
+        );
+        for name in ["secret", "quota", "card"] {
+            assert_eq!(properties[name]["type"], json!("string"));
+            assert!(properties[name].get("properties").is_none());
+        }
     }
 
     #[test]

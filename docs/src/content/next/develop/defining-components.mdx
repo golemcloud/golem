@@ -79,6 +79,38 @@ golem new . --template moonbit --component-name my:component --yes
     </Tabs.Tab>
 </Tabs>
 
+## Choosing a TypeScript component role
+
+TypeScript components use different prebuilt WASM guests depending on what they export. Select the matching component template in `golem.yaml`:
+
+| Template | Component exports | SDK import |
+| --- | --- | --- |
+| `ts` | Agents, tools, and snapshots | `@golemcloud/golem-ts-sdk` |
+| `ts-tool-middleware` | Tool middleware only | `@golemcloud/golem-ts-sdk/middleware` |
+| `ts-agent-tool-middleware` | Agents, tools, snapshots, and tool middleware | `@golemcloud/golem-ts-sdk` |
+
+For example, select the middleware-only guest with:
+
+```yaml filename="golem.yaml"
+components:
+    my:middleware:
+        dir: middleware
+        templates: ts-tool-middleware
+```
+
+Then import its authoring APIs from the middleware entry point:
+
+```typescript
+import {
+    toolDefinition,
+    universalToolMiddleware,
+} from '@golemcloud/golem-ts-sdk/middleware';
+```
+
+The middleware-only guest deliberately has no `golem:tool/host` import. Middleware can invoke its runtime-bound next inner layer, but cannot re-enter ambient tool dispatch. Use `ts-agent-tool-middleware` when one component must define agents or tools and middleware together; combined components import every API from the package root so all definitions share one embedded registry.
+
+The `optimized` and `quick` build profiles both select the guest associated with the component template. The TypeScript build reports an actionable error if source imports the wrong SDK entry point or defines middleware under the ordinary `ts` template, rather than producing a component whose declared exports do not match its registrations.
+
 ## Defining agents
 
 Defining Golem agents is done using the Golem SDK, which is included in all the templates provided by `golem`.
@@ -169,7 +201,7 @@ fn MyAgent::new(name : String) -> MyAgent {
 
 </Tabs>
 
-A component must define at least one agent, but can also define multiple ones.
+An agent component must define at least one agent, but can also define multiple ones.
 
 ### Agent constructors
 Every agent must define a **constructor** with an arbitrary number of parameters. These parameters form the **agent identifier**. Every possible parameter value combination identifies a particular agent instance.

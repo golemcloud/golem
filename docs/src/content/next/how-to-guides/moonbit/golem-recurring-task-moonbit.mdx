@@ -177,7 +177,7 @@ Remove expired data or stale resources on a schedule:
 
 ```moonbit
 pub fn PollerAgent::cleanup(self : Self) -> Unit {
-  self.entries = self.entries.filter(fn(e) { not(e.is_expired()) })
+  self.entries = self.entries.filter(fn(e) { !e.is_expired() })
   self.schedule_next(3600) // run hourly
 }
 ```

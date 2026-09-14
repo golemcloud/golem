@@ -1,1 +1,1 @@
-
+supported_targets = "+wasm"

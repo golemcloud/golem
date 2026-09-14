@@ -32,8 +32,7 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
-// TODO: atomic: re-enable test
-#[ignore]
+#[ignore = "covers the retired imperative component-plugin workflow"]
 #[test]
 async fn plugin_installation_test1(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
@@ -355,8 +354,7 @@ impl TestPlugin {
     }
 }
 
-// TODO: atomic: re-enable test
-#[ignore]
+#[ignore = "covers the retired imperative component-plugin workflow"]
 #[test]
 #[timeout("2 minutes")]
 async fn plugin_installation_test2(_tracing: &Tracing) {

@@ -6,7 +6,7 @@
 enum TextOrImage {
   Text(String)
   Image(Bytes)
-} derive(Eq, Show)
+} derive(Eq, Debug)
 
 ///|
 pub impl MultimodalModality for TextOrImage with fn multimodal_type_id() {
@@ -20,14 +20,14 @@ pub impl MultimodalModality for TextOrImage with fn multimodal_cases(b) {
       "Text",
       payload=@schema.register_in_with(
         b,
-        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+        (@schema.TypeTag::{ } : @schema.TypeTag[String]),
       ),
     ),
     @model.variant_case(
       "Image",
       payload=@schema.register_in_with(
         b,
-        (@schema.TypeTag::{  } : @schema.TypeTag[Bytes]),
+        (@schema.TypeTag::{ } : @schema.TypeTag[Bytes]),
       ),
     ),
   ]
@@ -61,7 +61,7 @@ pub impl MultimodalModality for TextOrImage with fn from_modality_value(
 ///|
 test "Multimodal schema is List(Variant) with role=Multimodal" {
   let graph = @schema.into_schema_graph(
-    (@schema.TypeTag::{  } : @schema.TypeTag[Multimodal[TextOrImage]]),
+    (@schema.TypeTag::{ } : @schema.TypeTag[Multimodal[TextOrImage]]),
   )
   // The root is a List node carrying role=Multimodal.
   assert_eq(graph.root.metadata.role, Some(@types.Role::Multimodal))

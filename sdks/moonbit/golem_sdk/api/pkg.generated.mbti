@@ -89,7 +89,7 @@ pub fn[T] with_retry_policy(@retry.NamedRetryPolicy, () -> T) -> T
 // Errors
 pub suberror DurabilityError {
   ReplayMismatch(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub suberror RetryBuilderError {
   RetryBuilderError(String)
@@ -110,7 +110,7 @@ pub(all) enum DurableFunctionType {
   WriteRemote
   WriteRemoteBatched(UInt64?)
   WriteRemoteTransaction(UInt64?)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub struct Duration {
   repr : DurationRepr
@@ -270,4 +270,3 @@ pub using @host {type StringFilterComparator}
 pub using @host {type UpdateMode}
 
 // Traits
-

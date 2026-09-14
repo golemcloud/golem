@@ -34,6 +34,27 @@ final class toolDefinition(
  */
 final class toolImplementation() extends StaticAnnotation
 
+/** Marks a concrete class as a monomorphic tool middleware implementation. */
+final class toolMiddleware(
+  val name: String,
+  val aliases: Array[String] = Array()
+) extends StaticAnnotation
+
+/** Marks a concrete class as a universal tool middleware implementation. */
+final class universalToolMiddleware(
+  val name: String,
+  val aliases: Array[String] = Array()
+) extends StaticAnnotation
+
+/**
+ * Carries canonical projection metadata from generated middleware source into
+ * the assembly macro.
+ */
+final class internalToolMiddlewareField(
+  val canonicalName: String,
+  val countFlag: Boolean = false
+) extends StaticAnnotation
+
 /**
  * Overrides a tool method's command name and declares command aliases. On a
  * subtree method the `name` also renames the grafted child root.

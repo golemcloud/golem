@@ -266,12 +266,6 @@ fn worker_error_variant_name(e: &golem_rust::bindings::golem::api::oplog::Worker
         golem_rust::bindings::golem::api::oplog::WorkerError::ExceededRpcCallLimit => {
             "ExceededRpcCallLimit".to_string()
         }
-        golem_rust::bindings::golem::api::oplog::WorkerError::NodeOutOfFilesystemStorage => {
-            "NodeOutOfFilesystemStorage".to_string()
-        }
-        golem_rust::bindings::golem::api::oplog::WorkerError::AgentExceededFilesystemStorageLimit => {
-            "AgentExceededFilesystemStorageLimit".to_string()
-        }
         golem_rust::bindings::golem::api::oplog::WorkerError::AgentTerminatedByQuota(_) => {
             "AgentTerminatedByQuota".to_string()
         }

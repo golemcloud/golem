@@ -17,6 +17,7 @@ use crate::durable_host::call_coordinator::{
     DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
 };
 use crate::durable_host::concurrent::{self, DropEvent, Resolution, ResolutionOutcome};
+use crate::durable_host::replay_state::{ReplayToLiveOutcome, ReplayToLiveRole};
 use crate::metrics::wasm::{
     record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
 };
@@ -288,7 +289,7 @@ pub(crate) struct OpenCustomInvocationScope {
 #[derive(Debug)]
 pub struct LiveCustomDurableInvocation {
     scope_id: u64,
-    start_index: OplogIndex,
+    start_index: Option<OplogIndex>,
 }
 
 /// Classification of host function failures for semantic retry decisions
@@ -1320,7 +1321,7 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
         };
         let resource = access.get().table().push(LiveCustomDurableInvocation {
             scope_id,
-            start_index,
+            start_index: Some(start_index),
         })?;
         access.get().state.custom_invocation_scopes.insert(
             scope_id,
@@ -1350,12 +1351,15 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
 fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
     access: &mut Access<'_, U, HasSelf<DurableWorkerCtx<Ctx>>>,
     resource: Resource<LiveCustomDurableInvocation>,
-) -> anyhow::Result<OplogIndex> {
+) -> anyhow::Result<Option<OplogIndex>> {
+    let resource_rep = resource.rep();
+    let invocation = access.get().table().delete(resource)?;
+    let Some(start_index) = invocation.start_index else {
+        return Ok(None);
+    };
     let current = access
         .as_context_mut()
         .guest_task_context::<CustomInvocationContext>()?;
-    let resource_rep = resource.rep();
-    let invocation = access.get().table().delete(resource)?;
     let registered = access
         .get()
         .state
@@ -1367,9 +1371,7 @@ fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 invocation.scope_id
             )
         })?;
-    if registered.owner_start_index != invocation.start_index
-        || registered.resource_rep != resource_rep
-    {
+    if registered.owner_start_index != start_index || registered.resource_rep != resource_rep {
         return Err(anyhow::anyhow!(
             "custom invocation scope {} has stale attribution",
             invocation.scope_id
@@ -1399,7 +1401,7 @@ fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             .as_context_mut()
             .set_guest_task_context(Arc::new(next))?;
     }
-    Ok(invocation.start_index)
+    Ok(Some(start_index))
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocationWithStore<U>
@@ -1409,12 +1411,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         mut access: Access<'_, U, Self>,
         resource: Resource<LiveCustomDurableInvocation>,
     ) -> anyhow::Result<()> {
-        let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
-        access
-            .get()
-            .state
-            .active_custom_invocations
-            .remove(&start_index);
+        if let Some(start_index) = close_live_custom_durable_invocation(&mut access, resource)? {
+            access
+                .get()
+                .state
+                .active_custom_invocations
+                .remove(&start_index);
+        }
         Ok(())
     }
 
@@ -1424,9 +1427,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         response: golem_common::schema::wit::wire::TypedSchemaValue,
         forced_commit: bool,
     ) -> anyhow::Result<()> {
-        let (start_index, response, oplog, worker) = accessor.with(|mut access| {
+        let invocation = accessor.with(|mut access| {
             let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
             let ctx = access.get();
+            let Some(start_index) = start_index else {
+                golem_common::schema::wit::decode_typed_rejecting_quota_with(response, ctx)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to decode durable function response schema value: {e}"
+                        )
+                    })?;
+                return Ok::<_, anyhow::Error>(None);
+            };
             let invocation = ctx
                 .state
                 .active_custom_invocations
@@ -1459,14 +1471,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             })?;
             let oplog = ctx.state.oplog.clone();
             let worker = ctx.public_state.worker();
-            Ok::<_, anyhow::Error>((start_index, response, oplog, worker))
+            Ok::<_, anyhow::Error>(Some((start_index, response, oplog, worker)))
         })?;
+        let Some((start_index, response, oplog, worker)) = invocation else {
+            return Ok(());
+        };
 
         concurrent::drain_dropped_call_events_access(accessor, accessor.getter())
             .await
             .map_err(|err| err.source)?;
         let response = oplog
-            .upload_payload(&HostResponse::Custom(response))
+            .upload_payload_owned(HostResponse::Custom(response))
             .await
             .map_err(|err| anyhow::anyhow!("Failed to store durable function response: {err}"))?;
         worker
@@ -1633,7 +1648,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let start_invocation_id = invocation_id;
             let start = tokio::spawn(async move {
                 let persisted_request = oplog
-                    .upload_payload(&request)
+                    .upload_payload_owned(request)
                     .await
                     .map_err(|err| format!("Failed to store durable function request: {err}"))?;
                 Ok::<_, String>(
@@ -1721,8 +1736,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             .await?
         {
             ResolutionOutcome::Incomplete => {
-                replay_state.switch_to_live().await;
-                linear_memory.switch_to_live();
+                let outcome = replay_state
+                    .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                    .await?;
+                if matches!(outcome, ReplayToLiveOutcome::ReplayResumed) {
+                    return Err(WorkerExecutorError::runtime(
+                        "replay target grew while an incomplete custom invocation was settling",
+                    )
+                    .into());
+                }
                 accessor.with(|mut access| {
                     access.get().state.active_custom_invocations.insert(
                         start_index,
@@ -1805,14 +1827,14 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         let latest_status = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .get_attached_last_known_status()
             .await;
         latest_status.current_retry_state.get(&retry_from).cloned()
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live() || self.state.snapshotting_mode,
+            is_live: self.state.is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
@@ -1835,12 +1857,13 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return;
         }
 
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
+            self.entity_parent_start_index(),
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,
@@ -2006,6 +2029,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             let status = self.execution_status.read().unwrap();
             status.create_await_interrupt_signal()
         };
+        let entity_cancellation = self.entity_cancellation();
         if self
             .state
             .invocation_deadline_exceeded
@@ -2023,7 +2047,18 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 Timestamp::now_utc(),
             )));
         }
-        interrupt_signal
+        match entity_cancellation {
+            Some(cancellation) => Box::pin(async move {
+                tokio::select! {
+                    biased;
+                    interrupt = interrupt_signal => interrupt,
+                    _ = cancellation.cancelled() => {
+                        InterruptKind::Interrupt(Timestamp::now_utc())
+                    }
+                }
+            }),
+            None => interrupt_signal,
+        }
     }
 
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
@@ -2248,7 +2283,7 @@ pub async fn count_oplog_errors_for(
     if len == 0 {
         return 0;
     }
-    let entries = oplog.read_many(OplogIndex::INITIAL, len).await;
+    let entries = oplog.read_exact(OplogIndex::INITIAL, len).await;
     let mut count: u32 = 0;
     for entry in entries.values() {
         if let OplogEntry::Error { retry_from, .. } = entry
@@ -2271,6 +2306,8 @@ pub async fn count_oplog_errors_for(
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
     /// The oplog index that error entries reference as their `retry_from` point.
     pub retry_point: OplogIndex,
+    /// Entity invocation that initiated this task, if any.
+    pub entity_parent_start_index: Option<OplogIndex>,
     /// Environment state service for lazy policy fetching
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     /// Environment ID for policy lookup
@@ -2341,6 +2378,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
     ) {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
+            self.entity_parent_start_index,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,

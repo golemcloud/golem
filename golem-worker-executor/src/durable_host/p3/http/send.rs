@@ -218,8 +218,11 @@ where
     let claim_options = AccessClaimOptions {
         scope_discriminator: Some(format!("req:{scope_discriminator}")),
         request_identity: Some(HostRequest::from(host_request.clone())),
+        entity_invocation_identity: None,
+        tool_invocation_identity: None,
         parent_start_index: None,
         observational_owner: None,
+        ..Default::default()
     };
     let mut handle = DurableCallSession::<P3HttpClientSend, P>::start_access_with_options(
         store,
@@ -293,7 +296,8 @@ where
                     }),
                     SerializableP3HttpClientSendResult::HttpError(_) => None,
                 };
-                consume_replayed_request::<Ctx, U>(store, req, recorded_request_body).await?;
+                let replayed_request_body_drain =
+                    consume_replayed_request::<Ctx, U>(store, req, recorded_request_body).await?;
                 let recorded_status = match &response.result {
                     SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
                         headers,
@@ -342,6 +346,7 @@ where
                                     recorded_status,
                                     recorded_request_body: send_start_index,
                                     durable_body: None,
+                                    replayed_request_body_drain,
                                 }),
                                 body_is_placeholder: true,
                                 observational_owner,
@@ -411,7 +416,7 @@ where
     }
 
     if authorization_denied {
-        consume_replayed_request::<Ctx, U>(store, req, None).await?;
+        let _ = consume_replayed_request::<Ctx, U>(store, req, None).await?;
         let error_code = ErrorCode::HttpRequestDenied;
         let result =
             SerializableP3HttpClientSendResult::HttpError(serialize_error_code(&error_code));
@@ -478,7 +483,7 @@ where
     let recording_enabled = store.with(|mut access| {
         !durable_worker_ctx::<Ctx, U>(access.data_mut())
             .state
-            .snapshotting_mode
+            .durability_is_suppressed()
     });
     let converted = match convert_physical_send_request::<Ctx, U>(
         store,
@@ -825,6 +830,7 @@ where
                         recorded_status: response_status,
                         recorded_request_body: send_start_index,
                         durable_body: Some(physical.body.clone()),
+                        replayed_request_body_drain: None,
                     }),
                     body_is_placeholder: false,
                     observational_owner,
@@ -1149,6 +1155,7 @@ where
         agent_config_retry_policies,
         runtime_retry_policy_mutations,
         max_in_function_retry_delay,
+        entity_parent_start_index,
         worker,
     ) = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
@@ -1160,11 +1167,12 @@ where
             ctx.state.agent_config_retry_policies(),
             ctx.state.runtime_retry_policy_mutations.clone(),
             ctx.state.config.max_in_function_retry_delay,
+            ctx.entity_parent_start_index(),
             ctx.public_state.worker(),
         )
     });
     let current_retry_policy_state = worker
-        .get_non_detached_last_known_status()
+        .get_attached_last_known_status()
         .await
         .current_retry_state
         .get(&retry_point)
@@ -1172,6 +1180,7 @@ where
 
     TaskRetryContext {
         retry_point,
+        entity_parent_start_index,
         environment_state_service,
         environment_id,
         default_retry_policy,

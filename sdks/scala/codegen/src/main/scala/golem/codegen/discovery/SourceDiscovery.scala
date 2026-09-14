@@ -29,6 +29,8 @@ import java.security.MessageDigest
  *   - `@agentImplementation` annotated classes
  *   - `@toolDefinition` annotated traits
  *   - `@toolImplementation` annotated classes
+ *   - `@toolMiddleware` annotated classes
+ *   - `@universalToolMiddleware` annotated classes
  *   - Top-level objects (for companion conflict detection)
  *
  * All results are returned as pure data; no code generation is performed here.
@@ -38,6 +40,8 @@ object SourceDiscovery {
   final case class SourceInput(path: String, content: String)
 
   final case class Warning(path: Option[String], message: String)
+
+  final case class Error(path: Option[String], message: String)
 
   /** A non-secret config field discovered from a config case class. */
   final case class ConfigField(
@@ -91,6 +95,39 @@ object SourceDiscovery {
     wildcardImports: List[WildcardImport]
   )
 
+  /** Discovered `@toolMiddleware` implementation class. */
+  final case class ToolMiddlewareImpl(
+    path: String,
+    pkg: String,
+    implClass: String,
+    middlewareName: String,
+    aliases: List[String],
+    description: Option[String],
+    presentedToolType: String,
+    expectedToolType: String,
+    transparent: Boolean,
+    parentType: String,
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport],
+    sourceHash: String,
+    surfaceHash: String
+  )
+
+  /** Discovered `@universalToolMiddleware` implementation class. */
+  final case class UniversalToolMiddlewareImpl(
+    path: String,
+    pkg: String,
+    implClass: String,
+    middlewareName: String,
+    aliases: List[String],
+    description: Option[String],
+    parentType: String,
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport],
+    sourceHash: String,
+    surfaceHash: String
+  )
+
   /** One `@arg(...)` annotation on a tool trait method. */
   final case class ToolArgAnnotation(
     name: String,
@@ -121,7 +158,10 @@ object SourceDiscovery {
     toolName: Option[String],
     version: Option[String],
     sourceHash: String,
-    methods: List[ToolMethod]
+    methods: List[ToolMethod],
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport],
+    knownTypeFqns: Set[String] = Set.empty
   )
 
   /** Discovered top-level object (for companion conflict detection). */
@@ -134,7 +174,10 @@ object SourceDiscovery {
     objects: Seq[ExistingObject],
     warnings: Seq[Warning],
     tools: Seq[ToolTrait] = Nil,
-    sourceHashes: Seq[(String, String)] = Nil
+    sourceHashes: Seq[(String, String)] = Nil,
+    toolMiddlewares: Seq[ToolMiddlewareImpl] = Nil,
+    universalToolMiddlewares: Seq[UniversalToolMiddlewareImpl] = Nil,
+    errors: Seq[Error] = Nil
   )
 
   /**
@@ -167,6 +210,14 @@ object SourceDiscovery {
       builder.result()
     }
 
+    val knownTypeFqns: Set[String] = {
+      val builder = Set.newBuilder[String]
+      parsedTrees.foreach { case (_, tree) =>
+        collectDeclaredTypes(tree, "", builder)
+      }
+      builder.result()
+    }
+
     parsedTrees.foreach { case (src, tree) =>
       collect(
         tree,
@@ -185,14 +236,24 @@ object SourceDiscovery {
       )
     }
 
+    val discoveredTools = tools
+      .result()
+      .distinct
+      .map(_.copy(knownTypeFqns = knownTypeFqns))
+      .sortBy(t => (t.pkg, t.name))
+    val middlewares = discoverMiddlewares(parsedTrees, discoveredTools)
+
     Result(
       traits = traits.result().distinct.sortBy(t => (t.pkg, t.name)),
       implementations = impls.result().distinct.sortBy(ai => (ai.pkg, ai.traitType, ai.implClass)),
       toolImplementations = toolImpls.result().distinct.sortBy(ti => (ti.pkg, ti.traitType, ti.implClass)),
       objects = objects.result().distinct.sortBy(o => (o.pkg, o.name)),
       warnings = warnings.result(),
-      tools = tools.result().distinct.sortBy(t => (t.pkg, t.name)),
-      sourceHashes = parsedTrees.map { case (src, _) => src.path -> sourceHash(src.content) }.sortBy(_._1)
+      tools = discoveredTools,
+      sourceHashes = parsedTrees.map { case (src, _) => src.path -> sourceHash(src.content) }.sortBy(_._1),
+      toolMiddlewares = middlewares.toolMiddlewares,
+      universalToolMiddlewares = middlewares.universalToolMiddlewares,
+      errors = middlewares.errors
     )
   }
 
@@ -200,6 +261,32 @@ object SourceDiscovery {
 
   private def parseSource(source: String): Option[Source] =
     dialects.Scala3(source).parse[Source].toOption
+
+  private def collectDeclaredTypes(
+    tree: Tree,
+    pkg: String,
+    builder: scala.collection.mutable.Builder[String, Set[String]]
+  ): Unit = {
+    def add(name: String): Unit =
+      builder += qualifiedName(pkg, name)
+
+    tree match {
+      case source: Source =>
+        source.stats.foreach(collectDeclaredTypes(_, pkg, builder))
+      case pkgNode: Pkg =>
+        pkgNode.stats.foreach(collectDeclaredTypes(_, appendPkg(pkg, pkgNode.ref.syntax), builder))
+      case Pkg.Object(_, name, templ) =>
+        add(name.value)
+        templ.stats.foreach(collectDeclaredTypes(_, appendPkg(pkg, name.value), builder))
+      case definition: Defn.Class  => add(definition.name.value)
+      case definition: Defn.Trait  => add(definition.name.value)
+      case definition: Defn.Object => add(definition.name.value)
+      case definition: Defn.Enum   => add(definition.name.value)
+      case definition: Defn.Type   => add(definition.name.value)
+      case declaration: Decl.Type  => add(declaration.name.value)
+      case _                       => ()
+    }
+  }
 
   private def sourceHash(source: String): String = {
     val digest = MessageDigest.getInstance("SHA-256")
@@ -227,6 +314,12 @@ object SourceDiscovery {
 
   private def hasToolImplementation(mods: List[Mod]): Boolean =
     hasAnnotation(mods, "toolImplementation")
+
+  private def hasToolMiddleware(mods: List[Mod]): Boolean =
+    hasAnnotation(mods, "toolMiddleware")
+
+  private def hasUniversalToolMiddleware(mods: List[Mod]): Boolean =
+    hasAnnotation(mods, "universalToolMiddleware")
 
   /** Flatten all annotation arguments from an Init node. */
   private def flattenArgs(init: Init): List[Term] =
@@ -657,7 +750,9 @@ object SourceDiscovery {
           toolName = extractToolName(t.mods),
           version = extractToolVersion(t.mods),
           sourceHash = sourceHash,
-          methods = extractToolMethods(t.templ)
+          methods = extractToolMethods(t.templ),
+          imports = imports,
+          wildcardImports = wildcardImports
         )
 
       case t: Defn.Trait if hasAgentDefinition(t.mods) =>
@@ -735,6 +830,510 @@ object SourceDiscovery {
       case _ =>
         ()
     }
+
+  // ── Tool middleware extraction ────────────────────────────────────────────
+
+  private final case class MiddlewareDiscovery(
+    toolMiddlewares: Seq[ToolMiddlewareImpl],
+    universalToolMiddlewares: Seq[UniversalToolMiddlewareImpl],
+    errors: Seq[Error]
+  )
+
+  private final case class GeneratedToolRef(
+    toolType: String,
+    generatedSimpleName: String,
+    allowWildcardResolution: Boolean
+  )
+
+  private final case class ParsedMiddlewareParent(
+    presented: GeneratedToolRef,
+    expected: GeneratedToolRef,
+    transparent: Boolean,
+    syntax: String
+  )
+
+  private def discoverMiddlewares(
+    parsedTrees: Seq[(SourceInput, Tree)],
+    tools: Seq[ToolTrait]
+  ): MiddlewareDiscovery = {
+    val toolMiddlewares      = List.newBuilder[ToolMiddlewareImpl]
+    val universalMiddlewares = List.newBuilder[UniversalToolMiddlewareImpl]
+    val errors               = List.newBuilder[Error]
+
+    parsedTrees.foreach { case (source, tree) =>
+      collectMiddlewareTree(
+        tree,
+        pkg = "",
+        imports = Map.empty,
+        wildcardImports = Nil,
+        sourcePath = source.path,
+        sourceHash = sourceHash(source.content),
+        tools = tools,
+        toolMiddlewares = toolMiddlewares,
+        universalMiddlewares = universalMiddlewares,
+        errors = errors
+      )
+    }
+
+    val monomorphic     = toolMiddlewares.result().distinct.sortBy(m => (m.middlewareName, m.pkg, m.implClass))
+    val universal       = universalMiddlewares.result().distinct.sortBy(m => (m.middlewareName, m.pkg, m.implClass))
+    val duplicateErrors = (monomorphic.map(m => (m.middlewareName, m.path, m.pkg, m.implClass)) ++
+      universal.map(m => (m.middlewareName, m.path, m.pkg, m.implClass)))
+      .groupBy(_._1)
+      .toSeq
+      .sortBy(_._1)
+      .collect {
+        case (name, duplicates) if duplicates.size > 1 =>
+          val locations = duplicates.sortBy { case (_, path, pkg, implClass) => (path, pkg, implClass) }.map {
+            case (_, path, pkg, implClass) =>
+              val fqn = if (pkg.isEmpty) implClass else s"$pkg.$implClass"
+              s"$fqn ($path)"
+          }
+            .mkString(", ")
+          Error(None, s"Duplicate tool middleware name `$name`: $locations.")
+      }
+
+    MiddlewareDiscovery(
+      toolMiddlewares = monomorphic,
+      universalToolMiddlewares = universal,
+      errors = (errors.result() ++ duplicateErrors).sortBy(error => (error.path.getOrElse(""), error.message))
+    )
+  }
+
+  private def collectMiddlewareStats(
+    stats: Iterable[Stat],
+    pkg: String,
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport],
+    sourcePath: String,
+    sourceHash: String,
+    tools: Seq[ToolTrait],
+    toolMiddlewares: scala.collection.mutable.Builder[ToolMiddlewareImpl, List[ToolMiddlewareImpl]],
+    universalMiddlewares: scala.collection.mutable.Builder[UniversalToolMiddlewareImpl, List[
+      UniversalToolMiddlewareImpl
+    ]],
+    errors: scala.collection.mutable.Builder[Error, List[Error]]
+  ): Unit = {
+    var visibleImports         = imports
+    var visibleWildcardImports = wildcardImports
+    stats.foreach {
+      case importStat: Import =>
+        visibleImports = visibleImports ++ extractNamedImports(importStat)
+        visibleWildcardImports = visibleWildcardImports ++ extractWildcardImports(importStat)
+      case stat =>
+        collectMiddlewareTree(
+          stat,
+          pkg,
+          visibleImports,
+          visibleWildcardImports,
+          sourcePath,
+          sourceHash,
+          tools,
+          toolMiddlewares,
+          universalMiddlewares,
+          errors
+        )
+    }
+  }
+
+  private def collectMiddlewareTree(
+    tree: Tree,
+    pkg: String,
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport],
+    sourcePath: String,
+    sourceHash: String,
+    tools: Seq[ToolTrait],
+    toolMiddlewares: scala.collection.mutable.Builder[ToolMiddlewareImpl, List[ToolMiddlewareImpl]],
+    universalMiddlewares: scala.collection.mutable.Builder[UniversalToolMiddlewareImpl, List[
+      UniversalToolMiddlewareImpl
+    ]],
+    errors: scala.collection.mutable.Builder[Error, List[Error]]
+  ): Unit =
+    tree match {
+      case source: Source =>
+        collectMiddlewareStats(
+          source.stats,
+          pkg,
+          imports,
+          wildcardImports,
+          sourcePath,
+          sourceHash,
+          tools,
+          toolMiddlewares,
+          universalMiddlewares,
+          errors
+        )
+      case pkgNode: Pkg =>
+        collectMiddlewareStats(
+          pkgNode.stats,
+          appendPkg(pkg, pkgNode.ref.syntax),
+          imports,
+          wildcardImports,
+          sourcePath,
+          sourceHash,
+          tools,
+          toolMiddlewares,
+          universalMiddlewares,
+          errors
+        )
+      case Pkg.Object(_, name, templ) =>
+        collectMiddlewareStats(
+          templ.stats,
+          appendPkg(pkg, name.value),
+          imports,
+          wildcardImports,
+          sourcePath,
+          sourceHash,
+          tools,
+          toolMiddlewares,
+          universalMiddlewares,
+          errors
+        )
+      case cls: Defn.Class if hasToolMiddleware(cls.mods) && hasUniversalToolMiddleware(cls.mods) =>
+        errors += Error(
+          Some(sourcePath),
+          s"Tool middleware `${qualifiedName(pkg, cls.name.value)}` cannot use both @toolMiddleware and @universalToolMiddleware."
+        )
+      case cls: Defn.Class if hasToolMiddleware(cls.mods) =>
+        discoverToolMiddlewareClass(
+          cls,
+          pkg,
+          imports,
+          wildcardImports,
+          sourcePath,
+          sourceHash,
+          tools,
+          toolMiddlewares,
+          errors
+        )
+      case cls: Defn.Class if hasUniversalToolMiddleware(cls.mods) =>
+        discoverUniversalToolMiddlewareClass(
+          cls,
+          pkg,
+          imports,
+          wildcardImports,
+          sourcePath,
+          sourceHash,
+          universalMiddlewares,
+          errors
+        )
+      case traitDef: Defn.Trait if hasToolMiddleware(traitDef.mods) || hasUniversalToolMiddleware(traitDef.mods) =>
+        errors += Error(
+          Some(sourcePath),
+          s"Tool middleware `${qualifiedName(pkg, traitDef.name.value)}` must be a concrete class, not a trait."
+        )
+      case objectDef: Defn.Object if hasToolMiddleware(objectDef.mods) || hasUniversalToolMiddleware(objectDef.mods) =>
+        errors += Error(
+          Some(sourcePath),
+          s"Tool middleware `${qualifiedName(pkg, objectDef.name.value)}` must be a concrete class, not an object."
+        )
+      case _ => ()
+    }
+
+  private def discoverToolMiddlewareClass(
+    cls: Defn.Class,
+    pkg: String,
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport],
+    sourcePath: String,
+    sourceHash: String,
+    tools: Seq[ToolTrait],
+    toolMiddlewares: scala.collection.mutable.Builder[ToolMiddlewareImpl, List[ToolMiddlewareImpl]],
+    errors: scala.collection.mutable.Builder[Error, List[Error]]
+  ): Unit = {
+    val className  = qualifiedName(pkg, cls.name.value)
+    val valid      = validateMiddlewareClass(cls, className, sourcePath, errors)
+    val annotation = extractMiddlewareAnnotation(cls.mods, "toolMiddleware")
+    val name       = annotation.flatMap(_._1).filter(_.trim.nonEmpty)
+    val aliases    = annotation.map(_._2).getOrElse(Nil)
+    if (name.isEmpty)
+      errors += Error(Some(sourcePath), s"Tool middleware `$className` must declare a non-empty name.")
+
+    val parentCandidates = cls.templ.inits.flatMap { init =>
+      parseMiddlewareParent(init.tpe, imports).map(parent => parent.copy(syntax = init.tpe.syntax))
+    }
+    val parent = parentCandidates match {
+      case single :: Nil => Some(single)
+      case Nil           =>
+        errors += Error(
+          Some(sourcePath),
+          s"Tool middleware `$className` must directly extend a generated `<Tool>Middleware` or `<Tool>Middleware.Adapter[<Expected>Underlying]` trait."
+        )
+        None
+      case _ =>
+        errors += Error(
+          Some(sourcePath),
+          s"Tool middleware `$className` has multiple generated middleware parents: ${parentCandidates.map(_.syntax).mkString(", ")}."
+        )
+        None
+    }
+
+    val resolved = parent.flatMap { parsed =>
+      val presented = resolveToolReference(parsed.presented, pkg, wildcardImports, tools)
+      val expected  = resolveToolReference(parsed.expected, pkg, wildcardImports, tools)
+      if (presented.isEmpty)
+        errors += Error(
+          Some(sourcePath),
+          s"Tool middleware `$className` has an unresolved presented tool in parent `${parsed.syntax}`."
+        )
+      if (expected.isEmpty)
+        errors += Error(
+          Some(sourcePath),
+          s"Tool middleware `$className` has an unresolved expected underlying in parent `${parsed.syntax}`."
+        )
+      for {
+        presentedTool <- presented
+        expectedTool  <- expected
+      } yield (parsed, presentedTool, expectedTool)
+    }
+
+    for {
+      middlewareName                        <- name
+      (parsed, presentedTool, expectedTool) <- resolved
+      if valid
+    } {
+      val description = extractDescription(cls.mods)._2
+      val surface     =
+        s"$className|name=$middlewareName|aliases=${aliases.mkString(",")}|description=${description.getOrElse("")}|presented=$presentedTool|expected=$expectedTool|transparent=${parsed.transparent}|parent=${parsed.syntax}|source=$sourceHash"
+      toolMiddlewares += ToolMiddlewareImpl(
+        path = sourcePath,
+        pkg = pkg,
+        implClass = cls.name.value,
+        middlewareName = middlewareName,
+        aliases = aliases,
+        description = description,
+        presentedToolType = presentedTool,
+        expectedToolType = expectedTool,
+        transparent = parsed.transparent,
+        parentType = parsed.syntax,
+        imports = imports,
+        wildcardImports = wildcardImports,
+        sourceHash = sourceHash,
+        surfaceHash = sha256(surface)
+      )
+    }
+  }
+
+  private def discoverUniversalToolMiddlewareClass(
+    cls: Defn.Class,
+    pkg: String,
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport],
+    sourcePath: String,
+    sourceHash: String,
+    universalMiddlewares: scala.collection.mutable.Builder[UniversalToolMiddlewareImpl, List[
+      UniversalToolMiddlewareImpl
+    ]],
+    errors: scala.collection.mutable.Builder[Error, List[Error]]
+  ): Unit = {
+    val className  = qualifiedName(pkg, cls.name.value)
+    val valid      = validateMiddlewareClass(cls, className, sourcePath, errors)
+    val annotation = extractMiddlewareAnnotation(cls.mods, "universalToolMiddleware")
+    val name       = annotation.flatMap(_._1).filter(_.trim.nonEmpty)
+    val aliases    = annotation.map(_._2).getOrElse(Nil)
+    if (name.isEmpty)
+      errors += Error(Some(sourcePath), s"Universal tool middleware `$className` must declare a non-empty name.")
+
+    val parents = cls.templ.inits.filter(init => isUniversalMiddlewareParent(init.tpe, imports, wildcardImports))
+    val parent  = parents match {
+      case single :: Nil => Some(single.tpe.syntax)
+      case Nil           =>
+        errors += Error(
+          Some(sourcePath),
+          s"Universal tool middleware `$className` must directly extend `golem.tool.UniversalToolMiddleware`."
+        )
+        None
+      case _ =>
+        errors += Error(
+          Some(sourcePath),
+          s"Universal tool middleware `$className` has multiple `UniversalToolMiddleware` parents."
+        )
+        None
+    }
+
+    for {
+      middlewareName <- name
+      parentType     <- parent
+      if valid
+    } {
+      val description = extractDescription(cls.mods)._2
+      val surface     =
+        s"$className|name=$middlewareName|aliases=${aliases.mkString(",")}|description=${description.getOrElse("")}|parent=$parentType|source=$sourceHash"
+      universalMiddlewares += UniversalToolMiddlewareImpl(
+        path = sourcePath,
+        pkg = pkg,
+        implClass = cls.name.value,
+        middlewareName = middlewareName,
+        aliases = aliases,
+        description = description,
+        parentType = parentType,
+        imports = imports,
+        wildcardImports = wildcardImports,
+        sourceHash = sourceHash,
+        surfaceHash = sha256(surface)
+      )
+    }
+  }
+
+  private def validateMiddlewareClass(
+    cls: Defn.Class,
+    className: String,
+    sourcePath: String,
+    errors: scala.collection.mutable.Builder[Error, List[Error]]
+  ): Boolean = {
+    var valid = true
+    if (cls.mods.exists(_.is[Mod.Abstract])) {
+      errors += Error(Some(sourcePath), s"Tool middleware `$className` must be concrete, not abstract.")
+      valid = false
+    }
+    if (cls.tparamClause.values.nonEmpty) {
+      errors += Error(Some(sourcePath), s"Tool middleware `$className` must not declare type parameters.")
+      valid = false
+    }
+    if (cls.ctor.paramClauses.flatMap(_.values).nonEmpty) {
+      errors += Error(Some(sourcePath), s"Tool middleware `$className` must have a zero-argument primary constructor.")
+      valid = false
+    }
+    if (cls.templ.stats.exists(_.isInstanceOf[Ctor.Secondary])) {
+      errors += Error(Some(sourcePath), s"Tool middleware `$className` must not declare secondary constructors.")
+      valid = false
+    }
+    valid
+  }
+
+  private def extractMiddlewareAnnotation(
+    mods: List[Mod],
+    annotationName: String
+  ): Option[(Option[String], List[String])] =
+    annotationInits(mods, annotationName).headOption.map { init =>
+      val args = flattenArgs(init)
+      val name = namedArg(args, "name")
+        .flatMap(stringLit)
+        .orElse(args.headOption.flatMap(stringLit))
+      val aliases = namedArg(args, "aliases")
+        .map(stringArrayTerm)
+        .orElse(args.lift(1).map(stringArrayTerm))
+        .getOrElse(Nil)
+      (name, aliases)
+    }
+
+  private def parseMiddlewareParent(
+    tpe: Type,
+    imports: Map[String, String]
+  ): Option[ParsedMiddlewareParent] =
+    tpe match {
+      case Type.Apply.After_4_6_0(Type.Select(presented, Type.Name("Adapter")), args) if args.values.size == 1 =>
+        for {
+          presentedTool <- generatedToolRef(presented.syntax, "Middleware", imports)
+          expectedTool  <- generatedToolRef(args.values.head.syntax, "Underlying", imports)
+        } yield ParsedMiddlewareParent(
+          presented = presentedTool,
+          expected = expectedTool,
+          transparent = false,
+          syntax = tpe.syntax
+        )
+      case _ =>
+        generatedToolRef(tpe.syntax, "Middleware", imports).map { presented =>
+          ParsedMiddlewareParent(
+            presented = presented,
+            expected = presented,
+            transparent = true,
+            syntax = tpe.syntax
+          )
+        }
+    }
+
+  private def generatedToolRef(
+    rawRef: String,
+    suffix: String,
+    imports: Map[String, String]
+  ): Option[GeneratedToolRef] = {
+    val rooted     = rawRef.startsWith("_root_.")
+    val normalized = normalizeTypeRef(rawRef)
+    val expanded   = if (rooted) normalized else expandImportedTypeRef(normalized, imports)
+    val simpleName = normalized.split('.').lastOption.getOrElse(normalized)
+    if (!expanded.endsWith(suffix)) None
+    else {
+      val toolType = expanded.dropRight(suffix.length)
+      if (toolType.isEmpty || toolType.endsWith(".")) None
+      else
+        Some(
+          GeneratedToolRef(
+            toolType = normalizeTypeRef(toolType),
+            generatedSimpleName = simpleName,
+            allowWildcardResolution = !rooted && !normalized.contains(".") && expanded == normalized
+          )
+        )
+    }
+  }
+
+  private def resolveToolReference(
+    ref: GeneratedToolRef,
+    implPkg: String,
+    wildcardImports: List[WildcardImport],
+    tools: Seq[ToolTrait]
+  ): Option[String] = {
+    val byFqn          = tools.map(tool => qualifiedName(tool.pkg, tool.name) -> tool).toMap
+    val simpleToolName = ref.toolType.split('.').lastOption.getOrElse(ref.toolType)
+
+    val enclosingPackages = {
+      val parts = implPkg.split('.').toList.filter(_.nonEmpty)
+      parts.indices.reverse.map(index => parts.take(index + 1).mkString(".")).toList
+    }
+    val relativeCandidates =
+      if (ref.toolType.contains(".")) enclosingPackages.map(prefix => s"$prefix.${ref.toolType}")
+      else List(qualifiedName(implPkg, ref.toolType))
+    val discovered = (relativeCandidates :+ ref.toolType).distinct.find(byFqn.contains)
+
+    discovered.orElse {
+      if (!ref.allowWildcardResolution) None
+      else
+        wildcardImports
+          .filterNot(_.excludes.contains(ref.generatedSimpleName))
+          .map(wildcard => qualifiedName(wildcard.pkg, simpleToolName))
+          .distinct
+          .filter(byFqn.contains) match {
+          case single :: Nil => Some(single)
+          case _             => None
+        }
+    }
+  }
+
+  private def isUniversalMiddlewareParent(
+    tpe: Type,
+    imports: Map[String, String],
+    wildcardImports: List[WildcardImport]
+  ): Boolean = {
+    val raw        = tpe.syntax
+    val rooted     = raw.startsWith("_root_.")
+    val normalized = normalizeTypeRef(raw)
+    val expanded   = if (rooted) normalized else expandImportedTypeRef(normalized, imports)
+    expanded == "golem.tool.UniversalToolMiddleware" ||
+    (expanded == "UniversalToolMiddleware" &&
+      wildcardImports.exists(wildcard =>
+        wildcard.pkg == "golem.tool" && !wildcard.excludes.contains("UniversalToolMiddleware")
+      ))
+  }
+
+  private def expandImportedTypeRef(tpe: String, imports: Map[String, String]): String = {
+    val dot = tpe.indexOf('.')
+    if (dot < 0) imports.getOrElse(tpe, tpe)
+    else {
+      val qualifier = tpe.substring(0, dot)
+      val rest      = tpe.substring(dot + 1)
+      imports.get(qualifier).map(imported => s"$imported.$rest").getOrElse(tpe)
+    }
+  }
+
+  private def normalizeTypeRef(tpe: String): String =
+    tpe.stripPrefix("_root_.")
+
+  private def qualifiedName(pkg: String, name: String): String =
+    if (pkg.isEmpty) name else s"$pkg.$name"
+
+  private def sha256(value: String): String =
+    sourceHash(value)
 
   // ── Config field extraction ───────────────────────────────────────────────
 

@@ -1,720 +1,166 @@
 ---
 name: golem-skill-harness
-description: "Developing, testing, and running Golem skill tests with the skill test harness. Use when creating new skills, writing scenario YAML files, running skill tests locally, or debugging skill test failures."
+description: "Developing, testing, and running Golem skill scenarios with the TypeScript skill harness. Use when creating Golem skills, authoring scenario YAML, running agent matrices, or debugging skill activation and behavior failures."
 ---
 
 # Golem Skill Test Harness
 
-The skill test harness lives in `golem-skills/tests/harness/`. It drives coding agents (Claude Code, OpenCode, Codex) through scenario YAML files, verifying that skills are activated and produce correct results. Skill definitions live in `golem-skills/skills/`.
+The harness in `golem-skills/tests/harness/` runs coding agents against current-schema YAML scenarios. Treat `src/executor.ts`, `src/assertions.ts`, `src/driver/`, `src/workspace.ts`, and `src/services.ts` as the source of truth; do not add legacy fields or compatibility shims to new scenarios.
 
-## Skill Directory Structure
+## Skills and generated documentation
 
-Skills in `golem-skills/skills/` are organized by language scope:
+Catalog skills live in `golem-skills/skills/{common,rust,ts,scala,moonbit}/<skill>/SKILL.md`. Golem templates install common plus language-specific skills in the canonical `.agents/skills/` tree. Harness drivers also seed bootstrap skills there; Claude receives a `.claude -> .agents` symlink rather than a second catalog copy.
 
-```
-golem-skills/skills/
-  common/                  # Language-independent skills (included for all languages)
-    golem-new-project/
-      SKILL.md
-  rust/                    # Rust-specific skills (included only for Rust projects)
-    golem-add-rust-crate/
-      SKILL.md
-  ts/                      # TypeScript-specific skills (included only for TS projects)
-    golem-add-npm-package/
-      SKILL.md
-  scala/                   # Scala-specific skills (included only for Scala projects)
-  moonbit/                 # MoonBit-specific skills (included only for MoonBit projects)
-```
-
-When `golem new` creates a project, it embeds the `common/` skills plus the language-specific skills into the project's `.agents/skills/` and `.claude/skills/` directories.
-
-## Rebuilding After Skill Changes
-
-Skills are embedded by the `golem-cli` library build script and consumed by the `golem` binary. If you add or modify a skill under `golem-skills/skills/`, rebuild `golem` before running a scenario that installs or exercises that skill:
+After changing catalog skills:
 
 ```shell
 cargo build -p golem
-```
-
-Release mode is not required. However, the harness prefers `target/release/golem` when it already exists and otherwise uses `target/debug/golem`. Rebuild the profile the harness will select, or remove/rename a stale local release binary before using the debug build. Without this step, `golem new` can emit stale skill content.
-
-### Also regenerate the public How-To Guides
-
-Each `SKILL.md` is also republished as a How-To Guide on [learn.golem.cloud](https://learn.golem.cloud) under `docs/src/content/next/how-to-guides/`. After adding or editing a skill, regenerate those MDX pages:
-
-```shell
 cargo make generate-docs-skills
 ```
 
-CI's `check-docs-skills` task will fail any PR that changes `golem-skills/skills/` without also updating the generated MDX.
+The CLI embeds the catalog. The docs command updates the generated How-To index (`docs/src/content/next/how-to-guides.mdx`), category landing pages, `_meta.js` files, and individual guide pages. If `target/release/golem` exists, the harness chooses it before `target/debug/golem`; rebuild the selected profile or remove the stale binary.
 
-## Prerequisites
+## Prerequisites and limitations
 
-- **Node.js 20+** and npm
-- **Golem binary** pre-built: the harness requires a `golem` binary in `$GOLEM_PATH/target/release/` or `$GOLEM_PATH/target/debug/`. Build with `cargo build -p golem` (debug) or `cargo build -p golem --release` (release). The harness prefers the release build and falls back to debug.
-- **No pre-running Golem server**: the harness starts its own server automatically using `golem server run --data-dir <workspaces/golem-server-data> --clean` and stops it when done. If a server is already running on port 9881, the harness **fails with an error** to avoid conflicts.
-- **Agent CLI** installed: one of `claude` (Claude Code), `opencode`, or `codex`
-- **Filesystem watcher**: `fswatch` on macOS, `inotify-tools` on Linux
-- **GOLEM_PATH** env var set to the golem repo root. If not set, the harness auto-detects it by walking up from `cwd` looking for `sdks/rust/golem-rust` and `sdks/ts/packages` directories (same markers as `golem-cli`). If auto-detection also fails, the harness exits with an error. The resolved target directory (`target/release` or `target/debug`) is prepended to `PATH` so all spawned processes — including agent drivers — use the correct `golem` and `golem-cli` binaries.
-- For Rust skills: `cargo-component` and `wasm32-wasip2` target
-- For TS skills: `pnpm`, `wasm-rquickjs-cli`, and fresh TS SDK/template artifacts. `cargo make build-sdk-ts` creates missing outputs; after TS source changes, run `npx pnpm run build && npx pnpm run build-agent-template` in `sdks/ts/` because that cargo-make task skips existing outputs.
-- For MoonBit skills: `moon` (MoonBit toolchain), `wasm-tools`
+- Node.js/npm and one requested agent runtime: Amp SDK credentials, `claude`, `opencode`, `codex`, or `gemini`.
+- `GOLEM_PATH` must identify the workspace root. If absent, detection walks upward from the **process current directory** looking for both `sdks/rust/golem-rust` and `sdks/ts/packages`.
+- A built executable must exist at literal `<GOLEM_PATH>/target/release/golem` or `<GOLEM_PATH>/target/debug/golem`. `resolveGolemTargetDir` does not honor `CARGO_TARGET_DIR` or Cargo target-dir configuration.
+- The harness prepends the selected target directory to `PATH`, starts its own clean Golem server, and requires port **9881** to be free. The runner always starts on 9881. Although the scenario schema exposes `settings.golem_server.router_port`, changing it does not change server startup and is therefore not a usable alternate-port mechanism.
+- Docker is required for scenario prerequisite services (`postgres`, `mysql`, `ignite`, `openai-mock`).
+- Linux skill activation fallback uses `inotifywait` when available. macOS deliberately starts no `fswatch` process. Both platforms can use atime snapshots; filesystems or mounts that do not update atime reliably can miss reads. Amp, Claude, OpenCode, and Gemini primarily report native skill-tool events; Codex falls back to filesystem tracking.
+- Language toolchains must match the scenario. Rust commonly needs `wasm32-wasip2`; TypeScript needs pnpm and built SDK/template artifacts; MoonBit needs `moon` and `wasm-tools`.
+- Scala runs need Java 17, sbt, synchronized WIT, the three generated guest-runtime role WASMs
+  under `sdks/scala/{sbt/src/main/resources,mill/resources}/golem/wasm/`, and the Scala SDK
+  published locally for the versions used by templates. The Scala plugin/template build combines
+  those resources into its application-local `.generated/agent_guest.wasm`; there is no generated
+  `sdks/scala/agent_guest.wasm`. Follow `.github/actions/run-skill-harness/action.yml` for the
+  authoritative CI setup (including the TS SDK artifacts Scala currently consumes).
 
-## Install and Build
+## Install and fast checks
 
 ```shell
 cd golem-skills/tests/harness
 npm install
-npm run build
+npm run build          # lint + tsc
+npm run format:check
+npm test               # tests compiled into dist first
 ```
 
-The `build` script runs **ESLint** then **tsc**, so lint errors will fail the build.
+Repository policy forbids unit tests from spawning external tools or compilers. Keep schema, assertion, watcher, and driver parsing logic in harness unit tests; validate real agent CLIs, Golem, Docker services, and language compilers through harness scenarios/CI.
 
-## Linting and Formatting
+## Run scenarios
 
-The harness uses [ESLint 9](https://eslint.org/) with [`typescript-eslint`](https://typescript-eslint.io/) for linting and [Prettier](https://prettier.io/) for formatting. Configuration files:
-
-- `eslint.config.js` — ESLint flat config with `typescript-eslint` recommended rules
-- `.prettierrc` — Prettier config (2-space indent, double quotes, trailing commas, 100 char width)
+All relative CLI paths are resolved from the process current directory, not from the location of `run.ts`. Normally run from `golem-skills/tests/harness/`:
 
 ```shell
-cd golem-skills/tests/harness
-
-npm run lint            # Check for lint errors
-npm run lint:fix        # Auto-fix lint errors
-npm run format:check    # Check formatting without changing files
-npm run format          # Auto-format all source files
+npx tsx src/run.ts --dry-run --scenario <name>
+npx tsx src/run.ts --agent claude-code --language rust --scenario <name>
 ```
 
-When harness TypeScript changes, run `npm run build`, `npm run format:check`, and affected unit tests. Use `npm run lint:fix` or `npm run format` only when fixes are needed, then inspect the diff. Skill-definition or scenario-only changes do not require reformatting or testing unrelated harness TypeScript.
+Current options:
 
-## Running Unit Tests (harness self-tests)
+| Option                      | Meaning                                                                     | Default                     |
+| --------------------------- | --------------------------------------------------------------------------- | --------------------------- |
+| `--agent <name>`            | `amp`, `claude-code`, `opencode`, `codex`, or `gemini`; `all` runs all      | `all`                       |
+| `--language <lang>`         | `ts`, `rust`, `scala`, or `moonbit`; `all` runs all                         | `all`                       |
+| `--scenario <name>`         | Select one scenario                                                         | all                         |
+| `--model <id>`              | Model selection (currently sets `OPENCODE_MODEL`; also recorded in reports) | agent default               |
+| `--scenarios <dir>`         | Scenario directory, relative to cwd                                         | `./scenarios`               |
+| `--output <dir>`            | Results directory, relative to cwd                                          | `./results`                 |
+| `--timeout <seconds>`       | Global step timeout                                                         | 1800                        |
+| `--idle-timeout <seconds>`  | No-output timeout                                                           | 300; Gemini defaults to 600 |
+| `--retries <n>`             | Whole-scenario retries after idle timeout                                   | 5                           |
+| `--dry-run`                 | Parse/validate and summarize only                                           | false                       |
+| `--resume-from <id>`        | Start at a step ID; requires `--scenario`                                   | unset                       |
+| `--workspace <path>`        | Root under which the run UUID hierarchy is created                          | `./workspaces`              |
+| `--merge-reports <dir>`     | Merge discovered summaries/reports                                          | unset                       |
+| `--regenerate-report <url>` | Rebuild HTML from published report data; `latest` uses the built-in URL     | unset                       |
+| `--ctrf <path>`             | Write/update a CTRF report                                                  | unset                       |
 
-```shell
-cd golem-skills/tests/harness
-npm test
-```
+`--workspace` is a root override, not an exact reusable scenario directory. Workspaces are `<root>/<run-uuid>/<scenario>/<language>/` (retries add subdirectories) and are retained. `--resume-from` still creates a new run hierarchy; it skips earlier scenario steps rather than reopening an old workspace.
 
-## Running Skill Scenarios
+The server is restarted between scenarios and retries with the same clean data directory. The harness refuses a pre-existing healthy server on 9881.
 
-From `golem-skills/tests/harness/`:
-
-```shell
-npx tsx src/run.ts [options]
-```
-
-### CLI Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--agent <name>` | Agent driver: `claude-code`, `opencode`, `codex`, or `all` | `all` |
-| `--language <lang>` | Language: `ts`, `rust`, or `all` | `all` |
-| `--scenario <name>` | Run only the named scenario | all scenarios |
-| `--scenarios <dir>` | Path to scenario YAML directory | `./scenarios` |
-| `--output <dir>` | Results output directory | `./results` |
-| `--timeout <seconds>` | Global timeout per step | `300` |
-| `--dry-run` | Validate scenarios without executing | `false` |
-| `--resume-from <id>` | Resume from a specific step ID | — |
-| `--workspace <path>` | Override workspace directory | — |
-| `--merge-reports <dir>` | Merge summary.json files into aggregated report | — |
-
-### Examples
-
-```shell
-# Run a single scenario with Claude Code for Rust
-npx tsx src/run.ts --agent claude-code --language rust --scenario golem-new-project-rust
-
-# Dry-run to validate YAML
-npx tsx src/run.ts --dry-run --scenario golem-db-app-ts
-
-# Resume a failed scenario from a specific step, reusing a previous workspace
-npx tsx src/run.ts --agent claude-code --language ts --scenario golem-db-app-ts \
-  --resume-from build-and-deploy --workspace ./workspaces/<run-id>/golem-db-app-ts/ts
-
-# Merge reports from multiple CI runs
-npx tsx src/run.ts --merge-reports ./ci-results --output ./merged
-```
-
-### Workspace Directory
-
-Each harness run generates a unique run ID (UUID). Without `--workspace`, each scenario gets its own directory at `<cwd>/workspaces/<run-id>/<scenario-name>/<language>/`. With `--workspace`, the same structure is created under the specified root: `<workspace>/<run-id>/<scenario-name>/<language>/`. Workspace directories are never deleted, so you can inspect the results after the run.
-
-### Golem Server Lifecycle
-
-The harness manages the Golem server automatically:
-1. **Startup**: Before running scenarios, the harness checks port 9881. If a server is already running, it **fails with an error**. Otherwise it starts `golem server run --data-dir <workspaces/<run-id>/golem-server-data> --clean` and waits up to 60 seconds for the healthcheck to pass.
-2. **Between scenarios**: The server is restarted (stopped and started again with `--clean`) to ensure a fresh state for each scenario.
-3. **Per-scenario check**: Before each scenario, the harness verifies that a `local` Golem profile exists and the server is still reachable.
-4. **Teardown**: After all scenarios complete (or on Ctrl+C), the harness stops the server process.
-
-## Adding a New Skill
-
-### 1. Create the skill definition
-
-Create the skill under the appropriate subdirectory of `golem-skills/skills/`:
-- `common/<skill-name>/SKILL.md` — for language-independent skills
-- `rust/<skill-name>/SKILL.md` — for Rust-specific skills
-- `ts/<skill-name>/SKILL.md` — for TypeScript-specific skills
-- `scala/<skill-name>/SKILL.md` — for Scala-specific skills
-- `moonbit/<skill-name>/SKILL.md` — for MoonBit-specific skills
-
-Use YAML frontmatter:
-
-```markdown
----
-name: my-new-skill
-description: "What the skill does. Use when <trigger conditions>."
----
-
-# Skill Title
-
-Instructions for the agent...
-```
-
-### 2. (Optional) Link the skill from `golem-cli --help`
-
-If the skill is relevant to one or more `golem-cli` subcommands, add a `SkillBinding` entry so that — when an automated coding agent invokes `golem-cli ... --help` inside a Golem application that has the skill installed — a `Relevant skills:` block linking to the skill's `SKILL.md` is appended to that command's long help.
-
-Edit [`cli/golem-cli/src/agent_help_hints/builtin_skill_map.rs`](file:///Users/vigoo/projects/golem/golem/cli/golem-cli/src/agent_help_hints/builtin_skill_map.rs) and add a row to `SKILL_BINDINGS`:
-
-```rust
-// Common (language-independent) skill:
-SkillBinding {
-    cli_path: &["agent", "delete"],
-    basename: "golem-delete-agent",
-    kind: SkillKind::Common,
-    summary: "Delete an agent instance.",
-},
-
-// Per-language skill (one variant per listed language; folder is
-// `<basename>-<lang>` where lang is rust|ts|scala|moonbit):
-SkillBinding {
-    cli_path: &["secret", "create"],
-    basename: "golem-add-secret",
-    kind: SkillKind::PerLanguage(ALL_LANGS),
-    summary: "Add a typed secret available to your agents.",
-},
-```
-
-Rules:
-- `cli_path` is the chain of subcommand names exactly as they appear in clap's tree (kebab-case, e.g. `&["agent", "cancel-invocation"]`).
-- `basename` is the skill folder name **without** any language suffix.
-- `kind` is `SkillKind::Common` for language-independent skills, or `SkillKind::PerLanguage(...)` for per-language ones.
-- `summary` is a one-line, language-agnostic description shown above the file links.
-- The same `cli_path` can appear in multiple bindings; they are merged into a single block under that command in source order.
-- A skill that is **not installed** under `<app_dir>/.agents/skills/` is silently skipped at runtime, so adding speculative bindings is safe.
-
-Two compile-time tests guard the table:
-- `every_binding_basename_exists_in_golem_skills_repo` — fails if the named skill folder is missing from `golem-skills/skills/`.
-- `every_binding_path_resolves_in_clap_tree` — fails if `cli_path` doesn't match a real subcommand (catches CLI renames).
-
-Run them with:
-
-```shell
-cargo test -p golem-cli --lib -- agent_help_hints
-```
-
-### 3. Rebuild the binaries
-
-After creating or modifying a skill, recompile so the changes are embedded:
-
-```shell
-cargo build -p golem
-```
-
-If `target/release/golem` already exists, rebuild with `cargo build -p golem --release` or ensure the harness uses the fresh debug binary; it prefers release when both profiles exist.
-
-### 4. Write a scenario YAML
-
-Create `golem-skills/tests/harness/scenarios/<scenario-name>.yaml`:
+## Current scenario schema
 
 ```yaml
-name: "my-scenario"
+name: example # required
+languageAgnostic: false # optional; once per agent on first selected language
 settings:
-  timeout_per_subprompt: 300
+  timeout_per_subprompt: 1800
   golem_server:
-    custom_request_port: 9006
+    router_port: 9881 # keep 9881; startup is fixed there
+    custom_request_port: 9006 # exported to scenario commands
+  cleanup: true # accepted; unique workspaces make cleanup unnecessary
+prerequisites:
+  env: { EXTRA_VAR: "value" }
+  services: [postgres] # postgres|mysql|ignite|openai-mock
+skip_if: { agent: codex, language: ts, os: linux }
 steps:
-  - id: "step-one"
-    prompt: "Do something using the skill"
-    expectedSkills:
-      - "my-new-skill"
+  - id: create
+    create_project: { name: test-app }
     verify:
       build: true
+      deploy: true
+      expectedFiles: [test-app/golem.yaml]
+finally: [] # same step schema; best-effort cleanup
 ```
 
-### 5. Run the scenario
-
-```shell
-npx tsx src/run.ts --agent claude-code --language rust --scenario my-scenario
-```
-
-## Scenario YAML Reference
-
-### Top-Level Fields
-
-```yaml
-name: "scenario-name"              # Required. Unique scenario identifier.
-settings:
-  timeout_per_subprompt: 300       # Default timeout for prompt steps (seconds)
-  golem_server:
-    router_port: 9881              # Golem router port (for healthcheck)
-    custom_request_port: 9006      # Sets GOLEM_CUSTOM_REQUEST_PORT env var
-  cleanup: true                    # Whether to clean workspace before run
-prerequisites:
-  env:                             # Extra env vars set during execution
-    DATABASE_URL: "postgres://..."
-skip_if:                           # Skip entire scenario conditionally
-  language: "ts"                   # Skip when language is "ts"
-  agent: "codex"                   # Skip when agent is "codex"
-  os: "windows"                    # Skip when OS matches (darwin→macos, win32→windows)
-steps: [...]                       # Required. At least one step.
-```
-
-### Step Types
-
-Every step must have **exactly one** action field. Common fields available on all steps:
-
-```yaml
-- id: "unique-step-id"             # Optional. Used for --resume-from.
-  timeout: 600                     # Override step timeout (seconds)
-  expect: { ... }                  # Assertions (see below)
-  retry:                           # Retry on failure
-    attempts: 3
-    delay: 5                       # Seconds between retries
-  only_if:                         # Run only when conditions match
-    language: "rust"
-    agent: "claude-code"
-    os: "macos"
-  skip_if:                         # Skip when conditions match
-    language: "ts"
-```
-
-#### `prompt` — Send a prompt to the coding agent
-
-```yaml
-- id: "create-app"
-  prompt: "Create a new Golem application called my-app with Rust."
-  expectedSkills:                  # Skills that MUST be activated
-    - "golem-new-project"
-  allowedExtraSkills:              # Extra skills that are OK to activate
-    - "golem-db-app-rust"
-  strictSkillMatch: false          # If true, ONLY expectedSkills may activate
-  continueSession: true            # Continue previous agent session and keep cumulative
-                                   # skill tracking for that prompt session.
-                                   # Set to false to start a fresh agent session with
-                                   # fresh skill tracking.
-  verify:
-    build: true                    # Run `golem build` after the prompt
-    deploy: true                   # Run `golem build` + `golem deploy --yes`
-```
-
-#### `create_project` — Create a Golem project directly (without an agent prompt)
-
-Runs `golem new <name> --template <language> --yes` in the workspace, automatically using the current language as the template. Useful when a scenario needs a pre-existing project without involving the agent.
-
-```yaml
-- id: "setup-project"
-  create_project:
-    name: "my-app"
-  verify:
-    build: true
-    deploy: true
-```
-
-With language-conditional presets:
-
-```yaml
-- id: "setup-project"
-  create_project:
-    name: "my-app"
-    presets:
-      rust: ["some-rust-preset"]
-      ts: ["some-ts-preset"]
-  verify:
-    build: true
-    deploy: true
-```
-
-#### `shell` — Run a shell command
-
-```yaml
-- id: "check-files"
-  shell:
-    command: "ls"
-    args: ["my-app/golem.yaml"]
-    cwd: "subdirectory"            # Relative to workspace
-  expect:
-    exit_code: 0
-    stdout_contains: "golem.yaml"
-```
-
-#### `http` — Make an HTTP request
-
-```yaml
-- id: "call-api"
-  http:
-    url: "http://my-app.localhost:9006/path"
-    method: "POST"                 # GET, POST, PUT, DELETE, PATCH
-    headers:
-      Content-Type: "application/json"
-    body: '{"key": "value"}'
-  expect:
-    status: 200
-    body_contains: "expected text"
-    body_matches: "regex.*pattern"
-```
-
-#### `invoke` — Invoke a Golem agent function via CLI
-
-```yaml
-- id: "call-function"
-  invoke:
-    agent: 'CounterAgent("my-counter")'
-    method: "increment"
-    args: '"hello"'                # Optional function arguments
-  expect:
-    stdout_contains: "1"
-```
-
-Use the real method name as it appears in source code, not a kebab-cased external name. For
-cross-language scenarios, `method` and `args` can be language-conditional:
-
-```yaml
-- id: "call-function"
-  invoke:
-    agent: 'ItemRepositoryAgent("catalog")'
-    method:
-      rust: "create_item"
-      ts: "createItem"
-      scala: "createItem"
-    args: '{id: "item-1", name: "Hammer"}'
-```
-
-Prompts must use language-appropriate method name casing (snake_case for Rust/MoonBit,
-camelCase for TypeScript/Scala) — not kebab-case. Invocation steps must also use the
-source-language method names that the generated code actually exposes.
-
-#### `invoke_json` — Invoke with `--json` output
-
-Same as `invoke` but requests JSON-formatted CLI output. Supports `result_json` assertions with
-JSONPath.
-
-`result_json` assertions are evaluated against the unwrapped invocation result value, not the full
-CLI envelope. That means:
-- if the method returns a record/object/case class, use paths like `$.id`
-- if the method returns a scalar, assert against `$`
-- if the method returns a list, assert against `$` or list element paths like `$[0].id`
-
-```yaml
-- id: "call-json"
-  invoke_json:
-    agent: 'MyAgent("test")'
-    method: "getData"
-  expect:
-    result_json:
-      - path: "$.name"
-        equals: "test"
-      - path: "$.items[0]"
-        contains: "expected"
-```
-
-Cross-language example:
-
-```yaml
-- id: "create-item"
-  invoke_json:
-    agent: 'ItemRepositoryAgent("catalog")'
-    method:
-      rust: "create_item"
-      ts: "createItem"
-      scala: "createItem"
-    args: '{id: "item-1", name: "Hammer"}'
-  expect:
-    result_json:
-      - path: "$.id"
-        equals: "item-1"
-      - path: "$.name"
-        equals: "Hammer"
-```
-
-#### `create_agent` — Create a Golem agent
-
-```yaml
-- id: "make-agent"
-  create_agent:
-    name: 'MyAgent("instance-1")'
-    env:
-      KEY: "value"
-    config:
-      setting: "value"
-```
-
-#### `delete_agent` — Delete a Golem agent
-
-```yaml
-- id: "remove-agent"
-  delete_agent:
-    name: 'MyAgent("instance-1")'
-```
-
-#### `trigger` — Fire-and-forget agent function call
-
-```yaml
-- id: "trigger-bg"
-  trigger:
-    agent: 'MyAgent("test")'
-    method: "backgroundTask"
-```
-
-Like `invoke` and `invoke_json`, `trigger.method` can be language-conditional when Rust,
-TypeScript, and Scala use different method casing.
-
-#### `check_file` — Assert on file contents
-
-Reads a file relative to the golem project directory and runs assertions against its contents.
-The file content is treated as `stdout` for assertion purposes.
-
-```yaml
-- id: "check-output"
-  check_file:
-    path: "output.txt"
-  expect:
-    stdout_contains: "expected text"
-    stdout_not_contains: "unwanted text"
-    stdout_matches: "regex.*pattern"
-```
-
-#### `mcp_call` — Call an MCP server method
-
-Initializes an MCP session via the Streamable HTTP transport, then sends a JSON-RPC method call.
-Session management (initialize + session ID forwarding) is handled automatically.
-
-```yaml
-- id: "list-tools"
-  mcp_call:
-    url: "http://my-app.localhost:9007/mcp"
-    method: "tools/list"
-  expect:
-    status: 200
-    body_contains: "my-tool-name"
-```
-
-With parameters (e.g., calling a tool):
-
-```yaml
-- id: "call-tool"
-  mcp_call:
-    url: "http://my-app.localhost:9007/mcp"
-    method: "tools/call"
-    params:
-      name: "CounterAgent-increment"
-      arguments:
-        name: "my-counter"
-  expect:
-    status: 200
-    body_contains: "1"
-```
-
-#### `sleep` — Wait for a duration
-
-```yaml
-- id: "wait"
-  sleep: 5  # seconds
-```
-
-### Assertions (`expect`)
-
-Available assertion fields:
-
-| Field | Applies To | Description |
-|-------|-----------|-------------|
-| `exit_code` | shell, invoke | Assert process exit code |
-| `stdout_contains` | shell, invoke, check_file, mcp_call | Stdout includes substring |
-| `stdout_not_contains` | shell, invoke, check_file, mcp_call | Stdout must NOT include substring |
-| `stdout_matches` | shell, invoke, check_file, mcp_call | Stdout matches regex |
-| `status` | http, mcp_call | HTTP response status code |
-| `body_contains` | http, mcp_call | Response body includes substring |
-| `body_matches` | http, mcp_call | Response body matches regex |
-| `result_json` | invoke_json | JSONPath assertions on parsed JSON result |
-
-Regex-based assertions use JavaScript `RegExp` syntax because the harness evaluates them with
-Node.js. `--dry-run` validates that `stdout_matches` and `body_matches` compile successfully.
-Use JavaScript-compatible patterns such as `\\d+`, `(?:...)`, and `[\\s\\S]*` for cross-line
-matches. Do not use PCRE-only inline flags such as `(?s)`.
-
-`result_json` entries support:
-- `path`: JSONPath expression (e.g., `$.name`, `$.items[0].id`)
-- `equals`: Exact match (deep equality)
-- `contains`: Substring match on stringified value
-
-### Language-Conditional Fields
-
-`prompt`, `expectedSkills`, `allowedExtraSkills`, `verify`, `create_project`, `invoke.method`,
-`invoke_json.method`, `trigger.method`, `invoke.args`, `invoke_json.args`, and `trigger.args`
-can be language-conditional:
-
-```yaml
-- id: "create-project"
-  prompt:
-    ts: "Create a new Golem application with TypeScript."
-    rust: "Create a new Golem application with Rust."
-  expectedSkills:
-    ts: ["golem-new-project", "golem-db-app-ts"]
-    rust: ["golem-new-project", "golem-db-app-rust"]
-```
-
-Another common pattern is language-specific invocation naming:
-
-```yaml
-- id: "list-items"
-  invoke_json:
-    agent: 'ItemRepositoryAgent("catalog")'
-    method:
-      rust: "list_items"
-      ts: "listItems"
-      scala: "listItems"
-      moonbit: "list_items"
-```
-
-When method arguments contain records or other composite types, use per-language `args` because
-`golem agent invoke` parses arguments using language-specific syntax. Rust uses `{ field: value }`
-with `:`, TypeScript uses `{ field: value }` with `:`, Scala uses `TypeName(field = value)`
-with `=`, and MoonBit uses `{ field: value }` with `:` (same as Rust):
-
-```yaml
-- id: "create-item"
-  invoke_json:
-    agent: 'ItemRepositoryAgent("catalog")'
-    method:
-      rust: "create_item"
-      ts: "createItem"
-      scala: "createItem"
-      moonbit: "create_item"
-    args:
-      rust: '{ id: "item-1", name: "Hammer" }'
-      ts: '{ id: "item-1", name: "Hammer" }'
-      scala: 'Item(id = "item-1", name = "Hammer")'
-      moonbit: '{ id: "item-1", name: "Hammer" }'
-```
-
-For simple scalar arguments (strings, numbers, booleans), the syntax is the same across all
-languages, so a plain `args` string suffices:
-
-```yaml
-    args: '"item-1"'
-```
-
-## Scenario Authoring Tips
-
-- Prefer `create_project` for setup when the scenario is not specifically testing project
-  creation. This keeps skill activation expectations focused on the behavior under test.
-- Prefer `invoke_json` over `invoke` for behavioral verification. It is more stable for
-  assertions, especially for records, lists, and other structured return values.
-- Use language-conditional `method` fields whenever Rust, TypeScript, Scala, and MoonBit differ in method
-  casing or naming style. MoonBit uses `snake_case` (same as Rust).
-- **Prompts MUST use language-appropriate method name casing, not kebab-case.** When a
-  prompt mentions method names that the agent should create, use the casing convention for
-  each target language: TypeScript and Scala use `camelCase` (e.g., `createItem`, `getTag`),
-  Rust and MoonBit use `snake_case` (e.g., `create_item`, `get_tag`). If a prompt mentions
-  method names, use per-language prompt syntax even if the rest of the text is identical.
-  Agents (especially Codex) may interpret kebab-case method names literally and generate
-  code with computed property syntax like `async ["create-item"]()`, producing kebab-case
-  WIT exports that don't match the `invoke`/`invoke_json` step's expected method names.
-- **Avoid repetitive per-language prompts beyond method naming.** Use language-conditional
-  `prompt` when the wording genuinely differs between languages (e.g., different method
-  names, file names, or syntax). If the prompt is essentially the same for all languages
-  except for method name casing, still use per-language prompts for correctness. The agent
-  already knows the project language from the AGENTS.md guide and will pick the right REPL
-  language, file extension, etc.
-- **Helper agents with HTTP APIs for observable side effects**: Some skills (atomic blocks,
-  transactions, durability controls) need an external service to observe side effects — e.g., to
-  verify that operations were retried, compensated, or executed in the correct order. The harness
-  does not provide a built-in mock HTTP server, but you can achieve the same effect by prompting
-  the coding agent to create a **helper agent** that exposes an HTTP API and records events.
-  Configure `settings.golem_server.custom_request_port` so the app has a known HTTP endpoint, then
-  ask the agent to add a second agent type with an HTTP mount that acts as the "other side." For
-  example, a `SideEffectRecorder` agent with `POST /record` (appends an event string to an
-  internal list) and `GET /events` (returns the full event history as JSON). The agent under test
-  then makes HTTP requests to this recorder during its operation. After the invocation, the
-  scenario can use an `http` step to `GET /events` and assert on the recorded sequence. This
-  pattern mirrors how the worker executor tests use a `TestHttpServer` to capture side-effect
-  ordering, but uses a real Golem agent instead — no external infrastructure needed. See
-  `transactions-1-fallible-rollback-http-ledger.yaml` for a concrete example where `OrderLedger`
-  serves this role, recording reserve/charge/refund/release history via HTTP endpoints and
-  exposing a `GET /state` endpoint that the harness asserts against.
-
-### Template Variables
-
-Steps support `{{variable}}` substitution. Built-in variables:
-
-| Variable | Value |
-|----------|-------|
-| `{{workspace}}` | Absolute workspace path |
-| `{{scenario}}` | Scenario name |
-| `{{agent}}` | Current agent name |
-| `{{language}}` | Current language |
-
-## Skill Activation Detection
-
-The harness detects whether an agent actually read a skill using two mechanisms:
-
-1. **Filesystem watcher**: `fswatch` (macOS) or `inotifywait` (Linux) monitors SKILL.md file access events
-2. **atime comparison**: Snapshots file access times before each step and compares after
-
-Both mechanisms feed into `expectedSkills` / `allowedExtraSkills` / `strictSkillMatch`
-verification. Skill tracking is scoped to the current prompt session: followup prompts accumulate
-activations, while the first prompt in a scenario and any prompt with `continueSession: false`
-start a fresh tracking session.
-
-## Agent Drivers
-
-| Agent | CLI Command | Skill Directories | Session Support |
-|-------|------------|-------------------|-----------------|
-| `claude-code` | `claude --print --permission-mode bypassPermissions` | `.claude/skills/` | Yes (sessionId) |
-| `opencode` | `opencode run` | `.claude/skills/`, `.agents/skills/` | No |
-| `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` | `.agents/skills/` | Yes (session_id) |
-
-The driver copies/symlinks all skills from the `--skills` directory into the agent's expected skill directories within the workspace.
-
-## Failure Classification
-
-Failed steps are automatically classified:
-
-| Code | Category | Meaning |
-|------|----------|---------|
-| `SKILL_NOT_ACTIVATED` | agent | Expected skill was not read by the agent |
-| `SKILL_MISMATCH` | agent | Unexpected extra skills were activated |
-| `BUILD_FAILED` | build | `golem build` failed |
-| `DEPLOY_FAILED` | deploy | `golem deploy` failed |
-| `INVOKE_FAILED` | deploy | Agent function invocation failed |
-| `INVOKE_JSON_FAILED` | deploy | JSON agent invocation failed |
-| `SHELL_FAILED` | infra | Shell command returned non-zero exit |
-| `HTTP_FAILED` | network | HTTP request failed or timed out |
-| `MCP_CALL_FAILED` | network | MCP call failed (init, session, or method error) |
-| `CREATE_PROJECT_FAILED` | infra | `golem new` project creation failed |
-| `CREATE_AGENT_FAILED` | infra | `golem agent new` failed |
-| `DELETE_AGENT_FAILED` | infra | `golem agent delete` failed |
-| `FILE_CHECK_FAILED` | assertion | Could not read file for check_file step |
-| `ASSERTION_FAILED` | assertion | Output didn't match expect assertions |
-
-## Output and Reports
-
-Results are written to `--output` (default `./results/`):
-- **Per-scenario JSON**: `<agent>-<language>-<scenario-name>.json` with step-by-step results
-- **summary.json**: Aggregated pass/fail counts, durations, worst failures
-- **report.html**: Visual HTML report
-- **GitHub Actions summary**: Auto-generated if `GITHUB_STEP_SUMMARY` is set
-
-## Existing Skills and Scenarios
-
-Skills in `golem-skills/skills/` (see [Skill Directory Structure](#skill-directory-structure) for layout):
-- `common/golem-new-project` — scaffolding with `golem new`
-- `rust/golem-add-rust-crate` — adding Rust crate dependencies
-- `ts/golem-add-npm-package` — adding npm package dependencies
-- `scala/golem-add-scala-dependency` — adding Scala library dependencies
-- `moonbit/golem-add-moonbit-package` — adding MoonBit mooncakes dependencies
-
-Scenarios in `golem-skills/tests/harness/scenarios/`:
-- `create-a-new-project.yaml` — project creation, build, deploy, and invoke
-- `add-third-party-dependency.yaml` — add a third-party dependency, use it in code, and verify
+Every step has exactly one action:
+
+- `prompt`: string or language map. Supports `expectedSkills`, `allowedExtraSkills`, `strictSkillMatch`, and `continueSession`.
+- `create_project`: `{ name, presets? }`; presets may be language-specific.
+- `shell`: `{ command, args?, cwd? }`, with args optionally language-specific. It executes directly, not through a shell.
+- `invoke` / `invoke_json`: `{ agent, method, args? }`; method and args may be language-specific.
+- `trigger`: fire-and-forget form of invocation.
+- `create_agent`: `{ name, env?, config? }`; `delete_agent`: `{ name }`.
+- `http`: `{ url, method?, headers?, body? }`; methods include GET, POST, PUT, DELETE, PATCH, OPTIONS.
+- `get_agent_type`: `{ name }`; `list_agent_types`: `{}`.
+- `check_file`: `{ path }`, resolved from the discovered Golem app directory.
+- `mcp_call`: `{ url, method, params? }`, using Streamable HTTP session initialization.
+- `sleep`: seconds.
+
+Common optional step fields are `id`, `timeout`, `expect`, `retry: { attempts, delay }`, `only_if`, `skip_if`, and `verify: { build?, deploy?, expectedFiles? }`. `allowedExtraSkills` or `strictSkillMatch` requires `expectedSkills`. Without an explicit extra-skill restriction, additional activations do not fail the step.
+
+Language-conditional values use `{ ts, rust, scala, moonbit }` maps. Supported conditional fields include prompts, skill lists, `verify`, `expect`, project presets, shell args, HTTP body, and invocation/trigger method and args. A missing selected-language entry resolves to absent and may fail later validation/execution; include every language the scenario runs.
+
+Use source-language method names: snake_case for Rust/MoonBit and camelCase for TypeScript/Scala. Use language-specific argument syntax where composite values differ.
+
+## Assertions
+
+`expect` supports:
+
+- process/file output: `exit_code`, `stdout_contains`, `stdout_not_contains`, `stdout_matches`
+- HTTP/MCP: `status`, `body_contains`, `body_matches`, `header_contains`
+- JSON bodies: `body_json`
+- unwrapped `invoke_json` results: `result_json`
+
+`body_json` and `result_json` are arrays of `{ path, equals?, equals_unordered?, contains? }`. `equals_unordered` compares top-level arrays without order. Regexes are JavaScript `RegExp`, validated by dry-run; avoid PCRE-only syntax.
+
+## Variables and paths
+
+Text substitution recognizes `{{workspace}}`, `{{scenario}}`, `{{agent}}`, `{{language}}`, plus service variables `{{postgres_url}}`, `{{mysql_url}}`, `{{ignite_url}}`, and `{{openai_mock_url}}` when started. Substitution applies only to fields implemented in `substituteStepVariables`; do not assume arbitrary YAML strings are expanded.
+
+`shell.cwd` is relative to the scenario workspace. Most Golem actions discover `golem.yaml` at the workspace root or one immediate child and run from that app directory. `check_file.path` is app-relative. `expectedFiles` verification is workspace-relative, matching existing scenarios (which normally include the project directory).
+
+## Skill activation and sessions
+
+Native driver events are preferred when available; otherwise watcher events and changed atimes are combined. Activations accumulate across follow-ups. The first prompt and any `continueSession: false` prompt reset the activation session. Because activation detection proves that a skill was opened/reported, not that its advice was followed, pair `expectedSkills` with build, deploy, file, invocation, HTTP, or JSON assertions.
+
+## Reports and CI
+
+Normal runs write per-scenario JSON (`<agent>-<language>-<scenario>.json`), `summary.json`, and `report.html`; `--ctrf` adds CTRF JSON, and `GITHUB_STEP_SUMMARY` receives a summary. Merge mode writes `merged-summary.json`, `scenario-reports.json`, and `report.html`.
+
+- `.github/workflows/ci.yaml` runs harness build, formatting, and unit tests when `golem-skills/**` changes.
+- `.github/workflows/skill-harness.yaml` is manually dispatched (scheduled runs are disabled), runs provider/language matrices, merges artifacts, and publishes the report.
+- `.github/actions/run-skill-harness/action.yml` defines integration prerequisites and executes the harness from an isolated `/tmp/harness-run` while `GOLEM_PATH` points at the checkout.
+
+## Debugging workflow
+
+1. Run `--dry-run --scenario <name>` to catch current-schema and regex errors.
+2. Run one agent/language/scenario with explicit timeouts; inspect the retained workspace and per-step JSON.
+3. Distinguish step timeout from idle timeout. Whole-scenario retry occurs only for idle timeout; per-step `retry` handles any step failure.
+4. For missed activation, check native tool events first, then `.agents/skills`, atime behavior, and Linux `inotifywait`. Do not restore stale `.claude/skills` duplication.
+5. For stale skill behavior, confirm which release/debug `golem` was selected and rebuild it.
+6. For Golem failures, verify port 9881 is free and inspect server output. For service failures, inspect Docker availability/container logs.
+7. For Scala, reproduce the composite action's Java/sbt/WIT/base-image/local-publish preparation before blaming the scenario.

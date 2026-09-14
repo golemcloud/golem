@@ -308,6 +308,11 @@ mod canonical {
                     "max-count",
                 ]
             );
+            let shorts: Vec<Option<char>> = fields.iter().map(|field| field.short).collect();
+            assert_eq!(
+                shorts,
+                vec![None, Some('i'), None, None, Some('e'), Some('n')]
+            );
         }
 
         #[test]

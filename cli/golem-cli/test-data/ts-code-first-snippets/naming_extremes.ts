@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
 export const StringAgent = defineAgent({
   name: 'StringAgent',
@@ -33,18 +33,15 @@ export const StructAgentImpl = StructAgent.implement({
   },
 });
 
-const stringClient = clientFor(StringAgent);
-const structClient = clientFor(StructAgent);
-
 async function runStringTest(): Promise<void> {
   for (let i = 445; i < 450; i++) {
-    await stringClient({ name: ' '.repeat(i) }).test();
+    await StringAgent.client.get({ name: ' '.repeat(i) }).test();
   }
 }
 
 async function runStructTest(): Promise<void> {
   for (let i = 100; i < 105; i++) {
-    await structClient({
+    await StructAgent.client.get({
       args: { x: ' '.repeat(i), y: ' '.repeat(i), z: '/'.repeat(i) },
     }).test();
   }

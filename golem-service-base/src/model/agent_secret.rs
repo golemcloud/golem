@@ -51,16 +51,18 @@ impl From<AgentSecret> for golem_common::model::agent_secret::AgentSecretDto {
     }
 }
 
-impl From<AgentSecret> for golem_api_grpc::proto::golem::registry::AgentSecret {
-    fn from(value: AgentSecret) -> Self {
-        Self {
+impl TryFrom<AgentSecret> for golem_api_grpc::proto::golem::registry::AgentSecret {
+    type Error = String;
+
+    fn try_from(value: AgentSecret) -> Result<Self, Self::Error> {
+        Ok(Self {
             agent_secret_id: Some(value.id.into()),
             environment_id: Some(value.environment_id.into()),
             path: value.path.0,
             revision: value.revision.into(),
             secret_type: Some(value.secret_type.into()),
-            secret_value: value.secret_value.map(Into::into),
-        }
+            secret_value: value.secret_value.map(TryInto::try_into).transpose()?,
+        })
     }
 }
 

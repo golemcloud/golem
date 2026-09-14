@@ -328,10 +328,6 @@ pub enum AgentError {
     ExceededHttpCallLimit,
     // The worker exceeded the per-invocation RPC call limit from the plan
     ExceededRpcCallLimit,
-    // The executor-wide storage semaphore pool is exhausted (retriable)
-    NodeOutOfFilesystemStorage,
-    // The worker tried to use more storage than allowed by its plan (permanent)
-    AgentExceededFilesystemStorageLimit,
     // The agent was terminated by a quota with the terminae enforcement action (permanent)
     AgentTerminatedByQuota(AgentTerminatedByQuotaError),
     // Ephemeral agents cannot suspend and the requested sleep exceeded the configured maximum
@@ -362,8 +358,6 @@ impl AgentError {
             Self::ExceededTableLimit => "Exceeded plan function table limit",
             Self::ExceededHttpCallLimit => "Exceeded per-invocation HTTP call limit",
             Self::ExceededRpcCallLimit => "Exceeded per-invocation RPC call limit",
-            Self::NodeOutOfFilesystemStorage => "Out of storage space",
-            Self::AgentExceededFilesystemStorageLimit => "Exceeded plan storage limit",
             Self::AgentTerminatedByQuota(_) => "Terminated by quota",
             Self::EphemeralSleepTooLong(_) => "Ephemeral sleep too long",
             Self::EphemeralFuelExhausted(_) => "Ephemeral fuel exhausted",

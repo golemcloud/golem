@@ -33,6 +33,8 @@ import {
   type TypedSchemaValue,
   v,
   validateSchemaGraph,
+  encodeChild,
+  isolateCapabilityRoot,
 } from '../schema-model';
 import { CodecShapeMismatchError, type SchemaCodec } from '../../schema/codec';
 import { toolBuildError } from './errors';
@@ -249,19 +251,20 @@ export class CanonicalInputModel {
       root: t.record(fields.map((entry) => field(entry.name, entry.codec.graph.root))),
     };
     assertCanonicalGraph(graph, 'canonical input record');
+    const toValue = (input: unknown) => {
+      const record = input as Record<string, unknown>;
+      return v.record(
+        fields.map((entry) => {
+          if (!Object.prototype.hasOwnProperty.call(record, entry.name)) {
+            throw new Error(`missing canonical tool input field \`${entry.name}\``);
+          }
+          return encodeChild(entry.codec, record[entry.name]);
+        }),
+      );
+    };
     this.codec = {
       graph,
-      toValue: (input) => {
-        const record = input as Record<string, unknown>;
-        return v.record(
-          fields.map((entry) => {
-            if (!Object.prototype.hasOwnProperty.call(record, entry.name)) {
-              throw new Error(`missing canonical tool input field \`${entry.name}\``);
-            }
-            return entry.codec.toValue(record[entry.name]);
-          }),
-        );
-      },
+      toValue: isolateCapabilityRoot(toValue),
       fromValue: (input) => {
         if (input.tag !== 'record') {
           throw new Error('tool input must be a positional record');
@@ -696,7 +699,9 @@ function isRepeatable(shape: ExtendedOptionShape): boolean {
 export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
   return {
     graph: inner.graph,
-    toValue: (input) => v.option(input === undefined ? undefined : inner.toValue(input)),
+    toValue: isolateCapabilityRoot((input) =>
+      v.option(input === undefined ? undefined : encodeChild(inner, input)),
+    ),
     fromValue: (input) => {
       if (input.tag !== 'option') throw new Error('expected an optional tool input value');
       return input.value === undefined ? undefined : inner.fromValue(input.value);
@@ -755,15 +760,16 @@ export function resolveCodecRoot(codec: SchemaCodec) {
 }
 
 export function listCodec(itemCodec: SchemaCodec): SchemaCodec {
+  const toValue = (input: unknown) => {
+    if (!Array.isArray(input)) {
+      throw new CodecShapeMismatchError('expected a list source value');
+    }
+    return v.list(input.map((item) => encodeChild(itemCodec, item)));
+  };
   return {
     graph: { defs: itemCodec.graph.defs, root: t.list(itemCodec.graph.root) },
     listItem: itemCodec,
-    toValue: (input) => {
-      if (!Array.isArray(input)) {
-        throw new CodecShapeMismatchError('expected a list source value');
-      }
-      return v.list(input.map((item) => itemCodec.toValue(item)));
-    },
+    toValue: isolateCapabilityRoot(toValue),
     fromValue: (input) => {
       if (input.tag !== 'list') throw new Error('expected a list schema value');
       return input.elements.map((item) => itemCodec.fromValue(item));

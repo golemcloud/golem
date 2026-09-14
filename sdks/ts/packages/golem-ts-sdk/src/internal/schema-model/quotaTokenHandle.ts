@@ -25,59 +25,24 @@
 // is an alias — both are rejected by the encoder's preflight pass.
 
 import type { QuotaToken as RawQuotaToken } from 'golem:core/types@2.0.0';
+import { registerCapabilityAdoption } from './capabilityTransaction';
 import { QUOTA_INTERNAL, type QuotaInternal } from './quotaInternal';
 
+interface QuotaTokenHandleState {
+  raw: RawQuotaToken | undefined;
+  readonly tracked: boolean;
+}
+
+const states = new WeakMap<GuestQuotaTokenHandle, QuotaTokenHandleState>();
+const owners = new WeakMap<RawQuotaToken, object>();
+const transferredOwner = Object.freeze({});
+
 export class GuestQuotaTokenHandle {
-  // A true ECMAScript private field, not a TypeScript-only `private`: the owned
-  // resource is unreachable from guest code even through `as any` / field
-  // access, so the handle cannot be inspected, copied, or re-wrapped.
-  #raw: RawQuotaToken | undefined;
-
-  private constructor(raw: RawQuotaToken) {
-    this.#raw = raw;
-  }
-
-  /**
-   * Wrap a freshly received owned handle in a take-once cell.
-   *
-   * Wrapping a raw owned resource is a privileged operation: it is the
-   * primitive a guest would use to forge or duplicate a capability. It requires
-   * the unexported {@link QUOTA_INTERNAL} key so only SDK-internal code can call
-   * it. (`GuestQuotaTokenHandle` is itself not part of the package's public API,
-   * so this is defense in depth.)
-   */
-  static fromRaw(key: QuotaInternal, raw: RawQuotaToken): GuestQuotaTokenHandle {
+  constructor(key: QuotaInternal, raw: RawQuotaToken, tracked = true) {
     if (key !== QUOTA_INTERNAL) {
-      throw new Error('GuestQuotaTokenHandle.fromRaw is an internal SDK operation');
+      throw new Error('GuestQuotaTokenHandle construction is an internal SDK operation');
     }
-    return new GuestQuotaTokenHandle(raw);
-  }
-
-  /** Whether the handle is still present (not yet transferred). */
-  isPresent(): boolean {
-    return this.#raw !== undefined;
-  }
-
-  /**
-   * Take the owned handle out of the cell. Returns `undefined` if it was
-   * already transferred (consumed) by a previous encode.
-   */
-  take(): RawQuotaToken | undefined {
-    const raw = this.#raw;
-    this.#raw = undefined;
-    return raw;
-  }
-
-  /**
-   * Run `f` with the owned handle, if it is still present (i.e. has not been
-   * transferred out by an encode). Returns `undefined` if the handle was
-   * already consumed.
-   *
-   * Used by the SDK wrappers to invoke borrowing quota operations (`reserve`,
-   * `split`) on the underlying resource without taking ownership of it.
-   */
-  withHandle<R>(f: (raw: RawQuotaToken) => R): R | undefined {
-    return this.#raw === undefined ? undefined : f(this.#raw);
+    states.set(this, { raw, tracked });
   }
 
   /**
@@ -90,4 +55,137 @@ export class GuestQuotaTokenHandle {
       'quota-token handles cannot be serialized; transfer them through a WIT schema-value-tree',
     );
   }
+}
+
+function requireQuotaInternal(key: QuotaInternal): void {
+  if (key !== QUOTA_INTERNAL) {
+    throw new Error('this is an internal SDK operation on a quota-token handle');
+  }
+}
+
+function stateOf(handle: GuestQuotaTokenHandle): QuotaTokenHandleState {
+  const state = states.get(handle);
+  if (state === undefined) {
+    throw new Error('invalid quota-token handle');
+  }
+  return state;
+}
+
+export function createGuestQuotaTokenHandle(
+  key: QuotaInternal,
+  raw: RawQuotaToken,
+): GuestQuotaTokenHandle {
+  requireQuotaInternal(key);
+  if (owners.has(raw)) {
+    throw new Error('quota-token handle is already owned');
+  }
+  const handle = new GuestQuotaTokenHandle(key, raw);
+  owners.set(raw, handle);
+  return handle;
+}
+
+export function createUntrackedGuestQuotaTokenHandle(
+  key: QuotaInternal,
+  raw: RawQuotaToken,
+): GuestQuotaTokenHandle {
+  requireQuotaInternal(key);
+  return new GuestQuotaTokenHandle(key, raw, false);
+}
+
+export function adoptGuestQuotaTokenHandle(
+  key: QuotaInternal,
+  raw: RawQuotaToken,
+): GuestQuotaTokenHandle {
+  const handle = createGuestQuotaTokenHandle(key, raw);
+  registerCapabilityAdoption(() => releaseGuestQuotaTokenHandle(key, handle));
+  return handle;
+}
+
+export function peekGuestQuotaTokenHandle(
+  key: QuotaInternal,
+  handle: GuestQuotaTokenHandle,
+): RawQuotaToken | undefined {
+  requireQuotaInternal(key);
+  return stateOf(handle).raw;
+}
+
+export function takeGuestQuotaTokenHandle(
+  key: QuotaInternal,
+  handle: GuestQuotaTokenHandle,
+): RawQuotaToken | undefined {
+  requireQuotaInternal(key);
+  const state = stateOf(handle);
+  const raw = state.raw;
+  if (raw !== undefined && state.tracked && owners.get(raw) !== handle) {
+    throw new Error('quota-token handle ownership is invalid');
+  }
+  state.raw = undefined;
+  if (raw !== undefined && state.tracked) owners.set(raw, transferredOwner);
+  return raw;
+}
+
+export function takeGuestQuotaTokenHandleToWire(
+  key: QuotaInternal,
+  handle: GuestQuotaTokenHandle,
+  wireOwner: object,
+): RawQuotaToken | undefined {
+  requireQuotaInternal(key);
+  const state = stateOf(handle);
+  const raw = state.raw;
+  if (raw !== undefined && state.tracked && owners.get(raw) !== handle) {
+    throw new Error('quota-token handle ownership is invalid');
+  }
+  state.raw = undefined;
+  if (raw !== undefined && state.tracked) owners.set(raw, wireOwner);
+  return raw;
+}
+
+export function assertGuestQuotaTokenHandleCanLiftFromWire(
+  key: QuotaInternal,
+  raw: RawQuotaToken,
+  wireOwner: object,
+): void {
+  requireQuotaInternal(key);
+  const owner = owners.get(raw);
+  if (owner !== undefined && owner !== wireOwner) {
+    throw new Error('quota-token handle is already owned');
+  }
+}
+
+export function liftGuestQuotaTokenHandleFromWire(
+  key: QuotaInternal,
+  raw: RawQuotaToken,
+  wireOwner: object,
+): GuestQuotaTokenHandle {
+  assertGuestQuotaTokenHandleCanLiftFromWire(key, raw, wireOwner);
+  const handle = new GuestQuotaTokenHandle(key, raw);
+  owners.set(raw, handle);
+  return handle;
+}
+
+export function abandonGuestQuotaTokenWireHandle(
+  key: QuotaInternal,
+  raw: RawQuotaToken,
+  wireOwner: object,
+): void {
+  requireQuotaInternal(key);
+  const owner = owners.get(raw);
+  if (owner === undefined || owner === wireOwner) {
+    owners.set(raw, transferredOwner);
+  }
+}
+
+export function releaseGuestQuotaTokenHandle(
+  key: QuotaInternal,
+  handle: GuestQuotaTokenHandle,
+): RawQuotaToken | undefined {
+  requireQuotaInternal(key);
+  const state = stateOf(handle);
+  const raw = state.raw;
+  if (raw !== undefined && state.tracked && owners.get(raw) !== handle) {
+    throw new Error('quota-token handle ownership is invalid');
+  }
+  state.raw = undefined;
+  if (raw !== undefined && state.tracked) owners.delete(raw);
+  return raw;
 }

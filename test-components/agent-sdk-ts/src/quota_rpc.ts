@@ -20,7 +20,7 @@
 // handles `s.quotaToken()` carries — to keep the RPC-passing behavior faithful.
 
 import { z } from 'zod';
-import { defineAgent, method, s, clientFor } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, s } from '@golemcloud/golem-ts-sdk';
 import {
   newToken,
   reserve,
@@ -64,8 +64,6 @@ export const QuotaRpcReceiverImpl = QuotaRpcReceiver.implement({
   },
 });
 
-const receiverClient = clientFor(QuotaRpcReceiver);
-
 export const QuotaRpcSender = defineAgent({
   name: 'QuotaRpcSender',
   id: { name: z.string() },
@@ -92,7 +90,7 @@ export const QuotaRpcSenderImpl = QuotaRpcSender.implement({
       const childToken = split(token, BigInt(childExpectedUse));
 
       const receiverName = `${this.name}-receiver`;
-      receiverClient({ _name: receiverName }).reserveAndCallInLoop.trigger({
+      QuotaRpcReceiver.client.get({ _name: receiverName }).reserveAndCallInLoop.trigger({
         childToken,
         host,
         port,

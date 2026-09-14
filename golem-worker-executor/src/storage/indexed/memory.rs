@@ -203,6 +203,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         id: u64,
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
+        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self
             .data
@@ -212,6 +213,10 @@ impl IndexedStorage for InMemoryIndexedStorage {
         if let std::collections::btree_map::Entry::Vacant(e) = entry.entry(id) {
             e.insert(value.to_vec());
             Ok(())
+        } else if primary_oplog_insert {
+            Err(IndexedStorageError::Conflict(
+                "Key already exists".to_string(),
+            ))
         } else {
             Err(IndexedStorageError::Other("Key already exists".to_string()))
         }

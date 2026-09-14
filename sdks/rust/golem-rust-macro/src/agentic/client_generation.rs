@@ -379,6 +379,34 @@ mod tests {
     }
 
     #[test]
+    fn awaited_streaming_methods_use_async_value_encoding_only() {
+        let item_trait = parse_quote! {
+            trait StreamingAgent {
+                fn new() -> Self;
+                fn forward(
+                    &self,
+                    stream: AgentStream<String>,
+                ) -> AgentStream<String>;
+            }
+        };
+
+        for durable in [true, false] {
+            let rendered =
+                get_remote_client(&item_trait, &[], &[], &[], &[], &[], durable).to_string();
+
+            assert_eq!(rendered.matches("encode_schema_value_async").count(), 1);
+            assert_eq!(
+                rendered
+                    .matches(
+                        "live streams cannot cross remote or scheduled agent invocation boundaries"
+                    )
+                    .count(),
+                3
+            );
+        }
+    }
+
+    #[test]
     fn ephemeral_clients_use_shared_non_colliding_result_type() {
         let first = render_client(false);
         let second_trait = parse_quote! {
@@ -899,6 +927,24 @@ fn generate_method_code(
         syn::ReturnType::Type(_, ty) => quote! { #ty },
         syn::ReturnType::Default => quote! { () },
     };
+    let stream_types = sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(param) => Some(param.ty.as_ref()),
+            syn::FnArg::Receiver(_) => None,
+        })
+        .chain(match &sig.output {
+            syn::ReturnType::Type(_, ty) => Some(ty.as_ref()),
+            syn::ReturnType::Default => None,
+        })
+        .collect::<Vec<_>>();
+    let reject_non_awaited_stream_invocation = quote! {
+        if false #(|| <#stream_types as golem_rust::agentic::Schema>::contains_stream())* {
+            let _ = (#(&#input_idents),*);
+            panic!("live streams cannot cross remote or scheduled agent invocation boundaries")
+        }
+    };
     let process_invoke_result = match &sig.output {
         syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => decode_result_value(
             ty,
@@ -908,13 +954,19 @@ fn generate_method_code(
     };
 
     let input_record = positional_record_schema_value(input_idents, "Failed to encode parameter");
-    let encoded_input = encode_value_only_carrier(input_record);
+    let encoded_input = encode_value_only_carrier(input_record.clone());
     let encode_input = quote! { let input = #encoded_input; };
+    let encode_input_async = quote! {
+        let input_value = #input_record;
+        let input = golem_rust::encode_schema_value_async(&input_value)
+            .await
+            .expect("Failed to encode parameters");
+    };
     let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
     if agent_is_durable {
         return quote! {
         pub async fn #method_name(#(#input_defs),*) -> #return_type {
-            #encode_input
+            #encode_input_async
 
             let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                 #remote_token,
@@ -932,6 +984,7 @@ fn generate_method_code(
         }
 
         pub fn #trigger_name(#(#input_defs),*) {
+            #reject_non_awaited_stream_invocation
             #encode_input
 
             let rpc_result: Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> =
@@ -941,6 +994,7 @@ fn generate_method_code(
         }
 
         pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
             #encode_input
 
             self.wasm_rpc.schedule_invocation(
@@ -952,6 +1006,7 @@ fn generate_method_code(
         }
 
         pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
             #encode_input
 
             self.wasm_rpc.schedule_cancelable_invocation(
@@ -966,7 +1021,7 @@ fn generate_method_code(
 
     quote! {
         pub async fn #method_name(#(#input_defs),*) -> golem_rust::agentic::EphemeralInvocationResult<#return_type> {
-            #encode_input
+            #encode_input_async
             let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
             let metadata = invocation.metadata;
             let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
@@ -977,18 +1032,21 @@ fn generate_method_code(
         }
 
         pub fn #trigger_name(#(#input_defs),*) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
+            #reject_non_awaited_stream_invocation
             #encode_input
             self.wasm_rpc.invoke(#remote_token, input, None)
                 .unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e))
         }
 
         pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
             #encode_input
             self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input, None)
                 .map(|receipt| receipt.metadata)
         }
 
         pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt, golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
             #encode_input
             self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
         }

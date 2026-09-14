@@ -41,7 +41,7 @@ pub fn decode_qualified(name : String) -> (String, String)? {
 ///|
 /// HTTP endpoint information parsed from `#derive.endpoint` annotations on methods.
 pub(all) struct HttpEndpointInfo {
-  method : String
+  http_method : String
   path : String
   headers : Array[(String, String)]
   auth : Bool?
@@ -154,19 +154,25 @@ pub fn syntax_type_to_param_type(
             match tys {
               More(ok, tail~) =>
                 match tail {
-                  More(err, ..) =>
-                    ResultType(
-                      syntax_type_to_param_type(ok),
-                      syntax_type_to_param_type(err),
-                    )
+                  More(err, tail=rest) =>
+                    if rest.is_empty() {
+                      ResultType(
+                        syntax_type_to_param_type(ok),
+                        syntax_type_to_param_type(err),
+                      )
+                    } else {
+                      raise AgentParseError(
+                        "Result type requires exactly two type parameters",
+                      )
+                    }
                   Empty =>
                     raise AgentParseError(
-                      "Result type requires two type parameters",
+                      "Result type requires exactly two type parameters",
                     )
                 }
               Empty =>
                 raise AgentParseError(
-                  "Result type requires two type parameters",
+                  "Result type requires exactly two type parameters",
                 )
             }
           } else if tys.is_empty() {
@@ -211,7 +217,7 @@ pub fn syntax_type_to_param_type(
 ///|
 /// Extracts the content of a doc comment as a trimmed string.
 fn extract_doc_string(doc : @syntax.DocString) -> String {
-  let sb = StringBuilder::new()
+  let sb = StringBuilder()
   let mut first = true
   doc.content.each(fn(line) {
     if first {
@@ -221,18 +227,16 @@ fn extract_doc_string(doc : @syntax.DocString) -> String {
     }
     sb.write_string(line)
   })
-  sb.to_string().trim().to_string()
+  sb.to_string().trim().to_owned()
 }
 
 ///|
 /// Extracts the agent mode (durable or ephemeral) from `#derive.agent` attributes.
-fn extract_agent_mode(
-  attrs : @list.List[@attribute.Attribute],
-) -> AgentMode raise AgentParseError {
+fn extract_agent_mode(attrs : @list.List[@attribute.Attribute]) -> AgentMode {
   let mut result = Durable
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "agent" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "agent", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) =>
@@ -256,11 +260,11 @@ fn extract_agent_mode(
 /// `snapshotting="periodic(N)"`, `snapshotting="every_n(N)"`.
 fn extract_agent_snapshotting(
   attrs : @list.List[@attribute.Attribute],
-) -> AgentSnapshotting raise AgentParseError {
+) -> AgentSnapshotting {
   let mut result = Disabled
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "agent" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "agent", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Labeled("snapshotting", String(s)) => {
@@ -330,7 +334,7 @@ fn parse_snapshotting_value(
 /// `h`, `hr`, `hrs`, `hour`, `hours`,
 /// `d`, `day`, `days`.
 pub fn parse_duration_seconds(s : String) -> UInt64 raise AgentParseError {
-  let trimmed = s.trim().to_string()
+  let trimmed = s.trim().to_owned()
   // Try plain number first
   match parse_uint64(trimmed) {
     Some(n) => return n
@@ -401,7 +405,7 @@ fn duration_unit_to_seconds(unit : String) -> UInt64 raise AgentParseError {
 /// Splits a string by whitespace into non-empty tokens.
 fn split_whitespace(s : String) -> Array[String] {
   let tokens : Array[String] = []
-  let buf = StringBuilder::new()
+  let buf = StringBuilder()
   for ch in s {
     if ch == ' ' || ch == '\t' {
       if buf.to_string().length() > 0 {
@@ -465,15 +469,13 @@ fn parse_uint(s : String) -> UInt? {
 ///
 /// Note: `uses_principal` is never accepted as user input — it is derived from the
 /// method signature (presence of a `Principal` parameter).
-fn extract_read_only(
-  attrs : @list.List[@attribute.Attribute],
-) -> ReadOnlyInfo? raise AgentParseError {
+fn extract_read_only(attrs : @list.List[@attribute.Attribute]) -> ReadOnlyInfo? {
   let mut result : ReadOnlyInfo? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Ident({ qual: Some("derive"), name: "read_only" })) =>
-        result = Some({ cache_policy: UntilWrite })
-      Some(Apply({ qual: Some("derive"), name: "read_only" }, props)) => {
+      Some(Ident({ qual: Some("derive"), name: "read_only", })) =>
+        result = Some({ cache_policy: UntilWrite, })
+      Some(Apply({ qual: Some("derive"), name: "read_only", }, props)) => {
         let mut explicit_cache : ReadOnlyCachePolicy? = None
         let mut explicit_ttl : UInt64? = None
         props.each(fn(prop) {
@@ -523,7 +525,7 @@ fn extract_read_only(
           (None, Some(n)) => Ttl(n)
           (None, None) => UntilWrite
         }
-        result = Some({ cache_policy: policy })
+        result = Some({ cache_policy: policy, })
       }
       _ => ()
     }
@@ -555,7 +557,7 @@ fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "prompt_hint" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "prompt_hint", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result = Some(s)
@@ -578,13 +580,6 @@ pub fn is_multimodal_type(pt : ParamType) -> Bool {
 }
 
 ///|
-/// Returns true if the parameter type cannot be serialized for RPC transport.
-/// Currently always returns false.
-pub fn is_rpc_incompatible_type(_pt : ParamType) -> Bool {
-  false
-}
-
-///|
 /// Returns true if the parameter type is `Principal` or `@common.Principal`.
 pub fn is_principal_type(pt : ParamType) -> Bool {
   match pt {
@@ -598,9 +593,7 @@ pub fn is_principal_type(pt : ParamType) -> Bool {
 pub fn visible_params(
   params : Array[(String, ParamType)],
 ) -> Array[(String, ParamType)] {
-  params.filter(fn(p) {
-    not(is_principal_type(p.1)) && not(is_config_type(p.1))
-  })
+  params.filter(fn(p) { !is_principal_type(p.1) && !is_config_type(p.1) })
 }
 
 ///|
@@ -740,7 +733,7 @@ fn extract_mount_path(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result = Some(s)
@@ -759,7 +752,7 @@ fn extract_mount_auth(attrs : @list.List[@attribute.Attribute]) -> Bool? {
   let mut result : Bool? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_auth" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_auth", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(Bool(b)) => result = Some(b)
@@ -780,7 +773,7 @@ fn extract_mount_cors(
   let result : Array[String] = []
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_cors" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_cors", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result.push(s)
@@ -799,7 +792,7 @@ fn extract_mount_webhook(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_webhook" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_webhook", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result = Some(s)
@@ -818,7 +811,7 @@ fn extract_mount_phantom(attrs : @list.List[@attribute.Attribute]) -> Bool {
   let mut result = false
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "mount_phantom" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "mount_phantom", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(Bool(b)) => result = b
@@ -842,9 +835,9 @@ fn extract_endpoint(
   attrs : @list.List[@attribute.Attribute],
 ) -> HttpEndpointInfo? raise AgentParseError {
   let mut result : HttpEndpointInfo? = None
-  attrs.each(fn(attr) {
+  attrs.each(attr => {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint" }, props)) => {
+      Some(Apply({ qual: Some("derive"), name: "endpoint", }, props)) => {
         let found : Array[(String, String)] = []
         props.each(fn(prop) {
           match prop {
@@ -865,8 +858,14 @@ fn extract_endpoint(
             "#derive.endpoint requires exactly one HTTP method (e.g. get=\"/path\")",
           )
         } else {
-          let (method, path) = found[0]
-          result = Some({ method, path, headers: [], auth: None, cors: [] })
+          let (http_method, path) = found[0]
+          result = Some({
+            http_method,
+            path,
+            headers: [],
+            auth: None,
+            cors: [],
+          })
         }
       }
       _ => ()
@@ -883,7 +882,7 @@ fn extract_endpoint_headers(
   let result : Array[(String, String)] = []
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint_header" }, props)) => {
+      Some(Apply({ qual: Some("derive"), name: "endpoint_header", }, props)) => {
         let strings : Array[String] = []
         props.each(fn(prop) {
           match prop {
@@ -907,7 +906,7 @@ fn extract_endpoint_auth(attrs : @list.List[@attribute.Attribute]) -> Bool? {
   let mut result : Bool? = None
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint_auth" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "endpoint_auth", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(Bool(b)) => result = Some(b)
@@ -928,7 +927,7 @@ fn extract_endpoint_cors(
   let result : Array[String] = []
   attrs.each(fn(attr) {
     match attr.parsed {
-      Some(Apply({ qual: Some("derive"), name: "endpoint_cors" }, props)) =>
+      Some(Apply({ qual: Some("derive"), name: "endpoint_cors", }, props)) =>
         props.each(fn(prop) {
           match prop {
             Expr(String(s)) => result.push(s)
@@ -952,7 +951,7 @@ fn build_endpoint_info(
       let headers = extract_endpoint_headers(attrs)
       let auth = extract_endpoint_auth(attrs)
       let cors = extract_endpoint_cors(attrs)
-      Some({ ..ep, headers, auth, cors })
+      Some({ ..ep, headers, auth, cors, })
     }
     None => None
   }
@@ -962,7 +961,7 @@ fn build_endpoint_info(
 /// Extracts method parameter names and types from a function declaration AST.
 fn extract_method_params(
   fun_decl : @syntax.FunDecl,
-) -> Array[(String, ParamType)] raise AgentParseError {
+) -> Array[(String, ParamType)] {
   let params : Array[(String, ParamType)] = []
   match fun_decl.decl_params {
     Some(ps) =>
@@ -1002,23 +1001,73 @@ fn extract_return_type(
 }
 
 ///|
+/// Validates the static snapshot restoration factory for an agent.
+fn validate_snapshot_loader(
+  fun_decl : @syntax.FunDecl,
+  agent_name : String,
+) -> Unit raise AgentParseError {
+  let expected_signature = "\{agent_name}::load_snapshot(Bytes, @agents.SnapshotRestoreContext) -> Result[\{agent_name}, String]"
+  let invalid_signature = fn() raise AgentParseError {
+    raise AgentParseError(
+      "Snapshot loader must have signature '\{expected_signature}'",
+    )
+  }
+  if !(fun_decl.vis is Pub(..)) ||
+    fun_decl.is_async is Some(_) ||
+    !fun_decl.quantifiers.is_empty() ||
+    !(fun_decl.error_type is @syntax.ErrorType::NoErrorType) {
+    invalid_signature()
+  }
+  let params : Array[ParamType] = []
+  for param in fun_decl.decl_params.unwrap_or(@list.List([])) {
+    match param {
+      Positional(binder~, ty=Some(ty)) if binder.name != "self" => {
+        let parsed = syntax_type_to_param_type(ty) catch {
+          _ => {
+            invalid_signature()
+            abort("")
+          }
+        }
+        params.push(parsed)
+      }
+      _ => invalid_signature()
+    }
+  }
+  guard params.length() == 2 &&
+    params[0] == Simple("Bytes") &&
+    params[1] == Simple("@agents.SnapshotRestoreContext") else {
+    invalid_signature()
+  }
+  let return_type = extract_return_type(fun_decl)
+  let has_expected_return = match return_type {
+    Some(ResultType(Simple(ok), Simple(err))) =>
+      (ok == agent_name || ok == "Self") && err == "String"
+    _ => false
+  }
+  if !has_expected_return {
+    invalid_signature()
+  }
+}
+
+///|
 /// Parses agent definitions from source files. Finds `#derive.agent` structs,
 /// their constructors, and public methods.
 pub fn parse_agents(
   files : Array[(String, String)],
 ) -> Array[AgentInfo] raise AgentParseError {
-  let agent_names : Map[String, String] = {}
-  let agent_modes : Map[String, AgentMode] = {}
-  let agent_snapshotting : Map[String, AgentSnapshotting] = {}
+  let agent_names : Map[String, String] = Map([])
+  let agent_modes : Map[String, AgentMode] = Map([])
+  let agent_snapshotting : Map[String, AgentSnapshotting] = Map([])
   let agent_constructors : Map[
     String,
     (Array[(String, ParamType)], String, String?),
-  ] = {}
-  let agent_methods : Map[String, Array[MethodInfo]] = {}
-  let agent_snapshottable : Map[String, Bool] = {}
-  let agent_json_derives : Map[String, Bool] = {}
-  let agent_fields : Map[String, Array[(String, Bool)]] = {}
-  let agent_mounts : Map[String, HttpMountInfo?] = {}
+  ] = Map([])
+  let agent_methods : Map[String, Array[MethodInfo]] = Map([])
+  let agent_snapshot_savers : Map[String, Bool] = Map([])
+  let agent_snapshot_loaders : Map[String, Bool] = Map([])
+  let agent_json_derives : Map[String, Bool] = Map([])
+  let agent_fields : Map[String, Array[(String, Bool)]] = Map([])
+  let agent_mounts : Map[String, HttpMountInfo?] = Map([])
   let mut has_init = false
   // Parse all files first, then run passes over all AST nodes
   // to avoid file-ordering dependencies
@@ -1043,10 +1092,8 @@ pub fn parse_agents(
           let name = type_decl.tycon
           let description = extract_doc_string(type_decl.doc)
           let desc = if description == "" { name } else { description }
-          let mode = extract_agent_mode(type_decl.attrs) catch { _ => Durable }
-          let snapshotting = extract_agent_snapshotting(type_decl.attrs) catch {
-            _ => Disabled
-          }
+          let mode = extract_agent_mode(type_decl.attrs)
+          let snapshotting = extract_agent_snapshotting(type_decl.attrs)
           agent_names[name] = desc
           agent_modes[name] = mode
           agent_snapshotting[name] = snapshotting
@@ -1074,7 +1121,7 @@ pub fn parse_agents(
           // Extract struct field names and mutability
           let field_info : Array[(String, Bool)] = []
           match type_decl.components {
-            Record(fields~, ..) =>
+            Record(fields~) =>
               fields.each(fn(field) {
                 field_info.push((field.name.label, field.mut_))
               })
@@ -1100,8 +1147,8 @@ pub fn parse_agents(
       _ => ()
     }
   })
-  // Second pass: find ::new constructors, public methods, and fn init
-  all_impls.each(fn(impl_) {
+  // Second pass: find constructors, snapshot loaders, public methods, and fn init
+  all_impls.each(impl_ => {
     match impl_ {
       TopFuncDef(fun_decl~, ..) => {
         // Check for fn init
@@ -1113,11 +1160,14 @@ pub fn parse_agents(
             if agent_names.contains(name) {
               if fun_decl.name.name == "new" {
                 // Constructor
-                let params = extract_method_params(fun_decl) catch { _ => [] }
+                let params = extract_method_params(fun_decl)
                 let doc = extract_doc_string(fun_decl.doc)
                 let desc = if doc == "" { "Creates a new \{name}" } else { doc }
                 let hint = extract_prompt_hint(fun_decl.attrs)
                 agent_constructors[name] = (params, desc, hint)
+              } else if fun_decl.name.name == "load_snapshot" {
+                validate_snapshot_loader(fun_decl, name)
+                agent_snapshot_loaders[name] = true
               } else if fun_decl.vis is Pub(..) {
                 // Public method — check if first param is Self
                 let mut is_method = false
@@ -1145,9 +1195,7 @@ pub fn parse_agents(
                 }
                 if is_method {
                   // Extract params (skip self)
-                  let all_params = extract_method_params(fun_decl) catch {
-                    _ => []
-                  }
+                  let all_params = extract_method_params(fun_decl)
                   // Remove the first param (self : Self)
                   let params : Array[(String, ParamType)] = []
                   for i in 1..<all_params.length() {
@@ -1184,7 +1232,7 @@ pub fn parse_agents(
       _ => ()
     }
   })
-  // Third pass: detect Snapshottable trait implementations
+  // Third pass: detect instance-based snapshot savers
   all_impls.each(fn(impl_) {
     match impl_ {
       TopImpl(trait_~, self_ty~, ..) => {
@@ -1198,7 +1246,7 @@ pub fn parse_agents(
               match constr_id.id {
                 Ident(name~) =>
                   if agent_names.contains(name) {
-                    agent_snapshottable[name] = true
+                    agent_snapshot_savers[name] = true
                   }
                 _ => ()
               }
@@ -1212,6 +1260,20 @@ pub fn parse_agents(
   // Validate
   let agents : Array[AgentInfo] = []
   for name, description in agent_names {
+    let has_snapshot_saver = agent_snapshot_savers.get(name).unwrap_or(false)
+    let has_snapshot_loader = agent_snapshot_loaders.get(name).unwrap_or(false)
+    if has_snapshot_saver != has_snapshot_loader {
+      raise AgentParseError(
+        "Agent '\{name}' must define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
+      )
+    }
+    let snapshotting = agent_snapshotting.get(name).unwrap_or(Disabled)
+    let has_json_derives = agent_json_derives.get(name).unwrap_or(false)
+    if !(snapshotting is Disabled) && !has_json_derives && !has_snapshot_saver {
+      raise AgentParseError(
+        "Agent '\{name}' has enabled snapshotting but must derive both ToJson and FromJson or define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
+      )
+    }
     match agent_constructors.get(name) {
       Some((params, ctor_desc, ctor_hint)) => {
         let config_type = match find_config_param(params) {
@@ -1222,14 +1284,14 @@ pub fn parse_agents(
           name,
           description,
           mode: agent_modes.get(name).unwrap_or(Durable),
-          snapshotting: agent_snapshotting.get(name).unwrap_or(Disabled),
+          snapshotting,
           constructor_params: params,
           constructor_description: ctor_desc,
           constructor_prompt_hint: ctor_hint,
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
-          has_snapshottable: agent_snapshottable.get(name).unwrap_or(false),
-          has_json_derives: agent_json_derives.get(name).unwrap_or(false),
+          has_snapshottable: has_snapshot_saver,
+          has_json_derives,
           fields: agent_fields.get(name).unwrap_or([]),
           http_mount: agent_mounts.get(name).unwrap_or(None),
           config_type,

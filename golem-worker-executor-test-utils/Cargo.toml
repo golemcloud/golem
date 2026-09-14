@@ -18,7 +18,7 @@ golem-common = { workspace = true, default-features = true }
 golem-schema = { workspace = true, features = ["host"] }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 golem-test-framework = { workspace = true }
-golem-worker-executor = { workspace = true }
+golem-worker-executor = { workspace = true, features = ["test-utils"] }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -35,6 +35,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-tracing-opentelemetry = { workspace = true }

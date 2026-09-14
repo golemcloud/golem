@@ -57,7 +57,10 @@ pub fn trap(reason : String) -> Unit {
 /// effects via a `Jump` and re-executes the block.
 pub fn[T] with_atomic_operation(f : () -> T raise) -> T {
   let marker = @raw.mark_begin_operation()
-  match (try? f()) {
+  match
+    (try f() |> Ok catch {
+      e => Err(e)
+    }) {
     Ok(result) => {
       @raw.mark_end_operation(marker)
       result

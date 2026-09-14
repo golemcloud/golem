@@ -23,6 +23,7 @@ syn = { workspace = true, features = ["full"] }
 [dev-dependencies]
 chrono = { workspace = true }
 golem-common = { workspace = true, default-features = false, features = ["client"] }
+golem-schema = { workspace = true }
 poem-openapi = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }

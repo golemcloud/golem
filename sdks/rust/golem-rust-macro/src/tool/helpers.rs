@@ -18,7 +18,53 @@ use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
-use syn::{Error, Expr, ExprArray, ExprLit, Lit, Token};
+use syn::{Error, Expr, ExprArray, ExprLit, GenericArgument, Lit, PathArguments, Token, Type};
+
+/// Direction of an SDK stream parameter in a tool method signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamKind {
+    Input,
+    Output,
+}
+
+/// Recognizes required `InputStream`/`OutputStream` parameters and their
+/// optional `Option<...>` forms. The boolean is `true` for a required stream.
+pub fn stream_type(ty: &Type) -> Option<(StreamKind, bool)> {
+    if let Some(kind) = direct_stream_type(ty) {
+        return Some((kind, true));
+    }
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    let inner = arguments.args.iter().find_map(|argument| match argument {
+        GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    })?;
+    direct_stream_type(inner).map(|kind| (kind, false))
+}
+
+/// Whether a tool parameter is a required or optional SDK stream.
+pub fn is_stream_type(ty: &Type) -> bool {
+    stream_type(ty).is_some()
+}
+
+fn direct_stream_type(ty: &Type) -> Option<StreamKind> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    match path.path.segments.last()?.ident.to_string().as_str() {
+        "InputStream" => Some(StreamKind::Input),
+        "OutputStream" => Some(StreamKind::Output),
+        _ => None,
+    }
+}
 
 pub fn replace_ident(tokens: TokenStream, from: &Ident, to: &Ident) -> TokenStream {
     tokens
@@ -460,8 +506,8 @@ pub fn to_kebab_case(ident: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        fresh_internal_ident, normalize_sdk_paths_in_item_trait, replace_ident,
-        resolve_generated_sdk_paths, to_kebab_case,
+        StreamKind, fresh_internal_ident, normalize_sdk_paths_in_item_trait, replace_ident,
+        resolve_generated_sdk_paths, stream_type, to_kebab_case,
     };
     use proc_macro2::{Ident, Span};
     use quote::quote;
@@ -475,6 +521,20 @@ mod tests {
         assert_eq!(to_kebab_case("parseHTML"), "parse-html");
         assert_eq!(to_kebab_case("remote"), "remote");
         assert_eq!(to_kebab_case("log2"), "log2");
+    }
+
+    #[test]
+    fn recognizes_required_and_optional_stream_types() {
+        let input = syn::parse_str("golem_rust::agentic::InputStream").unwrap();
+        let optional_output = syn::parse_str("Option<golem_rust::agentic::OutputStream>").unwrap();
+        let nested_optional = syn::parse_str("Option<Option<InputStream>>").unwrap();
+
+        assert_eq!(stream_type(&input), Some((StreamKind::Input, true)));
+        assert_eq!(
+            stream_type(&optional_output),
+            Some((StreamKind::Output, false))
+        );
+        assert_eq!(stream_type(&nested_optional), None);
     }
 
     #[test]

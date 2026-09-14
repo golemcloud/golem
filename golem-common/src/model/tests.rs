@@ -13,14 +13,21 @@
 // limitations under the License.
 
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
+use crate::model::durable_stream::{
+    AttachmentId, AttemptId, StreamInvocationIdV1, StreamSessionAttachedRecordV1,
+    StreamSessionRecordV1,
+};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
-    AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, StringFilterComparator, Timestamp,
+    AgentStatus, AgentStatusRecord, ComponentId, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+    DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
+    DurableStreamSessionIndex, DurableStreamSessionStatus, FilterComparator, IdempotencyKey,
+    InvocationResultBloom, InvocationResultMembership, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator,
+    Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -28,6 +35,318 @@ use std::str::FromStr;
 use std::vec;
 use test_r::test;
 use uuid::{Uuid, uuid};
+
+#[test]
+fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished() {
+    let mut index = DurableStreamSessionIndex::default();
+    let unfinished = IdempotencyKey::new("unfinished".to_string());
+    index.insert(
+        unfinished.clone(),
+        DurableStreamSessionStatus {
+            first_prepared: Some(OplogIndex::from_u64(1)),
+            ..Default::default()
+        },
+    );
+    for n in 0..140 {
+        index.insert(
+            IdempotencyKey::new(format!("done-{n}")),
+            DurableStreamSessionStatus {
+                first_prepared: Some(OplogIndex::from_u64(n + 2)),
+                finished: Some(OplogIndex::from_u64(n + 1000)),
+                ..Default::default()
+            },
+        );
+    }
+    assert!(index.has_history());
+    assert!(index.get(&unfinished).is_some());
+    assert_eq!(
+        index
+            .iter()
+            .filter(|(_, value)| value.finished.is_some())
+            .count(),
+        128
+    );
+    assert!(
+        index
+            .get(&IdempotencyKey::new("done-0".to_string()))
+            .is_none()
+    );
+    assert!(
+        index
+            .get(&IdempotencyKey::new("done-139".to_string()))
+            .is_some()
+    );
+}
+
+#[test]
+fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
+    let key = IdempotencyKey::new("invocation".to_string());
+    let session_key = StreamInvocationIdV1 {
+        callee_environment_id: EnvironmentId::new(),
+        callee: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "agent".to_string(),
+        },
+        callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
+        idempotency_key: key.clone(),
+    };
+    let attempt = AttemptId::fresh();
+    let attachment_id = AttachmentId::primary(
+        session_key.callee_environment_id,
+        &session_key.callee,
+        &session_key.idempotency_key,
+    )
+    .unwrap();
+    let pending = OplogIndex::from_u64(12);
+    let mut status = DurableStreamSessionStatus {
+        first_prepared: Some(OplogIndex::from_u64(10)),
+        prepared: Some(OplogIndex::from_u64(10)),
+        session_key: Some(session_key.clone()),
+        prepared_attempt_id: Some(attempt),
+        ..Default::default()
+    };
+    status.apply_pending_invocation(pending, &key);
+    status.apply_record(
+        OplogIndex::from_u64(13),
+        &StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+            format_version: 1,
+            session_key,
+            attachment_id,
+            attempt_id: attempt,
+            epoch: 1,
+            pending_invocation_oplog_index: pending,
+        }),
+    );
+    assert_eq!(status.validated_initial_pending_invocation, Some(pending));
+    assert_eq!(status.lifecycle_error, None);
+}
+
+#[test]
+fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
+    let key = IdempotencyKey::new("invocation".to_string());
+    let session_key = StreamInvocationIdV1 {
+        callee_environment_id: EnvironmentId::new(),
+        callee: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "agent".to_string(),
+        },
+        callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
+        idempotency_key: key,
+    };
+    let attempt = AttemptId::fresh();
+    let attachment_id = AttachmentId::primary(
+        session_key.callee_environment_id,
+        &session_key.callee,
+        &session_key.idempotency_key,
+    )
+    .unwrap();
+    let mut status = DurableStreamSessionStatus {
+        first_prepared: Some(OplogIndex::from_u64(10)),
+        prepared: Some(OplogIndex::from_u64(10)),
+        session_key: Some(session_key.clone()),
+        prepared_attempt_id: Some(attempt),
+        ..Default::default()
+    };
+    status.apply_record(
+        OplogIndex::from_u64(13),
+        &StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+            format_version: 1,
+            session_key,
+            attachment_id,
+            attempt_id: attempt,
+            epoch: 1,
+            pending_invocation_oplog_index: OplogIndex::from_u64(12),
+        }),
+    );
+    assert!(status.lifecycle_error.is_some());
+    assert_eq!(status.attachment_attached, None);
+
+    for pending in [
+        OplogIndex::NONE,
+        OplogIndex::from_u64(9),
+        OplogIndex::from_u64(13),
+        OplogIndex::from_u64(14),
+    ] {
+        let mut invalid = DurableStreamSessionStatus {
+            first_prepared: Some(OplogIndex::from_u64(10)),
+            prepared: Some(OplogIndex::from_u64(10)),
+            session_key: status.session_key.clone(),
+            prepared_attempt_id: Some(attempt),
+            ..Default::default()
+        };
+        invalid.apply_pending_invocation(
+            pending,
+            &invalid
+                .session_key
+                .as_ref()
+                .unwrap()
+                .idempotency_key
+                .clone(),
+        );
+        let mut attached = match StreamSessionRecordV1::Attached(StreamSessionAttachedRecordV1 {
+            format_version: 1,
+            session_key: invalid.session_key.clone().unwrap(),
+            attachment_id: AttachmentId::primary(
+                invalid.session_key.as_ref().unwrap().callee_environment_id,
+                &invalid.session_key.as_ref().unwrap().callee,
+                &invalid.session_key.as_ref().unwrap().idempotency_key,
+            )
+            .unwrap(),
+            attempt_id: attempt,
+            epoch: 1,
+            pending_invocation_oplog_index: pending,
+        }) {
+            StreamSessionRecordV1::Attached(value) => value,
+            _ => unreachable!(),
+        };
+        invalid.apply_record(
+            OplogIndex::from_u64(13),
+            &StreamSessionRecordV1::Attached(attached.clone()),
+        );
+        assert!(
+            invalid.lifecycle_error.is_some(),
+            "pending index {pending:?}"
+        );
+        assert_eq!(invalid.attachment_attached, None);
+
+        attached.format_version = 2;
+        let mut unsupported = DurableStreamSessionStatus {
+            first_prepared: Some(OplogIndex::from_u64(10)),
+            prepared: Some(OplogIndex::from_u64(10)),
+            session_key: Some(attached.session_key.clone()),
+            prepared_attempt_id: Some(attempt),
+            ..Default::default()
+        };
+        assert!(
+            !unsupported.validate_initial_attachment_reference(OplogIndex::from_u64(13), &attached)
+        );
+        assert!(unsupported.lifecycle_error.is_some());
+    }
+}
+
+#[test]
+fn invocation_result_membership_bounds_exact_entries_without_false_negatives() {
+    let mut membership = InvocationResultMembership::new(2, 64, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+    let fourth = IdempotencyKey::new("fourth".to_string());
+    let fifth = IdempotencyKey::new("fifth".to_string());
+
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    assert!(membership.is_exact_complete());
+
+    membership.insert(third.clone(), OplogIndex::from_u64(30));
+    membership.insert(fourth.clone(), OplogIndex::from_u64(40));
+    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
+
+    assert_eq!(membership.len(), 2);
+    assert!(!membership.is_exact_complete());
+    assert_eq!(membership.change_generation(), 5);
+    assert_eq!(
+        membership.oldest_retained_index(),
+        Some(OplogIndex::from_u64(40))
+    );
+    assert_eq!(membership.get(&first), None);
+    assert_eq!(membership.get(&second), None);
+    assert_eq!(membership.get(&third), None);
+    assert_eq!(membership.get(&fourth), Some(&OplogIndex::from_u64(40)));
+    assert_eq!(membership.get(&fifth), Some(&OplogIndex::from_u64(50)));
+    assert!(membership.might_contain(&first));
+    assert!(membership.might_contain(&second));
+    assert!(membership.might_contain(&third));
+    assert!(membership.might_contain(&fourth));
+    assert!(membership.might_contain(&fifth));
+}
+
+#[test]
+fn invocation_result_membership_updates_recency_for_repeated_keys() {
+    let mut membership = InvocationResultMembership::new(2, 64, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+    let fourth = IdempotencyKey::new("fourth".to_string());
+    let fifth = IdempotencyKey::new("fifth".to_string());
+    let sixth = IdempotencyKey::new("sixth".to_string());
+
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second.clone(), OplogIndex::from_u64(20));
+    membership.insert(third, OplogIndex::from_u64(30));
+    membership.insert(fourth, OplogIndex::from_u64(40));
+    membership.insert(fifth.clone(), OplogIndex::from_u64(50));
+    membership.insert(first.clone(), OplogIndex::from_u64(60));
+    membership.insert(sixth.clone(), OplogIndex::from_u64(70));
+
+    assert_eq!(membership.get(&first), Some(&OplogIndex::from_u64(60)));
+    assert_eq!(membership.get(&second), None);
+    assert_eq!(membership.get(&fifth), None);
+    assert_eq!(membership.get(&sixth), Some(&OplogIndex::from_u64(70)));
+}
+
+#[test]
+fn invocation_result_membership_binary_round_trip_preserves_membership() {
+    use crate::serialization::{deserialize, serialize};
+
+    let mut membership = InvocationResultMembership::new(2, 64, 3);
+    let first = IdempotencyKey::new("first".to_string());
+    let second = IdempotencyKey::new("second".to_string());
+    let third = IdempotencyKey::new("third".to_string());
+    let fourth = IdempotencyKey::new("fourth".to_string());
+    let fifth = IdempotencyKey::new("fifth".to_string());
+    membership.insert(first.clone(), OplogIndex::from_u64(10));
+    membership.insert(second, OplogIndex::from_u64(20));
+    membership.insert(third, OplogIndex::from_u64(30));
+    membership.insert(fourth, OplogIndex::from_u64(40));
+    membership.insert(fifth, OplogIndex::from_u64(50));
+    membership.set_revert_generation(4);
+
+    let bytes = serialize(&membership).unwrap();
+    let recovered: InvocationResultMembership = deserialize(&bytes).unwrap();
+
+    assert_eq!(recovered, membership);
+    assert!(recovered.might_contain(&first));
+    assert_eq!(recovered.revert_generation(), 4);
+}
+
+#[test]
+fn small_invocation_result_membership_serializes_without_a_bloom_filter() {
+    use crate::serialization::{deserialize, serialize};
+
+    let mut membership = InvocationResultMembership::default();
+    membership.insert(
+        IdempotencyKey::new("first".to_string()),
+        OplogIndex::from_u64(10),
+    );
+
+    assert!(membership.is_exact_complete());
+    let bytes = serialize(&membership).unwrap();
+    assert!(bytes.len() < 1024);
+    let recovered: InvocationResultMembership = deserialize(&bytes).unwrap();
+    assert_eq!(recovered, membership);
+}
+
+#[test]
+fn default_invocation_result_bloom_keeps_new_invocations_local_at_100x_capacity() {
+    let history_size = 100 * DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY;
+    let mut bloom = InvocationResultBloom::new(
+        DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+        DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+    );
+    for index in 0..history_size {
+        bloom.insert(&IdempotencyKey::new(format!("existing-{index}")));
+    }
+
+    let sample_size = 100_000;
+    let false_positives = (0..sample_size)
+        .filter(|index| bloom.might_contain(&IdempotencyKey::new(format!("new-{index}"))))
+        .count();
+
+    assert!(
+        false_positives * 100 < sample_size * 2,
+        "default Bloom filter sent {false_positives}/{sample_size} new invocations to physical lookup"
+    );
+}
 
 #[test]
 fn timestamp_conversion() {
@@ -580,4 +899,62 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
             ..
         } if decoded_scope_card == scope_card
     ));
+}
+
+#[test]
+fn durable_stream_session_index_rejects_unloaded_external_payload() {
+    use crate::model::oplog::{OplogEntry, OplogPayload, PayloadId};
+
+    let entry = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![0; 16],
+            cached: None,
+        },
+    };
+
+    let error = DurableStreamSessionIndex::default()
+        .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
+        .unwrap_err();
+    assert!(error.contains("has not been loaded"));
+}
+
+#[test]
+fn durable_stream_session_index_rejects_unsupported_inline_payload_version() {
+    use crate::model::oplog::{OplogEntry, OplogPayload};
+
+    let entry = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::SerializedInline {
+            bytes: vec![0xff],
+            cached: None,
+        },
+    };
+
+    let error = DurableStreamSessionIndex::default()
+        .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
+        .unwrap_err();
+    assert!(error.contains("unsupported serialization version"));
+}
+
+#[test]
+fn durable_stream_session_index_rejects_malformed_inline_payload() {
+    use crate::model::oplog::{OplogEntry, OplogPayload};
+
+    let entry = OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::SerializedInline {
+            bytes: vec![crate::serialization::SERIALIZATION_VERSION_V3, 0xff],
+            cached: None,
+        },
+    };
+
+    let error = DurableStreamSessionIndex::default()
+        .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
+        .unwrap_err();
+    assert!(error.contains("failed to decode"));
 }

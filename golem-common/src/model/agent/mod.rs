@@ -70,7 +70,14 @@ impl TryFrom<i32> for AgentMode {
     }
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[allow(clippy::large_enum_variant)]
 pub enum AgentError {
     InvalidInput(String),

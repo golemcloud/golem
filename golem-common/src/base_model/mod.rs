@@ -29,9 +29,12 @@ pub mod deploy_validation_warning;
 pub mod deployment;
 pub mod diff;
 pub mod domain_registration;
+pub mod durable_stream;
 pub mod environment;
 pub mod environment_plugin_grant;
+pub mod environment_tool_grant;
 pub mod error;
+pub mod external_agent_secret;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod json;
@@ -49,9 +52,11 @@ pub mod reports;
 pub mod retry_policy;
 pub mod security_scheme;
 pub mod tool;
+pub mod tool_release;
 pub mod worker;
 pub mod worker_filter;
 
+pub use durable_stream::*;
 pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
@@ -527,7 +532,9 @@ pub fn validate_lower_kebab_case_identifier(
     Debug,
     Eq,
     Hash,
+    Ord,
     PartialEq,
+    PartialOrd,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]

@@ -22,8 +22,8 @@ import "golem/schema/schema.proto";
 // removed and replaced by `Start`, `End`, `Cancelled`. Their tag numbers are reserved to
 // prevent accidental reuse should we ever need rolling-version compatibility in the future.
 message OplogEntry {
-  reserved 2, 14, 15;
-  reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite";
+  reserved 2, 14, 15, 41;
+  reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite", "FilesystemStorageUsageUpdate";
 
   oneof entry {
     CreateParameters Create = 1;
@@ -60,7 +60,6 @@ message OplogEntry {
     RemoteTransactionParameters RolledBackRemoteTransaction = 38;
     SnapshotDataParameters Snapshot = 39;
     OplogProcessorCheckpointParameters OplogProcessorCheckpoint = 40;
-    FilesystemStorageUsageUpdateParameters FilesystemStorageUsageUpdate = 41;
     SetRetryPolicyParameters SetRetryPolicy = 42;
     RemoveRetryPolicyParameters RemoveRetryPolicy = 43;
     StartParameters Start = 44;
@@ -79,6 +78,11 @@ message OplogEntry {
     CardTransferredParameters CardTransferred = 57;
     CardRevokedCascadeParameters CardRevokedCascade = 58;
     CardTransferConfirmedParameters CardTransferConfirmed = 59;
+    DurableStreamRecordParameters StreamRegistered = 60;
+    DurableStreamRecordParameters StreamItems = 61;
+    DurableStreamRecordParameters StreamEnd = 62;
+    DurableStreamRecordParameters StreamCancel = 63;
+    DurableStreamRecordParameters StreamSession = 64;
   }
 }
 
@@ -442,6 +446,11 @@ message HostStreamFrameParameters {
   golem.schema.TypedSchemaValue payload = 4;
 }
 
+message DurableStreamRecordParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.schema.TypedSchemaValue record = 2;
+}
+
 message EndAtomicRegionParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 begin_index = 2;
@@ -496,11 +505,6 @@ message FailedUpdateParameters {
 message GrowMemoryParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 delta = 2;
-}
-
-message FilesystemStorageUsageUpdateParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  int64 delta = 2;
 }
 
 message CreateResourceParameters {
@@ -628,4 +632,55 @@ message OplogProcessorCheckpointParameters {
 message OplogEntryWithIndex {
   uint64 oplog_index = 1;
   OplogEntry entry = 2;
+  PublicOplogEntryAttribution attribution = 3;
+}
+
+enum PublicAgentEntityKind {
+  PUBLIC_AGENT_ENTITY_KIND_UNSPECIFIED = 0;
+  PUBLIC_AGENT_ENTITY_KIND_TOOL = 1;
+  PUBLIC_AGENT_ENTITY_KIND_TOOL_MIDDLEWARE = 2;
+}
+
+enum PublicEntityCallMode {
+  PUBLIC_ENTITY_CALL_MODE_UNSPECIFIED = 0;
+  PUBLIC_ENTITY_CALL_MODE_SYNCHRONOUS = 1;
+  PUBLIC_ENTITY_CALL_MODE_ASYNCHRONOUS = 2;
+  PUBLIC_ENTITY_CALL_MODE_FIRE_AND_FORGET = 3;
+}
+
+message PublicAgentEntity {
+  PublicAgentEntityKind kind = 1;
+  string name = 2;
+}
+
+message PublicToolInvocationOperation {
+  repeated string command_path = 1;
+  bool has_stdin = 2;
+  bool has_stdout = 3;
+  bool declares_stdout = 4;
+}
+
+message PublicEntityInvocationOperation {
+  oneof operation {
+    PublicToolInvocationOperation tool = 1;
+  }
+}
+
+message PublicEntityInvocation {
+  PublicAgentEntity entity = 1;
+  optional uint64 start_index = 2;
+  PublicEntityCallMode call_mode = 3;
+  PublicEntityInvocationOperation operation = 4;
+}
+
+message PublicEntityInvocationContext {
+  PublicEntityInvocation invocation = 1;
+  repeated PublicEntityInvocation ancestors = 2;
+}
+
+message PublicOplogEntryAttribution {
+  oneof attribution {
+    golem.common.Empty agent = 1;
+    PublicEntityInvocationContext entity = 2;
+  }
 }

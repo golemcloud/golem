@@ -1,0 +1,21 @@
+manifestVersion: 1.6.0
+
+app: scala-tool-middleware-roles
+
+version: v0.0.0
+
+environments:
+  local:
+    server: local
+    version: v0.0.0
+
+components:
+  scala-tool-middleware-roles:ordinary:
+    dir: ordinary
+    templates: scala
+  scala-tool-middleware-roles:middleware:
+    dir: middleware
+    templates: scala-tool-middleware
+  scala-tool-middleware-roles:combined:
+    dir: combined
+    templates: scala-agent-tool-middleware

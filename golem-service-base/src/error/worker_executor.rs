@@ -1009,8 +1009,6 @@ pub enum GolemSpecificWasmTrap {
     WorkerExceededTableLimit,
     WorkerExceededHttpCallLimit,
     WorkerExceededRpcCallLimit,
-    NodeOutOfFilesystemStorage,
-    WorkerAgentExceededFilesystemStorageLimit,
     WorkerMonthlyHttpCallBudgetExhausted,
     WorkerMonthlyRpcCallBudgetExhausted,
     AgentTerminatedByQuota {
@@ -1043,12 +1041,6 @@ impl Display for GolemSpecificWasmTrap {
             }
             Self::WorkerExceededRpcCallLimit => {
                 write!(f, "Worker exceeded per-invocation RPC call limit")
-            }
-            Self::NodeOutOfFilesystemStorage => {
-                write!(f, "Worker cannot acquire more storage space")
-            }
-            Self::WorkerAgentExceededFilesystemStorageLimit => {
-                write!(f, "Worker exceeded plan storage limits")
             }
             Self::WorkerMonthlyHttpCallBudgetExhausted => {
                 write!(f, "Worker exhausted monthly HTTP call budget")

@@ -1,0 +1,47 @@
+warnings = "-44"
+
+import {
+  "golemcloud/golem_sdk/gen-agent-tool-middleware/interface/golem/agent/guest" @guest0,
+  "golemcloud/golem_sdk/gen-agent-tool-middleware/interface/golem/api/load-snapshot",
+  "golemcloud/golem_sdk/gen-agent-tool-middleware/interface/golem/api/save-snapshot",
+  "golemcloud/golem_sdk/gen-agent-tool-middleware/interface/golem/tool/guest",
+  "golemcloud/golem_sdk/gen-agent-tool-middleware/interface/golem/tool/tool-middleware-guest",
+}
+
+supported_targets = "+wasm"
+
+options(
+  link: {
+    "wasm": {
+      "export-memory-name": "memory",
+      "heap-start-address": 16,
+      "exports": [
+        "mbt_ffi_cabi_realloc:cabi_realloc",
+        "wasmExportAsyncInitialize:[callback][async-lift]golem:agent/guest@2.0.0#initialize",
+        "wasmExportAsyncInvokeGolemAgentGuest:[callback][async-lift]golem:agent/guest@2.0.0#invoke",
+        "wasmExportAsyncInvokeGolemToolGuest:[callback][async-lift]golem:tool/guest@0.1.0#invoke",
+        "wasmExportAsyncInvokeToolMiddleware:[callback][async-lift]golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+        "wasmExportAsyncLoad:[callback][async-lift]golem:api/load-snapshot@1.5.0#load",
+        "wasmExportAsyncSave:[callback][async-lift]golem:api/save-snapshot@1.5.0#save",
+        "wasmExportDiscoverAgentTypes:golem:agent/guest@2.0.0#discover-agent-types",
+        "wasmExportDiscoverAgentTypesPostReturn:cabi_post_golem:agent/guest@2.0.0#discover-agent-types",
+        "wasmExportDiscoverToolMiddlewares:golem:tool/tool-middleware-guest@0.1.0#discover-tool-middlewares",
+        "wasmExportDiscoverToolMiddlewaresPostReturn:cabi_post_golem:tool/tool-middleware-guest@0.1.0#discover-tool-middlewares",
+        "wasmExportDiscoverTools:golem:tool/guest@0.1.0#discover-tools",
+        "wasmExportDiscoverToolsPostReturn:cabi_post_golem:tool/guest@0.1.0#discover-tools",
+        "wasmExportGetDefinition:golem:agent/guest@2.0.0#get-definition",
+        "wasmExportGetDefinitionPostReturn:cabi_post_golem:agent/guest@2.0.0#get-definition",
+        "wasmExportGetTool:golem:tool/guest@0.1.0#get-tool",
+        "wasmExportGetToolMiddleware:golem:tool/tool-middleware-guest@0.1.0#get-tool-middleware",
+        "wasmExportGetToolMiddlewarePostReturn:cabi_post_golem:tool/tool-middleware-guest@0.1.0#get-tool-middleware",
+        "wasmExportGetToolPostReturn:cabi_post_golem:tool/guest@0.1.0#get-tool",
+        "wasmExportInitialize:[async-lift]golem:agent/guest@2.0.0#initialize",
+        "wasmExportInvokeGolemAgentGuest:[async-lift]golem:agent/guest@2.0.0#invoke",
+        "wasmExportInvokeGolemToolGuest:[async-lift]golem:tool/guest@0.1.0#invoke",
+        "wasmExportInvokeToolMiddleware:[async-lift]golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+        "wasmExportLoad:[async-lift]golem:api/load-snapshot@1.5.0#load",
+        "wasmExportSave:[async-lift]golem:api/save-snapshot@1.5.0#save",
+      ],
+    },
+  },
+)

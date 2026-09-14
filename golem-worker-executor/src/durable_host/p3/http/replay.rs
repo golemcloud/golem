@@ -27,12 +27,16 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use http::{HeaderMap, HeaderName, HeaderValue};
+use http_body::Body as _;
 use http_body_util::BodyExt as _;
 use http_body_util::Empty;
 use http_body_util::combinators::UnsyncBoxBody;
+use std::future::poll_fn;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tokio::sync::oneshot;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Poll;
+use tokio::sync::{Notify, oneshot};
 use tracing::warn;
 use wasmtime::AsContextMut;
 use wasmtime::component::{Accessor, AccessorTask, Resource};
@@ -49,11 +53,49 @@ pub(super) struct ReplayedRequestBodyRecording {
     pub(super) recording_complete_at_end: bool,
 }
 
+pub(super) struct ReplayedRequestBodyDrainReadiness {
+    pub(super) proof: oneshot::Receiver<Result<ReplayedRequestBodyRecordingProof, String>>,
+    pub(super) progress: Arc<ReplayedRequestBodyDrainProgress>,
+}
+
+#[derive(Default)]
+pub(super) struct ReplayedRequestBodyDrainProgress {
+    waiting_for_guest_body: AtomicBool,
+    changed: Notify,
+}
+
+impl ReplayedRequestBodyDrainProgress {
+    pub(super) fn set_waiting_for_guest_body(&self, waiting: bool) {
+        if self.waiting_for_guest_body.swap(waiting, Ordering::AcqRel) != waiting {
+            self.changed.notify_one();
+        }
+    }
+
+    pub(super) fn is_waiting_for_guest_body(&self) -> bool {
+        self.waiting_for_guest_body.load(Ordering::Acquire)
+    }
+
+    pub(super) async fn wait_for_change(&self, previous: bool) {
+        loop {
+            let changed = self.changed.notified();
+            if self.is_waiting_for_guest_body() != previous {
+                return;
+            }
+            changed.await;
+        }
+    }
+}
+
 pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
     req: Resource<Request>,
     recorded_body: Option<ReplayedRequestBodyRecording>,
-) -> HttpResult<()> {
+) -> HttpResult<Option<ReplayedRequestBodyDrainReadiness>> {
+    let await_recording = recorded_body
+        .as_ref()
+        .is_some_and(|recorded| !recorded.recording_complete_at_end);
+    let (recording_finished_tx, recording_finished_rx) = oneshot::channel();
+    let progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
     let (drain_result_tx, drain_result_rx) = oneshot::channel::<Result<(), ErrorCode>>();
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
     let body = http_store.with(
@@ -85,9 +127,16 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
         body,
         recorded_body,
         drain_result_tx,
+        recording_finished_tx,
+        progress.clone(),
         activity,
     ));
-    Ok(())
+    Ok(
+        await_recording.then_some(ReplayedRequestBodyDrainReadiness {
+            proof: recording_finished_rx,
+            progress,
+        }),
+    )
 }
 
 /// Spawns a [`ReplayedRequestLeakGuard`] for the replayed send's request
@@ -225,6 +274,8 @@ pub(super) struct ReplayRequestBodyDrain<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     recorded_body: Option<ReplayedRequestBodyRecording>,
     result_tx: oneshot::Sender<Result<(), ErrorCode>>,
+    recording_finished_tx: oneshot::Sender<Result<ReplayedRequestBodyRecordingProof, String>>,
+    progress: Arc<ReplayedRequestBodyDrainProgress>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
@@ -234,12 +285,16 @@ impl<Ctx> ReplayRequestBodyDrain<Ctx> {
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         recorded_body: Option<ReplayedRequestBodyRecording>,
         result_tx: oneshot::Sender<Result<(), ErrorCode>>,
+        recording_finished_tx: oneshot::Sender<Result<ReplayedRequestBodyRecordingProof, String>>,
+        progress: Arc<ReplayedRequestBodyDrainProgress>,
         activity: TailActivity,
     ) -> Self {
         Self {
             body,
             recorded_body,
             result_tx,
+            recording_finished_tx,
+            progress,
             activity,
             _phantom: PhantomData,
         }
@@ -256,52 +311,91 @@ where
             body,
             recorded_body,
             result_tx,
+            recording_finished_tx,
+            progress,
             activity,
             _phantom,
         } = self;
-        let result = match recorded_body.filter(|recorded| !recorded.recording_complete_at_end) {
-            None => activity.park(drain_request_body(body)).await,
+        let (result, recording_result) = match recorded_body
+            .filter(|recorded| !recorded.recording_complete_at_end)
+        {
+            None => (activity.park(drain_request_body(body)).await, None),
             Some(recorded_body) => {
                 let (oplog, recording_enabled) = accessor.with(|mut access| {
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
                     (ctx.state.oplog.clone(), !ctx.state.snapshotting_mode)
                 });
                 if recording_enabled {
-                    drain_replayed_request_body_completing_recording(
+                    let outcome = drain_replayed_request_body_completing_recording_with_progress(
                         body,
                         oplog,
                         recorded_body.send_start_index,
                         &activity,
+                        &progress,
                     )
-                    .await
+                    .await;
+                    (outcome.transmission, Some(outcome.recording))
                 } else {
-                    activity.park(drain_request_body(body)).await
+                    (
+                        activity
+                            .park(drain_request_body_with_progress(body, &progress))
+                            .await,
+                        Some(Err(
+                            "the incomplete request-body recording cannot be healed while snapshotting"
+                                .to_string(),
+                        )),
+                    )
                 }
             }
         };
+        if let Some(recording_result) = recording_result {
+            let _ = recording_finished_tx.send(recording_result);
+        }
         let _ = result_tx.send(result);
         Ok(())
     }
+}
+
+pub(super) struct ReplayRequestBodyDrainOutcome {
+    pub(super) transmission: Result<(), ErrorCode>,
+    pub(super) recording: Result<ReplayedRequestBodyRecordingProof, String>,
 }
 
 /// Drains a replayed request body whose oplog recording may be incomplete,
 /// completing the recording as it goes: the recorded frames are summarized
 /// (merged by offset — frame recordings are appended by concurrent tasks, so
 /// oplog order is not pull order, and crash/re-exec generations may overlap),
-/// and if no terminal frame was recorded, the guest's re-produced bytes past
-/// the covered prefix are appended as new frames. Bytes inside the covered
-/// prefix are discarded by byte count, because the guest's frame boundaries
-/// can differ between runs.
+/// and the guest's re-produced bytes past the covered prefix are appended as
+/// new frames. The body is always fully driven even if an old terminal exists:
+/// independently appended frames can land out of order, so that terminal does
+/// not prove that an earlier data or trailers append succeeded.
 ///
-/// Scan or append failures never fail the drain: the guest's transmission
-/// result must not depend on recording health. They only leave the recording
-/// incomplete, which a later rebuild detects and refuses.
+/// Scan or append failures do not change the guest's transmission result, but
+/// they fail the separate recording proof and prevent a physical re-issue.
+#[cfg(test)]
 pub(super) async fn drain_replayed_request_body_completing_recording(
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     oplog: Arc<dyn Oplog>,
     send_start_index: OplogIndex,
     activity: &TailActivity,
-) -> Result<(), ErrorCode> {
+) -> ReplayRequestBodyDrainOutcome {
+    drain_replayed_request_body_completing_recording_with_progress(
+        body,
+        oplog,
+        send_start_index,
+        activity,
+        &Arc::new(ReplayedRequestBodyDrainProgress::default()),
+    )
+    .await
+}
+
+async fn drain_replayed_request_body_completing_recording_with_progress(
+    body: UnsyncBoxBody<Bytes, ErrorCode>,
+    oplog: Arc<dyn Oplog>,
+    send_start_index: OplogIndex,
+    activity: &TailActivity,
+    progress: &Arc<ReplayedRequestBodyDrainProgress>,
+) -> ReplayRequestBodyDrainOutcome {
     let scan = match scan_recorded_request_body_frames(oplog.clone(), send_start_index).await {
         Ok(scan) => scan,
         Err(error) => {
@@ -311,36 +405,70 @@ pub(super) async fn drain_replayed_request_body_completing_recording(
                 "Failed to scan the recorded p3 HTTP request-body frames; draining the replayed request body without completing its recording"
             );
             // Safe park: the fallback drain appends nothing (guest-driven only).
-            return activity.park(drain_request_body(body)).await;
+            return ReplayRequestBodyDrainOutcome {
+                transmission: activity
+                    .park(drain_request_body_with_progress(body, progress))
+                    .await,
+                recording: Err(format!(
+                    "the recorded request-body frames could not be scanned: {error}"
+                )),
+            };
         }
     };
-    if scan.terminal_recorded() {
-        // The recording completed after the send result was recorded (its
-        // terminal frame just landed later in the oplog): nothing to append.
-        // Safe park: this drain appends nothing (guest-driven only).
-        return activity.park(drain_request_body(body)).await;
+    drain_past_recorded_prefix(body, oplog, send_start_index, scan, activity, progress).await
+}
+
+async fn next_replayed_request_body_frame(
+    body: &mut UnsyncBoxBody<Bytes, ErrorCode>,
+    progress: &Arc<ReplayedRequestBodyDrainProgress>,
+) -> Option<Result<http_body::Frame<Bytes>, ErrorCode>> {
+    poll_fn(|cx| match std::pin::Pin::new(&mut *body).poll_frame(cx) {
+        Poll::Ready(frame) => {
+            progress.set_waiting_for_guest_body(false);
+            Poll::Ready(frame)
+        }
+        Poll::Pending => {
+            progress.set_waiting_for_guest_body(true);
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+async fn drain_request_body_with_progress(
+    mut body: UnsyncBoxBody<Bytes, ErrorCode>,
+    progress: &Arc<ReplayedRequestBodyDrainProgress>,
+) -> Result<(), ErrorCode> {
+    while let Some(frame) = next_replayed_request_body_frame(&mut body, progress).await {
+        frame?;
     }
-    drain_past_recorded_prefix(body, oplog, send_start_index, scan, activity).await
+    Ok(())
 }
 
 /// The incomplete-recording drain core: discards the guest's re-produced bytes
 /// up to `scan.covered_len` (splitting a frame that straddles the boundary),
 /// records everything past it — data at its byte offset, trailers unless
-/// already recorded, and always a terminal frame — and returns the guest
-/// body's terminal result.
+/// already recorded, and a terminal frame when one is missing — and returns
+/// the guest body's terminal result plus the recording-health proof.
 async fn drain_past_recorded_prefix(
     mut body: UnsyncBoxBody<Bytes, ErrorCode>,
     oplog: Arc<dyn Oplog>,
     send_start_index: OplogIndex,
     scan: RecordedRequestBodyScan,
     activity: &TailActivity,
-) -> Result<(), ErrorCode> {
+    progress: &Arc<ReplayedRequestBodyDrainProgress>,
+) -> ReplayRequestBodyDrainOutcome {
     let mut recording = true;
     let mut trailers_recorded = scan.trailers_recorded();
+    let terminal_recorded = scan.terminal_recorded();
+    let mut reproduced_trailers = false;
     let mut pos: u64 = 0;
     // Safe park: each frame is guest-(re)produced body data; the appends
     // between frames stay active.
-    while let Some(frame) = activity.park(body.frame()).await {
+    while let Some(frame) = activity
+        .park(next_replayed_request_body_frame(&mut body, progress))
+        .await
+    {
         match frame {
             Ok(frame) => match frame.into_data().map_err(http_body::Frame::into_trailers) {
                 Ok(data) => {
@@ -360,6 +488,7 @@ async fn drain_past_recorded_prefix(
                     pos = end;
                 }
                 Err(Ok(trailers)) => {
+                    reproduced_trailers = true;
                     if recording && !trailers_recorded {
                         recording = record_frame_or_warn(
                             &oplog,
@@ -383,19 +512,38 @@ async fn drain_past_recorded_prefix(
                     )
                     .await;
                 }
-                return Err(error);
+                return ReplayRequestBodyDrainOutcome {
+                    transmission: Err(error),
+                    recording: Err(
+                        "the deterministically reproduced guest request body ended with an error"
+                            .to_string(),
+                    ),
+                };
             }
         }
     }
-    if recording {
-        record_frame_or_warn(
+    if recording && !terminal_recorded {
+        recording = record_frame_or_warn(
             &oplog,
             send_start_index,
             SerializableP3HttpRequestBodyFrame::End,
         )
         .await;
     }
-    Ok(())
+    ReplayRequestBodyDrainOutcome {
+        transmission: Ok(()),
+        recording: if recording {
+            Ok(ReplayedRequestBodyRecordingProof {
+                final_length: pos,
+                trailers_present: reproduced_trailers,
+            })
+        } else {
+            Err(
+                "a required request-body frame could not be appended while healing the recording"
+                    .to_string(),
+            )
+        },
+    }
 }
 
 /// Appends one frame to the send's recording, returning whether recording may
@@ -481,6 +629,25 @@ mod tests {
 
     fn test_activity() -> TailActivity {
         crate::durable_host::tail_work::TailWorkTracker::new().activity()
+    }
+
+    fn assert_clean_recording(
+        outcome: ReplayRequestBodyDrainOutcome,
+        final_length: u64,
+        trailers_present: bool,
+    ) {
+        assert!(
+            matches!(&outcome.transmission, Ok(())),
+            "drain failed: {:?}",
+            outcome.transmission
+        );
+        assert_eq!(
+            outcome.recording,
+            Ok(ReplayedRequestBodyRecordingProof {
+                final_length,
+                trailers_present,
+            })
+        );
     }
 
     struct TrackedChunk {
@@ -863,16 +1030,16 @@ mod tests {
             &test_activity(),
         )
         .await;
-        assert!(matches!(result, Ok(())), "drain failed: {result:?}");
+        assert_clean_recording(result, 11, false);
         let (bytes, trailers, ends, errors) =
             summarize_recording(oplog.recorded_frames_for(PARENT));
         assert_eq!(bytes, b"hello world");
         assert_eq!((trailers, ends, errors), (0, 1, 0));
     }
 
-    /// A recording whose terminal frame landed in the oplog (even after the
-    /// send result) is complete: the drain must only discard the guest's
-    /// re-produced body and append nothing.
+    /// A recording whose terminal frame landed after the send result still has
+    /// its reproduced length verified. When all earlier frames are present,
+    /// the drain appends nothing.
     #[test]
     #[timeout("10s")]
     async fn replay_drain_leaves_complete_recording_untouched() {
@@ -891,8 +1058,77 @@ mod tests {
             &test_activity(),
         )
         .await;
-        assert!(matches!(result, Ok(())), "drain failed: {result:?}");
+        assert_clean_recording(result, 3, false);
         assert_eq!(oplog.entry_count(), entries_before);
+    }
+
+    /// A terminal can overtake an independently appended data frame. The old
+    /// terminal must not hide that gap: replay fills it from the reproduced
+    /// body and proves the final contiguous length before recovery may resend.
+    #[test]
+    #[timeout("10s")]
+    async fn replay_drain_heals_gap_even_when_end_is_already_recorded() {
+        let oplog = FrameTestOplog::new();
+        record(&oplog, PARENT, data(0, b"ab")).await;
+        record(&oplog, PARENT, data(4, b"ef")).await;
+        record(&oplog, PARENT, SerializableP3HttpRequestBodyFrame::End).await;
+        let body = frame_body(
+            vec![http_body::Frame::data(Bytes::from_static(b"abcdef"))],
+            None,
+        );
+
+        let outcome = drain_replayed_request_body_completing_recording(
+            body,
+            oplog.clone(),
+            PARENT,
+            &test_activity(),
+        )
+        .await;
+
+        assert_clean_recording(outcome, 6, false);
+        let scan = scan_recorded_request_body_frames(oplog, PARENT)
+            .await
+            .expect("scan failed");
+        assert_eq!(scan.covered_len, 6);
+        assert!(matches!(
+            scan.terminal,
+            Some(RecordedRequestBodyTerminal::End)
+        ));
+    }
+
+    /// If healing a gap fails, an old terminal is insufficient proof and the
+    /// recording must remain ineligible for a physical recovery request.
+    #[test]
+    #[timeout("10s")]
+    async fn replay_drain_rejects_failed_healing_despite_recorded_end() {
+        let oplog = FrameTestOplog::new();
+        record(&oplog, PARENT, data(0, b"ab")).await;
+        record(&oplog, PARENT, data(4, b"ef")).await;
+        record(&oplog, PARENT, SerializableP3HttpRequestBodyFrame::End).await;
+        oplog.fail_uploads();
+        let body = frame_body(
+            vec![http_body::Frame::data(Bytes::from_static(b"abcdef"))],
+            None,
+        );
+
+        let outcome = drain_replayed_request_body_completing_recording(
+            body,
+            oplog.clone(),
+            PARENT,
+            &test_activity(),
+        )
+        .await;
+
+        assert!(matches!(&outcome.transmission, Ok(())));
+        assert!(outcome.recording.is_err());
+        let scan = scan_recorded_request_body_frames(oplog, PARENT)
+            .await
+            .expect("scan failed");
+        assert_eq!(scan.covered_len, 2);
+        assert!(matches!(
+            scan.terminal,
+            Some(RecordedRequestBodyTerminal::End)
+        ));
     }
 
     /// Guest trailers past the covered prefix are recorded when the recording
@@ -918,7 +1154,7 @@ mod tests {
             &test_activity(),
         )
         .await;
-        assert!(matches!(result, Ok(())), "drain failed: {result:?}");
+        assert_clean_recording(result, 3, true);
         let (bytes, trailers, ends, errors) =
             summarize_recording(oplog.recorded_frames_for(PARENT));
         assert_eq!(bytes, b"abc");
@@ -958,7 +1194,7 @@ mod tests {
             &test_activity(),
         )
         .await;
-        assert!(matches!(result, Ok(())), "drain failed: {result:?}");
+        assert_clean_recording(result, 3, true);
         let (bytes, trailers, ends, errors) =
             summarize_recording(oplog.recorded_frames_for(PARENT));
         assert_eq!(bytes, b"abc");
@@ -985,9 +1221,11 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(result, Err(ErrorCode::HttpProtocolError)),
-            "drain must surface the guest body error, got {result:?}"
+            matches!(&result.transmission, Err(ErrorCode::HttpProtocolError)),
+            "drain must surface the guest body error, got {:?}",
+            result.transmission
         );
+        assert!(result.recording.is_err());
         let (bytes, trailers, ends, errors) =
             summarize_recording(oplog.recorded_frames_for(PARENT));
         assert_eq!(bytes, b"ab");
@@ -1009,7 +1247,7 @@ mod tests {
             &test_activity(),
         )
         .await;
-        assert!(matches!(result, Ok(())), "drain failed: {result:?}");
+        assert_clean_recording(result, 0, false);
         let (bytes, trailers, ends, errors) =
             summarize_recording(oplog.recorded_frames_for(PARENT));
         assert!(bytes.is_empty());

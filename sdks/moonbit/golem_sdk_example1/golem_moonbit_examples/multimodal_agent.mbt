@@ -17,7 +17,7 @@ struct VisionAgent {
 ///|
 /// Creates a vision agent.
 fn VisionAgent::new() -> VisionAgent {
-  { count: 0 }
+  { count: 0, }
 }
 
 ///|

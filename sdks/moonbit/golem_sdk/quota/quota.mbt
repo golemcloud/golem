@@ -61,8 +61,8 @@ pub fn QuotaToken::reserve(
   amount : UInt64,
 ) -> Result[Reservation, FailedReservation] {
   match self.handle.with_handle(h => @raw.reserve(h, amount)) {
-    Some(Ok(r)) => Ok({ inner: r })
-    Some(Err(e)) => Err({ estimated_wait_nanos: e.estimated_wait_nanos })
+    Some(Ok(r)) => Ok({ inner: r, })
+    Some(Err(e)) => Err({ estimated_wait_nanos: e.estimated_wait_nanos, })
     None => abort(TOKEN_CONSUMED)
   }
 }
@@ -80,7 +80,7 @@ pub fn QuotaToken::split(
   child_expected_use : UInt64,
 ) -> QuotaToken {
   match self.handle.with_handle(h => @raw.split(h, child_expected_use)) {
-    Some(raw) => { handle: @model.GuestQuotaTokenHandle::new(raw) }
+    Some(raw) => { handle: @model.GuestQuotaTokenHandle::new(raw), }
     None => abort(TOKEN_CONSUMED)
   }
 }
@@ -145,7 +145,7 @@ pub impl @schema.IntoSchema for QuotaToken with fn type_id() {
 
 ///|
 pub impl @schema.IntoSchema for QuotaToken with fn register_in(_b) {
-  @model.schema_type(QuotaToken({ resource_name: None }))
+  @model.schema_type(QuotaToken({ resource_name: None, }))
 }
 
 ///|

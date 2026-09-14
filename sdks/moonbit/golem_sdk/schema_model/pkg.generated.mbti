@@ -2,10 +2,14 @@
 package "golemcloud/golem_sdk/schema_model"
 
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "moonbitlang/core/debug",
 }
 
 // Values
+pub fn canonical_schema_bytes_v1(SchemaGraph, SchemaType?) -> FixedArray[Byte] raise SchemaFingerprintError
+
 pub fn empty_metadata() -> @types.MetadataEnvelope
 
 pub fn encode_merged_agent_graph(MergedAgentGraph) -> EncodedAgentGraph raise SchemaModelError
@@ -16,19 +20,25 @@ pub fn merge_agent_graphs(Array[SchemaGraph]) -> MergedAgentGraph raise SchemaMo
 
 pub fn merge_graph_defs(Array[SchemaGraph]) -> Array[SchemaTypeDef] raise SchemaModelError
 
+pub fn schema_fingerprint_v1(SchemaGraph, SchemaType?) -> SchemaFingerprintV1 raise SchemaFingerprintError
+
 pub fn schema_graph_from_wit(@types.SchemaGraph) -> SchemaGraph raise SchemaModelError
 
 pub fn schema_graph_to_wit(SchemaGraph) -> @types.SchemaGraph raise SchemaModelError
 
 pub fn schema_type(SchemaTypeBody, metadata? : @types.MetadataEnvelope) -> SchemaType
 
-pub fn schema_value_from_wit(@types.SchemaValueTree) -> SchemaValue raise SchemaModelError
+pub fn schema_value_from_wit(@types.SchemaValueTree, SchemaValueResourceDrops) -> SchemaValue raise SchemaModelError
 
 pub fn schema_value_to_wit(SchemaValue) -> @types.SchemaValueTree raise SchemaModelError
 
-pub fn typed_schema_value_from_wit(@types.TypedSchemaValue) -> TypedSchemaValue raise SchemaModelError
+pub async fn schema_value_to_wit_async(SchemaValue) -> @types.SchemaValueTree
+
+pub fn typed_schema_value_from_wit(@types.TypedSchemaValue, SchemaValueResourceDrops) -> TypedSchemaValue raise SchemaModelError
 
 pub fn typed_schema_value_to_wit(TypedSchemaValue) -> @types.TypedSchemaValue raise SchemaModelError
+
+pub async fn typed_schema_value_to_wit_async(TypedSchemaValue) -> @types.TypedSchemaValue
 
 pub fn validate_graph(SchemaGraph) -> Array[SchemaError]
 
@@ -61,14 +71,19 @@ pub suberror SchemaError {
   TextLengthRangeInverted
   BinaryByteRangeInverted
   NullableNesting(inner~ : String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
+
+pub suberror SchemaFingerprintError {
+  InvalidSchema(String)
+  DuplicateSetValue(field~ : String, value~ : String)
+} derive(Eq, @debug.Debug)
 
 pub suberror SchemaModelError {
   EncodeError(String)
   DecodeError(String)
   MergeConflict(String)
   BuilderError(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct EncodedAgentGraph {
@@ -111,6 +126,14 @@ pub fn GuestQuotaTokenHandle::new(@types.QuotaToken) -> Self
 pub fn GuestQuotaTokenHandle::take(Self) -> @types.QuotaToken?
 pub fn[R] GuestQuotaTokenHandle::with_handle(Self, (@types.QuotaToken) -> R) -> R?
 
+pub(all) struct GuestSchemaValueStreamHandle {
+  // private fields
+}
+pub fn GuestSchemaValueStreamHandle::from_native(@async-core.Stream[@types.SchemaValueTree]) -> Self
+pub fn GuestSchemaValueStreamHandle::from_wrapped(@types.SchemaValueStream) -> Self
+pub fn GuestSchemaValueStreamHandle::is_present(Self) -> Bool
+pub async fn GuestSchemaValueStreamHandle::read_native(Self) -> FixedArray[@types.SchemaValueTree]?
+
 pub(all) struct GuestSecretHandle {
   // private fields
 }
@@ -122,13 +145,13 @@ pub fn[R] GuestSecretHandle::with_handle(Self, (@types.Secret) -> R) -> R?
 pub(all) struct MergedAgentGraph {
   defs : Array[SchemaTypeDef]
   roots : Array[SchemaType]
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct NamedFieldType {
   name : String
   body : SchemaType
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub struct SchemaBuilder {
   defs : Array[SchemaTypeDef]
@@ -143,20 +166,24 @@ pub fn SchemaBuilder::ref_(Self, String) -> SchemaType
 pub fn SchemaBuilder::register(Self, String, () -> SchemaType, String?) -> SchemaType
 pub fn SchemaBuilder::reserve(Self, String) -> Unit
 
+pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, @debug.Debug)
+pub fn SchemaFingerprintV1::as_bytes(Self) -> FixedArray[Byte]
+pub fn SchemaFingerprintV1::to_hex(Self) -> String
+
 pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]
   root : SchemaType
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaMapEntry {
   key : SchemaValue
   value : SchemaValue
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaType {
   body : SchemaTypeBody
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SchemaTypeBody {
   Ref(String)
@@ -196,13 +223,13 @@ pub(all) enum SchemaTypeBody {
   PermissionCard(@types.PermissionCardSpec)
   Future(SchemaType?)
   Stream(SchemaType?)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SchemaTypeDef {
   id : String
   name : String?
   body : SchemaType
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SchemaValue {
   Bool(Bool)
@@ -239,34 +266,42 @@ pub(all) enum SchemaValue {
   Union(String, SchemaValue)
   Secret(GuestSecretHandle)
   QuotaToken(GuestQuotaTokenHandle)
+  Stream(GuestSchemaValueStreamHandle)
   PermissionCard(GuestPermissionCardHandle)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
+pub fn SchemaValue::release_resources(Self, SchemaValueResourceDrops) -> Unit
+
+pub(all) struct SchemaValueResourceDrops {
+  drop_secret : (@types.Secret) -> Unit
+  drop_quota_token : (@types.QuotaToken) -> Unit
+  drop_stream : (@types.SchemaValueStream) -> Unit
+  drop_native_stream : (@async-core.Stream[@types.SchemaValueTree]) -> Unit
+}
 
 pub(all) struct SecretSpec {
   inner : SchemaType
   category : String?
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct TypedSchemaValue {
   graph : SchemaGraph
   value : SchemaValue
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct UnionBranch {
   tag : String
   body : SchemaType
   discriminator : @types.DiscriminatorRule
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 pub(all) struct VariantCaseType {
   name : String
   payload : SchemaType?
   metadata : @types.MetadataEnvelope
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 pub type TypeId = String
 
 // Traits
-

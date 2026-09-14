@@ -9,7 +9,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 Golem agents process invocations **sequentially** — a single agent cannot run work in parallel. To execute work concurrently, distribute it across **multiple agent instances**. This skill covers two approaches:
 
-1. **Child agents via `clientFor(AgentDef)(id)`** — spawn separate agent instances, dispatch work, and collect results
+1. **Child agents via `AgentDef.client.get(id)`** — spawn separate agent instances, dispatch work, and collect results
 2. **`fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 ## Approach 1: Child Agent Fan-Out
@@ -20,7 +20,7 @@ Spawn child agents, call them concurrently with `Promise.all`, and aggregate res
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
 export const Worker = defineAgent({
     name: 'Worker',
@@ -39,9 +39,6 @@ export const WorkerImpl = Worker.implement({
     },
 });
 
-// A typed RPC client factory for the remote Worker (built once, caches codecs).
-const workerClient = clientFor(Worker);
-
 export const Coordinator = defineAgent({
     name: 'Coordinator',
     id: { name: z.string() },
@@ -55,7 +52,7 @@ export const CoordinatorImpl = Coordinator.implement({
     methods: {
         async fanOut({ items }) {
             // Spawn one child per item and call concurrently.
-            const promises = items.map((item, i) => workerClient({ id: i }).process({ data: item }));
+            const promises = items.map((item, i) => Worker.client.get({ id: i }).process({ data: item }));
             // Wait for all children to finish.
             return await Promise.all(promises);
         },
@@ -73,7 +70,7 @@ async fanOutChunked({ ids }) {
     const results: number[] = [];
 
     for (const chunk of chunks) {
-        const promises = chunk.map((id) => workerClient({ id }).compute({ n: id }));
+        const promises = chunk.map((id) => Worker.client.get({ id }).compute({ n: id }));
         results.push(...await Promise.all(promises));
     }
     return results;
@@ -97,7 +94,7 @@ agent boundary as a bigint-aware JSON string:
 ```typescript
 import { z } from 'zod';
 import {
-    defineAgent, method, clientFor,
+    defineAgent, method,
     createPromise, awaitPromise, completePromise, PromiseId,
 } from '@golemcloud/golem-ts-sdk';
 
@@ -128,8 +125,6 @@ export const RegionWorkerImpl = RegionWorker.implement({
     },
 });
 
-const regionClient = clientFor(RegionWorker);
-
 // Inside a coordinator method handler:
 async dispatchAndCollect({ regions }) {
     // Create one promise per child.
@@ -137,7 +132,7 @@ async dispatchAndCollect({ regions }) {
 
     // Fire-and-forget: trigger each child with its (encoded) promise ID.
     regions.forEach((region, i) => {
-        regionClient({ region }).runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
+        RegionWorker.client.get({ region }).runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
     });
 
     // Collect all results (the agent suspends until each promise completes).
@@ -153,7 +148,7 @@ Use `Promise.allSettled` to handle partial failures:
 
 ```typescript
 async fanOutWithErrors({ items }) {
-    const promises = items.map((item, i) => workerClient({ id: i }).process({ data: item }));
+    const promises = items.map((item, i) => Worker.client.get({ id: i }).process({ data: item }));
     const settled = await Promise.allSettled(promises);
 
     const successes: string[] = [];

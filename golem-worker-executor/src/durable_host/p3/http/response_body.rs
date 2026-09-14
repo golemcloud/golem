@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::rebuild::resend_recorded_request;
 use super::rebuild::{AbortOnDropIoTask, P3HttpSendRebuild};
 use super::rebuild::{RebuildOutcome, ResendOutcome, reissue_recorded_request};
+use super::rebuild::{recorded_request_body_replayability, resend_recorded_request};
+use super::replay::ReplayedRequestBodyDrainProgress;
 use super::serialization::{deserialize_error_code, serialize_error_code};
 use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DropEvent,
-    DurableDemandItem, DurableDemandStream, deliver_demand, demand_channel,
+    DurableDemandItem, DurableDemandStream, ScopeReplayRecovery, demand_channel,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
@@ -32,11 +33,11 @@ use crate::durable_host::http::policy::{
 };
 use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{
-    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
+    DurableP3, DurableP3View, durable_worker_ctx, expect_ctx, observe_function_call,
     observe_function_call_store, wasi_http_view,
 };
 use crate::durable_host::tail_work::TailActivity;
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{P3HttpBodyProducerHook, WorkerCtx};
 use bytes::Bytes;
 use golem_common::model::RetryContext;
 use golem_common::model::oplog::host_functions::{
@@ -49,15 +50,17 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseP3HttpClientConsumeBodyChunk,
     HostResponseP3HttpClientConsumeBodyResult, OplogIndex,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::HeaderMap;
 use http_body_util::BodyExt as _;
 use http_body_util::combinators::UnsyncBoxBody;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tracing::debug;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureProducer, FutureReader, Resource,
@@ -126,12 +129,6 @@ pub(super) fn register_open_response<Ctx: WorkerCtx, U: Send>(
     });
 }
 
-/// Whether the recorded request head declares a request body: a positive (or
-/// unparseable) `content-length`, or any `transfer-encoding`. The oplog does
-/// not record request body bytes, so such a request cannot be faithfully
-/// re-issued after a restart. This is best-effort detection from the head
-/// only — a streamed upload without `content-length` is indistinguishable
-/// from no body and slips through.
 impl<Ctx: WorkerCtx> types::HostResponse for DurableP3View<'_, Ctx> {
     fn get_status_code(&mut self, res: Resource<Response>) -> wasmtime::Result<StatusCode> {
         observe_function_call(&*self.0, "http::types::response", "get-status-code");
@@ -175,15 +172,15 @@ pub(super) enum HttpBodyDemand {
 pub(super) enum HttpBodyChunkReply {
     /// One non-empty body frame, already persisted to the oplog as a `Data`
     /// child chunk before being handed back for delivery to the guest.
-    Data(Bytes),
+    Data {
+        bytes: Bytes,
+        delivery: HttpBodyChunkDelivery,
+    },
     /// The body stream reached its terminal (clean EOF, trailers, or a body
-    /// error); there are no more bytes to deliver. The producer signals `ack`
-    /// immediately before it reports EOF to the guest, so the durable task only
-    /// resolves trailers (and finalizes the parent marker) once the terminal has
-    /// actually been observed by the guest-facing stream.
-    End { ack: oneshot::Sender<()> },
+    /// error); there are no more bytes to deliver.
+    End { delivery: HttpBodyChunkDelivery },
     /// The guest cancelled this pending body read before upstream bytes arrived.
-    Cancelled,
+    Cancelled { delivery: HttpBodyChunkDelivery },
     /// A durable failure occurred while persisting/replaying the body; the guest
     /// stream traps with this message, tagged with the failing call scope's trap
     /// context so post-trap retry grouping stays owned by that call.
@@ -191,6 +188,99 @@ pub(super) enum HttpBodyChunkReply {
         message: String,
         trap_context: DurableCallTrapContext,
     },
+}
+
+#[derive(Default)]
+struct HttpBodyDemandSignal {
+    observed: AtomicBool,
+    notify: Notify,
+}
+
+impl HttpBodyDemandSignal {
+    fn observe(&self) {
+        self.observed.store(true, Ordering::Release);
+        self.notify.notify_one();
+    }
+
+    async fn observed(&self) {
+        while !self.observed.load(Ordering::Acquire) {
+            self.notify.notified().await;
+        }
+    }
+}
+
+async fn require_recording_before_response_demand(
+    readiness: impl Future<Output = Result<(), String>>,
+    demand_signal: Arc<HttpBodyDemandSignal>,
+    request_body_progress: Option<Arc<ReplayedRequestBodyDrainProgress>>,
+) -> Result<(), String> {
+    let Some(request_body_progress) = request_body_progress else {
+        return readiness.await;
+    };
+    tokio::pin!(readiness);
+    let mut response_demanded = demand_signal.observed.load(Ordering::Acquire);
+    loop {
+        let request_body_waiting = request_body_progress.is_waiting_for_guest_body();
+        if response_demanded && request_body_waiting {
+            tokio::select! {
+                biased;
+                result = &mut readiness => return result,
+                () = std::future::ready(()) => return Err(
+                    "response-body demand arrived while replay was waiting for more guest request-body data"
+                        .to_string(),
+                )
+            }
+        }
+
+        if response_demanded {
+            tokio::select! {
+                biased;
+                result = &mut readiness => return result,
+                () = request_body_progress.wait_for_change(request_body_waiting) => {}
+            }
+        } else {
+            tokio::select! {
+                biased;
+                result = &mut readiness => return result,
+                () = demand_signal.observed() => response_demanded = true,
+                () = request_body_progress.wait_for_change(request_body_waiting) => {}
+            }
+        }
+    }
+}
+
+/// Settles a persisted chunk completion at the producer's observation boundary rather than when
+/// the background task merely queues the reply. The latter is too early: another concurrent guest
+/// future can win and drop the producer before it consumes the queued reply, making replay observe
+/// a different cancellation order.
+pub(super) struct HttpBodyChunkDelivery {
+    delivery: Option<CompletionDelivery>,
+    observed: Option<oneshot::Sender<()>>,
+}
+
+impl HttpBodyChunkDelivery {
+    fn new(delivery: CompletionDelivery) -> (Self, oneshot::Receiver<()>) {
+        let (observed, observation) = oneshot::channel();
+        (
+            Self {
+                delivery: Some(delivery),
+                observed: Some(observed),
+            },
+            observation,
+        )
+    }
+
+    fn observed(mut self) {
+        self.delivery
+            .take()
+            .expect("body chunk delivery is settled exactly once")
+            .delivered();
+        let _ = self
+            .observed
+            .take()
+            .expect("body chunk observation is sent exactly once")
+            .send(());
+    }
 }
 
 /// Resolution delivered to the guest-facing trailers future once the body closes
@@ -332,6 +422,8 @@ impl Drop for HttpTrailersDeliveryGuard {
 /// replay.
 pub(super) struct DurableHttpBodyProducer {
     demand_tx: mpsc::Sender<HttpBodyDemand>,
+    demand_signal: Arc<HttpBodyDemandSignal>,
+    hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
     pending: Option<PendingHttpBodyRead>,
     pending_cancel: Option<oneshot::Receiver<()>>,
     finished: bool,
@@ -339,15 +431,22 @@ pub(super) struct DurableHttpBodyProducer {
 
 pub(super) struct PendingHttpBodyRead {
     reply: oneshot::Receiver<HttpBodyChunkReply>,
+    ready_reply: Option<HttpBodyChunkReply>,
     cancel: Option<oneshot::Sender<()>>,
     cancel_ack: Option<oneshot::Receiver<()>>,
     cancelling: bool,
 }
 
 impl DurableHttpBodyProducer {
-    fn new(demand_tx: mpsc::Sender<HttpBodyDemand>) -> Self {
+    fn new(
+        demand_tx: mpsc::Sender<HttpBodyDemand>,
+        demand_signal: Arc<HttpBodyDemandSignal>,
+        hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
+    ) -> Self {
         Self {
             demand_tx,
+            demand_signal,
+            hook,
             pending: None,
             pending_cancel: None,
             finished: false,
@@ -382,6 +481,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 }
             }
 
+            let hook = self.hook.clone();
             if let Some(pending) = self.pending.as_mut() {
                 if finish && !pending.cancelling {
                     if let Some(cancel) = pending.cancel.take() {
@@ -389,20 +489,41 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                     }
                     pending.cancelling = true;
                 }
-                if pending.cancelling
-                    && let Some(cancel_ack) = pending.cancel_ack.as_mut()
-                {
-                    match Pin::new(cancel_ack).poll(cx) {
-                        Poll::Ready(_) => {
-                            self.pending = None;
-                            self.finished = true;
-                            return Poll::Ready(Ok(StreamResult::Cancelled));
-                        }
-                        Poll::Pending => {}
+                let reply = match pending.ready_reply.take() {
+                    Some(reply) => Poll::Ready(Ok(reply)),
+                    None => Pin::new(&mut pending.reply).poll(cx),
+                };
+                let reply = match reply {
+                    Poll::Ready(Ok(reply))
+                        if !finish
+                            && hook
+                                .as_ref()
+                                .is_some_and(|hook| hook.should_defer_ready_reply()) =>
+                    {
+                        pending.ready_reply = Some(reply);
+                        hook.expect("the checked hook must exist")
+                            .ready_reply_deferred();
+                        return Poll::Pending;
                     }
-                }
-                match Pin::new(&mut pending.reply).poll(cx) {
+                    reply => reply,
+                };
+                match reply {
                     Poll::Pending => {
+                        // A reply that is already queued wins over cancellation: it may contain
+                        // bytes that were copied into guest memory before cancel-read completed
+                        // live. Only settle cancellation when no reply is ready.
+                        if pending.cancelling
+                            && let Some(cancel_ack) = pending.cancel_ack.as_mut()
+                        {
+                            match Pin::new(cancel_ack).poll(cx) {
+                                Poll::Ready(_) => {
+                                    self.pending = None;
+                                    self.finished = true;
+                                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                                }
+                                Poll::Pending => {}
+                            }
+                        }
                         // A demand is in flight. If `finish` was set above, the
                         // durable task has also been signalled to stop the
                         // upstream read and record a terminal, so this pending
@@ -410,7 +531,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         // the remote peer producing more body bytes.
                         return Poll::Pending;
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::Data(bytes))) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::Data { bytes, delivery })) => {
                         self.pending = None;
                         if bytes.is_empty() {
                             continue;
@@ -419,17 +540,14 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         // across as many guest reads as needed and only calls
                         // us again once it is drained.
                         dst.set_buffer(bytes);
+                        delivery.observed();
                         return Poll::Ready(Ok(StreamResult::Completed));
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::End { ack })) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::End { delivery })) => {
                         let cancelling = pending.cancelling;
                         let cancel_ack = pending.cancel_ack.take();
                         self.pending = None;
-                        // Acknowledge the terminal *before* reporting EOF so the
-                        // task only resolves trailers after this stream observes
-                        // the terminal. A dropped `ack` receiver just means the
-                        // task is already gone, which is harmless here.
-                        let _ = ack.send(());
+                        delivery.observed();
                         if cancelling {
                             if let Some(cancel_ack) = cancel_ack {
                                 self.pending_cancel = Some(cancel_ack);
@@ -442,9 +560,10 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                             return Poll::Ready(Ok(StreamResult::Dropped));
                         }
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::Cancelled)) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::Cancelled { delivery })) => {
                         let cancel_ack = pending.cancel_ack.take();
                         self.pending = None;
+                        delivery.observed();
                         if let Some(cancel_ack) = cancel_ack {
                             self.pending_cancel = Some(cancel_ack);
                             continue;
@@ -489,7 +608,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 // oplog and fail on replay.
                 let (tx, rx) = oneshot::channel();
                 match self.demand_tx.try_send(HttpBodyDemand::Cancel(tx)) {
-                    Ok(()) => {}
+                    Ok(()) => self.demand_signal.observe(),
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         self.finished = true;
                         return Poll::Ready(Ok(StreamResult::Cancelled));
@@ -515,7 +634,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 cancel: cancel_rx,
                 cancel_ack: cancel_ack_tx,
             }) {
-                Ok(()) => {}
+                Ok(()) => self.demand_signal.observe(),
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     self.finished = true;
                     return Poll::Ready(Err(wasmtime::Error::msg(
@@ -533,6 +652,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
             }
             self.pending = Some(PendingHttpBodyRead {
                 reply: reply_rx,
+                ready_reply: None,
                 cancel: Some(cancel_tx),
                 cancel_ack: Some(cancel_ack_rx),
                 cancelling: false,
@@ -705,6 +825,42 @@ pub(super) enum ProducedChunk {
     Cancelled,
 }
 
+/// Crosses the final HTTP body delivery boundary after a child terminal is durable. Unlike the
+/// generic demand-stream transfer, queueing the reply is not sufficient: the producer must poll
+/// it and hand it to Wasmtime before the completion is guest-observable.
+async fn deliver_http_body_reply(
+    activity: &TailActivity,
+    mut demand: oneshot::Sender<HttpBodyChunkReply>,
+    mut delivery: CompletionDelivery,
+    reply: impl FnOnce(HttpBodyChunkDelivery) -> HttpBodyChunkReply,
+) -> Result<DemandDelivery, WorkerExecutorError> {
+    if delivery.is_replay_discarded() {
+        debug!(
+            "recorded consume-body completion was discarded before delivery; parking until the \
+             replayed guest drops the body reader"
+        );
+        activity.park(demand.closed()).await;
+        return Ok(DemandDelivery::Abandoned);
+    }
+
+    delivery.prepare_delivery(Some(activity)).await?;
+    let (delivery, observed) = HttpBodyChunkDelivery::new(delivery);
+    if let Err(reply) = demand.send(reply(delivery)) {
+        // Dropping an armed delivery reserves the discard marker before waking this task.
+        drop(reply);
+    }
+
+    if observed.await.is_ok() {
+        Ok(DemandDelivery::Delivered)
+    } else {
+        debug!(
+            "consume-body completion persisted but the guest dropped the body reader before \
+             observing it"
+        );
+        Ok(DemandDelivery::Abandoned)
+    }
+}
+
 /// Reads the next meaningful frame from the upstream body, skipping empty data
 /// frames so an empty frame is never persisted/delivered as a body chunk.
 pub(super) async fn read_http_body_frame(
@@ -784,6 +940,7 @@ pub(super) async fn skip_body_prefix(
 pub(super) struct HttpConsumeBodyTask<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     demand_rx: mpsc::Receiver<HttpBodyDemand>,
+    demand_signal: Arc<HttpBodyDemandSignal>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
     trailers_delivery: Arc<HttpTrailersDelivery>,
     /// Open-response state of the send that produced this response (its
@@ -801,6 +958,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
     fn new(
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
+        demand_signal: Arc<HttpBodyDemandSignal>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
         trailers_delivery: Arc<HttpTrailersDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
@@ -809,6 +967,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         Self {
             body,
             demand_rx,
+            demand_signal,
             trailers_tx,
             trailers_delivery,
             response_state,
@@ -827,12 +986,36 @@ where
         let HttpConsumeBodyTask {
             mut body,
             demand_rx,
+            demand_signal,
             trailers_tx,
             trailers_delivery,
-            response_state,
+            mut response_state,
             activity,
             ..
         } = self;
+
+        let scope_replay_recovery = match response_state.as_mut() {
+            Some(state) if state.body_is_placeholder && state.is_idempotent => {
+                match state.resend.as_mut() {
+                    Some(rebuild) => {
+                        let request_body_progress = rebuild
+                            .replayed_request_body_drain
+                            .as_ref()
+                            .map(|drain| drain.progress.clone());
+                        ScopeReplayRecovery::reexecute_when(
+                            require_recording_before_response_demand(
+                                recorded_request_body_replayability(accessor, rebuild),
+                                demand_signal.clone(),
+                                request_body_progress,
+                            ),
+                        )
+                    }
+                    None => ScopeReplayRecovery::Forbidden,
+                }
+            }
+            Some(state) if state.body_is_placeholder => ScopeReplayRecovery::Forbidden,
+            _ => ScopeReplayRecovery::Default,
+        };
 
         let (
             response_span,
@@ -894,8 +1077,11 @@ where
                     .as_ref()
                     .map(|span| format!("consume-body:{}", span.send_start_index)),
                 request_identity: None,
+                entity_invocation_identity: None,
+                tool_invocation_identity: None,
                 parent_start_index: None,
                 observational_owner,
+                scope_replay_recovery,
             },
             DemandDeliveryMode::Deferred,
             async |_| Ok(HostRequestNoInput {}),
@@ -919,7 +1105,8 @@ where
 
         loop {
             // Safe park: waiting for the guest to demand the next body chunk.
-            let (demand, cancel_rx, read_cancel_ack) = match stream.next_demand(&activity).await {
+            let (demand, cancel_rx, mut read_cancel_ack) = match stream.next_demand(&activity).await
+            {
                 Some(HttpBodyDemand::Read {
                     reply,
                     cancel,
@@ -975,24 +1162,41 @@ where
             // guest.
             let (produced, delivery) = match item {
                 DurableDemandItem::Replayed { response, delivery } => {
+                    let replay_at_marker = delivery.is_replay_at_marker();
+                    let replay_discarded = delivery.is_replay_discarded();
                     let produced = match response.chunk {
                         SerializableP3HttpBodyChunk::Data(bytes) => {
-                            // Release the read's cancel plumbing once the frame has
-                            // been produced, matching the live path.
                             drop(cancel_rx);
-                            drop(read_cancel_ack);
+                            // A marker-bearing replay must keep cancel-read pending until the
+                            // recorded bytes reach Wasmtime's destination. Markerless and
+                            // discarded completions retain the live cancellation race; the
+                            // latter must release the ack before parking to avoid a cycle.
+                            if !replay_at_marker {
+                                drop(read_cancel_ack.take());
+                            }
                             ProducedChunk::Data(Bytes::from(bytes))
                         }
                         SerializableP3HttpBodyChunk::End => {
                             drop(cancel_rx);
-                            drop(read_cancel_ack);
+                            if !replay_at_marker {
+                                drop(read_cancel_ack.take());
+                            }
                             ProducedChunk::End
                         }
                         SerializableP3HttpBodyChunk::Cancelled => {
-                            if let Some(cancel_rx) = cancel_rx {
-                                let _ = cancel_rx.await;
+                            if replay_discarded {
+                                drop(cancel_rx);
+                                drop(read_cancel_ack.take());
+                            } else {
+                                if let Some(cancel_rx) = cancel_rx {
+                                    let _ = cancel_rx.await;
+                                }
+                                if replay_at_marker {
+                                    cancel_ack = read_cancel_ack.take();
+                                } else {
+                                    drop(read_cancel_ack.take());
+                                }
                             }
-                            cancel_ack = read_cancel_ack;
                             terminal = Ok(None);
                             ProducedChunk::Cancelled
                         }
@@ -1010,13 +1214,14 @@ where
                     let read_frame = async {
                         if pending_reissue {
                             // First live read of a replayed response's placeholder body:
-                            // the durable consume-body scope turned out to be incomplete
-                            // (the original run was interrupted mid-body-stream, so the
-                            // scope claim jumped to live), and the placeholder carries no
-                            // data. Re-issue the recorded request now and stream the
-                            // fresh body instead. This only fires on a real guest demand:
-                            // a dropped stream or a cleanly replaying scope never
-                            // re-issues.
+                            // the durable consume-body scope was either missing entirely
+                            // (the crash happened before its `Start` was committed, so a
+                            // synthetic scope was recovered live) or incomplete (the
+                            // original run was interrupted mid-body-stream, so the scope
+                            // claim jumped to live), and the placeholder carries no data.
+                            // Re-issue the recorded request now and stream the fresh body
+                            // instead. This only fires on a real guest demand: a dropped
+                            // stream or a cleanly replaying scope never re-issues.
                             pending_reissue = false;
                             match resend.as_ref() {
                                 Some(resend) => {
@@ -1368,20 +1573,17 @@ where
             // single point where chunks reach the guest, identically live and on
             // replay, so the count/order of delivered chunks always matches the
             // count/order of persisted children. It is also where the child's
-            // deferred-delivery token is consumed: a successful send is
-            // `delivered`, a closed demand receiver records the child's
-            // `CompletionDiscarded` marker, and a replay-discarded child is never
-            // re-sent (the task parks until the replayed guest drops the body
-            // reader at the same point it did live).
+            // deferred-delivery token is consumed: producer observation is
+            // `delivered`, a dropped reply reserves the child's `CompletionDiscarded`
+            // marker, and a replay-discarded child is never re-sent (the task parks
+            // until the replayed guest drops the body reader at the same point it
+            // did live).
             match produced {
                 ProducedChunk::Data(bytes) => {
                     let chunk_len = bytes.len() as u64;
-                    match deliver_demand(
-                        &activity,
-                        demand,
-                        HttpBodyChunkReply::Data(bytes),
-                        delivery,
-                    )
+                    match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+                        HttpBodyChunkReply::Data { bytes, delivery }
+                    })
                     .await
                     {
                         Ok(DemandDelivery::Delivered) => delivered_bytes += chunk_len,
@@ -1405,19 +1607,12 @@ where
                     }
                 }
                 ProducedChunk::End => {
-                    let (ack_tx, ack_rx) = oneshot::channel();
-                    match deliver_demand(
-                        &activity,
-                        demand,
-                        HttpBodyChunkReply::End { ack: ack_tx },
-                        delivery,
-                    )
+                    match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+                        HttpBodyChunkReply::End { delivery }
+                    })
                     .await
                     {
-                        Ok(DemandDelivery::Delivered) => {
-                            // Do not resolve trailers before the guest observes EOF.
-                            let _ = ack_rx.await;
-                        }
+                        Ok(DemandDelivery::Delivered) => {}
                         Ok(DemandDelivery::Abandoned) => {}
                         Err(error) => {
                             let trap_context = stream.trap_context();
@@ -1431,8 +1626,10 @@ where
                     break;
                 }
                 ProducedChunk::Cancelled => {
-                    match deliver_demand(&activity, demand, HttpBodyChunkReply::Cancelled, delivery)
-                        .await
+                    match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+                        HttpBodyChunkReply::Cancelled { delivery }
+                    })
+                    .await
                     {
                         Ok(_) => {}
                         Err(error) => {
@@ -1510,6 +1707,16 @@ where
             }
         }
 
+        // Cancellation is settled once the body and send span are durable. Without a recorded
+        // trailers delivery marker, holding its acknowledgement across the delivery wait would
+        // prevent the guest from returning (or dropping trailers) and advancing the replay tail.
+        // Recorded deliveries retain their ordering; their acknowledgement stays below the gate.
+        if !delivery.is_replay_at_marker()
+            && let Some(ack) = cancel_ack.take()
+        {
+            let _ = ack.send(());
+        }
+
         if delivery.is_replay_discarded() {
             // The recorded run persisted the parent terminal but the guest
             // dropped the trailers future before the outcome was delivered
@@ -1518,22 +1725,19 @@ where
             // pending, and park at the delivery boundary until the
             // deterministic guest drops the receiver at the same point it
             // did live.
-            // A cancelling body cannot finish dropping its trailers receiver
-            // until its stream cancellation is acknowledged. The discard is
-            // already durable on replay, so acknowledge before waiting for it.
-            if let Some(ack) = cancel_ack.take() {
-                let _ = ack.send(());
-            }
             let mut trailers_tx = trailers_tx;
             activity.park(trailers_tx.closed()).await;
             drop(trailers_tx);
         } else {
-            delivery.prepare_delivery().await.map_err(|error| {
-                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                    anyhow::Error::from(error),
-                    parent_trap_context,
-                ))
-            })?;
+            delivery
+                .prepare_delivery(Some(&activity))
+                .await
+                .map_err(|error| {
+                    wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                        anyhow::Error::from(error),
+                        parent_trap_context,
+                    ))
+                })?;
             trailers_delivery.arm(delivery);
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => {}
@@ -1624,15 +1828,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // Capacity 1 suffices (and bounds memory as defense in depth): the
         // producer keeps at most one demand in flight at a time.
         let (demand_tx, demand_rx) = demand_channel();
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
         let (trailers_tx, trailers_rx) = oneshot::channel();
         let trailers_delivery = HttpTrailersDelivery::new();
+        let producer_hook = {
+            let mut store_ctx = store.as_context_mut();
+            expect_ctx::<Ctx, U>(store_ctx.data_mut()).p3_http_body_producer_hook()
+        };
 
         // Build both guest-facing handles before spawning the durable task. The
         // task appends the `consume-body` `Start`; the guest cannot poll either
         // handle until this host call returns, so spawning first would risk
         // committing a `Start` with no terminal (orphaned `Start`) if a later
         // handle construction fails.
-        let mut stream = StreamReader::new(&mut store, DurableHttpBodyProducer::new(demand_tx))?;
+        let mut stream = StreamReader::new(
+            &mut store,
+            DurableHttpBodyProducer::new(demand_tx, demand_signal.clone(), producer_hook),
+        )?;
         let mut trailers = match FutureReader::new(
             &mut store,
             HttpTrailersFutureProducer::<Ctx, U>::new(trailers_rx),
@@ -1661,6 +1873,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         store.spawn(HttpConsumeBodyTask::<Ctx>::new(
             body,
             demand_rx,
+            demand_signal,
             trailers_tx,
             trailers_delivery,
             response_state,
@@ -1710,6 +1923,66 @@ mod tests {
         DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
     };
     use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("10s")]
+    async fn missing_scope_readiness_refuses_pending_proof_after_response_demand() {
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
+        demand_signal.observe();
+        let request_body_progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
+        request_body_progress.set_waiting_for_guest_body(true);
+
+        let error = require_recording_before_response_demand(
+            std::future::pending::<Result<(), String>>(),
+            demand_signal,
+            Some(request_body_progress),
+        )
+        .await
+        .expect_err("response demand must bound a pending recording proof");
+
+        assert!(error.contains("response-body demand"));
+    }
+
+    #[test]
+    async fn missing_scope_readiness_prefers_an_already_completed_proof() {
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
+        demand_signal.observe();
+        let request_body_progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
+        request_body_progress.set_waiting_for_guest_body(true);
+
+        require_recording_before_response_demand(
+            async { Ok(()) },
+            demand_signal,
+            Some(request_body_progress),
+        )
+        .await
+        .expect("a completed recording proof must win over concurrent response demand");
+    }
+
+    #[test]
+    async fn missing_scope_readiness_ignores_demand_for_storage_only_validation() {
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
+        demand_signal.observe();
+        let request_body_progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let mut check = Box::pin(require_recording_before_response_demand(
+            async move {
+                ready_rx.await.expect("readiness sender dropped");
+                Ok(())
+            },
+            demand_signal,
+            Some(request_body_progress),
+        ));
+
+        assert!(
+            futures::poll!(check.as_mut()).is_pending(),
+            "response demand alone must not refuse bounded storage-only validation"
+        );
+        ready_tx.send(()).expect("readiness receiver dropped");
+        check
+            .await
+            .expect("storage-only validation must complete after becoming ready");
+    }
 
     /// Seeds `oplog` with the durable prefix a live consume-body loop leaves behind right before
     /// the guest-facing transfer of its first chunk: the parent consume-body `Start`, the child
@@ -1775,21 +2048,36 @@ mod tests {
         let tracker = TailWorkTracker::new();
         let activity = tracker.activity();
         let (demand, mut reply) = oneshot::channel();
-        let outcome = deliver_demand(
+
+        let mut transfer = Box::pin(deliver_http_body_reply(
             &activity,
             demand,
-            HttpBodyChunkReply::Data(Bytes::from_static(b"abc")),
             delivery,
-        )
-        .await
-        .expect("live transfer must not fail");
-
-        assert!(matches!(outcome, DemandDelivery::Delivered));
+            |delivery| HttpBodyChunkReply::Data {
+                bytes: Bytes::from_static(b"abc"),
+                delivery,
+            },
+        ));
+        assert!(
+            futures::poll!(transfer.as_mut()).is_pending(),
+            "the transfer must wait until the producer observes the queued chunk"
+        );
+        assert_eq!(
+            oplog.entry_count(),
+            seeded_entries,
+            "queueing the chunk is not yet a guest delivery boundary"
+        );
         match reply.try_recv() {
-            Ok(HttpBodyChunkReply::Data(bytes)) => assert_eq!(bytes, Bytes::from_static(b"abc")),
+            Ok(HttpBodyChunkReply::Data { bytes, delivery }) => {
+                assert_eq!(bytes, Bytes::from_static(b"abc"));
+                delivery.observed();
+            }
             Ok(_) => panic!("expected the delivered data chunk, got a different reply kind"),
             Err(error) => panic!("expected the delivered data chunk, got no reply: {error}"),
         }
+        let outcome = transfer.await.expect("live transfer must not fail");
+
+        assert!(matches!(outcome, DemandDelivery::Delivered));
         assert_eq!(
             oplog.entry_count(),
             seeded_entries + 1,
@@ -1813,8 +2101,8 @@ mod tests {
 
     /// The vanished-demand-receiver regression at the unit level: the child's `End(Data)` is
     /// durable but the guest dropped the body reader before the transfer. The helper must report
-    /// the body abandoned and must have the child's `CompletionDiscarded` marker durable *before*
-    /// it returns.
+    /// the body abandoned and must reserve the child's `CompletionDiscarded` marker before it
+    /// returns.
     #[test]
     #[timeout("10s")]
     async fn durable_demand_delivery_records_discard_marker_for_closed_live_receiver() {
@@ -1827,12 +2115,12 @@ mod tests {
         let activity = tracker.activity();
         let (demand, reply) = oneshot::channel::<HttpBodyChunkReply>();
         drop(reply);
-        let outcome = deliver_demand(
-            &activity,
-            demand,
-            HttpBodyChunkReply::Data(Bytes::from_static(b"abc")),
-            delivery,
-        )
+        let outcome = deliver_http_body_reply(&activity, demand, delivery, |delivery| {
+            HttpBodyChunkReply::Data {
+                bytes: Bytes::from_static(b"abc"),
+                delivery,
+            }
+        })
         .await
         .expect("a discarded transfer must not fail the task");
 
@@ -1865,11 +2153,14 @@ mod tests {
         let tracker = TailWorkTracker::new();
         let activity = tracker.activity();
         let (demand, mut reply) = oneshot::channel::<HttpBodyChunkReply>();
-        let mut transfer = Box::pin(deliver_demand(
+        let mut transfer = Box::pin(deliver_http_body_reply(
             &activity,
             demand,
-            HttpBodyChunkReply::Data(Bytes::from_static(b"abc")),
             delivery,
+            |delivery| HttpBodyChunkReply::Data {
+                bytes: Bytes::from_static(b"abc"),
+                delivery,
+            },
         ));
         assert!(
             futures::poll!(transfer.as_mut()).is_pending(),

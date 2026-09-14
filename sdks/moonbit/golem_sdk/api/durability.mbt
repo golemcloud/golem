@@ -7,13 +7,13 @@ pub(all) enum DurableFunctionType {
   WriteRemote
   WriteRemoteBatched(UInt64?)
   WriteRemoteTransaction(UInt64?)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 /// Errors detected while replaying a custom durable operation.
 pub suberror DurabilityError {
   ReplayMismatch(String)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 ///|
 fn DurableFunctionType::to_raw(
@@ -143,6 +143,6 @@ fn[Response : @schema.FromSchema] decode_durable_replay(
       "function type differs for '\{function_name}'",
     )
   }
-  let response = @model.typed_schema_value_from_wit(invocation.response)
+  let response = @model_host.typed_schema_value_from_wit(invocation.response)
   @schema.from_value_as(response.value)
 }

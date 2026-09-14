@@ -21,6 +21,10 @@ pub trait HttpClient4 {
     /// while awaiting response headers.
     async fn put_with_p3_small_body_open_until_response(&self) -> String;
 
+    /// Sends a raw wasip3 PUT request and keeps the body stream open until the first
+    /// response-body read completes.
+    async fn put_with_p3_body_open_until_response_read(&self) -> String;
+
     /// Sends a raw wasip3 PUT request with a declared small content-length but keeps the
     /// body stream open while awaiting response headers.
     async fn put_with_p3_declared_small_body_open_until_response(&self) -> String;
@@ -101,6 +105,11 @@ pub trait HttpClient4 {
     /// both the pending read future and the body stream are gone.
     async fn get_and_cancel_body_read_after_signal(&self) -> String;
 
+    /// Starts a raw wasip3 response-body read, waits for a second request to
+    /// complete, then cancels the read and verifies that a concurrently
+    /// completed transfer still returns its byte count and destination bytes.
+    async fn get_and_cancel_body_read_with_bytes(&self) -> String;
+
     /// Sends a POST via raw wasip3 `wasi:http` whose declared `content-length`
     /// is larger than the bytes actually written, and returns the request-body
     /// transmission future's result (together with the send outcome). The
@@ -121,6 +130,12 @@ pub trait HttpClient4 {
     /// `x-resp-test` response header, and the body — in agent state, formatted
     /// as a single string, which is also returned.
     async fn get_and_store_full_response(&mut self) -> String;
+
+    /// Reads the full response but leaves its trailers future unconsumed.
+    async fn get_and_ignore_trailers(&mut self) -> String;
+
+    /// Cancels a pending body read after its first chunk and leaves trailers unconsumed.
+    async fn get_and_cancel_body_ignoring_trailers(&mut self) -> String;
 
     /// Returns the response stored by the last `get_and_store_full_response`
     /// call (rebuilt from the oplog on replay).
@@ -164,6 +179,10 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn put_with_p3_small_body_open_until_response(&self) -> String {
         do_put_with_p3_small_body_open_until_response().await
+    }
+
+    async fn put_with_p3_body_open_until_response_read(&self) -> String {
+        do_put_with_p3_body_open_until_response_read().await
     }
 
     async fn put_with_p3_declared_small_body_open_until_response(&self) -> String {
@@ -260,6 +279,10 @@ impl HttpClient4 for HttpClient4Impl {
         do_get_and_cancel_body_read_after_signal().await
     }
 
+    async fn get_and_cancel_body_read_with_bytes(&self) -> String {
+        do_get_and_cancel_body_read_with_bytes().await
+    }
+
     async fn post_with_short_body_transmission_error(&self) -> String {
         do_post_with_short_body_transmission_error().await
     }
@@ -277,7 +300,19 @@ impl HttpClient4 for HttpClient4Impl {
     }
 
     async fn get_and_store_full_response(&mut self) -> String {
-        let result = do_get_full_response().await;
+        let result = do_get_full_response(false, false).await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn get_and_ignore_trailers(&mut self) -> String {
+        let result = do_get_full_response(true, false).await;
+        self.last_full_response = Some(result.clone());
+        result
+    }
+
+    async fn get_and_cancel_body_ignoring_trailers(&mut self) -> String {
+        let result = do_get_full_response(true, true).await;
         self.last_full_response = Some(result.clone());
         result
     }
@@ -458,6 +493,63 @@ async fn do_get_and_cancel_body_read_after_signal() -> String {
     format!("{result} done={done_status}")
 }
 
+async fn do_get_and_cancel_body_read_with_bytes() -> String {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::wit_future;
+    use std::future::Future;
+    use std::task::Poll;
+
+    const EXPECTED: &[u8] = b"gated-first-chunk";
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let headers =
+        types::Fields::from_list(&[("x-test".to_string(), b"cancel-read".to_vec())]).unwrap();
+    let (_request_done_tx, request_done_rx) = wit_future::new(|| Ok(None));
+    let (request, _transmit) = types::Request::new(headers, None, request_done_rx, None);
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/gated-body")).unwrap();
+
+    let response = client::send(request).await.expect("Request failed");
+    let status = response.get_status_code();
+    let (_response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut read = Box::pin(body.read(Vec::with_capacity(EXPECTED.len())));
+
+    futures_util::future::poll_fn(|cx| match read.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready((result, buffer)) => {
+            panic!("body read completed before cancellation: {result:?}, {buffer:?}")
+        }
+    })
+    .await;
+
+    let signal = wasi_fetch::Client::new()
+        .get(&format!("http://localhost:{port}/cancel-signal"))
+        .send()
+        .await
+        .expect("Cancel-signal request failed");
+    let signal_status = signal.status().as_u16();
+    drop(signal);
+
+    let (result, buffer) = read.as_mut().cancel();
+    assert_eq!(result, StreamResult::Complete(EXPECTED.len()));
+    assert_eq!(buffer, EXPECTED);
+    drop(read);
+    drop(body);
+    drop(trailers);
+
+    format!(
+        "cancel-read({status}, {signal_status}, {})={}",
+        EXPECTED.len(),
+        String::from_utf8_lossy(&buffer)
+    )
+}
+
 async fn do_post_with_short_body_transmission_error() -> String {
     use futures_concurrency::prelude::*;
     use golem_rust::wasip3::http::{client, types};
@@ -540,7 +632,7 @@ async fn do_send_with_permanent_error() -> String {
     }
 }
 
-async fn do_get_full_response() -> String {
+async fn do_get_full_response(ignore_trailers: bool, cancel_body: bool) -> String {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::wit_bindgen::StreamResult;
     use golem_rust::wasip3::wit_future;
@@ -557,9 +649,7 @@ async fn do_get_full_response() -> String {
     request
         .set_authority(Some(&format!("localhost:{port}")))
         .unwrap();
-    request
-        .set_path_with_query(Some("/full-response"))
-        .unwrap();
+    request.set_path_with_query(Some("/full-response")).unwrap();
 
     let response = client::send(request).await.expect("Request failed");
     let status = response.get_status_code();
@@ -581,13 +671,32 @@ async fn do_get_full_response() -> String {
             StreamResult::Complete(n) => {
                 body_bytes.extend_from_slice(&buffer[..n]);
                 buffer.clear();
+                if cancel_body && n > 0 {
+                    use std::future::Future;
+                    use std::task::Poll;
+
+                    let mut pending = Box::pin(body.read(Vec::with_capacity(1024)));
+                    futures_util::future::poll_fn(|cx| {
+                        assert!(pending.as_mut().poll(cx).is_pending());
+                        Poll::Ready(())
+                    })
+                    .await;
+                    let (result, _) = pending.as_mut().cancel();
+                    assert_eq!(result, StreamResult::Cancelled);
+                    break;
+                }
             }
             StreamResult::Dropped => break,
             StreamResult::Cancelled => panic!("response body read was cancelled"),
         }
     }
     drop(body);
-    trailers.await.expect("response trailers failed");
+    if ignore_trailers {
+        // Model a guest that never reads or drops the returned future handle.
+        std::mem::forget(trailers);
+    } else {
+        trailers.await.expect("response trailers failed");
+    }
     response_done_tx
         .write(Ok(()))
         .await
@@ -771,9 +880,7 @@ async fn do_post_with_p3_streamed_body(chunk_count: usize, chunk_len: usize) -> 
         async { transmit.await },
         async {
             for i in 0..chunk_count {
-                let chunk: Vec<u8> = (0..chunk_len)
-                    .map(|j| ((i * 31 + j) % 251) as u8)
-                    .collect();
+                let chunk: Vec<u8> = (0..chunk_len).map(|j| ((i * 31 + j) % 251) as u8).collect();
                 let remaining = body_tx.write_all(chunk).await;
                 assert!(remaining.is_empty(), "request body receiver closed early");
             }
@@ -920,6 +1027,65 @@ async fn do_put_with_p3_small_body_open_until_response() -> String {
     };
 
     (send, hold_body_open).race().await
+}
+
+async fn do_put_with_p3_body_open_until_response_read() -> String {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let headers =
+        types::Fields::from_list(&[("x-test".to_string(), b"open-until-response-read".to_vec())])
+            .unwrap();
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Put).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request
+        .set_path_with_query(Some("/early-response"))
+        .unwrap();
+
+    let (send_result, remaining) = (async { client::send(request).await }, async {
+        body_tx.write_all(b"hello".to_vec()).await
+    })
+        .join()
+        .await;
+    assert!(remaining.is_empty(), "request body receiver closed early");
+
+    let response = send_result.expect("Request failed");
+    let status = response.get_status_code();
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, response_trailers) = types::Response::consume_body(response, response_done_rx);
+    let (read_result, buffer) = body.read(Vec::with_capacity(1024)).await;
+    let response_bytes = match read_result {
+        StreamResult::Complete(len) => buffer[..len].to_vec(),
+        StreamResult::Dropped => Vec::new(),
+        StreamResult::Cancelled => panic!("response body read was cancelled"),
+    };
+
+    drop(body_tx);
+    trailers_tx
+        .write(Ok(None))
+        .await
+        .expect("failed to finish request trailers");
+    let transmit_result = transmit.await;
+    drop(body);
+    response_trailers.await.expect("response trailers failed");
+    response_done_tx
+        .write(Ok(()))
+        .await
+        .expect("failed to acknowledge response body");
+
+    format!(
+        "{status} {} transmit={transmit_result:?}",
+        String::from_utf8_lossy(&response_bytes)
+    )
 }
 
 async fn do_put_with_p3_declared_small_body_open_until_response() -> String {

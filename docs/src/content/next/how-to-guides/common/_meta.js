@@ -1,6 +1,7 @@
 export default {
   "golem-add-component": "Adding Components and Agent Templates to an Existing Golem Application",
   "golem-add-initial-files": "Adding Initial Files to Golem Agent Filesystems",
+  "golem-agent-reflection": "Agent Reflection",
   "golem-build": "Building a Golem Application with `golem build`",
   "golem-cancel-queued-invocation": "Canceling a Queued Invocation",
   "golem-configure-api-domain": "Configuring HTTP API Domain Deployments",

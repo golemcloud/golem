@@ -144,15 +144,13 @@ function convertItemToMarkdown(
   return [
     `## ${operation.summary}`,
     overviewTable,
-    "",
     explanation,
-    "",
     queryParamsTable,
-    "",
     requestBody,
-    "",
     response,
-  ].join("\n")
+  ]
+    .filter(section => section !== undefined && section !== "")
+    .join("\n\n")
 }
 
 type MdTable = {

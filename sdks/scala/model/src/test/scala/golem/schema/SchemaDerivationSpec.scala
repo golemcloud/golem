@@ -69,7 +69,7 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
   }
 
   final case class Box[T](value: T)
-  // zio-blocks 0.0.32 bakes the abstract type param into a generic
+  // zio-blocks bakes the abstract type param into a generic
   // `Schema.derived` in a `def [T: Schema]`, so generic instantiations must be
   // derived concretely to carry concrete type args + a working value encoder.
   implicit val boxIntSchema: Schema[Box[Int]]    = Schema.derived

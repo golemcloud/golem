@@ -10,7 +10,7 @@ This project targets a moving toolchain (Scala.js + golem-cli). The compatibilit
 | Category | Supported |
 |---|---|
 | Scala | 3.8.2+ |
-| Scala.js | 1.20.x |
+| Scala.js | 1.22.x |
 | sbt | 1.10+ (tested with 1.11.x) |
 | Mill | 1.1.x (tested with 1.1.0-RC3; set `GOLEM_MILL_LIBS_VERSION` to compile the plugin against other 1.1.x versions) |
 | golem-cli | 1.5.x (targets Golem v1.5 APIs) |
@@ -23,5 +23,4 @@ This project targets a moving toolchain (Scala.js + golem-cli). The compatibilit
 - The sbt plugin is implemented against sbt 1.x's Scala 2.12 runtime. This does not provide Scala 2 application compatibility; SDK applications must use Scala 3.
 - If `golem-cli` changes invocation semantics again, update your invocation names accordingly (and then adjust any docs/scripts that call `golem`).
 - The example/ and test-agents/ scripts default to `--local`; set `GOLEM_CLI_FLAGS="--cloud -p <profile>"` to target cloud.
-
 

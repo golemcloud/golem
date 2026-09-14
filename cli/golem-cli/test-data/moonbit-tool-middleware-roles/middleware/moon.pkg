@@ -1,0 +1,7 @@
+import {
+  "golemcloud/golem_sdk/tool-middleware" @toolMiddleware,
+}
+
+options(
+  "is-main": true,
+)

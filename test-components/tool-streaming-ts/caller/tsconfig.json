@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "target": "ES2020",
+    "noEmit": true,
+    "lib": ["ES2020"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "paths": {
+      "ts-streaming-tool-guest-client": [
+        "../golem-temp/bridge-sdk/ts/internal/ts-streaming-tool-guest-client/ts-streaming-tool-guest-client.ts"
+      ]
+    },
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "../golem-temp/bridge-sdk/ts/internal/ts-streaming-tool-guest-client/*.ts"
+  ]
+}

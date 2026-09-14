@@ -1,9 +1,9 @@
-use crate::Tracing;
 use crate::app::{
     TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
     extracted_component_metadata_path_hash, flag, pattern, placeholder_component_wasm,
     seed_extracted_metadata, seed_extraction_marker,
 };
+use crate::{Tracing, workspace_path};
 
 use golem_cli::fs;
 use golem_cli::model::language::GuestLanguage;
@@ -789,6 +789,79 @@ fn echo_tool() -> Tool {
         },
         schema: SchemaGraph::empty(),
     }
+}
+
+#[test]
+#[timeout("2m")]
+async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let component_wasm =
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
+    let final_wasm = ctx.cwd_path_join("tools-final.wasm");
+    let manifest = formatdoc! {r#"
+        manifestVersion: {MANIFEST_VERSION}
+
+        app: tool-publication-only-plan
+
+        environments:
+          local:
+            server: local
+
+        components:
+          app:tools:
+            componentWasm: {component_wasm}
+            outputWasm: tools-final.wasm
+
+        tools:
+          echo:
+            component: app:tools
+    "#, MANIFEST_VERSION = versions::sdk::MANIFEST, component_wasm = component_wasm.display()};
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    fs::write_str(&manifest_path, &manifest).unwrap();
+
+    let build = ctx
+        .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
+        .await;
+    assert!(build.success_or_dump());
+    let metadata = serde_json::json!({
+        "agentTypes": [],
+        "tools": [echo_tool()]
+    });
+    seed_extracted_metadata(
+        &ctx,
+        "app:tools",
+        &final_wasm,
+        &serde_json::to_string(&metadata).unwrap(),
+    );
+    seed_extraction_marker(&ctx, "app:tools");
+
+    let initial_deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(initial_deploy.success_or_dump());
+
+    let publication_manifest = manifest.replace(
+        "components:\n",
+        "toolReleases:\n  local:\n    echo: {}\n\ncomponents:\n",
+    );
+    fs::write_str(&manifest_path, publication_manifest).unwrap();
+
+    let plan = ctx.cli([cmd::DEPLOY, "--plan"]).await;
+    assert!(plan.success_or_dump());
+    assert!(
+        plan.stdout_contains(
+            "staging area with current deployment (tool publications excluded): SAME"
+        ) || plan.stderr_contains(
+            "staging area with current deployment (tool publications excluded): SAME"
+        )
+    );
+    assert!(
+        plan.stdout_contains("Tool publication plan:")
+            || plan.stderr_contains("Tool publication plan:")
+    );
+    assert!(
+        plan.stdout_contains("publish echo@1.0.0") || plan.stderr_contains("publish echo@1.0.0")
+    );
 }
 
 #[test]

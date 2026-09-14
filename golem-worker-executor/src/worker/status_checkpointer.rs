@@ -228,6 +228,7 @@ mod tests {
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentId, AgentStatus, AgentStatusRecord};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::Mutex as StdMutex;
     use test_r::test;
     use uuid::Uuid;
@@ -242,20 +243,45 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for RecordingWorkerService {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
-            None
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+            Ok(None)
         }
 
-        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
-            Vec::new()
+        async fn lookup_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _status: &AgentStatusRecord,
+            _key: &golem_common::model::IdempotencyKey,
+        ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
+            unimplemented!()
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn get_running_workers_in_shards(
+            &self,
+        ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+            Ok(Vec::new())
+        }
 
-        async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
-        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
-            Some(AgentMode::Durable)
+        async fn remove_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+
+        async fn get_agent_mode(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
+            Ok(Some(AgentMode::Durable))
         }
 
         async fn write_cached_status(
@@ -271,8 +297,8 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> Option<AgentStatusRecord> {
-            None
+        ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+            Ok(None)
         }
 
         async fn write_status_checkpoint(
@@ -289,7 +315,8 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _status_value: &AgentStatusRecord,
-        ) {
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 

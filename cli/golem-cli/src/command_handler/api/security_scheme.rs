@@ -187,16 +187,13 @@ impl ApiSecuritySchemeCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        // TODO: atomic: missing client method to get by name
-        let Some(result) = clients
+        let result = clients
             .api_security
-            .list_environment_security_schemes(&environment.environment_id.0)
+            .get_environment_security_scheme(&environment.environment_id.0, &security_scheme_name.0)
             .await
-            .map_service_error()?
-            .values
-            .into_iter()
-            .find(|s| s.name == *security_scheme_name)
-        else {
+            .map_service_error_not_found_as_opt()?;
+
+        let Some(result) = result else {
             log_error(format!(
                 "HTTP API Security Scheme {} not found.",
                 security_scheme_name.0

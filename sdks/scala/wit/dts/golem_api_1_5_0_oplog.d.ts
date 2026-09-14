@@ -366,6 +366,13 @@ declare module 'golem:api/oplog@1.5.0' {
     kind: HostStreamKind;
     payload: TypedSchemaValue;
   };
+  /**
+   * A public durable-stream producer record rendered as a typed schema value.
+   */
+  export type DurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: TypedSchemaValue;
+  };
   export type EndAtomicRegionParameters = {
     timestamp: Datetime;
     beginIndex: OplogIndex;
@@ -424,10 +431,6 @@ declare module 'golem:api/oplog@1.5.0' {
     details?: string;
   };
   export type GrowMemoryParameters = {
-    timestamp: Datetime;
-    delta: bigint;
-  };
-  export type FilesystemStorageUsageUpdateParameters = {
     timestamp: Datetime;
     delta: bigint;
   };
@@ -661,12 +664,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'exceeded-rpc-call-limit'
   } |
   {
-    tag: 'node-out-of-filesystem-storage'
-  } |
-  {
-    tag: 'agent-exceeded-filesystem-storage-limit'
-  } |
-  {
     tag: 'agent-terminated-by-quota'
     val: AgentTerminatedByQuotaError
   } |
@@ -739,6 +736,13 @@ declare module 'golem:api/oplog@1.5.0' {
     parentStartIndex: OplogIndex;
     kind: HostStreamKind;
     payload: OplogPayload;
+  };
+  /**
+   * A raw durable-stream producer record, stored inline or in external payload storage.
+   */
+  export type RawDurableStreamRecordParameters = {
+    timestamp: Datetime;
+    record: OplogPayload;
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
@@ -957,11 +961,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'grow-memory'
     val: GrowMemoryParameters
   } |
-  /** Updated filesystem usage by a signed delta */
-  {
-    tag: 'filesystem-storage-usage-update'
-    val: FilesystemStorageUsageUpdateParameters
-  } |
   /** Created a resource instance */
   {
     tag: 'create-resource'
@@ -1094,6 +1093,31 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'host-stream-frame'
     val: RawHostStreamFrameParameters
+  } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: RawDurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: RawDurableStreamRecordParameters
   } |
   /**
    * The successful completion of the durable host call started by the matching `start`
@@ -1229,11 +1253,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'grow-memory'
     val: GrowMemoryParameters
   } |
-  /** Updated filesystem usage by a signed delta */
-  {
-    tag: 'filesystem-storage-usage-update'
-    val: FilesystemStorageUsageUpdateParameters
-  } |
   /** Created a resource instance */
   {
     tag: 'create-resource'
@@ -1366,6 +1385,31 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'host-stream-frame'
     val: HostStreamFrameParameters
+  } |
+  /** Registers a durable stream before exposing its handle */
+  {
+    tag: 'stream-registered'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records committed durable stream values or a packed-u8 batch */
+  {
+    tag: 'stream-items'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream end terminal */
+  {
+    tag: 'stream-end'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records a durable stream cancellation terminal */
+  {
+    tag: 'stream-cancel'
+    val: DurableStreamRecordParameters
+  } |
+  /** Records durable Stream Session state and consumer-journal facts */
+  {
+    tag: 'stream-session'
+    val: DurableStreamRecordParameters
   } |
   /**
    * The successful completion of the durable host call started by the matching `start`

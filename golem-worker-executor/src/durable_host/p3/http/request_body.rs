@@ -474,7 +474,7 @@ pub(super) async fn record_frame_entry(
 }
 
 /// Loads one recorded data/trailers frame back from its `HostStreamFrame`
-/// entry. Uses `read_many`, which merges not-yet-committed buffered entries,
+/// entry. The canonical read merges not-yet-committed buffered entries,
 /// so a resend within the same session can replay frames that have not been
 /// committed yet.
 async fn load_recorded_frame(
@@ -482,11 +482,7 @@ async fn load_recorded_frame(
     index: OplogIndex,
 ) -> Result<Frame<Bytes>, ErrorCode> {
     let internal = |message: String| ErrorCode::InternalError(Some(message));
-    let entry = oplog
-        .read_many(index, 1)
-        .await
-        .remove(&index)
-        .ok_or_else(|| internal(format!("recorded request-body frame missing at {index}")))?;
+    let entry = oplog.read(index).await;
     let OplogEntry::HostStreamFrame { payload, .. } = entry else {
         return Err(internal(format!(
             "oplog entry at {index} is not a recorded request-body frame"
@@ -549,6 +545,14 @@ pub(super) enum RecordedRequestBodyTerminal {
     Error(SerializableHttpErrorCode),
 }
 
+/// Facts observed while fully draining the deterministically reproduced guest request body.
+/// Recovery compares them with the healed recording before physically re-issuing the request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ReplayedRequestBodyRecordingProof {
+    pub(super) final_length: u64,
+    pub(super) trailers_present: bool,
+}
+
 impl RecordedRequestBodyScan {
     pub(super) fn trailers_recorded(&self) -> bool {
         self.trailers_index.is_some()
@@ -582,10 +586,8 @@ pub(super) async fn scan_recorded_request_body_frames(
     let mut terminal: Option<RecordedRequestBodyTerminal> = None;
     let mut next = parent_start_index.next();
     while next <= scan_end {
-        let entries = oplog.read_many(next, SCAN_CHUNK).await;
-        if entries.is_empty() {
-            break;
-        }
+        let available = scan_end.as_u64() - next.as_u64() + 1;
+        let entries = oplog.read_exact(next, SCAN_CHUNK.min(available)).await;
         for (index, entry) in &entries {
             let OplogEntry::HostStreamFrame {
                 parent_start_index: frame_parent,
@@ -1179,8 +1181,11 @@ where
             AccessClaimOptions {
                 scope_discriminator: None,
                 request_identity: None,
+                entity_invocation_identity: None,
+                tool_invocation_identity: None,
                 parent_start_index: None,
                 observational_owner,
+                ..Default::default()
             },
             async |_| Ok(HostRequestNoInput {}),
         )

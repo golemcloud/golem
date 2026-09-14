@@ -1,5 +1,7 @@
 use crate::location_details::LocationDetails;
-use golem_rust::agentic::{BasicModality, Multimodal, UnstructuredBinary, UnstructuredText};
+use golem_rust::agentic::{
+    AgentStream, BasicModality, Multimodal, UnstructuredBinary, UnstructuredText,
+};
 use golem_rust::{agent_definition, agent_implementation, prompt};
 
 // These agent methods are tools, since they take arguments, but with constructor params
@@ -14,6 +16,8 @@ trait WeatherAgent {
     fn get_weather_report_for_city_text(&self, city: String) -> UnstructuredText;
     fn get_snow_fall_image_for_city(&self, city: String) -> UnstructuredBinary<String>;
     fn get_lat_long_for_city(&self, city: String) -> LocationDetails;
+    #[prompt("Stream a weather report for a specific city")]
+    fn stream_weather_report_for_city(&self, city: String) -> AgentStream<String>;
 }
 
 struct MyDynamicWeatherToolImpl {
@@ -59,5 +63,10 @@ impl WeatherAgent for MyDynamicWeatherToolImpl {
             country: "Unknown".to_string(),
             population: 0,
         }
+    }
+
+    fn stream_weather_report_for_city(&self, _city: String) -> AgentStream<String> {
+        let (_writer, stream) = AgentStream::new();
+        stream
     }
 }

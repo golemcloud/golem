@@ -13,51 +13,14 @@ import {
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
   "golemcloud/golem_sdk/tool",
+  "golemcloud/golem_sdk/tool-core",
   "moonbitlang/core/json",
 }
 
 // Values
-pub fn cabi_realloc(Int, Int, Int, Int) -> Int
-
 pub fn collect_app_config_overrides(AppConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
 
 pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
-
-pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
-
-pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
-
-pub fn wasmExportDiscoverAgentTypes() -> Int
-
-pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
-
-pub fn wasmExportDiscoverTools() -> Int
-
-pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
-
-pub fn wasmExportGetDefinition() -> Int
-
-pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
-
-pub fn wasmExportGetTool(Int, Int) -> Int
-
-pub fn wasmExportGetToolPostReturn(Int) -> Unit
-
-pub fn wasmExportInitialize(Int) -> Int
-
-pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
-
-pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
-
-pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
-
-pub fn wasmExportSave() -> Int
 
 // Errors
 
@@ -117,7 +80,7 @@ pub fn CanonicalBigBoundClient::drop(Self) -> Unit
 pub fn CanonicalBigBoundClient::new() -> Self
 
 type CanonicalCommitError
-pub impl @tool.ToolErrorSchema for CanonicalCommitError
+pub impl @tool-core.ToolErrorSchema for CanonicalCommitError
 
 pub(all) struct CanonicalCommitResult {
   hash : String
@@ -171,13 +134,13 @@ pub async fn CanonicalGitStashClient::pop(Self, String?, UInt?) -> Result[Unit, 
 pub async fn CanonicalGitStashClient::stash(Self, String, Bool) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
 
 type CanonicalGrep
-pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @async-core.Sink[Byte]) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
+pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @tool-core.ProviderStdout) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
 pub fn CanonicalGrep::replace(Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, CanonicalGrepError]
 
 pub(all) struct CanonicalGrepClient {
   client : @tool.ToolClient
 }
-pub async fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[(Array[CanonicalGrepHit], @async-core.Stream[Byte]), @tool.ToolError[CanonicalGrepError]]
+pub fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError], @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalGrepClient::drop(Self) -> Unit
 pub fn CanonicalGrepClient::new() -> Self
 pub async fn CanonicalGrepClient::replace(Self, Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
@@ -191,7 +154,7 @@ pub impl @schema.FromSchema for CanonicalGrepColorMode
 pub impl @schema.IntoSchema for CanonicalGrepColorMode
 
 type CanonicalGrepError
-pub impl @tool.ToolErrorSchema for CanonicalGrepError
+pub impl @tool-core.ToolErrorSchema for CanonicalGrepError
 
 pub(all) struct CanonicalGrepHit {
   file : @schema.Path
@@ -211,7 +174,7 @@ pub impl @schema.FromSchema for CanonicalLogEntry
 pub impl @schema.IntoSchema for CanonicalLogEntry
 
 type CanonicalLogError
-pub impl @tool.ToolErrorSchema for CanonicalLogError
+pub impl @tool-core.ToolErrorSchema for CanonicalLogError
 
 type CanonicalRemote
 pub fn CanonicalRemote::add(UInt, String, @schema.Url, Array[String], String?, Bool, Bool) -> Result[Unit, CanonicalRemoteError]
@@ -219,10 +182,10 @@ pub fn CanonicalRemote::remove(String) -> Result[Unit, CanonicalRemoteError]
 pub fn CanonicalRemote::set_url(String, @schema.Url, @schema.Url?, Bool, Bool, Bool) -> Result[Unit, CanonicalSetUrlError]
 
 type CanonicalRemoteError
-pub impl @tool.ToolErrorSchema for CanonicalRemoteError
+pub impl @tool-core.ToolErrorSchema for CanonicalRemoteError
 
 type CanonicalSetUrlError
-pub impl @tool.ToolErrorSchema for CanonicalSetUrlError
+pub impl @tool-core.ToolErrorSchema for CanonicalSetUrlError
 
 type CanonicalStash
 pub fn CanonicalStash::apply(String?, UInt?) -> Result[Unit, CanonicalStashError]
@@ -230,7 +193,7 @@ pub fn CanonicalStash::pop(String?, UInt?) -> Result[Unit, CanonicalStashError]
 pub fn CanonicalStash::stash(UInt, String, Bool) -> Result[Unit, CanonicalStashError]
 
 type CanonicalStashError
-pub impl @tool.ToolErrorSchema for CanonicalStashError
+pub impl @tool-core.ToolErrorSchema for CanonicalStashError
 
 type ConfiguredAgent
 pub fn ConfiguredAgent::get_request_count(Self) -> UInt64
@@ -305,6 +268,36 @@ pub(all) struct DatabaseConfigOverride {
   timeout : UInt64?
 }
 pub fn DatabaseConfigOverride::empty() -> Self
+
+type MoonBitStreaming
+pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool-core.ProviderStdout) -> UInt64
+
+type MoonBitToolStreamingCaller
+pub async fn MoonBitToolStreamingCaller::marker_before_eof(Self, Bytes) -> UInt64
+
+pub(all) struct MoonBitToolStreamingCallerClient {
+  client : @rpc.AgentClient
+}
+pub fn MoonBitToolStreamingCallerClient::drop(Self) -> Unit
+pub fn MoonBitToolStreamingCallerClient::get(String) -> Self raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub async fn MoonBitToolStreamingCallerClient::marker_before_eof(Self, Bytes) -> UInt64
+pub fn MoonBitToolStreamingCallerClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::phantom_id(Self) -> @types.Uuid?
+pub fn MoonBitToolStreamingCallerClient::schedule_cancelable_marker_before_eof(Self, @system-clock.Instant, Bytes) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::schedule_marker_before_eof(Self, @system-clock.Instant, Bytes) -> Unit raise @common.AgentError
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn MoonBitToolStreamingCallerClient::trigger_marker_before_eof(Self, Bytes) -> Unit raise @common.AgentError
+
+pub(all) struct MoonbitStreamingClient {
+  client : @tool.ToolClient
+}
+pub fn MoonbitStreamingClient::drop(Self) -> Unit
+pub fn MoonbitStreamingClient::new() -> Self
+pub fn MoonbitStreamingClient::stream(Self, String, @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[UInt64, @tool-core.NoToolError], @tool.ToolError[@tool-core.NoToolError]]
 
 pub(all) enum Priority {
   Low
@@ -479,4 +472,3 @@ pub async fn WebhookAgentClient::wait_for_webhook(Self) -> String
 // Type aliases
 
 // Traits
-

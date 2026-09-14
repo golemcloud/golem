@@ -83,6 +83,22 @@ function parseJsonCommandOutput<T>(output: string): T | undefined {
 }
 
 function extractInvokeJsonResult(output: string): unknown {
+  const lifecycleResult = output
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => tryParseJson<unknown>(line.trim()))
+    .find(
+      (document) =>
+        document !== undefined &&
+        typeof document === "object" &&
+        document !== null &&
+        (document as Record<string, unknown>).$type === "agent.invoke-session" &&
+        (document as Record<string, unknown>).kind === "result",
+    );
+  if (lifecycleResult && typeof lifecycleResult === "object") {
+    return (lifecycleResult as Record<string, unknown>).value;
+  }
+
   const parsed = parseJsonCommandOutput<unknown>(output);
   if (!parsed || typeof parsed !== "object") {
     return parsed;

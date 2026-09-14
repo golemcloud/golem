@@ -26,4 +26,3 @@ pub fn move_object(@types.ObjectId, @types.ObjectId) -> Result[Unit, String]
 // Type aliases
 
 // Traits
-

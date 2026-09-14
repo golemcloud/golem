@@ -39,3 +39,12 @@ world agent-guest {
   export golem:api/save-snapshot@1.5.0;
   export golem:api/load-snapshot@1.5.0;
 }
+
+world tool-middleware-guest {
+  include golem:tool/tool-middleware@0.1.0;
+}
+
+world agent-tool-middleware-guest {
+  include agent-guest;
+  export golem:tool/tool-middleware-guest@0.1.0;
+}

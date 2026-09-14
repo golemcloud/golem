@@ -284,7 +284,7 @@ pub(crate) async fn deliver_demand<R>(
         return Ok(DemandDelivery::Abandoned);
     }
 
-    delivery.prepare_delivery().await?;
+    delivery.prepare_delivery(Some(activity)).await?;
     if demand.send(reply).is_ok() {
         delivery.delivered();
         Ok(DemandDelivery::Delivered)

@@ -108,8 +108,19 @@ async fn env_vars(
             registry_service.grpc_port().to_string(),
         )
         .with_all(
+            // The shard manager's SQL settings live under `persistence`, not `db`: the same key
+            // also selects etcd in distributed mode. The sub-keys are identical to DbConfig's.
             rdb.info()
-                .env("golem_shard_manager", rdb_private_connection),
+                .env("golem_shard_manager", rdb_private_connection)
+                .into_iter()
+                .map(|(key, value)| {
+                    let key = key
+                        .strip_prefix("GOLEM__DB__")
+                        .map(|rest| format!("GOLEM__PERSISTENCE__{rest}"))
+                        .unwrap_or(key);
+                    (key, value)
+                })
+                .collect(),
         )
         .with_optional_otlp("shard_manager", otlp);
 

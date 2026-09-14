@@ -5,26 +5,35 @@ description: "Running and debugging tests in the Golem workspace. Use when writi
 
 # Testing in Golem
 
-Tests use [test-r](https://test-r.vigoo.dev). Each test file **must** import `test_r::test` or the tests will silently not run:
+Root-workspace Rust tests use [test-r](https://test-r.vigoo.dev). Each test crate or integration-test
+entry point using test-r must call `test_r::enable!()`, and `test_r::test` must be in lexical scope
+wherever `#[test]` is used. Separate workspaces may have their own harness setup.
 
 ```rust
-use test_r::test;
+#[cfg(test)]
+test_r::enable!();
 
-#[test]
-fn my_test() {
-    // ...
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    #[test]
+    fn my_test() {
+        // ...
+    }
 }
 ```
 
 ## Choosing the Right Test Command
 
-**Do not run `cargo make test`** — it runs all tests and takes a very long time.
+**Do not run `cargo make test`** — it runs broad root-workspace unit, worker-executor, service, and
+CLI integration suites and takes a very long time.
 
 | Change Type | Test Command |
 |-------------|--------------|
 | Core logic, utilities | `cargo make unit-tests` |
 | Worker executor functionality | `cargo make worker-executor-tests` |
-| Service integration | `cargo make integration-tests` |
+| Broad service and CLI integration | `cargo make integration-tests` |
 | CLI changes | `cargo make cli-integration-tests` |
 | CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
 
@@ -40,11 +49,25 @@ For `golem-cli` structured output schema or generator changes, load the
 rerun this prop test a few times to catch generator/schema drift:
 
 ```shell
-cargo test -p golem-cli cli_output_schema_accepts_registered_generated_examples --lib
+cargo test -p golem-cli cli_output_schema_accepts_registered_generated_examples --lib -- --report-time
 ```
 
 If CLI JSON output field names, `$type` names, or invoke JSON unwrapping changed,
 also keep `golem-skills/skills` and tests under `golem-skills/tests` up to date.
+
+## External Process Ownership
+
+Tests that directly execute external processes belong in the CLI integration test suite. This
+includes Golem binaries such as `golem` and `golem-cli`, and tools or compilers such as `cargo`,
+`rustc`, `npm`, `npx`, `tsc`, `bun`, `sbt`, `scala-cli`, and `moon`.
+
+- Unit tests and worker-executor tests must never spawn external processes.
+- Non-CLI integration tests must use `golem-test-framework` for process-backed dependencies and
+  must not spawn additional processes directly.
+- CLI integration tests may spawn the processes required by the behavior they exercise.
+
+Build generated code and test components before the test run rather than invoking their toolchains
+from a unit or worker-executor test.
 
 ## Test Filtering Rules (test-r)
 
@@ -95,14 +118,14 @@ cargo test -p <crate> -- <test> --nocapture
 ```shell
 cargo test -p <crate> -- <test> --nocapture > tmp/test_output.txt 2>&1
 # Then search/inspect the saved file as needed
-grep -n "pattern" tmp/test_output.txt
+rg -n "pattern" tmp/test_output.txt
 ```
 
 **Handling hanging tests:** Load the `debugging-hanging-tests` skill for a step-by-step workflow.
 
 ## Test Components
 
-Worker executor tests, integration tests, and CLI integration tests can depend on built WASM artifacts in `test-components/`. These `.wasm` files are no longer checked into the repository, so compiling the test components used by the selected tests is a separate prerequisite step before running the tests.
+Worker executor tests, integration tests, and CLI integration tests can depend on built WASM artifacts in `test-components/`. Generated `.wasm` files are generally not checked into the repository, so compiling the test components used by the selected tests is a separate prerequisite step before running the tests. The checked-in `concurrent-delivery-order` and `concurrent-runtime-events` WASMs are intentional minimal-fixture exceptions.
 
 Use this workflow:
 

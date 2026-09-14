@@ -570,6 +570,7 @@ fn shape_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Union(_) => "union",
         SchemaValue::Secret(_) => "secret",
         SchemaValue::QuotaToken(_) => "quota-token",
+        SchemaValue::Stream(_) => "stream",
         SchemaValue::PermissionCard(_) => "permission-card",
     }
 }
@@ -828,6 +829,7 @@ fn check<'a>(
             #[cfg(all(feature = "guest", not(feature = "host")))]
             let _ = (spec, payload);
         }
+        (SchemaType::Stream { .. }, SchemaValue::Stream(_)) => {}
         (SchemaType::PermissionCard { spec, .. }, SchemaValue::PermissionCard(payload)) => {
             #[cfg(not(all(feature = "guest", not(feature = "host"))))]
             check_permission_card(spec, payload, path, errors);

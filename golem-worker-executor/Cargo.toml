@@ -11,6 +11,9 @@ license-file = "../LICENSE"
 
 autotests = false
 
+[features]
+test-utils = []
+
 [lib]
 path = "src/lib.rs"
 harness = false
@@ -36,6 +39,7 @@ golem-service-base = { workspace = true, features = ["worker-executor"] }
 anyhow = { workspace = true }
 applying = { workspace = true }
 arc-swap = { workspace = true }
+async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-recursion = { workspace = true }
 async-scoped = { workspace = true, features = ["use-tokio"] }
@@ -44,6 +48,7 @@ bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
@@ -90,6 +95,7 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
+stacker = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
@@ -110,7 +116,12 @@ wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+linux-raw-sys = { workspace = true }
+rustix = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"
@@ -118,6 +129,14 @@ harness = false
 
 [[bench]]
 name = "authorization"
+harness = false
+
+[[bench]]
+name = "event_broadcast_allocations"
+harness = false
+
+[[bench]]
+name = "oplog_read"
 harness = false
 
 [dev-dependencies]
@@ -129,6 +148,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true }
 axum = { workspace = true }
+figment = { workspace = true, features = ["test"] }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }

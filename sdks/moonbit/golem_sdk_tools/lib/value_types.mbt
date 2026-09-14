@@ -74,7 +74,7 @@ pub fn parse_multimodal_enums(
                       )
                   }
                 }
-                results.push({ name, variants })
+                results.push({ name, variants, })
               }
               _ =>
                 raise AgentParseError(
@@ -114,7 +114,7 @@ pub fn parse_value_types(
             let name = type_decl.tycon
             let kind = parse_type_desc(name, type_decl.components)
             validate_no_multimodal_in_value_kind(name, kind)
-            results.push({ name, kind })
+            results.push({ name, kind, })
           }
         }
         _ => ()
@@ -131,7 +131,7 @@ fn parse_type_desc(
   desc : @syntax.TypeDesc,
 ) -> ValueTypeKind raise AgentParseError {
   match desc {
-    Record(fields~, ..) => {
+    Record(fields~) => {
       let result : Array[(String, ParamType)] = []
       let field_arr = fields.to_array()
       for field in field_arr {
@@ -201,7 +201,7 @@ fn parse_constr_payload(
       }
       if items.length() == 0 {
         VariantPayload::None
-      } else if items.length() == 1 && not(any_labelled) {
+      } else if items.length() == 1 && !any_labelled {
         Single(items[0].1)
       } else {
         Multi(items, any_labelled)

@@ -16,12 +16,12 @@
 //! `unit` → 204, `option<T>` → 200 + 404, `result<ok, err>` → 200 / 500,
 //! `Text` → `text/plain` + `Content-Language`, `Binary` → selected media type,
 //! everything else → `application/json`. Schema bodies are rendered from the
-//! schema model via [`render_schema`]; CORS / webhook / OpenAPI-spec / OIDC
+//! schema model via [`render_output_schema`]; CORS / webhook / OpenAPI-spec / OIDC
 //! routes carry no agent schema and produce fixed responses/headers.
 
 use super::route_schema::{ResponseModel, RouteSchema};
 use super::schema_mapping::{
-    arbitrary_binary_schema, render_schema, string_enum_schema, string_schema,
+    arbitrary_binary_schema, render_output_schema, string_enum_schema, string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::HttpMethod;
@@ -192,7 +192,7 @@ fn classify_single_response(
 
     match resolve_top_ref(graph, ty) {
         SchemaType::Option { inner, .. } => {
-            let schema = render_schema(graph, inner, components)?;
+            let schema = render_output_schema(graph, inner, components)?;
             responses.insert(
                 200,
                 ResponseBodyOpenApiSchema::Known {
@@ -205,7 +205,7 @@ fn classify_single_response(
         SchemaType::Result { spec, .. } => {
             match &spec.ok {
                 Some(ok) => {
-                    let schema = render_schema(graph, ok, components)?;
+                    let schema = render_output_schema(graph, ok, components)?;
                     responses.insert(
                         200,
                         ResponseBodyOpenApiSchema::Known {
@@ -222,7 +222,7 @@ fn classify_single_response(
             }
             match &spec.err {
                 Some(err) => {
-                    let schema = render_schema(graph, err, components)?;
+                    let schema = render_output_schema(graph, err, components)?;
                     responses.insert(
                         500,
                         ResponseBodyOpenApiSchema::Known {
@@ -247,7 +247,7 @@ fn classify_single_response(
         _ => {
             // Render the original `ty` (not the ref-resolved body) so a named
             // type keeps its `$ref` and is emitted once into components.
-            let schema = render_schema(graph, ty, components)?;
+            let schema = render_output_schema(graph, ty, components)?;
             responses.insert(
                 200,
                 ResponseBodyOpenApiSchema::Known {

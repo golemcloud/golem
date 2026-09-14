@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::card::DbCardRepo;
+use crate::repo::environment::DbEnvironmentRepo;
 use crate::repo::model::BindFields;
 use crate::repo::model::card::CardRecord;
 use crate::repo::model::component::{
@@ -30,7 +31,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::Blob;
-use golem_service_base::repo::{PoolLabelledTransaction, RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::fmt::Debug;
@@ -365,33 +366,6 @@ impl<DBP: Pool> DbComponentRepo<DBP> {
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
-impl DbComponentRepo<PostgresPool> {
-    async fn lock_live_environment(
-        tx: &mut PoolLabelledTransaction<PostgresPool>,
-        environment_id: Uuid,
-    ) -> Result<(), ComponentRepoError> {
-        let environment = tx
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    UPDATE environments
-                    SET environment_id = environment_id
-                    WHERE environment_id = $1
-                        AND deleted_at IS NULL
-                    RETURNING environment_id
-                "#})
-                .bind(environment_id),
-            )
-            .await?;
-
-        if environment.is_none() {
-            return Err(ComponentRepoError::ConcurrentModification);
-        }
-
-        Ok(())
-    }
-}
-
-#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<PostgresPool> {
     async fn create(
@@ -427,7 +401,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
 
         self.with_tx_err("create", |tx| {
             async move {
-                Self::lock_live_environment(tx, environment_id).await?;
+                if !DbEnvironmentRepo::<PostgresPool>::lock_in_tx(tx, environment_id).await? {
+                    return Err(ComponentRepoError::ConcurrentModification);
+                }
 
                 tx.execute(
                     sqlx::query(indoc! { r#"
@@ -484,7 +460,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .ok_or(ComponentRepoError::ConcurrentModification)?
                     .try_get::<Uuid, _>("environment_id")
                     .map_err(RepoError::from)?;
-                Self::lock_live_environment(tx, environment_id).await?;
+                if !DbEnvironmentRepo::<PostgresPool>::lock_in_tx(tx, environment_id).await? {
+                    return Err(ComponentRepoError::ConcurrentModification);
+                }
 
                 for card in cards_to_create {
                     DbCardRepo::<PostgresPool>::create_in_tx(tx, card).await?;
@@ -531,6 +509,47 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         let deleted_cards = self
             .with_tx_err("delete", |tx| {
                 async move {
+                    let environment_id = tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT environment_id
+                                FROM components
+                                WHERE component_id = $1
+                                    AND deleted_at IS NULL
+                            "#})
+                            .bind(component_id),
+                        )
+                        .await?
+                        .ok_or(ComponentRepoError::ConcurrentModification)?
+                        .try_get::<Uuid, _>("environment_id")
+                        .map_err(RepoError::from)?;
+                    if !DbEnvironmentRepo::<PostgresPool>::lock_in_tx(tx, environment_id).await? {
+                        return Err(ComponentRepoError::ConcurrentModification);
+                    }
+
+                    let source_reference = tx
+                        .fetch_optional(
+                            sqlx::query(indoc! { r#"
+                                SELECT component_id
+                                FROM tool_releases
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
+                                FROM deployment_component_revisions
+                                WHERE component_id = $1
+                                UNION ALL
+                                SELECT component_id
+                                FROM deployment_registered_tools
+                                WHERE component_id = $1
+                                LIMIT 1
+                            "#})
+                            .bind(component_id),
+                        )
+                        .await?;
+                    if source_reference.is_some() {
+                        return Err(ComponentRepoError::ComponentSourceInUse);
+                    }
+
                     let active_revisions: Vec<ComponentRevisionRecord> = tx
                         .fetch_all_as(
                             sqlx::query_as(indoc! { r#"

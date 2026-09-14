@@ -23,4 +23,3 @@ pub async fn invoke(String, @types.SchemaValueTree, @common.Principal, @async-co
 // Type aliases
 
 // Traits
-

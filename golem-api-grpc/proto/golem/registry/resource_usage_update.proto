@@ -12,4 +12,7 @@ message ResourceUsageUpdate {
   int64 durable_storage_byte_seconds_delta = 5;
   int64 ephemeral_storage_byte_seconds_delta = 6;
   int64 memory_gb_seconds_delta = 7;
+  bool compute_metering_enabled = 8;
+  bool memory_metering_enabled = 9;
+  bool filesystem_metering_enabled = 10;
 }

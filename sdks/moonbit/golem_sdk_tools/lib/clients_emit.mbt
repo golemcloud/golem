@@ -2,34 +2,123 @@
 // schema model (`golem:core/types@2.0.0`).
 //
 // Each agent gets a `<Name>Client` wrapping `@rpc.AgentClient`. Constructor and
-// method arguments are encoded into a `@types.SchemaValueTree` input record via
-// `@agents.encode_invocation_input`, and awaited results decoded via
-// `@agents.decode_output`. Awaited methods are async so they can suspend on the
-// P3 RPC result future; synchronous setup, trigger, and scheduling methods keep
-// the SDK's `@common.AgentError` contract.
+// method arguments are encoded into a `@types.SchemaValueTree` input record.
+// Awaited methods use `@agents.encode_invocation_input_async` and decode results
+// via `@agents.decode_output`, allowing native streams at any nesting depth.
+// Synchronous setup, trigger, and scheduling methods use
+// `@agents.encode_invocation_input` and keep the SDK's `@common.AgentError`
+// contract.
 //
 // Built as a MoonBit-source string and parsed back via `parse_generated_impls`
 // (see `value_types_emit.mbt` / `agents_emit.mbt`).
 
 ///|
-/// Checks if any constructor parameter uses an RPC-incompatible type.
-fn has_rpc_incompatible_constructor(agent : AgentInfo) -> Bool {
-  visible_params(agent.constructor_params)
-  .iter()
-  .find_first(fn(p) { is_rpc_incompatible_type(p.1) })
-  is Some(_)
+/// Checks whether a type contains an agent stream, resolving local value types
+/// recursively. `visited` is path-local so cycles terminate without hiding a
+/// stream reachable through a sibling field.
+fn param_type_contains_agent_stream(
+  pt : ParamType,
+  value_types : Map[String, ValueTypeInfo],
+  visited : Array[String],
+) -> Bool {
+  match pt {
+    Simple(name) => {
+      if visited.contains(name) {
+        return false
+      }
+      match value_types.get(name) {
+        Some(value_type) => {
+          let next_visited = visited.copy()
+          next_visited.push(name)
+          value_type_contains_agent_stream(
+            value_type, value_types, next_visited,
+          )
+        }
+        None => false
+      }
+    }
+    Optional(inner) | List(inner) | MultimodalType(inner) =>
+      param_type_contains_agent_stream(inner, value_types, visited)
+    ResultType(ok, err) =>
+      param_type_contains_agent_stream(ok, value_types, visited) ||
+      param_type_contains_agent_stream(err, value_types, visited)
+    Tuple(elems) =>
+      elems
+      .iter()
+      .any(fn(elem) {
+        param_type_contains_agent_stream(elem, value_types, visited)
+      })
+    Parameterized(name, params) =>
+      name == "AgentStream" ||
+      name == "@schema.AgentStream" ||
+      params
+      .iter()
+      .any(fn(param) {
+        param_type_contains_agent_stream(param, value_types, visited)
+      })
+  }
 }
 
 ///|
-/// Checks if any parameter or return type of a method uses an RPC-incompatible type.
-fn method_has_rpc_incompatible_types(meth : MethodInfo) -> Bool {
-  for p in visible_params(meth.params) {
-    if is_rpc_incompatible_type(p.1) {
+fn value_type_contains_agent_stream(
+  value_type : ValueTypeInfo,
+  value_types : Map[String, ValueTypeInfo],
+  visited : Array[String],
+) -> Bool {
+  match value_type.kind {
+    Record(fields) =>
+      fields
+      .iter()
+      .any(fn(field) {
+        param_type_contains_agent_stream(field.1, value_types, visited)
+      })
+    SimpleEnum(_) => false
+    VariantEnum(cases) =>
+      cases
+      .iter()
+      .any(fn(case) {
+        match case.1 {
+          VariantPayload::None => false
+          Single(payload) =>
+            param_type_contains_agent_stream(payload, value_types, visited)
+          Multi(fields, _) =>
+            fields
+            .iter()
+            .any(fn(field) {
+              param_type_contains_agent_stream(field.1, value_types, visited)
+            })
+        }
+      })
+  }
+}
+
+///|
+/// Returns the first client-visible constructor parameter containing a stream.
+fn stream_bearing_constructor_param(
+  agent : AgentInfo,
+  value_types : Map[String, ValueTypeInfo],
+) -> (String, ParamType)? {
+  for param in visible_params(agent.constructor_params) {
+    if param_type_contains_agent_stream(param.1, value_types, []) {
+      return Some(param)
+    }
+  }
+  None
+}
+
+///|
+/// Checks if any client-visible parameter or return type contains a stream.
+fn method_contains_agent_stream(
+  meth : MethodInfo,
+  value_types : Map[String, ValueTypeInfo],
+) -> Bool {
+  for param in visible_params(meth.params) {
+    if param_type_contains_agent_stream(param.1, value_types, []) {
       return true
     }
   }
   match meth.return_type {
-    Some(pt) => is_rpc_incompatible_type(pt)
+    Some(pt) => param_type_contains_agent_stream(pt, value_types, [])
     None => false
   }
 }
@@ -50,22 +139,38 @@ fn encode_input_expr(params : Array[(String, ParamType)]) -> String {
 }
 
 ///|
+/// Renders the async input encoder used only by awaited RPC methods.
+fn encode_input_async_expr(params : Array[(String, ParamType)]) -> String {
+  let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
+  "@agents.encode_invocation_input_async([\{parts}])"
+}
+
+///|
 /// Generates typed RPC client stubs for all agents.
 pub fn generate_client_code(
   agents : Array[AgentInfo],
+  value_types? : Array[ValueTypeInfo] = [],
   config_types? : Array[ConfigTypeInfo] = [],
   agent_package? : String = "",
-) -> @list.List[@syntax.Impl] {
-  let buf = StringBuilder::new()
+) -> @list.List[@syntax.Impl] raise AgentParseError {
+  let value_types_by_name : Map[String, ValueTypeInfo] = Map([])
+  for value_type in value_types {
+    value_types_by_name[value_type.name] = value_type
+  }
+  let buf = StringBuilder()
   for agent in agents {
-    if has_rpc_incompatible_constructor(agent) {
-      continue
+    match stream_bearing_constructor_param(agent, value_types_by_name) {
+      Some(param) =>
+        raise AgentParseError(
+          "Cannot generate native client for agent '\{agent.name}': constructor parameter '\{param.0}' contains AgentStream, but native client construction is synchronous; move the stream to an agent method parameter or return type",
+        )
+      None => ()
     }
-    emit_client(buf, agent, config_types, agent_package)
+    emit_client(buf, agent, value_types_by_name, config_types, agent_package)
   }
   let source = buf.to_string()
   if source.is_empty() {
-    return @list.List::from_array([])
+    return @list.List([])
   }
   parse_generated_impls(source, "clients")
 }
@@ -75,6 +180,7 @@ pub fn generate_client_code(
 fn emit_client(
   buf : StringBuilder,
   agent : AgentInfo,
+  value_types : Map[String, ValueTypeInfo],
   config_types : Array[ConfigTypeInfo],
   agent_package : String,
 ) -> Unit {
@@ -156,10 +262,8 @@ fn emit_client(
   }
   // methods
   for meth in agent.methods {
-    if method_has_rpc_incompatible_types(meth) {
-      continue
-    }
-    emit_client_method(buf, agent, meth, client, durable)
+    let contains_stream = method_contains_agent_stream(meth, value_types)
+    emit_client_method(buf, agent, meth, client, durable, contains_stream)
   }
   // _with_config variants
   match resolve_config_type(agent, config_types, agent_package) {
@@ -167,7 +271,7 @@ fn emit_client(
       // Use the same recursive "has overridable leaves" predicate as the
       // config emitter, so we only emit `_with_config` variants when an
       // `*Override` type + walker were actually generated for `ct`.
-      let by_name : Map[String, ConfigTypeInfo] = {}
+      let by_name : Map[String, ConfigTypeInfo] = Map([])
       for c in config_types {
         by_name[c.name] = c
       }
@@ -222,18 +326,20 @@ fn emit_client_scoped(
 }
 
 ///|
-/// Emits the four per-method client functions: awaited invoke, fire-and-forget
-/// trigger, scheduled invoke, and cancelable scheduled invoke.
+/// Emits the awaited client method and, for stream-free signatures, the three
+/// synchronous trigger and scheduling variants.
 fn emit_client_method(
   buf : StringBuilder,
   agent : AgentInfo,
   meth : MethodInfo,
   client : String,
   durable : Bool,
+  contains_stream : Bool,
 ) -> Unit {
   let vis = visible_params(meth.params)
   let ctx = escape_string_lit("\{agent.name}.\{meth.name}")
   let input_expr = encode_input_expr(vis)
+  let awaited_input_expr = encode_input_async_expr(vis)
   let arg_sig = params_sig(vis)
   let self_args = if arg_sig.is_empty() {
     "self : \{client}"
@@ -254,7 +360,7 @@ fn emit_client_method(
   buf.write_string(
     "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} {\n",
   )
-  buf.write_string("  let input = \{input_expr}\n")
+  buf.write_string("  let input = \{awaited_input_expr}\n")
   buf.write_string(
     "  let response = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
   )
@@ -262,9 +368,9 @@ fn emit_client_method(
     None =>
       buf.write_string(
         if durable {
-          "  let _ = response.value\n"
+          "  @agents.discard_optional_wire_value(response.value)\n"
         } else {
-          "  { metadata: response.metadata, value: () }\n"
+          "  @agents.discard_optional_wire_value(response.value)\n  { metadata: response.metadata, value: () }\n"
         },
       )
     Some(_) => {
@@ -284,6 +390,9 @@ fn emit_client_method(
     }
   }
   buf.write_string("}\n\n")
+  if contains_stream {
+    return
+  }
   // trigger
   buf.write_string("///|\n")
   buf.write_string(
@@ -456,9 +565,9 @@ fn resolve_config_type(
     Some(type_name) =>
       if decode_qualified(type_name) is Some(_) {
         for ct in config_types {
-          if ct.package.length() > 0 {
-            let alias = last_path_segment(ct.package)
-            if "@\{alias}.\{ct.name}" == type_name {
+          if ct.package_path.length() > 0 {
+            let package_alias = last_path_segment(ct.package_path)
+            if "@\{package_alias}.\{ct.name}" == type_name {
               return Some(ct)
             }
           }
@@ -466,7 +575,7 @@ fn resolve_config_type(
         None
       } else {
         for ct in config_types {
-          if ct.name == type_name && ct.package == agent_package {
+          if ct.name == type_name && ct.package_path == agent_package {
             return Some(ct)
           }
         }

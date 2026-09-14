@@ -9,7 +9,7 @@ fn vstr() -> SchemaType {
 
 ///|
 fn def(id : String, body : SchemaType) -> SchemaTypeDef {
-  { id, name: None, body }
+  { id, name: None, body, }
 }
 
 ///|
@@ -18,7 +18,7 @@ fn branch(
   body : SchemaType,
   discriminator : @types.DiscriminatorRule,
 ) -> UnionBranch {
-  { tag, body, discriminator, metadata: empty_metadata() }
+  { tag, body, discriminator, metadata: empty_metadata(), }
 }
 
 // ============================================================
@@ -34,7 +34,7 @@ test "well-formed record graph passes" {
     defs: [def("Person", rec)],
     root: schema_type(Ref("Person")),
   }
-  inspect(validate_graph(g).length(), content="0")
+  debug_inspect(validate_graph(g).length(), content="0")
 }
 
 ///|
@@ -43,7 +43,7 @@ test "map with primitive key resolved through a ref passes" {
     defs: [def("Key", vstr())],
     root: schema_type(Map(schema_type(Ref("Key")), vstr())),
   }
-  inspect(validate_graph(g).length(), content="0")
+  debug_inspect(validate_graph(g).length(), content="0")
 }
 
 // ============================================================
@@ -56,21 +56,21 @@ test "duplicate type id" {
     defs: [def("a", vstr()), def("a", schema_type(S32(None)))],
     root: schema_type(Ref("a")),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DuplicateTypeId(a)]
+      #|[DuplicateTypeId("a")]
     ),
   )
 }
 
 ///|
 test "dangling ref" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Ref("missing")) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(Ref("missing")), }
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DanglingRef(missing)]
+      #|[DanglingRef("missing")]
     ),
   )
 }
@@ -81,8 +81,8 @@ test "dangling ref" {
 
 ///|
 test "empty variant" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Variant([])) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(Variant([])), }
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[EmptyVariant]
@@ -92,8 +92,8 @@ test "empty variant" {
 
 ///|
 test "empty enum" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Enum([])) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(Enum([])), }
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[EmptyEnum]
@@ -103,8 +103,8 @@ test "empty enum" {
 
 ///|
 test "empty flags" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Flags([])) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(Flags([])), }
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[EmptyFlags]
@@ -114,8 +114,8 @@ test "empty flags" {
 
 ///|
 test "empty union" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Union([])) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(Union([])), }
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[EmptyUnion]
@@ -133,10 +133,10 @@ test "duplicate field name" {
     defs: [],
     root: schema_type(Record([field("x", vstr()), field("x", vstr())])),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DuplicateFieldName(x)]
+      #|[DuplicateFieldName("x")]
     ),
   )
 }
@@ -147,32 +147,32 @@ test "duplicate variant case" {
     defs: [],
     root: schema_type(Variant([variant_case("a"), variant_case("a")])),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DuplicateVariantCase(a)]
+      #|[DuplicateVariantCase("a")]
     ),
   )
 }
 
 ///|
 test "duplicate enum case" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Enum(["a", "a"])) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(Enum(["a", "a"])), }
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DuplicateEnumCase(a)]
+      #|[DuplicateEnumCase("a")]
     ),
   )
 }
 
 ///|
 test "duplicate flag name" {
-  let g : SchemaGraph = { defs: [], root: schema_type(Flags(["f", "f"])) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(Flags(["f", "f"])), }
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DuplicateFlagName(f)]
+      #|[DuplicateFlagName("f")]
     ),
   )
 }
@@ -188,10 +188,10 @@ test "duplicate union tag" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DuplicateUnionTag(t)]
+      #|[DuplicateUnionTag("t")]
     ),
   )
 }
@@ -206,7 +206,7 @@ test "map key not primitive (structural key)" {
     defs: [],
     root: schema_type(Map(schema_type(List(vstr())), vstr())),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[MapKeyNotPrimitive]
@@ -220,7 +220,7 @@ test "map key not primitive (self-recursive ref chain)" {
     defs: [def("a", schema_type(Ref("a")))],
     root: schema_type(Map(schema_type(Ref("a")), vstr())),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[MapKeyNotPrimitive]
@@ -230,8 +230,8 @@ test "map key not primitive (self-recursive ref chain)" {
 
 ///|
 test "fixed list zero length" {
-  let g : SchemaGraph = { defs: [], root: schema_type(FixedList(vstr(), 0)) }
-  inspect(
+  let g : SchemaGraph = { defs: [], root: schema_type(FixedList(vstr(), 0)), }
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[FixedListZeroLength]
@@ -256,7 +256,7 @@ test "text length range inverted" {
       }),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[TextLengthRangeInverted]
@@ -269,10 +269,10 @@ test "binary byte range inverted" {
   let g : SchemaGraph = {
     defs: [],
     root: schema_type(
-      Binary({ mime_types: None, min_bytes: Some(5U), max_bytes: Some(2U) }),
+      Binary({ mime_types: None, min_bytes: Some(5U), max_bytes: Some(2U), }),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[BinaryByteRangeInverted]
@@ -290,10 +290,10 @@ test "nullable nesting option of option" {
     defs: [],
     root: schema_type(Option(schema_type(Option(vstr())))),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[NullableNesting(inner=option<_>)]
+      #|[NullableNesting(inner="option<_>")]
     ),
   )
 }
@@ -304,10 +304,10 @@ test "nullable nesting option of ref to nullable" {
     defs: [def("a", schema_type(Option(vstr())))],
     root: schema_type(Option(schema_type(Ref("a")))),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[NullableNesting(inner=ref `a`)]
+      #|[NullableNesting(inner="ref `a`")]
     ),
   )
 }
@@ -328,10 +328,13 @@ test "nullable nesting option of union with nullable branch" {
       ),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[NullableNesting(inner=union), UnionFieldRuleOnNonRecordBody(tag=t)]
+      #|[
+      #|  NullableNesting(inner="union"),
+      #|  UnionFieldRuleOnNonRecordBody(tag="t"),
+      #|]
     ),
   )
 }
@@ -348,15 +351,15 @@ test "quantity min unit mismatch" {
       Quantity({
         base_unit: "m",
         allowed_suffixes: [],
-        min: Some({ mantissa: 0L, scale: 0, unit: "cm" }),
+        min: Some({ mantissa: 0L, scale: 0, unit: "cm", }),
         max: None,
       }),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[QuantityMinUnitMismatch(base_unit=m, min_unit=cm)]
+      #|[QuantityMinUnitMismatch(base_unit="m", min_unit="cm")]
     ),
   )
 }
@@ -373,10 +376,10 @@ test "union string rule on non-string body" {
       Union([branch("t", schema_type(S32(None)), @types.Prefix("a"))]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionStringRuleOnNonStringBody(tag=t)]
+      #|[UnionStringRuleOnNonStringBody(tag="t")]
     ),
   )
 }
@@ -390,15 +393,15 @@ test "union field rule on non-record body" {
         branch(
           "t",
           vstr(),
-          @types.FieldEquals({ field_name: "x", literal: None }),
+          @types.FieldEquals({ field_name: "x", literal: None, }),
         ),
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionFieldRuleOnNonRecordBody(tag=t)]
+      #|[UnionFieldRuleOnNonRecordBody(tag="t")]
     ),
   )
 }
@@ -412,15 +415,15 @@ test "union field rule missing field" {
         branch(
           "t",
           schema_type(Record([field("y", vstr())])),
-          @types.FieldEquals({ field_name: "x", literal: None }),
+          @types.FieldEquals({ field_name: "x", literal: None, }),
         ),
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionFieldRuleMissingField(tag=t, field_name=x)]
+      #|[UnionFieldRuleMissingField(tag="t", field_name="x")]
     ),
   )
 }
@@ -434,15 +437,15 @@ test "union field-equals literal on non-string field" {
         branch(
           "t",
           schema_type(Record([field("x", schema_type(S32(None)))])),
-          @types.FieldEquals({ field_name: "x", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "x", literal: Some("v"), }),
         ),
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionFieldEqualsLiteralOnNonStringField(tag=t, field_name=x)]
+      #|[UnionFieldEqualsLiteralOnNonStringField(tag="t", field_name="x")]
     ),
   )
 }
@@ -461,10 +464,10 @@ test "union unsatisfiable field absent" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionUnsatisfiableFieldAbsent(tag=t, field_name=x)]
+      #|[UnionUnsatisfiableFieldAbsent(tag="t", field_name="x")]
     ),
   )
 }
@@ -475,10 +478,10 @@ test "union empty regex" {
     defs: [],
     root: schema_type(Union([branch("t", vstr(), @types.Regex(""))])),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[InvalidRegex(tag=t, regex=, message=regex must be non-empty)]
+      #|[InvalidRegex(tag="t", regex="", message="regex must be non-empty")]
     ),
   )
 }
@@ -498,10 +501,16 @@ test "union ambiguous discriminators (prefix overlap)" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=prefix `ab` and prefix `a` overlap)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="prefix `ab` and prefix `a` overlap",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -518,10 +527,10 @@ test "multiple errors collected in discovery order" {
       Record([field("x", schema_type(Ref("missing"))), field("x", vstr())]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[DanglingRef(missing), DuplicateFieldName(x)]
+      #|[DanglingRef("missing"), DuplicateFieldName("x")]
     ),
   )
 }
@@ -546,10 +555,16 @@ test "ambiguity: suffix overlap" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=suffix `ing` and suffix `ng` overlap)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="suffix `ing` and suffix `ng` overlap",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -565,10 +580,16 @@ test "ambiguity: empty contains (same constructor)" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=contains `` and contains `x` overlap)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="contains `` and contains `x` overlap",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -584,10 +605,16 @@ test "ambiguity: equal regex" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=both branches share regex `x`)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="both branches share regex `x`",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -601,20 +628,26 @@ test "ambiguity: field-equals same field without literal" {
         branch(
           "a",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: None }),
+          @types.FieldEquals({ field_name: "k", literal: None, }),
         ),
         branch(
           "b",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: None }),
+          @types.FieldEquals({ field_name: "k", literal: None, }),
         ),
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=field-equals on `k` without literal overlaps another field-equals on the same field)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="field-equals on `k` without literal overlaps another field-equals on the same field",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -628,20 +661,26 @@ test "ambiguity: field-equals same literal" {
         branch(
           "a",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "k", literal: Some("v"), }),
         ),
         branch(
           "b",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "k", literal: Some("v"), }),
         ),
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=two field-equals on `k` share literal `v`)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="two field-equals on `k` share literal `v`",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -657,10 +696,16 @@ test "ambiguity: field-absent same field" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=field-absent on `x` and `x` can match the same object)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="field-absent on `x` and `x` can match the same object",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -676,10 +721,16 @@ test "ambiguity: mixed empty prefix vs suffix (fallthrough)" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=prefix `` and suffix `` overlap)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="prefix `` and suffix `` overlap",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -695,10 +746,16 @@ test "ambiguity: mixed empty suffix vs contains (fallthrough)" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=suffix `` and contains `` overlap)]
+      #|[
+      #|  UnionAmbiguousDiscriminators(
+      #|    tag_a="a",
+      #|    tag_b="b",
+      #|    reason="suffix `` and contains `` overlap",
+      #|  ),
+      #|]
     ),
   )
 }
@@ -714,7 +771,7 @@ test "ambiguity: mixed empty contains vs regex (fallthrough)" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
       #|[]
@@ -732,12 +789,12 @@ test "no ambiguity: distinct non-empty rules of different kinds" {
         branch(
           "b",
           rec1("k", vstr()),
-          @types.FieldEquals({ field_name: "k", literal: Some("v") }),
+          @types.FieldEquals({ field_name: "k", literal: Some("v"), }),
         ),
       ]),
     ),
   }
-  inspect(validate_graph(g).length(), content="0")
+  debug_inspect(validate_graph(g).length(), content="0")
 }
 
 ///|
@@ -745,7 +802,7 @@ fn field_equals_rule(
   field_name : String,
   literal : String?,
 ) -> @types.DiscriminatorRule {
-  @types.FieldEquals({ field_name, literal })
+  @types.FieldEquals({ field_name, literal, })
 }
 
 ///|
@@ -776,7 +833,7 @@ test "union classifier integration rejects only Reject" {
 ///|
 test "text is not a union string discriminator body" {
   let text = schema_type(
-    Text({ languages: None, min_length: None, max_length: None, regex: None }),
+    Text({ languages: None, min_length: None, max_length: None, regex: None, }),
   )
   let body_graph : SchemaGraph = {
     defs: [],
@@ -790,13 +847,17 @@ test "text is not a union string discriminator body" {
       ]),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(body_graph),
-    content="[UnionStringRuleOnNonStringBody(tag=t)]",
+    content=(
+      #|[UnionStringRuleOnNonStringBody(tag="t")]
+    ),
   )
-  inspect(
+  debug_inspect(
     validate_graph(field_graph),
-    content="[UnionFieldEqualsLiteralOnNonStringField(tag=t, field_name=kind)]",
+    content=(
+      #|[UnionFieldEqualsLiteralOnNonStringField(tag="t", field_name="kind")]
+    ),
   )
 }
 
@@ -810,7 +871,7 @@ test "map key primitive through a multi-ref chain passes" {
     defs: [def("a", schema_type(Ref("b"))), def("b", vstr())],
     root: schema_type(Map(schema_type(Ref("a")), vstr())),
   }
-  inspect(validate_graph(g).length(), content="0")
+  debug_inspect(validate_graph(g).length(), content="0")
 }
 
 ///|
@@ -819,10 +880,10 @@ test "dangling map key reports both not-primitive and dangling" {
     defs: [],
     root: schema_type(Map(schema_type(Ref("missing")), vstr())),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[MapKeyNotPrimitive, DanglingRef(missing)]
+      #|[MapKeyNotPrimitive, DanglingRef("missing")]
     ),
   )
 }
@@ -834,7 +895,7 @@ test "option of cyclic non-nullable ref is well-formed (no hang, no false nullab
     defs: [def("a", rec1("self", schema_type(Ref("a"))))],
     root: schema_type(Option(schema_type(Ref("a")))),
   }
-  inspect(validate_graph(g).length(), content="0")
+  debug_inspect(validate_graph(g).length(), content="0")
 }
 
 ///|
@@ -847,12 +908,12 @@ test "resolved_shape through refs (string + record) is well-formed" {
         branch(
           "b",
           schema_type(Ref("rec")),
-          @types.FieldEquals({ field_name: "k", literal: None }),
+          @types.FieldEquals({ field_name: "k", literal: None, }),
         ),
       ]),
     ),
   }
-  inspect(validate_graph(g).length(), content="0")
+  debug_inspect(validate_graph(g).length(), content="0")
 }
 
 // ============================================================
@@ -868,14 +929,14 @@ test "quantity max unit mismatch" {
         base_unit: "m",
         allowed_suffixes: [],
         min: None,
-        max: Some({ mantissa: 0L, scale: 0, unit: "km" }),
+        max: Some({ mantissa: 0L, scale: 0, unit: "km", }),
       }),
     ),
   }
-  inspect(
+  debug_inspect(
     validate_graph(g),
     content=(
-      #|[QuantityMaxUnitMismatch(base_unit=m, max_unit=km)]
+      #|[QuantityMaxUnitMismatch(base_unit="m", max_unit="km")]
     ),
   )
 }

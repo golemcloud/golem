@@ -81,6 +81,9 @@ object SchemaValue {
    */
   final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends SchemaValue
 
+  /** An owned native stream, which may occur at any depth in the value tree. */
+  final case class StreamValue(handle: GuestSchemaValueStreamHandle) extends SchemaValue
+
   /** An owned, opaque, affine `permission-card` resource handle. */
   final case class PermissionCardHandle(handle: GuestPermissionCardHandle) extends SchemaValue
 }
@@ -130,5 +133,6 @@ object v {
 
   def secret(handle: GuestSecretHandle): SchemaValue                 = SecretValue(handle)
   def quotaToken(handle: GuestQuotaTokenHandle): SchemaValue         = QuotaTokenHandle(handle)
+  def stream(handle: GuestSchemaValueStreamHandle): SchemaValue      = StreamValue(handle)
   def permissionCard(handle: GuestPermissionCardHandle): SchemaValue = PermissionCardHandle(handle)
 }

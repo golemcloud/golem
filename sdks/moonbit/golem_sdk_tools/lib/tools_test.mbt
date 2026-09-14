@@ -119,7 +119,7 @@ test "tool metadata, hidden types, result, and constraints" {
         #|#derive.tool("tool")
         #|struct Tool {}
         #|
-        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte]) -> String { ... }
+        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> String { ... }
         #|
       ),
     ),
@@ -208,12 +208,6 @@ test "strict tool parser diagnostics" {
       "#derive.tool\nstruct Bad {}\npub fn Bad::run(self : Self) -> Unit {}\n",
     ),
     content="Tool command 'Bad::run' must not have a self receiver",
-  )
-  inspect(
-    parse_error(
-      "#derive.tool\nstruct Bad {}\npub async fn Bad::run() -> Unit { ... }\n",
-    ),
-    content="Async tool command 'Bad::run' is unsupported: the MoonBit WIT export invoker is synchronous and no block_on is available",
   )
   inspect(
     parse_error(

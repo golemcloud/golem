@@ -1869,24 +1869,33 @@ mod tests {
 
     #[test]
     async fn credit_debited_on_immediate_grant() {
-        let rid = test_resource_definition_id();
-        let mock = MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 100)));
-        let svc = make_service(mock);
+        for (initial_credit, expected_credit) in [(10_000, 9_970), (500, 470)] {
+            let rid = test_resource_definition_id();
+            let mock = MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 100)));
+            let svc = make_service(mock);
 
-        // expected_use=100 → credit_rate=10/ms, max_credit=10_000
-        let mut interest = svc
-            .acquire(test_env_id(), test_resource_name(), 100, 500, None)
-            .await;
+            let mut interest = svc
+                .acquire(
+                    test_env_id(),
+                    test_resource_name(),
+                    100,
+                    initial_credit,
+                    None,
+                )
+                .await;
+            if initial_credit < interest.max_credit {
+                // At the cap accrual cannot change credit; below it, disable accrual.
+                interest.credit_rate = 0.0;
+            }
 
-        // Record credit before reserve.
-        let credit_before = interest.current_credit();
+            let result = svc.try_reserve(&mut interest, 30).await;
+            assert_matches!(
+                result,
+                ReserveResult::Ok(Reservation::Bounded { reserved: 30, .. })
+            );
 
-        let result = svc.try_reserve(&mut interest, 30).await;
-        assert_matches!(result, ReserveResult::Ok(_));
-
-        // Credit should have been debited by 30.
-        // (time may have ticked slightly, so we check the snapshot value)
-        assert_eq!(interest.last_credit_value, credit_before - 30);
+            assert_eq!(interest.last_credit_value, expected_credit);
+        }
     }
 
     #[test]

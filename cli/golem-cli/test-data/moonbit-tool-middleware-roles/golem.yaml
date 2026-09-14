@@ -1,0 +1,22 @@
+manifestVersion: 1.6.0
+
+app: moonbit-tool-middleware-roles
+
+version: v0.0.0
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+    version: v0.0.0
+
+components:
+  moonbit-tool-middleware-roles:ordinary:
+    dir: ordinary
+    templates: moonbit
+  moonbit-tool-middleware-roles:middleware:
+    dir: middleware
+    templates: moonbit-tool-middleware
+  moonbit-tool-middleware-roles:combined:
+    dir: combined
+    templates: moonbit-agent-tool-middleware

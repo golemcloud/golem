@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { templateMatrix } from './template-matrix.mjs';
 
 // ---------------------------------------------------------------------------
 // The generated Preview 3 wrapper must build its async WIT bindings with Golem's
@@ -51,7 +52,6 @@ function useForkedWitBindgen(cargoTomlPath) {
 // ---------------------------------------------------------------------------
 
 const sourceWit = resolve(process.cwd(), '../../wit');
-const output = 'agent-template';
 
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
@@ -73,36 +73,33 @@ if (offenders.length > 0) {
   );
 }
 
-rmSync(output, { recursive: true, force: true });
+for (const template of templateMatrix) {
+  rmSync(template.wrapperDirectory, { recursive: true, force: true });
 
-const result = spawnSync(
-  'wasm-rquickjs',
-  [
-    'generate-wrapper-crate',
-    '--wit',
-    sourceWit,
-    '--output',
-    output,
-    '--world',
-    'agent-guest',
-    '--target',
-    'wasi-p3',
-    '--js-modules',
-    '@golemcloud/golem-ts-sdk=dist/index.mjs',
-    '--js-modules',
-    'user=@slot',
-  ],
-  {
-    stdio: 'inherit',
-  },
-);
+  const result = spawnSync(
+    'wasm-rquickjs',
+    [
+      'generate-wrapper-crate',
+      '--wit',
+      sourceWit,
+      '--output',
+      template.wrapperDirectory,
+      '--world',
+      template.world,
+      '--target',
+      'wasi-p3',
+      '--js-modules',
+      `${template.sdkModuleName}=${template.sdkEntry}`,
+      '--js-modules',
+      'user=@slot',
+    ],
+    {
+      stdio: 'inherit',
+    },
+  );
 
-if (result.error) {
-  throw result.error;
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+
+  useForkedWitBindgen(resolve(process.cwd(), template.wrapperDirectory, 'Cargo.toml'));
 }
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
-}
-
-useForkedWitBindgen(resolve(process.cwd(), output, 'Cargo.toml'));

@@ -274,11 +274,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}increase:          {}", params.delta,);
         }
-        PublicOplogEntry::FilesystemStorageUsageUpdate(params) => {
-            let _ = writeln!(result, "STORAGE USAGE UPDATE");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}delta:             {}", params.delta);
-        }
         PublicOplogEntry::CreateResource(params) => {
             let _ = writeln!(result, "CREATE RESOURCE");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -579,6 +574,51 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 result,
                 "{pad}payload:           {}",
                 typed_schema_value_to_string(&params.payload)
+            );
+        }
+        PublicOplogEntry::StreamRegistered(params) => {
+            let _ = writeln!(result, "STREAM REGISTERED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamItems(params) => {
+            let _ = writeln!(result, "STREAM ITEMS");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamEnd(params) => {
+            let _ = writeln!(result, "STREAM END");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamCancel(params) => {
+            let _ = writeln!(result, "STREAM CANCEL");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamSession(params) => {
+            let _ = writeln!(result, "STREAM SESSION");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
             );
         }
     }

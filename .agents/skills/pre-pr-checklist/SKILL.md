@@ -32,14 +32,14 @@ For one root-workspace Rust crate:
 
 ```shell
 cargo fmt -p <crate> -- --check
-cargo clippy -p <crate> --all-targets -- --no-deps -Dwarnings
+cargo clippy -p <crate> --all-targets --no-deps -- -D warnings
 ```
 
 For a separate workspace, add its manifest path. For example:
 
 ```shell
 cargo fmt --manifest-path dev-tools/Cargo.toml -p <crate> -- --check
-cargo clippy --manifest-path dev-tools/Cargo.toml -p <crate> --all-targets -- --no-deps -Dwarnings
+cargo clippy --manifest-path dev-tools/Cargo.toml -p <crate> --all-targets --no-deps -- -D warnings
 ```
 
 Prefer non-mutating checks for final verification. If fixes are needed, use the equivalent scoped `cargo fmt` or `cargo clippy ... --fix` command and inspect the resulting diff.
@@ -74,7 +74,7 @@ Then broaden only as warranted:
 |---|---|
 | Broad core logic, shared types, or utilities | `cargo make unit-tests` |
 | Broad worker executor behavior | Relevant worker test group, then `cargo make worker-executor-tests` only if needed |
-| Broad service integration | Relevant tagged integration tests, then `cargo make integration-tests` only if needed |
+| Broad service and CLI integration | Relevant tagged integration tests, then `cargo make integration-tests` only if both broad suites are warranted |
 | Broad CLI behavior | Targeted `cargo-test-r` filters, then `cargo make cli-integration-tests` only if needed |
 | HTTP or gRPC endpoint behavior | Relevant endpoint tests; use the full HTTP/gRPC API suite for cross-cutting endpoint changes |
 | SDK behavior used by the platform | Relevant SDK tests plus only the platform tests that exercise the changed integration |

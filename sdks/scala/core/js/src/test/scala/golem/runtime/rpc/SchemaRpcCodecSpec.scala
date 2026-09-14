@@ -21,6 +21,8 @@ import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.autowire.SchemaPayload
 import golem.schema._
 import golem.schema.wire.SchemaWire
+import scala.concurrent.{Future, Promise}
+import zio.ZIO
 import zio.blocks.schema.Schema
 import zio.test._
 
@@ -56,6 +58,196 @@ object SchemaRpcCodecSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("SchemaRpcCodecSpec")(
+      suite("generated stream boundaries")(
+        test("encoding does not prefetch and a pending read cannot request another item") {
+          ZIO.fromFuture { implicit ec =>
+            var pulls     = 0
+            val requested = Promise[Unit]()
+            val next      = Promise[Option[String]]()
+            val source    = AgentStream.fromPull[String] { () =>
+              pulls += 1
+              requested.trySuccess(())
+              next.future
+            }
+            for {
+              tree   <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(source))
+              stream <-
+                SchemaRpcCodec.decodeResultAsync {
+                  AgentStream.fromSchema[String].fromValue(SchemaRpcCodec.decodeValue(tree)).fold(throw _, identity)
+                }
+              lazyBeforeRead = pulls == 0
+              pending        = stream.pull()
+              _             <- requested.future
+              rejected      <- stream.pull().failed
+              _              = next.success(Some("item"))
+              item          <- pending
+              _             <- stream.close()
+            } yield assertTrue(
+              lazyBeforeRead,
+              pulls == 1,
+              item.contains("item"),
+              rejected.isInstanceOf[IllegalStateException]
+            )
+          }
+        },
+        test("failed nested item decode closes acquired and unvisited stream siblings") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            val original = new IllegalArgumentException("invalid nested sibling")
+            val rawItems = new IntoSchema[SchemaValue] {
+              def graph: SchemaGraph = {
+                val stream = AgentStream.intoSchema[String].graph
+                stream.copy(root = SchemaType(SchemaTypeBody.TupleType(List(stream.root, stream.root))))
+              }
+              def toValue(value: SchemaValue): SchemaValue = value
+            }
+            val source = AgentStream.fromPull(() =>
+              Future.successful(
+                Some(
+                  SchemaValue.TupleValue(List.fill(2) {
+                    AgentStream
+                      .intoSchema[String]
+                      .toValue(
+                        AgentStream.fromPull[String](
+                          () => Future.successful(Some("inner")),
+                          () => { closed += 1; Future.failed(new RuntimeException("cleanup failed")) }
+                        )
+                      )
+                  })
+                )
+              )
+            )
+            val itemDecoder = new FromSchema[AgentStream[String]] {
+              def fromValue(value: SchemaValue): Either[FromSchemaError, AgentStream[String]] = {
+                val SchemaValue.TupleValue(items) = value: @unchecked
+                AgentStream.fromSchema[String].fromValue(items.head).fold(throw _, identity)
+                throw original
+              }
+            }
+            for {
+              tree  <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[SchemaValue](rawItems).toValue(source))
+              outer <- SchemaRpcCodec.decodeResultAsync {
+                         AgentStream
+                           .fromSchema[AgentStream[String]](itemDecoder)
+                           .fromValue(SchemaRpcCodec.decodeValue(tree))
+                           .fold(throw _, identity)
+                       }
+              error <- outer.pull().failed
+              _     <- outer.close().recover { case _ => () }
+            } yield assertTrue(error eq original, closed == 2)
+          }
+        },
+        test("successfully returned inner stream survives outer EOF") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            var produced = false
+            val source   = AgentStream.fromPull[AgentStream[String]](() =>
+              if (produced) Future.successful(None)
+              else {
+                produced = true
+                Future.successful(
+                  Some(
+                    AgentStream.fromPull[String](
+                      () => Future.successful(Some("inner")),
+                      () => { closed += 1; Future.successful(()) }
+                    )
+                  )
+                )
+              }
+            )
+            for {
+              tree  <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[AgentStream[String]].toValue(source))
+              outer <- SchemaRpcCodec.decodeResultAsync {
+                         AgentStream
+                           .fromSchema[AgentStream[String]]
+                           .fromValue(SchemaRpcCodec.decodeValue(tree))
+                           .fold(throw _, identity)
+                       }
+              inner <- outer.pull().map(_.get)
+              end   <- outer.pull()
+              _     <- outer.close()
+              alive  = closed == 0
+              item  <- inner.pull()
+              _     <- inner.close()
+            } yield assertTrue(end.isEmpty, alive, item.contains("inner"), closed == 1)
+          }
+        },
+        test("by-name encoding rolls back an earlier sibling and preserves the original error") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            val original = new IllegalArgumentException("invalid sibling")
+            val stream   = AgentStream.fromPull[String](
+              () => Future.successful(Some("item")),
+              () => { closed += 1; Future.failed(new RuntimeException("cleanup failed")) }
+            )
+            SchemaRpcCodec.encodeValueAsync {
+              AgentStream.intoSchema[String].toValue(stream)
+              throw original
+            }.failed.map(error => assertTrue(error eq original, closed == 1))
+          }
+        },
+        test("result decoding closes partial sibling acquisitions exactly once") {
+          ZIO.fromFuture { implicit ec =>
+            var closed   = 0
+            val original = new IllegalArgumentException("invalid result sibling")
+            val source   = AgentStream.fromPull[String](
+              () => Future.successful(Some("item")),
+              () => { closed += 1; Future.failed(new RuntimeException("cleanup failed")) }
+            )
+            for {
+              tree  <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(source))
+              error <- SchemaRpcCodec.decodeResultAsync {
+                         val raw = SchemaRpcCodec.decodeValue(tree)
+                         AgentStream.fromSchema[String].fromValue(raw).fold(throw _, identity)
+                         throw original
+                       }.failed
+            } yield assertTrue(error eq original, closed == 1)
+          }
+        },
+        test("successful output survives decoding and forwards without invoking item codecs") {
+          ZIO.fromFuture { implicit ec =>
+            var closed = 0
+            var pulls  = 0
+            val source = AgentStream.fromPull[String](
+              () => { pulls += 1; Future.successful(Some("item")) },
+              () => { closed += 1; Future.successful(()) }
+            )
+            val neverDecode = new FromSchema[String] {
+              def fromValue(value: SchemaValue): Either[FromSchemaError, String] =
+                throw new AssertionError("forwarding decoded an item")
+            }
+            for {
+              tree            <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(source))
+              originalEndpoint =
+                tree.valueNodes(0).asInstanceOf[scala.scalajs.js.Dynamic].selectDynamic("val").asInstanceOf[AnyRef]
+              stream <- SchemaRpcCodec.decodeResultAsync {
+                          AgentStream
+                            .fromSchema[String](neverDecode)
+                            .fromValue(SchemaRpcCodec.decodeValue(tree))
+                            .fold(throw _, identity)
+                        }
+              alive      = closed == 0 && pulls == 0
+              forwarded <- SchemaRpcCodec.encodeValueAsync(AgentStream.intoSchema[String].toValue(stream))
+              same       =
+                originalEndpoint eq
+                  forwarded
+                    .valueNodes(0)
+                    .asInstanceOf[scala.scalajs.js.Dynamic]
+                    .selectDynamic("val")
+                    .asInstanceOf[AnyRef]
+              received <- SchemaRpcCodec.decodeResultAsync {
+                            AgentStream
+                              .fromSchema[String]
+                              .fromValue(SchemaRpcCodec.decodeValue(forwarded))
+                              .fold(throw _, identity)
+                          }
+              item <- received.pull()
+              _    <- received.close()
+              _    <- received.close()
+            } yield assertTrue(alive, same, item.contains("item"), pulls == 1, closed == 1)
+          }
+        }
+      ),
       suite("arguments (parameter-list value tree)")(
         test("encodeArgs/decodeArgs round-trip for a multi-field param list") {
           val in   = Args2(7, "hello")

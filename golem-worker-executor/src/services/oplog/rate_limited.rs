@@ -15,7 +15,8 @@
 use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -188,6 +189,15 @@ impl Oplog for RateLimitedOplog {
         })
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        let result = self.inner.add_durable_stream_batch(make_batch).await;
+        self.apply_rate_limit().await;
+        result
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.inner.drop_prefix(last_dropped_id).await
     }
@@ -198,6 +208,15 @@ impl Oplog for RateLimitedOplog {
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.inner.current_oplog_index().await
+    }
+
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+    ) -> super::RawDurableStreamSessionStatus {
+        self.inner
+            .raw_durable_stream_session_status(session_key)
+            .await
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
@@ -212,8 +231,20 @@ impl Oplog for RateLimitedOplog {
         self.inner.read(oplog_index).await
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read_many(oplog_index, n).await
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read_exact(oplog_index, n).await
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read_source(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {
@@ -246,7 +277,7 @@ impl Oplog for RateLimitedOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         // Order the `Start` first (the inner oplog assigns its index), then throttle. Applying
         // back-pressure before delegating would reorder concurrent calls' `Start` entries relative
@@ -254,6 +285,18 @@ impl Oplog for RateLimitedOplog {
         let ordered = self
             .inner
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        self.apply_rate_limit().await;
+        Ok(ordered)
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let ordered = self
+            .inner
+            .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         self.apply_rate_limit().await;
         Ok(ordered)
@@ -318,6 +361,14 @@ impl std::fmt::Debug for RateLimitedOplogService {
 
 #[async_trait]
 impl OplogService for RateLimitedOplogService {
+    fn set_stream_session_index(&self, index: Arc<super::StreamSessionIndexService>) {
+        self.inner.set_stream_session_index(index);
+    }
+
+    fn stream_session_index(&self) -> Option<Arc<super::StreamSessionIndexService>> {
+        self.inner.stream_session_index()
+    }
+
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -423,14 +474,28 @@ impl OplogService for RateLimitedOplogService {
         self.inner.delete(owned_agent_id, agent_mode).await
     }
 
-    async fn read(
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read(owned_agent_id, agent_mode, idx, n).await
+        self.inner
+            .read_exact(owned_agent_id, agent_mode, idx, n)
+            .await
+    }
+
+    async fn read_source(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner
+            .read_source(owned_agent_id, agent_mode, idx, n)
+            .await
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
@@ -612,10 +677,13 @@ mod tests {
     }
 
     fn dummy_entry() -> OplogEntry {
-        OplogEntry::jump(OplogRegion {
-            start: OplogIndex::from_u64(1),
-            end: OplogIndex::from_u64(1),
-        })
+        OplogEntry::jump(
+            None,
+            OplogRegion {
+                start: OplogIndex::from_u64(1),
+                end: OplogIndex::from_u64(1),
+            },
+        )
     }
 
     // When writes exceed the configured rate, subsequent adds are delayed.

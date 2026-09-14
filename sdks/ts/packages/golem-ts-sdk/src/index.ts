@@ -17,6 +17,7 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
+import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/host@0.1.0';
 import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
 import {
   schemaValueFromWit,
@@ -34,8 +35,15 @@ import { encodeMultipart, decodeMultipart } from './internal/multipart';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
-import { sourceValueIsCanonical, type SchemaCodec } from './schema/codec';
+import {
+  encodeDeclaredToolErrorPayload,
+  encodeToolValue,
+  invalidToolResult,
+  isDeclaredToolError,
+} from './internal/tool/invocationResult';
+import { closeAsyncIterable } from './internal/tool/asyncIterable';
 import { awaitAbortable, throwIfAborted } from './internal/pollableUtils';
+import { ToolStreamError, toolStreamFailureFromError } from './internal/tool/startedToolInvocation';
 import './schema/zod';
 import './schema/valibot';
 import './schema/arktype';
@@ -44,6 +52,7 @@ import './schema/effect';
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
+export type { ParsedAgentIdCreateOptions, ParsedAgentIdParts } from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
@@ -56,7 +65,8 @@ export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
 export * from './host/guard';
-export * from './host/quota';
+export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
+export type { FailedReservation } from './host/quota';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
@@ -66,6 +76,8 @@ export * from './host/durable';
 export { defineAgent } from './defineAgent';
 export type {
   AgentDefinition,
+  AgentClientBindingDefinition,
+  AgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -74,9 +86,13 @@ export type {
   AgentContext,
   IdRecord,
   InitContext,
+  SnapshotRestoreContext,
   MethodsRecord,
 } from './defineAgent';
 export { Secret } from './secret';
+export { AgentStream } from './schema/agentStream';
+export { schemaFingerprintV1, SchemaFingerprintError } from './internal/schema-model/fingerprint';
+export type { SchemaGraph, SchemaType } from './internal/schema-model/model';
 export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 export type { StandardSchemaV1 } from './schema/standardSchema';
@@ -89,17 +105,20 @@ export type {
 } from './schema/markers';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { SchemaCodec, SchemaWalker } from './schema/codec';
+export { SchemaRef, SchemaRenderError } from './schema/ref';
+export type { JsonValue, SchemaIssue, SchemaValidationResult } from './schema/ref';
 export {
   c,
-  client,
   command,
   err,
   ok,
   renderArgumentHelp,
   renderHelp,
-  ToolCallError,
+  ToolInvokeError,
   toolDefinition,
+  universalToolMiddleware,
 } from './tool';
+export { client, ToolCallError } from './toolClient';
 export type {
   CamelCase,
   ConstraintRef,
@@ -111,6 +130,7 @@ export type {
   GlobalFlagOptions,
   GlobalValueOptions,
   ImplementedTool,
+  ImplementedToolMiddleware,
   NestedCommandImplementation,
   OptionOptions,
   PositionalOptions,
@@ -119,12 +139,10 @@ export type {
   StreamOptions,
   TailOptions,
   ToolBodyModel,
-  ToolCallErrorCause,
   ToolClient,
   ToolClientErrors,
   ToolClientInvocationResult,
   ToolClientMethod,
-  ToolClientOptions,
   ToolClientTransport,
   ToolCommandModel,
   ToolCommandModelOf,
@@ -135,29 +153,67 @@ export type {
   ToolHelpError,
   ToolHelpResult,
   ToolImplementation,
+  ToolInputStream,
   ToolInvocationContext,
+  ToolInvokeErrorCause,
+  ToolMiddlewareHandler,
+  ToolMiddlewareImplementation,
+  ToolMiddlewareInvocationContext,
+  ToolMiddlewareOptions,
   ToolOk,
   ToolResult,
   ToolSubtreeModel,
+  ToolUnderlying,
+  ToolUnderlyingErrors,
+  UniversalToolMiddlewareContext,
+  UniversalToolMiddlewareInvocation,
+  UniversalToolMiddlewareInvoke,
+  UniversalToolMiddlewareOptions,
+  UniversalToolUnderlying,
+  UniversalToolUnderlyingInvoke,
 } from './tool';
-export { clientFor, RemoteCallError } from './client';
+export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
+export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
+  AgentClientFactory,
+  AgentClientSpec,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
+  RemoteAgentError,
+  RemoteCallErrorCause,
   RemoteCallOptions,
   RemoteClient,
   RemoteClientFactory,
 } from './client';
+export {
+  golemTool010ToolMiddlewareGuest,
+  toolMiddlewareGuest,
+} from './internal/tool/middlewareGuest';
 export * from './keyvalue';
 export * from './blobstore';
 export * from './websocket';
 export * from './rdbms';
 export * as http from './http';
 export * as bridge from './bridge';
+export * as reflection from './reflection';
+export {
+  AgentMethod as ReflectedAgentMethodDefinition,
+  AgentType as ReflectedAgentType,
+  DynamicAgentClient,
+  DynamicAgentMethod,
+  ReflectedAgentClient,
+  ReflectedAgentClientFactory,
+  ReflectedAgentMethod,
+  getAgentTypeByAgentId,
+  getAllAgentTypes,
+  getAgentType as getReflectedAgentType,
+} from './reflection';
+export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
+export type { StartedToolInvocation } from './bridge/tool';
+export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
-let resolvedAgent: ResolvedAgent | undefined = undefined;
-let initializationPrincipal: Principal | undefined = undefined;
+let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
 
 interface GolemAgentGuest {
   initialize(agentTypeName: string, input: SchemaValueTree, principal: Principal): Promise<void>;
@@ -177,7 +233,8 @@ interface GolemToolGuest {
     toolName: string,
     commandPath: string[],
     input: TypedSchemaValue,
-    stdin: AsyncIterable<number> | undefined,
+    stdin: AsyncIterable<ByteStreamItem> | undefined,
+    stdout: ToolStdoutWriter | undefined,
     principal: Principal,
   ): Promise<InvocationResult>;
 }
@@ -198,7 +255,7 @@ async function initialize(
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
-  if (resolvedAgent) {
+  if (initializedAgent) {
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
@@ -222,8 +279,7 @@ async function initialize(
     : initiator.initiate(schemaValueFromWit(input), principal));
 
   if (initiateResult.tag === 'ok') {
-    resolvedAgent = initiateResult.val;
-    initializationPrincipal = principal;
+    initializedAgent = { agent: initiateResult.val, principal };
   } else {
     throw initiateResult.val;
   }
@@ -234,11 +290,10 @@ async function invokeAgent(
   input: SchemaValueTree,
   principal: Principal,
 ): Promise<SchemaValueTree | undefined> {
-  if (!resolvedAgent) {
+  if (!initializedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
-
-  const result = await resolvedAgent.invoke(methodName, input, principal);
+  const result = await initializedAgent.agent.invoke(methodName, input, principal);
 
   if (result.tag === 'ok') {
     return result.val;
@@ -269,7 +324,8 @@ async function invokeTool(
   toolName: string,
   commandPath: string[],
   input: TypedSchemaValue,
-  stdin: AsyncIterable<number> | undefined,
+  stdin: AsyncIterable<ByteStreamItem> | undefined,
+  stdout: ToolStdoutWriter | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
@@ -310,13 +366,18 @@ async function invokeTool(
     }
 
     if (body.stdout) {
-      outputAdapter = createToolOutputStream();
-      context.stdout = outputAdapter.stream;
+      if (!stdout && body.stdout.required) {
+        throw invalidToolInput('tool invocation did not contain declared stdout stream');
+      }
+      if (stdout) {
+        outputAdapter = createToolOutputStream(stdout);
+        context.stdout = outputAdapter.stream;
+      }
     }
 
     const outcome = await prepared.invoke(context);
-    const stdout = await outputAdapter?.finish();
-    const result = projectToolOutcome(body, outcome, stdout);
+    await outputAdapter?.finish();
+    const result = projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
@@ -325,11 +386,7 @@ async function invokeTool(
   }
 }
 
-function projectToolOutcome(
-  body: ExtendedCommandBody,
-  outcome: unknown,
-  stdout: AsyncIterable<number> | undefined,
-): InvocationResult {
+function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): InvocationResult {
   if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
     throw invalidToolResult('tool handler returned an invalid outcome');
   }
@@ -342,16 +399,15 @@ function projectToolOutcome(
       if (outcome.value !== undefined) {
         throw invalidToolResult('unit tool handler returned a structured result');
       }
-      return { result: undefined, stdout };
+      return { result: undefined };
     }
     return {
       result: encodeToolValue(body.result.codec, outcome.value, 'tool result'),
-      stdout,
     };
   }
 
   if (outcome.tag === 'err') {
-    if (typeof outcome.name !== 'string' || typeof outcome.hasPayload !== 'boolean') {
+    if (!isDeclaredToolError(outcome)) {
       throw invalidToolResult('tool handler returned an invalid declared error');
     }
     const errorCase = body.errors.find((candidate) => candidate.name === outcome.name);
@@ -359,44 +415,15 @@ function projectToolOutcome(
       throw invalidToolResult(`tool handler returned undeclared error "${outcome.name}"`);
     }
 
-    let payload: TypedSchemaValue;
-    if (errorCase.payloadCodec) {
-      if (!outcome.hasPayload || !Object.prototype.hasOwnProperty.call(outcome, 'payload')) {
-        throw invalidToolResult(`tool error "${outcome.name}" requires a payload`);
-      }
-      payload = encodeToolValue(
-        errorCase.payloadCodec,
-        outcome.payload,
-        `tool error "${outcome.name}" payload`,
-      );
-    } else {
-      if (outcome.hasPayload || Object.prototype.hasOwnProperty.call(outcome, 'payload')) {
-        throw invalidToolResult(`tool error "${outcome.name}" does not declare a payload`);
-      }
-      payload = typedSchemaValueToWit({
-        graph: { defs: new Map(), root: t.tuple([]) },
-        value: v.tuple([]),
-      });
-    }
+    const payload = encodeDeclaredToolErrorPayload(
+      errorCase,
+      outcome,
+      `tool error "${outcome.name}"`,
+    );
     throw { tag: 'custom-error', val: payload } satisfies ToolError;
   }
 
   throw invalidToolResult(`tool handler returned unknown outcome tag "${outcome.tag}"`);
-}
-
-function encodeToolValue(codec: SchemaCodec, value: unknown, position: string): TypedSchemaValue {
-  try {
-    const encoded = codec.toValue(value);
-    if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {
-      throw new Error('does not match its declared schema');
-    }
-    if (!sourceValueIsCanonical(codec, value, encoded)) {
-      throw new Error('is not canonical for its declared schema');
-    }
-    return typedSchemaValueToWit({ graph: codec.graph, value: encoded });
-  } catch (error) {
-    throw invalidToolResult(`${position}: ${errorMessage(error)}`);
-  }
 }
 
 interface ToolInputStreamAdapter {
@@ -406,11 +433,11 @@ interface ToolInputStreamAdapter {
 
 interface ToolOutputStreamAdapter {
   readonly stream: WritableStream<Uint8Array>;
-  finish(): Promise<AsyncIterable<number>>;
+  finish(): Promise<void>;
   abort(reason?: unknown): Promise<void>;
 }
 
-function readableStreamFromInput(input: AsyncIterable<number>): ToolInputStreamAdapter {
+function readableStreamFromInput(input: AsyncIterable<ByteStreamItem>): ToolInputStreamAdapter {
   const iterator = input[Symbol.asyncIterator]();
   const cancellation = new AbortController();
   let activePull: Promise<void> | undefined;
@@ -464,7 +491,7 @@ function readableStreamFromInput(input: AsyncIterable<number>): ToolInputStreamA
 }
 
 async function pullInput(
-  iterator: AsyncIterator<number>,
+  iterator: AsyncIterator<ByteStreamItem>,
   controller: ReadableStreamDefaultController<Uint8Array>,
   signal: AbortSignal,
   disposeIterator: () => Promise<void>,
@@ -481,22 +508,23 @@ async function pullInput(
       return;
     }
 
-    if (!Number.isInteger(next.value) || next.value < 0 || next.value > 255) {
-      throw new TypeError('tool stdin yielded a value outside the byte range');
+    if (next.value.tag === 'err') {
+      throw new ToolStreamError(next.value.val);
     }
-    controller.enqueue(Uint8Array.of(next.value));
+    if (next.value.val.byteLength === 0) throw new TypeError('tool stdin yielded an empty chunk');
+    controller.enqueue(next.value.val);
   } catch (error) {
     if (signal.aborted) closeReadableStream(controller);
     else controller.error(error);
   }
 }
 
-function createToolOutputStream(): ToolOutputStreamAdapter {
-  const chunks: Uint8Array[] = [];
+function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapter {
   const invocationCompleted = new Error('tool invocation completed');
   let activeOperation: Promise<void> | undefined;
   let controller: WritableStreamDefaultController | undefined;
   let acceptingOperations = true;
+  let terminated = false;
   let failed = false;
   let failure: unknown;
 
@@ -536,9 +564,16 @@ function createToolOutputStream(): ToolOutputStreamAdapter {
 
   const abort = async (reason?: unknown): Promise<void> => {
     const abortReason = reason === undefined ? new Error('tool stdout stream was aborted') : reason;
-    recordFailure(abortReason);
     acceptingOperations = false;
     controller?.error(abortReason);
+    if (!terminated) {
+      terminated = true;
+      try {
+        await writer.fail(toolStreamFailureFromError(abortReason));
+      } catch {
+        // An endpoint terminal selected by the handler remains authoritative.
+      }
+    }
     try {
       await settle();
     } catch {
@@ -557,13 +592,16 @@ function createToolOutputStream(): ToolOutputStreamAdapter {
           if (!(contents instanceof Uint8Array)) {
             throw new TypeError('tool stdout accepts only Uint8Array chunks');
           }
-          chunks.push(contents.slice());
+          if (contents.byteLength === 0) return;
+          return writer.write(contents);
         }),
       );
     },
     close() {
       if (!acceptingOperations) return Promise.reject(failed ? failure : invocationCompleted);
-      return track(Promise.resolve());
+      acceptingOperations = false;
+      terminated = true;
+      return track(writer.finish());
     },
     abort,
   });
@@ -577,25 +615,13 @@ function createToolOutputStream(): ToolOutputStreamAdapter {
       await settle();
       if (failed) throw failure;
       controller?.error(invocationCompleted);
-      return bytesFromChunks(chunks);
+      if (!terminated) {
+        terminated = true;
+        await writer.finish();
+      }
     },
     abort,
   };
-}
-
-async function* bytesFromChunks(chunks: readonly Uint8Array[]): AsyncIterable<number> {
-  for (const chunk of chunks) {
-    for (const byte of chunk) yield byte;
-  }
-}
-
-async function closeAsyncIterable(input: AsyncIterable<number> | undefined): Promise<void> {
-  if (!input) return;
-  try {
-    await input[Symbol.asyncIterator]().return?.();
-  } catch {
-    // Input stream cleanup is best-effort.
-  }
 }
 
 function closeReadableStream(controller: ReadableStreamDefaultController<Uint8Array>): void {
@@ -612,10 +638,6 @@ function invalidToolName(name: string): ToolError {
 
 function invalidToolInput(message: string): ToolError {
   return { tag: 'invalid-input', val: message };
-}
-
-function invalidToolResult(message: string): ToolError {
-  return { tag: 'invalid-result', val: message };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -657,11 +679,11 @@ function formatAgentRegistrationError(agentTypeName: string, messages: readonly 
 }
 
 function getDefinition(): AgentType {
-  if (!resolvedAgent) {
+  if (!initializedAgent) {
     throw new Error('Failed to get agent definition: agent is not initialized');
   }
 
-  return resolvedAgent.getAgentType();
+  return initializedAgent.agent.getAgentType();
 }
 
 function serializePrincipal(p: Principal): object {
@@ -750,12 +772,12 @@ function deserializePrincipal(obj: any): Principal {
 }
 
 async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
-  if (!resolvedAgent) {
+  if (!initializedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const { data: agentSnapshot, mimeType } = await resolvedAgent.saveSnapshot();
-  const principal = initializationPrincipal ?? { tag: 'anonymous' };
+  const { data: agentSnapshot, mimeType } = await initializedAgent.agent.saveSnapshot();
+  const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
 
   if (mimeType.startsWith('multipart/mixed')) {
@@ -813,7 +835,7 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
 async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
   const bytes = snapshot.payload;
 
-  if (resolvedAgent) {
+  if (initializedAgent) {
     throw `Agent is already initialized in this container`;
   }
 
@@ -827,6 +849,27 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
+  let databases: Array<{ name: string; bytes: Uint8Array }> = [];
+
+  const decodeJsonEnvelope = (data: Uint8Array, description: string) => {
+    const envelope = JSON.parse(new TextDecoder().decode(data));
+    if (envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)) {
+      throw `${description} must be a JSON object`;
+    }
+    if (!Object.hasOwn(envelope, 'version')) {
+      throw `${description} missing 'version' field`;
+    }
+    if (envelope.version !== 1) {
+      throw `${description} version must be 1`;
+    }
+    if (!Object.hasOwn(envelope, 'principal')) {
+      throw `${description} missing 'principal' field`;
+    }
+    if (!Object.hasOwn(envelope, 'state')) {
+      throw `${description} missing 'state' field`;
+    }
+    return envelope;
+  };
 
   if (snapshot.mimeType.startsWith('multipart/mixed')) {
     // Multipart snapshot: extract principal from the state JSON part
@@ -842,46 +885,39 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       throw 'multipart snapshot missing "state" part';
     }
 
-    const envelope = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    principal = envelope.principal
-      ? deserializePrincipal(envelope.principal)
-      : (initializationPrincipal ?? { tag: 'anonymous' });
+    const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part');
+    principal = deserializePrincipal(envelope.principal);
 
-    if (envelope.state === undefined) {
-      throw `multipart state part missing 'state' field`;
-    }
-
-    // Replace the state part body with just the agent properties (strip version/principal)
-    parts[stateIdx] = {
-      ...parts[stateIdx],
-      body: new TextEncoder().encode(JSON.stringify(envelope.state)),
-    };
-
-    // Re-encode the parts for loadSnapshot
-    const { data: reencoded, boundary: newBoundary } = encodeMultipart(parts);
-    agentSnapshot = reencoded;
-    agentSnapshotMimeType = `multipart/mixed; boundary=${newBoundary}`;
+    agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
+    agentSnapshotMimeType = 'application/json';
+    databases = parts
+      .filter((part) => part.name.startsWith('db:'))
+      .map((part) => ({ name: part.name.slice(3), bytes: part.body }));
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state }
-    const envelope = JSON.parse(new TextDecoder().decode(bytes));
-    principal = envelope.principal
-      ? deserializePrincipal(envelope.principal)
-      : (initializationPrincipal ?? { tag: 'anonymous' });
-    if (envelope.state === undefined) {
-      throw `JSON snapshot missing 'state' field`;
-    }
+    const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
+    principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
   } else {
     // Custom binary snapshot with version envelope
+    if (bytes.byteLength < 1) {
+      throw `Snapshot is empty`;
+    }
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const version = view.getUint8(0);
 
     if (version === 1) {
       agentSnapshot = bytes.slice(1);
-      principal = initializationPrincipal ?? { tag: 'anonymous' };
+      principal = { tag: 'anonymous' };
     } else if (version === 2) {
+      if (bytes.byteLength < 5) {
+        throw `Version 2 snapshot too short for principal length`;
+      }
       const principalLen = view.getUint32(1, false); // big-endian
+      if (principalLen > bytes.byteLength - 5) {
+        throw `Version 2 snapshot too short for principal data`;
+      }
       const principalBytes = bytes.slice(5, 5 + principalLen);
       principal = deserializePrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
       agentSnapshot = bytes.slice(5 + principalLen);
@@ -890,21 +926,22 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     }
   }
 
-  initializationPrincipal = principal;
-
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (!initiator) {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = await initiator.initiate(agentParameters, principal);
+  const initiateResult = await initiator.loadSnapshot(
+    agentParameters,
+    principal,
+    agentSnapshot,
+    agentSnapshotMimeType,
+    databases,
+  );
 
   if (initiateResult.tag === 'ok') {
-    const agent = initiateResult.val;
-    await agent.loadSnapshot(agentSnapshot, agentSnapshotMimeType);
-
-    resolvedAgent = agent;
+    initializedAgent = { agent: initiateResult.val, principal };
   } else {
     // Throwing a String because the load WIT function returns result<_, string>
     let errorString = 'Failed to construct agent';

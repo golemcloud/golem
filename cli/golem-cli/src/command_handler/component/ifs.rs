@@ -25,8 +25,10 @@ use golem_common::model::component::ArchiveFilePath;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use tempfile::TempDir;
+use std::sync::Arc;
+use tempfile::{NamedTempFile, TempDir};
 use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReadDirStream;
 use url::Url;
@@ -35,6 +37,13 @@ use url::Url;
 struct LoadedFile {
     content: Vec<u8>,
     source: Url,
+}
+
+pub struct LoadedInitialFile {
+    pub content: Arc<NamedTempFile>,
+    pub content_hash: blake3::Hash,
+    pub size: u64,
+    pub target: CanonicalFilePathWithPermissions,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +233,21 @@ async fn expand_local_component_file(
 impl IfsFileManager {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
+    }
+
+    pub async fn load_initial_files(
+        &self,
+        component_files: &[InitialComponentFile],
+    ) -> anyhow::Result<Vec<LoadedInitialFile>> {
+        let loader = InitialFileLoader {
+            client: self.client.clone(),
+        };
+        let component_files = expand_component_files(component_files).await?;
+        let mut result = Vec::new();
+        for component_file in &component_files {
+            result.extend(self.process_component_file(&loader, component_file).await?);
+        }
+        Ok(result)
     }
 
     pub async fn build_files_archive(
@@ -445,6 +469,101 @@ trait FileProcessor<R> {
         url: &Url,
         target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<R>;
+}
+
+struct InitialFileLoader {
+    client: reqwest::Client,
+}
+
+#[async_trait]
+impl FileProcessor<LoadedInitialFile> for InitialFileLoader {
+    async fn process_local_file(
+        &self,
+        path: &Path,
+        target: &CanonicalFilePathWithPermissions,
+    ) -> anyhow::Result<LoadedInitialFile> {
+        log_action(
+            "Loading",
+            format!(
+                "local IFS file: {}",
+                path.display().to_string().log_color_highlight()
+            ),
+        );
+
+        let mut source = File::open(path)
+            .await
+            .with_context(|| anyhow!("Error reading local IFS file: {}", path.display()))?;
+        let (content, content_hash, size) = stream_to_temp_file(&mut source).await?;
+        Ok(LoadedInitialFile {
+            content,
+            content_hash,
+            size,
+            target: target.clone(),
+        })
+    }
+
+    async fn process_remote_file(
+        &self,
+        url: &Url,
+        target: &CanonicalFilePathWithPermissions,
+    ) -> anyhow::Result<LoadedInitialFile> {
+        log_action(
+            "Downloading",
+            format!("remote IFS file: {}", url.as_str().log_color_highlight()),
+        );
+
+        let response = self
+            .client
+            .get(url.clone())
+            .send()
+            .await
+            .with_context(|| anyhow!("Failed to download remote IFS file: {}", url))?;
+        let response = check_http_response_success(response).await?;
+        let temp_file = Arc::new(NamedTempFile::new()?);
+        let mut destination = File::from_std(temp_file.reopen()?);
+        let mut hasher = blake3::Hasher::new();
+        let mut size = 0_u64;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.with_context(|| anyhow!("Failed to stream remote IFS file: {}", url))?;
+            destination.write_all(&chunk).await?;
+            hasher.update(&chunk);
+            size = size
+                .checked_add(chunk.len() as u64)
+                .context("Initial file is too large")?;
+        }
+        destination.flush().await?;
+        Ok(LoadedInitialFile {
+            content: temp_file,
+            content_hash: hasher.finalize(),
+            size,
+            target: target.clone(),
+        })
+    }
+}
+
+async fn stream_to_temp_file(
+    source: &mut File,
+) -> anyhow::Result<(Arc<NamedTempFile>, blake3::Hash, u64)> {
+    let temp_file = Arc::new(NamedTempFile::new()?);
+    let mut destination = File::from_std(temp_file.reopen()?);
+    let mut hasher = blake3::Hasher::new();
+    let mut size = 0_u64;
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let read = source.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        destination.write_all(&buffer[..read]).await?;
+        hasher.update(&buffer[..read]);
+        size = size
+            .checked_add(read as u64)
+            .context("Initial file is too large")?;
+    }
+    destination.flush().await?;
+    Ok((temp_file, hasher.finalize(), size))
 }
 
 struct FileLoader {

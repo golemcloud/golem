@@ -325,7 +325,8 @@ impl WorkerApi {
         agent_id: AgentId,
         auth: AuthCtx,
     ) -> Result<Json<AgentMetadataDto>> {
-        let response = self.worker_service.get_metadata(&agent_id, auth).await?;
+        let mut response = self.worker_service.get_metadata(&agent_id, auth).await?;
+        response.redact_host_managed_values_for_external();
 
         Ok(Json(response))
     }
@@ -422,7 +423,7 @@ impl WorkerApi {
             None => None,
         };
 
-        let (cursor, workers) = self
+        let (cursor, mut workers) = self
             .worker_service
             .find_metadata(
                 component_id,
@@ -433,6 +434,8 @@ impl WorkerApi {
                 auth,
             )
             .await?;
+
+        redact_worker_metadata_for_external(&mut workers);
 
         Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
     }
@@ -490,7 +493,7 @@ impl WorkerApi {
         params: WorkersMetadataRequest,
         auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let (cursor, workers) = self
+        let (cursor, mut workers) = self
             .worker_service
             .find_metadata(
                 component_id,
@@ -501,6 +504,8 @@ impl WorkerApi {
                 auth,
             )
             .await?;
+
+        redact_worker_metadata_for_external(&mut workers);
 
         Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
     }
@@ -632,7 +637,7 @@ impl WorkerApi {
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        let response = match (from, query) {
+        let mut response = match (from, query) {
             (Some(_), Some(_)) => {
                 return Err(ApiEndpointError::bad_request(
                     api::error_code::INVALID_OPLOG_QUERY_PARAMS,
@@ -657,6 +662,10 @@ impl WorkerApi {
                     .await?
             }
         };
+
+        for entry in &mut response.entries {
+            entry.entry.redact_host_managed_values_for_external();
+        }
 
         Ok(Json(response))
     }
@@ -1133,6 +1142,12 @@ impl WorkerApi {
                 golem_common::safe(format!("Invalid worker id: {error}")),
             )
         })
+    }
+}
+
+fn redact_worker_metadata_for_external(workers: &mut [AgentMetadataDto]) {
+    for worker in workers {
+        worker.redact_host_managed_values_for_external();
     }
 }
 

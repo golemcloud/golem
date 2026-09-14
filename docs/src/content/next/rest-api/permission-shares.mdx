@@ -1,15 +1,10 @@
 # Permission Shares API
 
 ## List permission shares owned by an account.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/permission-shares`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -43,13 +38,10 @@ Path|Method|Protected
 ```
 
 ## Create a new permission share owned by an account.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/permission-shares`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -101,15 +93,10 @@ Path|Method|Protected
 ```
 
 ## List permission shares targeting an account.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/received-permission-shares`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -143,15 +130,10 @@ Path|Method|Protected
 ```
 
 ## Get permission share by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/permission-shares/{permission_share_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -181,19 +163,16 @@ Path|Method|Protected
 ```
 
 ## Delete permission share.
+
 Path|Method|Protected
 ---|---|---
 `/v1/permission-shares/{permission_share_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
-
-
 
 **Example Response JSON**
 
@@ -223,13 +202,10 @@ current_revision|integer|Yes|-
 ```
 
 ## Update permission share data.
+
 Path|Method|Protected
 ---|---|---
 `/v1/permission-shares/{permission_share_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -281,15 +257,10 @@ Path|Method|Protected
 ```
 
 ## Get permission share by owner account and name.
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/permission-shares/{name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

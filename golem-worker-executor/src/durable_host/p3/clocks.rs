@@ -160,7 +160,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
             std::future::pending::<()>().await;
         }
         delivery
-            .prepare_delivery()
+            .prepare_delivery(None)
             .await
             .map_err(wasmtime::Error::from)?;
         delivery.delivered();

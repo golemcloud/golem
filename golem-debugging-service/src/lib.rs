@@ -33,7 +33,7 @@ use async_trait::async_trait;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
 pub use golem_worker_executor::RunDetails;
-use golem_worker_executor::durable_host::DurableWorkerCtx;
+use golem_worker_executor::durable_host::{CoreTypesHost, DurableWorkerCtx};
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_agents::ActiveAgents;
 use golem_worker_executor::services::agent_types::AgentTypesService;
@@ -63,7 +63,7 @@ use golem_worker_executor::services::worker_enumeration::{
 };
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{All, rdbms};
+use golem_worker_executor::services::{All, HasActiveAgents, rdbms};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::{Bootstrap, create_worker_executor_impl};
 use humansize::ISizeFormatter;
@@ -429,6 +429,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
         epoch_stop,
         shutdown,
         leak_detector: worker_executor_impl.leak_detector(),
+        invocation_loops: worker_executor_impl.active_agents().invocation_loops(),
     })
 }
 
@@ -512,7 +513,7 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;
-    golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+    golem_schema::schema::wit::wire::add_to_linker::<_, CoreTypesHost<DebugContext>>(
         &mut linker,
         get_durable_ctx,
     )?;

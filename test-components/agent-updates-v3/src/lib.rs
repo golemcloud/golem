@@ -33,10 +33,14 @@ impl UpdateTest for UpdateTestImpl {
         Ok(result)
     }
 
-    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
         if bytes.len() >= 8 {
-            self.last = u64::from_be_bytes(bytes[..8].try_into().unwrap());
-            Ok(())
+            Ok(Self {
+                last: u64::from_be_bytes(bytes[..8].try_into().unwrap()),
+            })
         } else {
             Err("Invalid snapshot - not enough bytes to read u64".to_string())
         }
@@ -65,7 +69,10 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
         Ok(Vec::new())
     }
 
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        Ok(())
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Ok(Self)
     }
 }

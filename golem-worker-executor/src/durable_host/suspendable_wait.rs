@@ -194,14 +194,14 @@ where
     .await
 }
 
-struct SuspendableWaitRegistration {
+pub(crate) struct SuspendableWaitRegistration {
     wait_id: u64,
     deadline: Option<DateTime<Utc>>,
     suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
 }
 
 impl SuspendableWaitRegistration {
-    fn new(
+    pub(crate) fn new(
         wait_id: u64,
         deadline: Option<DateTime<Utc>>,
         suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
@@ -290,7 +290,11 @@ mod tests {
 
     #[async_trait]
     impl PromiseService for UnusedPromiseService {
-        async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
+        async fn create(
+            &self,
+            _agent_id: &AgentId,
+            _oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
             unreachable!("promise service is unused by this test")
         }
 
@@ -381,7 +385,7 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             _oplog_index: OplogIndex,
             _n: u64,
@@ -412,6 +416,13 @@ mod tests {
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }
+
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: crate::services::oplog::IndexedReservedStartBuilder,
+        ) -> Result<OrderedOplogStart, String> {
+            unreachable!("oplog is unused by this test")
+        }
     }
 
     fn unused_wakeup_scheduler() -> WakeupScheduler {
@@ -432,11 +443,15 @@ mod tests {
 
     #[async_trait]
     impl PromiseService for StubPromiseService {
-        async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
-            PromiseId {
+        async fn create(
+            &self,
+            agent_id: &AgentId,
+            oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
+            Ok(PromiseId {
                 agent_id: agent_id.clone(),
                 oplog_idx,
-            }
+            })
         }
 
         async fn poll(&self, _promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
@@ -531,7 +546,7 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             _oplog_index: OplogIndex,
             _n: u64,
@@ -559,6 +574,13 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<OrderedOplogStart, String> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: crate::services::oplog::IndexedReservedStartBuilder,
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }

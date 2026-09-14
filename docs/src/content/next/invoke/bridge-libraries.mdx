@@ -2,7 +2,9 @@ import { Callout, Tabs } from "nextra/components"
 
 # Bridge Libraries
 
-Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates or TypeScript npm packages, Scala sbt projects and MoonBit modules that implement a fully typed client for specific agents, using Golem's REST API under the hood (`reqwest` for Rust, `fetch` for TypeScript).
+Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates, Node.js TypeScript npm packages, Scala sbt projects, and MoonBit modules that implement a fully typed client for specific agents.
+
+Methods without streams use the existing REST invocation API and remain compatible with previously generated clients. A method whose input or output contains a stream instead opens the public streaming WebSocket endpoint described below.
 
 ## Configuring Bridge Generation in golem.yaml
 
@@ -49,9 +51,9 @@ const value = await c1.increment()
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
-use counter_agent_client::{CounterAgent, GolemServer};
+use counter_agent_client::{configure, CounterAgent, GolemServer};
 
-CounterAgent::configure(GolemServer::Local, "bridgetest", "local");
+configure(GolemServer::Local, "bridgetest", "local");
 let c1 = CounterAgent::get("c1").await?;
 let value = c1.increment().await?;
 ```
@@ -84,13 +86,240 @@ async fn main {
 </Tabs.Tab>
 </Tabs>
 
+## Streaming Methods
+
+Generated clients preserve streams wherever they occur in a method's typed input or output, including nested values and multiple sibling streams. The examples below assume a `MediaAgent` with input-only `upload`, output-only `transcribe`, and mixed `transform` methods. The generated method names and parameter order follow the agent definition; there is no separate streaming method suffix.
+
+<Tabs items={["Rust", "TypeScript", "Scala", "MoonBit"]} storageKey="bridge-streaming-languages">
+<Tabs.Tab>
+```rust
+use futures_util::{stream, StreamExt};
+use golem_client::invocation_session::AgentStream;
+use media_agent_client::{configure, GolemServer, MediaAgent};
+
+configure(GolemServer::Local, "media-app", "prod");
+let agent = MediaAgent::get("studio-a").await?;
+
+// Input-only: AgentStream::input accepts a Stream<Item = Result<T, E>>.
+let samples = AgentStream::input(stream::iter([
+    Ok::<_, std::io::Error>(1_u8),
+    Ok(2_u8),
+]));
+agent.upload(samples).await?;
+
+// Output-only: AgentStream implements futures_core::Stream.
+let mut words = agent.transcribe().await?;
+while let Some(word) = words.next().await {
+    println!("{}", word?);
+}
+
+// Mixed: input ownership moves into the invocation and output is affine.
+let input = AgentStream::input(stream::iter([Ok::<_, std::io::Error>(10_u8)]));
+let mut output = agent.transform(input).await?;
+if let Some(first) = output.next().await {
+    println!("{}", first?);
+}
+output.cancel(); // Dropping an unread output also sends consumer-drop cancellation.
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { agentStream } from '@golemcloud/golem-ts-bridge'
+import { MediaAgent, configure } from 'media-agent-client/media-agent-client.js'
+
+configure({ server: { type: 'local' }, application: 'media-app', environment: 'prod' })
+const agent = await MediaAgent.get('studio-a')
+
+async function* samples() {
+  yield 1
+  yield 2
+}
+
+// Input-only. agentStream enforces a single call to Symbol.asyncIterator.
+await agent.upload(agentStream(samples()))
+
+// Output-only.
+for await (const word of await agent.transcribe()) console.log(word)
+
+// Mixed, with explicit whole-invocation cancellation.
+const controller = new AbortController()
+const output = await agent.transform.abortable(controller.signal, agentStream(samples()))
+for await (const item of output) {
+  console.log(item)
+  controller.abort()
+  break // Returning from iteration drops and cancels this unread output stream.
+}
+```
+
+<Callout type="warning">
+  Streaming TypeScript bridges run on **Node.js only**. Browser WebSocket streaming is not supported. Non-streaming generated TypeScript methods can still use `fetch` in their existing supported environments.
+</Callout>
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.bridge.client.media_agent.MediaAgentClient
+import golem.bridge.runtime.{AgentStream, AgentStreamStep, GolemServer}
+import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration._
+
+implicit val ec: ExecutionContext = ExecutionContext.global
+MediaAgentClient.configure(GolemServer.Local, "media-app", "prod")
+val agent = Await.result(MediaAgentClient.get("studio-a"), 30.seconds)
+
+var samples = List(1.toByte, 2.toByte)
+val input = AgentStream.fromPull(() => Future.successful(samples match {
+  case head :: tail => samples = tail; AgentStreamStep.Item(head)
+  case Nil => AgentStreamStep.End
+}))
+Await.result(agent.upload(input), 30.seconds) // Input-only.
+
+val words = Await.result(agent.transcribe(), 30.seconds) // Output-only.
+val consumer = Await.result(words.consume(), 30.seconds)
+Await.result(consumer.pull(), 30.seconds)
+Await.result(consumer.drop(), 30.seconds) // Explicit unread-output cancellation.
+
+val mixed = Await.result(agent.transform(AgentStream.fromPull(() =>
+  Future.successful(AgentStreamStep.End)
+)), 30.seconds)
+val mixedConsumer = Await.result(mixed.consume(), 30.seconds)
+Await.result(mixedConsumer.cancel(), 30.seconds)
+```
+
+`consume()` is affine: a second consumer fails deterministically. `pull()` is the back-pressure boundary; use `cancel()` for explicit cancellation or `drop()` when abandoning an unread output.
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+// Generated package imports in moon.pkg:
+//   "media-agent-client/client" @client
+//   "media-agent-client/runtime" @runtime
+async fn main {
+  @client.MediaAgent::configure(@runtime.Local, "media-app", "prod")
+  let agent = @client.MediaAgent::get("studio-a")
+  let mut samples = [1, 2]
+  let input = @runtime.AgentStream::from_next(async fn() { samples.remove(0) })
+  agent.upload(input) // Input-only; ownership moves into the invocation.
+
+  let words = agent.transcribe() // Output-only.
+  match words.next() {
+    Some(word) => println(word)
+    None => ()
+  }
+  words.drop() // Propagates consumer-drop for an unread output.
+
+  let empty = @runtime.AgentStream::from_next(async fn() { None })
+  let mixed = agent.transform(empty)
+  mixed.cancel()
+}
+```
+
+An `AgentStream` allows only one reader and one outstanding `next()` call. After an input stream is passed to an invocation, client code can no longer read or cancel it.
+</Tabs.Tab>
+</Tabs>
+
+### Raw binary lanes
+
+Direct `stream<u8>` and `stream<binary>` values use binary WebSocket frames rather than JSON/base64 for their item data. `stream<u8>` treats every byte as one logical item. `stream<binary>` treats each frame chunk as an `AgentBinary` item with bytes and an optional MIME type. Streams nested inside another value still retain their structural position, while their bytes travel on the corresponding binary lane.
+
+For example, a video-processing client can stream a multi-megabyte recording without constructing one enormous JSON value:
+
+```typescript
+import { createReadStream } from 'node:fs'
+import { agentStream, type AgentBinary } from '@golemcloud/golem-ts-bridge'
+
+async function* videoChunks(path: string): AsyncGenerator<AgentBinary> {
+  for await (const chunk of createReadStream(path, { highWaterMark: 1024 * 1024 })) {
+    yield { bytes: new Uint8Array(chunk), mimeType: 'video/mp4' }
+  }
+}
+
+// A 250 MiB video is sent as 1 MiB binary items with normal stream back-pressure.
+const preview = await agent.makePreview(agentStream(videoChunks('recording.mp4')))
+for await (const audioChunk of preview) {
+  await audioSink.write(audioChunk.bytes) // e.g. AgentBinary with audio/aac
+}
+```
+
+Use a stream of structured records instead when each item needs additional application metadata.
+
+## Public Streaming Transport
+
+Streaming bridges connect to:
+
+```text
+GET /v1/agents/invoke-agent-session
+Sec-WebSocket-Protocol: golem.agent-invocation.v1
+Authorization: Bearer <token>
+```
+
+The URL uses `ws:` for an HTTP server and `wss:` for HTTPS. `Local` and `Cloud` select the standard server and credentials; a custom server configuration supplies its own base URL and bearer token. For example, TypeScript uses `server: { type: "custom", url: "https://golem.example.com", token }`; the corresponding variants are `GolemServer::Custom { url: reqwest::Url, token }` in Rust, `GolemServer.Custom(url, token)` in Scala, and `@runtime.Custom(url, token)` in MoonBit. Authentication and authorization are checked both when starting and when reattaching to a session. The generated runtime negotiates the required `golem.agent-invocation.v1` subprotocol automatically; applications should not open this socket directly.
+
+The [Stream Session Public Protocol v1](/next/invoke/stream-session-public-protocol-v1) reference specifies every JSON message, binary envelope, stable error code, limit, token, and resume rule.
+
+### Durability, resume, and cancellation
+
+- Losing the WebSocket or stopping a client **detaches the transport**; it does not by itself cancel the durable invocation.
+- A resume presents the opaque session token and the last delivered output cursors. The server replays output after those cursors in per-stream order.
+- Delivery across a detach is **at least once**. If the client received an item but its cursor was not durably checkpointed, that item can be replayed. Consumers that perform external side effects should deduplicate them.
+- Normal resume requires the old attachment to be detached. An authenticated takeover advances the attachment epoch and fences a still-connected old client; stale frames are rejected.
+- Cancelling an output stream, abandoning its reader, or aborting an invocation is explicit and propagates to the session. A producer failure remains a stream-local error unless it causes the invocation itself to fail.
+- Every stream is affine: it has one consumer. Reading twice, reusing an input after passing it to a method, or concurrently pulling where unsupported fails rather than silently duplicating data.
+
+The generated bridges reconnect transiently using in-memory session state. For an operator-controlled checkpoint that survives a CLI process exit, use the CLI workflow below. See [Operating Durable Stream Sessions](/next/operate/durable_streams) for service limits and operational recovery.
+
+## CLI Streaming and Checkpoints
+
+Use `-` for exactly one direct stream input. The default `value` stdin format parses one source-language value per line; `value` stdout emits a sequence of structured lifecycle documents:
+
+```shell
+# JSON/value stdin and stdout for stream<string>.
+printf '"first"\n"second"\n' |
+  golem agent invoke 'MediaAgent("studio-a")' index_words - \
+    --stdin-format value --stdout-format value --format json
+```
+
+Raw mode is restricted to one direct `stream<u8>` or `stream<binary>` input or output. It avoids JSON encoding, making it suitable for multi-megabyte audio and video:
+
+```shell
+# Raw binary stdin to a direct stream<binary> parameter.
+golem agent invoke 'MediaAgent("studio-a")' upload_video - \
+  --stdin-format raw < recording.mp4
+
+# Raw binary stdout from one direct stream<u8> or stream<binary> result.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw > soundtrack.aac
+```
+
+For `stream<binary>`, raw stdin forms fixed 64 KiB logical items except for the final shorter item. For `stream<u8>`, each byte is an item. Raw stdout contains only bytes, so diagnostics remain off stdout.
+
+`--save-session` is the CLI checkpoint option. It atomically records opaque session identity, pending operation, and delivered output cursors, but not credentials or stream values:
+
+```shell
+# Start and continuously checkpoint.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --save-session render-session.json > soundtrack.aac
+
+# Resume only after the previous transport detached.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --resume-session render-session.json >> soundtrack.aac
+
+# Or explicitly fence a transport that may still be attached.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --takeover-session render-session.json >> soundtrack.aac
+```
+
+The CLI does not retry automatically. On resumed input, stdin begins after the server's durable input high-water mark; bytes that had not reached that durable point before the previous process exited cannot be recovered from the checkpoint. Keep checkpoint files private.
+
+## Current Boundary
+
+This feature is the generated external bridge and CLI **invocation-session WebSocket** transport. It does not provide Durable Streams URLs, catch-up HTTP endpoints, long polling, Server-Sent Events (SSE), browser streaming, or an `openDurableStream` API. Those are future-facing possibilities, not supported interfaces in this release.
+
 ## Configuration Options
 
 The TypeScript, Rust, Scala and MoonBit bridge libraries require three configuration parameters:
 
 | Parameter | Description |
 |-----------|-------------|
-| **Server** | `Local` for the default local Golem server, `Cloud` for Golem Cloud, or a custom deployment URL |
+| **Server** | `Local` for the default local Golem server, `Cloud` for Golem Cloud, or a custom deployment URL and bearer token |
 | **Application name** | The `app:` key from your `golem.yaml` |
 | **Environment** | The target environment (e.g., `local`, `staging`, `prod`) |
 

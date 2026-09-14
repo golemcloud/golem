@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use std::fmt::{self, Debug, Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
@@ -31,15 +33,17 @@ pub type ScanCursor = u64;
 
 /// Typed error for [`IndexedStorage`] operations.
 ///
-/// `Transient` errors (pool exhaustion, connection resets) are retriable;
-/// `Other` errors (data issues, schema problems) are not.
+/// `Transient` errors are safe to retry. `Indeterminate` errors can only be retried by callers
+/// that reconcile a possibly committed write. `Conflict` and `Other` errors are not retriable.
 #[derive(Debug, Clone)]
 pub enum IndexedStorageError {
-    /// Transient error — pool exhaustion, connection reset, broken pipe.
-    /// Caller may retry.
+    /// The operation did not take effect, or is idempotent, so the caller may retry it.
     Transient(String),
-    /// Permanent error — data issue, unique violation, schema error.
-    /// Caller should not retry.
+    /// A write may have taken effect, so a retry must reconcile the stored value on conflict.
+    Indeterminate(String),
+    /// The requested index already exists.
+    Conflict(String),
+    /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
 }
 
@@ -53,6 +57,10 @@ impl Display for IndexedStorageError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             IndexedStorageError::Transient(msg) => write!(f, "Transient storage error: {msg}"),
+            IndexedStorageError::Indeterminate(msg) => {
+                write!(f, "Indeterminate storage error: {msg}")
+            }
+            IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
         }
     }
@@ -131,19 +139,19 @@ pub trait IndexedStorage: Debug + Sync {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: &IndexedStorageNamespace,
         key: &str,
-        pairs: Vec<(u64, Vec<u8>)>,
+        pairs: Arc<[(u64, Bytes)]>,
     ) -> Result<(), IndexedStorageError> {
-        for (id, value) in pairs {
+        for (id, value) in pairs.iter() {
             self.append(
                 svc_name,
                 api_name,
                 entity_name,
-                namespace.clone(),
+                (*namespace).clone(),
                 key,
-                id,
-                value,
+                *id,
+                value.to_vec(),
             )
             .await?;
         }
@@ -420,7 +428,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     /// Returns the total number of bytes written to storage.
     pub async fn append_many<V: BinarySerializer>(
         &self,
-        namespace: IndexedStorageNamespace,
+        namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: &[(u64, &V)],
     ) -> Result<u64, IndexedStorageError> {
@@ -429,8 +437,20 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         for (id, value) in pairs {
             let bytes = serialize(value).map_err(IndexedStorageError::Other)?;
             total_bytes += bytes.len() as u64;
-            serialized_pairs.push((*id, bytes));
+            serialized_pairs.push((*id, Bytes::from(bytes)));
         }
+        self.append_many_raw(namespace, key, serialized_pairs.into())
+            .await?;
+        Ok(total_bytes)
+    }
+
+    /// Appends an already serialized batch without repeating serialization in a retry loop.
+    pub async fn append_many_raw(
+        &self,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: Arc<[(u64, Bytes)]>,
+    ) -> Result<(), IndexedStorageError> {
         self.storage
             .append_many(
                 self.svc_name,
@@ -438,10 +458,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 self.entity_name,
                 namespace,
                 key,
-                serialized_pairs,
+                pairs,
             )
-            .await?;
-        Ok(total_bytes)
+            .await
     }
 
     /// Reads a closed range of entries from the index of the given key, deserializing each entry

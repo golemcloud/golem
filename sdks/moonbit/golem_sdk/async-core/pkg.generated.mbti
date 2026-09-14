@@ -129,4 +129,3 @@ type WaitableSet derive(Eq, Hash)
 // Type aliases
 
 // Traits
-

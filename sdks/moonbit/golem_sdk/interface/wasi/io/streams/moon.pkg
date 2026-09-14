@@ -4,3 +4,5 @@ import {
   "golemcloud/golem_sdk/interface/wasi/io/error",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
 }
+
+supported_targets = "+wasm"

@@ -27,17 +27,21 @@
 //! A spawned task counts as **active** from the moment it is spawned until
 //! it finishes, *except* while it is parked at a designated **safe park
 //! point**: a wait that may legitimately span invocations because it cannot
-//! produce durable work until a future guest action. Safe park points are
-//! exclusively waits on guest-driven events:
+//! produce durable work until a future guest action or replay-tail progress.
+//! Safe park points are:
 //!
 //! * awaiting guest demand (e.g. a consume-body / TCP-receive demand
 //!   channel, or the demand-gating oneshot of the request-body transmission
 //!   recorder);
 //! * awaiting guest-produced stream data (stdio capture, filesystem write
-//!   chunks, TCP send bytes, replayed request-body frames).
+//!   chunks, TCP send bytes, replayed request-body frames);
+//! * passive replay-progress notification for a markerless completion whose
+//!   durable finalization is finished. No recorded entry depends on that
+//!   unobserved delivery, and invocation settlement may own the remaining tail.
 //!
 //! Waits whose completion is *not* guest-driven — durable oplog appends,
-//! live network / file I/O, replay-resolver waits — keep the task active:
+//! live network / file I/O, replay-resolver waits, queued or running cursor
+//! transactions, and recorded delivery-marker waits — keep the task active:
 //! the completion path waits for them (bounded by the invocation tail-drain
 //! timeout).
 

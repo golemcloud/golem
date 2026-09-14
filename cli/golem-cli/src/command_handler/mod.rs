@@ -15,6 +15,7 @@
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
 use self::secret::SecretCommandHandler;
+use self::tool::ToolCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
@@ -54,7 +55,6 @@ use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
-use std::ffi::OsString;
 use std::marker::PhantomData;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -80,6 +80,7 @@ mod retry_policy;
 mod secret;
 pub(crate) mod template;
 mod tui;
+mod tool;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound
 // on the `handler_server_commands` method. Having a Send bound there causes "Send is not generic enough"
@@ -140,12 +141,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         }
     }
 
-    pub async fn handle_args<I, T>(args_iterator: I, hooks: Arc<Hooks>) -> ExitCode
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<OsString> + Clone,
-    {
-        let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
+    pub async fn handle(
+        command_parse_result: GolemCliCommandParseResult,
+        hooks: Arc<Hooks>,
+    ) -> ExitCode {
+        let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(command) => {
                 #[cfg(feature = "server-commands")]
                 let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
@@ -388,6 +388,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
+                GolemCliSubcommand::Tool { subcommand } => {
+                    ctx.get_or_init()
+                        .await?
+                        .tool_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
                 GolemCliSubcommand::Component { subcommand } => {
                     ctx.get_or_init()
                         .await?
@@ -522,6 +529,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     }
 }
 
+#[cfg(feature = "server-commands")]
+pub fn requires_executor_runtime(command_parse_result: &GolemCliCommandParseResult) -> bool {
+    matches!(
+        command_parse_result,
+        GolemCliCommandParseResult::FullMatch(GolemCliCommand {
+            subcommand: GolemCliSubcommand::Server {
+                subcommand: ServerSubcommand::Run { .. }
+            },
+            ..
+        })
+    )
+}
+
 fn render_raw_schema_document(format: Format, value: &serde_json::Value) -> anyhow::Result<String> {
     match format {
         Format::Text => Ok(serde_json::to_string(value)?),
@@ -592,6 +612,7 @@ pub trait Handlers {
     fn card_handler(&self) -> CardCommandHandler;
     fn component_handler(&self) -> ComponentCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
+    fn tool_handler(&self) -> ToolCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
@@ -659,6 +680,10 @@ impl Handlers for Arc<Context> {
         EnvironmentCommandHandler::new(self.clone())
     }
 
+    fn tool_handler(&self) -> ToolCommandHandler {
+        ToolCommandHandler::new(self.clone())
+    }
+
     fn error_handler(&self) -> ErrorHandler {
         ErrorHandler::new(self.clone())
     }
@@ -670,13 +695,6 @@ impl Handlers for Arc<Context> {
     fn log_handler(&self) -> LogHandler {
         LogHandler::new(self.clone())
     }
-
-    // TODO: atomic:
-    /*
-    fn plugin_installation_handler(&self) -> PluginInstallationHandler {
-        PluginInstallationHandler::new(self.clone())
-    }
-    */
 
     fn plugin_handler(&self) -> PluginCommandHandler {
         PluginCommandHandler::new(self.clone())
@@ -716,5 +734,40 @@ fn debug_log_parse_error(error: &clap::Error, fallback_command: &GolemCliFallbac
         for (kind, value) in error.context() {
             debug!(kind = %kind, value = %value, "Clap error context");
         }
+    }
+}
+
+#[cfg(all(test, feature = "server-commands"))]
+mod tests {
+    use super::requires_executor_runtime;
+    use crate::command::GolemCliCommand;
+    use test_r::test;
+
+    fn requires_executor_runtime_for(args: &[&str]) -> bool {
+        let result = GolemCliCommand::try_parse_from_lenient(args, true);
+        requires_executor_runtime(&result)
+    }
+
+    #[test]
+    fn server_runtime_is_selected_only_for_parsed_server_run() {
+        assert!(requires_executor_runtime_for(&["golem", "server", "run"]));
+        assert!(requires_executor_runtime_for(&[
+            "golem",
+            "--verbose",
+            "server",
+            "run"
+        ]));
+
+        assert!(!requires_executor_runtime_for(&[
+            "golem", "server", "clean"
+        ]));
+        assert!(!requires_executor_runtime_for(&[
+            "golem", "server", "run", "--help"
+        ]));
+        assert!(!requires_executor_runtime_for(&[
+            "golem", "server", "invalid"
+        ]));
+        assert!(!requires_executor_runtime_for(&["golem", "templates"]));
+        assert!(!requires_executor_runtime_for(&["golem"]));
     }
 }

@@ -55,7 +55,7 @@ abstract class AbstractRemoteMethod[Trait, In, Out] protected (
   protected final def awaitWithMetadata(input: In): Future[InvocationResult[Out]] =
     resolved.awaitWithMetadata(method, input)
 
-  protected final def cancelableAwaitWithMetadata(input: In): Either[String, CancelableAsyncInvocation[Out]] =
+  protected final def cancelableAwaitWithMetadata(input: In): Future[CancelableAsyncInvocation[Out]] =
     resolved.cancelableAwaitWithMetadata(method, input)
 
   protected final def triggerWithMetadata(input: In): Future[InvocationReceipt] =

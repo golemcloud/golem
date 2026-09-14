@@ -14,6 +14,7 @@
 
 use crate::model::EnvironmentId;
 use crate::schema::schema_type::QuantityValue;
+use crate::schema::stream::SchemaValueStream;
 use chrono::{DateTime, Utc};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
@@ -152,9 +153,22 @@ pub enum SchemaValue {
     Union(UnionValuePayload),
 
     // Capability nodes
+    #[cfg_attr(all(feature = "guest", not(feature = "host")), serde(skip))]
+    #[cfg_attr(
+        all(feature = "full", feature = "guest", not(feature = "host")),
+        transient
+    )]
     Secret(SecretVariantValue),
+    #[cfg_attr(all(feature = "guest", not(feature = "host")), serde(skip))]
+    #[cfg_attr(
+        all(feature = "full", feature = "guest", not(feature = "host")),
+        transient
+    )]
     QuotaToken(QuotaTokenVariantValue),
     PermissionCard(PermissionCardVariantValue),
+    #[serde(skip)]
+    #[cfg_attr(feature = "full", transient)]
+    Stream(SchemaValueStream),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]

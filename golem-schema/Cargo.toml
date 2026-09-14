@@ -26,7 +26,8 @@ chrono = []
 derive = []
 full = ["dep:desert_rust", "dep:golem-api-grpc", "dep:poem", "dep:poem-openapi"]
 guest = ["dep:wasip2", "dep:wit-bindgen"]
-host = ["dep:wasmtime", "dep:wasmtime-wasi"]
+host = ["native-stream", "dep:wasmtime", "dep:wasmtime-wasi"]
+native-stream = []
 mac_address = ["dep:mac_address"]
 nonempty_collections = ["dep:nonempty-collections"]
 num_bigint = ["dep:num-bigint"]
@@ -41,6 +42,7 @@ golem-schema-derive = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true }
 combine = { workspace = true }

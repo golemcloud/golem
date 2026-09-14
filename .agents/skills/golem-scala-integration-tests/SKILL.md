@@ -1,177 +1,86 @@
 ---
 name: golem-scala-integration-tests
-description: "Run and debug Golem Scala SDK integration tests. Use when running golem-scala integration tests, debugging test failures, or working with GolemExamplesIntegrationSpec."
+description: "Runs and debugs the Scala SDK's self-hosted Golem integration suite. Use for generated test agents, REPL samples, HTTP routes, host provisioning, or GolemExamplesIntegrationSpec."
 ---
 
 # Golem Scala Integration Tests
 
-Integration tests for the Golem Scala SDK live in `sdks/scala/integration-tests/`. They exercise test agents against a real local Golem server.
+The suite is `sdks/scala/integration-tests/src/test/scala/golem/integration/GolemExamplesIntegrationSpec.scala`; its application is `sdks/scala/test-agents/`.
+
+## Repository test-policy conflict
+
+This existing sbt suite directly launches the `golem` executable. That is a
+known source-level conflict with the repository rule that subprocess-based
+tests belong in the CLI integration test suite. Do not add coverage that
+extends this pattern: place new subprocess coverage in CLI integration tests,
+and keep non-CLI Scala tests process-free. The commands below document how to
+verify the existing suite until that coverage is migrated.
 
 ## Prerequisites
 
-1. **`golem-cli`** on PATH (v1.5.0-dev at `~/.cargo/bin/golem-cli`)
-2. **TS packages built** — the Golem TypeScript SDK packages at the path pointed to by `GOLEM_TS_PACKAGES_PATH`
-3. **Port 9881 free** — the test suite starts its own Golem server
-4. **SDK published locally** — run from `sdks/scala/`:
+- Build the repository's `golem` binary and put its directory on `PATH`. The suite executes `golem`, not `golem-cli` and not a fixed binary under the home directory.
+- Build the TypeScript SDK packages and set `GOLEM_TS_PACKAGES_PATH` to their packages directory.
+- Keep local port 9881 free; the suite owns the server lifecycle. HTTP fixtures also use localhost:9006.
+- Generate the Scala guest runtimes. The test manifest consumes `.generated/agent_guest.wasm`; current CI runs the generator first.
+
+For a complete local Scala publication from repository root, use `cargo make build-sdk-scala`. For the exact CI setup, follow the `scala-sdk-integration-tests` job in `.github/workflows/ci.yaml`.
+
+## Run
+
+Use non-client sbt so `build.sbt` can forward `GOLEM_TS_PACKAGES_PATH` into the forked test JVM:
 
 ```bash
 cd sdks/scala
-sbt '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal'
+GOLEM_TS_PACKAGES_PATH="$PWD/../ts/packages" \
+  sbt -batch "++3.8.2; integrationTests/test"
 ```
 
-## Running Tests
-
-Run all Scala SDK integration tests with non-client `sbt`:
+Focused ZIO tests use the suite's current test names/tags, for example:
 
 ```bash
-cd sdks/scala
-GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt "++3.8.2; integrationTests/test"
+GOLEM_TS_PACKAGES_PATH=<packages> \
+  sbt -batch '++3.8.2; integrationTests/testOnly -- -t snapshot-counter'
 ```
 
-The `GOLEM_TS_PACKAGES_PATH` env var is forwarded automatically by `build.sbt` to `javaOptions` and `envVars` for the integration tests. The `golemTestAll` alias does not include integration tests.
+If client mode is unavoidable, explicitly pass `-Dgolem.tsPackagesPath=...` in `integrationTests / Test / javaOptions`; ordinary environment changes are not reliably propagated by a running sbt client.
 
-### Running specific tests with `sbt --client`
+## Lifecycle
 
-With `sbt --client`, env vars don't propagate to the forked test JVM. Use the `set` override instead:
+`GolemServer.layer` currently:
 
-```bash
-cd sdks/scala
+1. checks `golem --version`, the TS package path, and port 9881;
+2. locates `test-agents/golem.yaml` from supported repository/checkout layouts;
+3. safely removes stale `test-agents/golem-temp` content, including symlinks;
+4. starts `golem -vvv server run --clean --disable-app-manifest-discovery` and writes `sdks/scala/target/scala-integration/golem-server.log`;
+5. invokes local manifest-aware `golem deploy` with one retry;
+6. provisions retry policies and secret values used by fixtures;
+7. runs all tests sequentially and kills the server process tree on release.
 
-# All integration tests
-sbt --client '++3.8.2; set integrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; integrationTests/test'
+Commands use `--yes --local --app-manifest-path <test-agents/golem.yaml>`. The suite forwards `GOLEM_TS_PACKAGES_PATH` and, for build/server commands, `RUST_BACKTRACE=1`.
 
-# Only HTTP endpoint tests
-sbt --client '++3.8.2; set integrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; integrationTests/testOnly -- -t http-'
+Do not start a second server, pre-deploy manually, or kill unrelated system processes as routine setup.
 
-# A specific test by name
-sbt --client '++3.8.2; set integrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; integrationTests/testOnly -- -t sync-return'
-```
+## Current application contract
 
-Use the sbt logging pattern (redirect to log file, check exit code).
+`test-agents/golem.yaml` is a manifest v1.6 application named `scala-examples`, with component ID `scala:examples`. Its build command selects sbt project `testAgents`, writes `.golem/scala.js`, injects that module into `.generated/agent_guest.wasm`, and preinitializes the resulting component. REPL samples are TypeScript files under `test-agents/samples/`; HTTP tests exercise manifest deployments on port 9006.
 
-## Test Architecture
+Avoid copying a full sample or agent inventory into this skill. The spec's `samples` table and manifest-coverage test are authoritative, and some tests are intentionally ignored unless their external dependency is enabled.
 
-### Server Lifecycle
+## Debugging
 
-The `GolemServer.layer` (ZLayer) handles everything:
+- Read `target/scala-integration/golem-server.log` first when startup or deploy fails.
+- The test process prints each `golem` command's output; inspect the first failing build/deploy/provision command.
+- If the CLI reports an up-to-date build after relevant SDK changes, remove only the affected generated build state (typically `test-agents/.golem`) and regenerate/redeploy through the suite.
+- Let the suite's symlink-aware cleanup remove `golem-temp`; do not replace it with unsafe recursive deletion in test code.
+- Verify `GOLEM_TS_PACKAGES_PATH` points at built packages when REPL imports fail.
 
-1. Checks `golem-cli` is on PATH
-2. Checks `GOLEM_TS_PACKAGES_PATH` / `golem.tsPackagesPath` is set
-3. Verifies port 9881 is free (fails if already in use — **kill any running golem server first**)
-4. Cleans `golem-temp/` directory (stale REPL caches)
-5. Starts `golem-cli -vvv server run --clean --disable-app-manifest-discovery`
-6. Waits for port 9881 to accept connections (60s timeout)
-7. Runs `golem-cli deploy` (with one retry)
-8. On teardown: kills the server process tree
+## Maintaining existing coverage
 
-### Two Test Categories
+Do not add new subprocess-based coverage to this suite. Put new generated-application, REPL, and
+CLI lifecycle coverage in the CLI integration test suite. When a contract change requires an
+existing Scala sample or assertion to change, keep `test-agents/src/main/scala/`,
+`test-agents/samples/`, and `test-agents/golem.yaml` aligned with the affected existing test; the
+manifest-coverage test detects unregistered sample scripts.
 
-1. **Sample tests** — TypeScript REPL scripts in `sdks/scala/test-agents/samples/*/repl-*.ts`. Each script is executed via `golem-cli repl scala:examples --language typescript --script-file <script>`. Output is checked for expected fragments.
-
-2. **HTTP endpoint tests** — Direct HTTP calls to `localhost:9006` (configured in `golem.yaml`). Test code-first HTTP routes defined via `@agentDefinition(mount=...)` and `@endpoint(...)`.
-
-### Key Files
-
-| File | Purpose |
-|------|---------|
-| `sdks/scala/integration-tests/src/test/scala/golem/integration/GolemExamplesIntegrationSpec.scala` | All tests |
-| `sdks/scala/test-agents/golem.yaml` | App manifest (components, HTTP deployments) |
-| `sdks/scala/test-agents/src/main/scala/example/minimal/` | Agent definitions and implementations |
-| `sdks/scala/test-agents/samples/` | TypeScript REPL test scripts |
-| `sdks/scala/test-agents/.golem/` | Build output (created by `golem-cli deploy`) |
-| `sdks/scala/test-agents/.generated/agent_guest.wasm` | Prebuilt QuickJS WASM runtime |
-| `sdks/scala/test-agents/golem-temp/` | REPL caches, bridge SDKs (created at runtime) |
-
-## Before Running Tests
-
-### Kill existing golem processes
-
-```bash
-pkill -f "golem.*server" 2>/dev/null
-```
-
-### Clean build artifacts when SDK code changed
-
-```bash
-rm -rf sdks/scala/test-agents/.golem sdks/scala/test-agents/target
-rm -rf sdks/scala/macros/target sdks/scala/model/.jvm/target sdks/scala/model/.js/target
-rm -rf sdks/scala/core/js/target
-```
-
-The Golem CLI caches builds aggressively (`[UP-TO-DATE]`). If you changed macro or core logic, you MUST delete `.golem/` to force a rebuild.
-
-### Ensure `.generated/agent_guest.wasm` exists
-
-```bash
-cp sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm sdks/scala/test-agents/.generated/agent_guest.wasm
-```
-
-This is normally done by `sbt golemPrepare` but the integration test deploy command needs it in place.
-
-## Common Failures
-
-### `port 9881 is already in use`
-A golem server is already running. Kill it: `pkill -f "golem.*server"`
-
-### `GOLEM_TS_PACKAGES_PATH env var or golem.tsPackagesPath system property must be set`
-Pass the system property via `javaOptions` in the sbt command (see Running Tests above).
-
-### `Cannot find package '@golem/golem-ts-repl/index.js'`
-The TypeScript SDK packages are not built. Build them in `sdks/ts/`, or check the path is correct.
-
-### `golem deploy failed after retry`
-Check the deploy output for the root cause. Common issues:
-- Agent type discovery failure (JavaScript error during WASM initialization)
-- Schema mismatch between mount path variables and constructor parameter names
-- Missing `.generated/agent_guest.wasm`
-
-### Build reported `[UP-TO-DATE]` but code changed
-Delete `sdks/scala/test-agents/.golem/` to force a full rebuild.
-
-### TypeScript REPL tests pass but HTTP tests fail (or vice versa)
-These are independent. REPL tests use `golem-cli repl` with TS scripts. HTTP tests use direct HTTP calls to port 9006.
-
-### `deleteRecursive` destroying files in external repos
-The `golem-temp/repl/ts/node_modules/@golem/` contains symlinks to the TS SDK packages directory. The cleanup code in `GolemServer.layer` checks for symlinks before recursing to avoid deleting symlink targets. **Never use plain `rm -rf` on `golem-temp/`** — always delete symlinks first:
-
-```bash
-find sdks/scala/test-agents/golem-temp -type l -delete 2>/dev/null
-rm -rf sdks/scala/test-agents/golem-temp
-```
-
-## Verifying Agent Schemas
-
-After deploy, inspect the component to verify constructor and method schemas:
-
-```bash
-golem-cli component get scala:examples --local
-```
-
-Look for correct parameter names in the output, e.g.:
-- `WeatherAgent.getWeather(city: string)` — not `(value: string)`
-- `CatalogAgent(region: string, catalog: string)` — case class fields flattened
-- `InventoryAgent(arg0: string, arg1: number)` — tuple positional names
-
-## Adding New Tests
-
-### HTTP endpoint test
-
-1. Define agent trait with `@agentDefinition(mount=...)` and `@endpoint(...)` in `sdks/scala/test-agents/src/`
-2. Add implementation class with `@agentImplementation()`
-3. Add agent to `sdks/scala/test-agents/golem.yaml` under `httpApi.deployments.local[0].agents`
-4. Add test in `GolemExamplesIntegrationSpec.scala`:
-   ```scala
-   test("http-my-test") {
-     for {
-       _ <- ZIO.service[GolemServer]
-       (status, body) <- httpGet("/api/my-agent/my-key/endpoint")
-     } yield assertTrue(status == 200) && assertTrue(body.contains("expected"))
-   }
-   ```
-5. Add to the appropriate test sequence and ensure it's included in the spec
-
-### TypeScript REPL test
-
-1. Create `sdks/scala/test-agents/samples/my-test/repl-my-test.ts`
-2. Register in the `samples` list in `GolemExamplesIntegrationSpec.scala`
-3. The manifest coverage test (`manifest covers all sample scripts`) will fail if scripts exist without being registered
+Whenever an existing test changes, run that focused test. Use the full existing suite only for
+shared lifecycle, manifest, generated-runtime, or cross-sample changes.

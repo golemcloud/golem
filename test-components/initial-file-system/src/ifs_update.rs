@@ -35,8 +35,19 @@ impl IfsUpdate for IfsUpdateImpl {
     }
 
     // intentionally incorrect implementation
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        self.content = "restored".to_string();
-        Ok(())
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let golem_rust::SchemaValue::Record { fields } = context.parameters else {
+            return Err("Invalid snapshot restore parameters".to_string());
+        };
+        let [golem_rust::SchemaValue::String(name)] = fields.as_slice() else {
+            return Err("Invalid snapshot restore parameters".to_string());
+        };
+        Ok(Self {
+            _name: name.clone(),
+            content: "restored".to_string(),
+        })
     }
 }

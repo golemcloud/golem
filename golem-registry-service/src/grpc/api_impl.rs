@@ -218,6 +218,11 @@ impl RegistryServiceGrpcApi {
                         ephemeral_storage_byte_seconds_delta: u
                             .ephemeral_storage_byte_seconds_delta,
                         memory_gb_seconds_delta: u.memory_gb_seconds_delta,
+                        metering: golem_service_base::clients::registry::ResourceUsageMetering {
+                            compute: u.compute_metering_enabled,
+                            memory: u.memory_metering_enabled,
+                            filesystem: u.filesystem_metering_enabled,
+                        },
                     },
                 ))
             })
@@ -377,7 +382,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetComponentMetadataSuccessResponse {
-            component: Some(component.into()),
+            component: Some(component.try_into()?),
         })
     }
 
@@ -396,7 +401,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetDeployedComponentMetadataSuccessResponse {
-            component: Some(component.into()),
+            component: Some(component.try_into()?),
         })
     }
 
@@ -415,7 +420,10 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetAllDeployedComponentRevisionsSuccessResponse {
-            components: components.into_iter().map(|c| c.into()).collect(),
+            components: components
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -452,7 +460,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(ResolveComponentSuccessResponse {
-            component: Some(component.into()),
+            component: Some(component.try_into()?),
         })
     }
 
@@ -599,7 +607,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetCurrentEnvironmentStateSuccessResponse {
-            environment_state: Some(environment_state.into()),
+            environment_state: Some(environment_state.try_into()?),
         })
     }
 
@@ -636,7 +644,7 @@ impl RegistryServiceGrpcApi {
                     retry_policies: Vec::new(),
                     tool_deployment: None,
                 }
-                .into(),
+                .try_into()?,
             ),
         })
     }

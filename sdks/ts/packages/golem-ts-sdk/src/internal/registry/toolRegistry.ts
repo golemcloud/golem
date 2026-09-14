@@ -57,6 +57,11 @@ interface InternalResolvedToolInvocation extends ResolvedToolInvocation {
   prepareValues(input: readonly CanonicalInputValue[]): PreparedToolInvocation;
 }
 
+export interface ResolvableToolRuntime {
+  readonly extended: ExtendedToolType;
+  readonly runtime: ExtendedToolRuntime;
+}
+
 class ToolRegistryImpl {
   private readonly registry = new Map<string, RegisteredTool>();
   private readonly registrationErrors = new Map<string, string[]>();
@@ -95,7 +100,12 @@ class ToolRegistryImpl {
         encoded: encodeTool(extended),
         runtime: registeredRuntime,
         invoker: async (commandPath, input, context) => {
-          const resolved = this.resolveRegistered(extended, registeredRuntime, commandPath);
+          const resolved = resolveToolInvocation(
+            extended,
+            registeredRuntime,
+            commandPath,
+            (childToolName) => this.get(childToolName),
+          );
           return await resolved.prepare(input).invoke(context);
         },
       } satisfies RegisteredTool;
@@ -136,7 +146,12 @@ class ToolRegistryImpl {
     if (!registered) {
       throw { tag: 'invalid-tool-name', val: name } satisfies ToolError;
     }
-    return this.resolveRegistered(registered.extended, registered.runtime, commandPath);
+    return resolveToolInvocation(
+      registered.extended,
+      registered.runtime,
+      commandPath,
+      (childToolName) => this.get(childToolName),
+    );
   }
 
   recordRegistrationError(toolName: string, message: string): void {
@@ -174,73 +189,84 @@ class ToolRegistryImpl {
   private sortedEntries(): [string, RegisteredTool][] {
     return Array.from(this.registry.entries()).sort(([left], [right]) => compareNames(left, right));
   }
+}
 
-  private resolveRegistered(
-    tool: ExtendedToolType,
-    runtime: ExtendedToolRuntime,
-    commandPath: readonly string[],
-    invalidPath: readonly string[] = commandPath,
-  ): InternalResolvedToolInvocation {
-    const command = tool.commandByPath(commandPath);
-    if (!command) throw invalidCommandPath(invalidPath);
+/** Resolve a command against an explicit descriptor/runtime pair without requiring registration. */
+export function resolveToolInvocation(
+  tool: ExtendedToolType,
+  runtime: ExtendedToolRuntime,
+  commandPath: readonly string[],
+  resolveForward?: (toolName: string) => ResolvableToolRuntime | undefined,
+  invalidPath: readonly string[] = commandPath,
+): ResolvedToolInvocation {
+  return resolveToolInvocationInternal(tool, runtime, commandPath, resolveForward, invalidPath);
+}
 
-    const canonicalPath = tool.commandPath(command);
-    if (!canonicalPath) throw invalidCommandPath(invalidPath);
+function resolveToolInvocationInternal(
+  tool: ExtendedToolType,
+  runtime: ExtendedToolRuntime,
+  commandPath: readonly string[],
+  resolveForward: ((toolName: string) => ResolvableToolRuntime | undefined) | undefined,
+  invalidPath: readonly string[],
+): InternalResolvedToolInvocation {
+  const command = tool.commandByPath(commandPath);
+  if (!command) throw invalidCommandPath(invalidPath);
 
-    const binding = runtime.bindings.find((candidate) =>
-      pathsEqual(candidate.commandPath, canonicalPath),
-    );
-    if (binding) {
-      const prepareValues = (
-        inputValues: readonly CanonicalInputValue[],
-      ): PreparedToolInvocation => {
-        let projectedValues: CanonicalInputValue[];
-        try {
-          projectedValues = tool.canonicalInputModel(command).projectValues(inputValues);
-        } catch (error) {
-          throw invalidInput(error);
-        }
-        const handlerInput = Object.fromEntries(
-          projectedValues.map((field) => [camelCase(field.name), field.value]),
-        );
-        return {
-          invoke: async (context) =>
-            await binding.handler.call(binding.receiver, handlerInput, context),
-        };
-      };
+  const canonicalPath = tool.commandPath(command);
+  if (!canonicalPath) throw invalidCommandPath(invalidPath);
+
+  const binding = runtime.bindings.find((candidate) =>
+    pathsEqual(candidate.commandPath, canonicalPath),
+  );
+  if (binding) {
+    const prepareValues = (inputValues: readonly CanonicalInputValue[]): PreparedToolInvocation => {
+      let projectedValues: CanonicalInputValue[];
+      try {
+        projectedValues = tool.canonicalInputModel(command).projectValues(inputValues);
+      } catch (error) {
+        throw invalidInput(error);
+      }
+      const handlerInput = Object.fromEntries(
+        projectedValues.map((field) => [camelCase(field.name), field.value]),
+      );
       return {
-        command,
-        prepare: (input) => prepareValues(decodeCanonicalInput(tool, command, input)),
-        prepareValues,
+        invoke: async (context) =>
+          await binding.handler.call(binding.receiver, handlerInput, context),
       };
-    }
-
-    const forward = runtime.subtreeForwards.find((candidate) =>
-      pathStartsWith(canonicalPath, candidate.pathPrefix),
-    );
-    if (!forward) throw invalidCommandPath(invalidPath);
-
-    const child = this.get(forward.childToolName);
-    if (!child) {
-      throw {
-        tag: 'invalid-tool-name',
-        val: forward.childToolName,
-      } satisfies ToolError;
-    }
-
-    const childPath = canonicalPath.slice(forward.pathPrefix.length);
-    const childResolved = this.resolveRegistered(
-      child.extended,
-      child.runtime,
-      childPath,
-      invalidPath,
-    );
+    };
     return {
       command,
-      prepare: (input) => childResolved.prepareValues(decodeCanonicalInput(tool, command, input)),
-      prepareValues: (inputValues) => childResolved.prepareValues(inputValues),
+      prepare: (input) => prepareValues(decodeCanonicalInput(tool, command, input)),
+      prepareValues,
     };
   }
+
+  const forward = runtime.subtreeForwards.find((candidate) =>
+    pathStartsWith(canonicalPath, candidate.pathPrefix),
+  );
+  if (!forward) throw invalidCommandPath(invalidPath);
+
+  const child = resolveForward?.(forward.childToolName);
+  if (!child) {
+    throw {
+      tag: 'invalid-tool-name',
+      val: forward.childToolName,
+    } satisfies ToolError;
+  }
+
+  const childPath = canonicalPath.slice(forward.pathPrefix.length);
+  const childResolved = resolveToolInvocationInternal(
+    child.extended,
+    child.runtime,
+    childPath,
+    resolveForward,
+    invalidPath,
+  );
+  return {
+    command,
+    prepare: (input) => childResolved.prepareValues(decodeCanonicalInput(tool, command, input)),
+    prepareValues: (inputValues) => childResolved.prepareValues(inputValues),
+  };
 }
 
 function decodeCanonicalInput(
