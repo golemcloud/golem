@@ -147,7 +147,9 @@ never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 A failure while creating or preparing the instance is durable health state, not only a resident-worker
 error. The invocation loop commits `Error { kind: Recovery, .. }` before unloading and preserves the
 underlying classification: transient infrastructure failures advance the effective retry policy,
-while invalid components, exports, snapshot baselines, and other permanent failures are terminal. The
+while invalid components, exports, snapshot baselines, and other permanent failures are terminal.
+An authoritative manual-update snapshot that cannot be loaded is terminal even when the immediate
+cause is a payload download failure, because recovery has no compatible replay fallback. The
 ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
 kind with the failed/retrying status, so metadata and invocation admission agree after unload or
 reassignment. A later startup appends `RecoverySucceeded` only when it fully completes

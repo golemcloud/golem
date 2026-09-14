@@ -6067,7 +6067,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             })
                         }
                     }
-                    SnapshotRecoveryResult::Unavailable(error) => Err(error),
+                    SnapshotRecoveryResult::Unavailable(error) => {
+                        if store
+                            .as_context()
+                            .data()
+                            .durable_ctx()
+                            .state
+                            .last_snapshot_source
+                            == Some(SnapshotSource::ManualUpdate)
+                        {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        } else {
+                            Err(error)
+                        }
+                    }
                     SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
