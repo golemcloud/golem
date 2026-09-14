@@ -39,12 +39,16 @@ pub fn native_tool_definition_impl(
         Ok(ir) => ir,
         Err(error) => return error.to_compile_error().into(),
     };
+    let mut descriptor_ir = ir.clone();
+    if let Err(error) = remove_cancellation_parameters(&mut descriptor_ir) {
+        return error.to_compile_error().into();
+    }
     let descriptor_canonical = syn::Ident::new("golem_rust", Span::call_site());
     let resolve = |tokens| {
         let tokens = resolve_generated_sdk_paths(tokens, native, &descriptor_canonical, &preserved);
         resolve_generated_sdk_paths(tokens, native, &canonical, &preserved)
     };
-    let descriptor = match crate::tool::descriptor::synthesize_descriptor_fn(&ir) {
+    let descriptor = match crate::tool::descriptor::synthesize_descriptor_fn(&descriptor_ir) {
         Ok(tokens) => resolve(tokens),
         Err(error) => return error.to_compile_error().into(),
     };
@@ -220,6 +224,38 @@ fn is_principal(ty: &Type) -> bool {
         .collect::<Vec<_>>();
     matches!(segments.as_slice(), [sdk, principal] if (sdk == "golem_native_tool" || sdk == "crate") && principal == "Principal")
 }
+fn is_cancellation(ty: &Type) -> bool {
+    terminal_type_is(ty, "NativeToolCancellation")
+}
+
+fn remove_cancellation_parameters(ir: &mut ToolDefinitionIr) -> syn::Result<()> {
+    for command in &mut ir.commands {
+        let cancellation_params = command
+            .params
+            .iter()
+            .filter(|param| is_cancellation(&param.ty))
+            .map(|param| param.ident.to_string())
+            .collect::<HashSet<_>>();
+        if cancellation_params.is_empty() {
+            continue;
+        }
+        if let Some(arg) = command
+            .args
+            .iter()
+            .find(|arg| cancellation_params.contains(&arg.param.to_string()))
+        {
+            return Err(syn::Error::new_spanned(
+                &arg.param,
+                "auto-injected NativeToolCancellation parameters cannot have #[arg] attributes because they are not part of the tool input schema",
+            ));
+        }
+        command
+            .params
+            .retain(|param| !cancellation_params.contains(&param.ident.to_string()));
+    }
+    Ok(())
+}
+
 fn is_stdin(ty: &Type) -> bool {
     terminal_type_is(ty, "NativeToolStdin")
 }
@@ -259,6 +295,8 @@ fn synthesize_native_invoke(
             let field = super::definition::canonical_param_name(ir, command, param, &tool_name);
             if is_principal(ty) {
                 quote! { let #ident = __invocation.principal.clone(); }
+            } else if is_cancellation(ty) {
+                quote! { let #ident = __invocation.cancellation.clone(); }
             } else if is_stdin(ty) {
                 quote! { let #ident = match __invocation.stdin.take() { Some(value) => value, None => return Ok(Err(golem_native_tool::NativeToolRpcError::InvalidInput("tool invocation did not contain declared stdin stream".to_string()))) }; }
             } else if is_optional_stdin(ty) {
@@ -438,4 +476,48 @@ pub fn native_tool_implementation_impl(
         &format_ident!("__unused_native_marker"),
     )
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::definition::build_tool_definition_ir;
+    use test_r::test;
+
+    fn ir(item: ItemTrait) -> ToolDefinitionIr {
+        build_tool_definition_ir(&item, None).unwrap()
+    }
+
+    #[test]
+    fn cancellation_is_removed_from_leaf_and_subtree_descriptor_commands() {
+        let mut ir = ir(syn::parse_quote! {
+            trait Native {
+                fn run(&self, value: String, cancellation: NativeToolCancellation);
+
+                #[command(subtree = Child)]
+                fn child(&self, cancellation: golem_native_tool::NativeToolCancellation) -> ChildImpl;
+            }
+        });
+
+        remove_cancellation_parameters(&mut ir).unwrap();
+
+        assert_eq!(ir.commands[0].params.len(), 1);
+        assert_eq!(ir.commands[0].params[0].ident, "value");
+        assert!(ir.commands[1].params.is_empty());
+    }
+
+    #[test]
+    fn cancellation_rejects_arg_annotations_in_native_tools() {
+        let mut ir = ir(syn::parse_quote! {
+            trait Native {
+                #[arg(cancellation = "option")]
+                fn run(&self, cancellation: NativeToolCancellation);
+            }
+        });
+
+        let error = remove_cancellation_parameters(&mut ir).unwrap_err();
+        assert!(error.to_string().contains(
+            "auto-injected NativeToolCancellation parameters cannot have #[arg] attributes"
+        ));
+    }
 }

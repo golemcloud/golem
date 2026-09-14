@@ -227,6 +227,8 @@ Golem can ship two kinds of system-provided tool. A component-implemented built-
 
 A native tool is compiled into the Golem host and provisioned as ambient. Do not declare it in the top-level `tools` map and do not specify a release coordinate. It is available to agents in the environment by default; an agent binding with the native tool's name can narrow its parameters and policies.
 
+Ambient tool names must not collide with application tools or selected account-owned tool releases. If a later Golem release adds an ambient tool with a name your application already uses, existing deployment snapshots remain unchanged, but preparing the next deployment fails until you resolve the name collision. Golem does not silently choose one implementation over another. This check applies to the entire ambient catalog, even when the manifest has no agent binding for that name.
+
 Both kinds use the normal effective binding policy. In particular, `configKeysReadable` is narrowing-only: the effective scope is the intersection of the system or environment binding and the agent binding. Calls made by a native implementation through Golem's config host helper are checked against that effective scope; running in the host does not grant unrestricted config access.
 
 Golem currently ships no production built-in or native tool inventory. A deployment can only refer to system-provided tool names advertised by the Golem installation it targets.

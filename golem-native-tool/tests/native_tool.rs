@@ -1,7 +1,8 @@
 use golem_native_tool::{
-    HostResult, NativeToolInvocation, NativeToolInvoker, NativeToolRpcError, NativeToolStdin,
-    NativeToolStdinHandle, NativeToolStdout, NativeToolStdoutHandle, Principal, SchemaValue,
-    ToolError, TypedSchemaValue, tool_definition, tool_implementation,
+    HostResult, NativeToolCancellation, NativeToolInvocation, NativeToolInvoker,
+    NativeToolRpcError, NativeToolStdin, NativeToolStdinHandle, NativeToolStdout,
+    NativeToolStdoutHandle, Principal, SchemaValue, ToolError, TypedSchemaValue, tool_definition,
+    tool_implementation,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -59,6 +60,7 @@ async fn metadata_and_send_invocation_share_sdk_authoring() {
                 command_path: vec![],
                 input,
                 principal: Principal::anonymous(),
+                cancellation: NativeToolCancellation::unavailable(),
                 stdin: None,
                 stdout: None,
             },
@@ -140,6 +142,7 @@ fn invocation(
         command_path: vec![command.to_string()],
         input: TypedSchemaValue::new(model.record_schema, SchemaValue::Record { fields }),
         principal: Principal::anonymous(),
+        cancellation: NativeToolCancellation::unavailable(),
         stdin: None,
         stdout: None,
     }
@@ -228,6 +231,7 @@ trait NativeChild {
         verbose: bool,
         name: String,
         principal: golem_native_tool::Principal,
+        cancellation: NativeToolCancellation,
         stdin: NativeToolStdin,
         stdout: Option<NativeToolStdout>,
     ) -> String;
@@ -243,6 +247,7 @@ impl NativeChild for NativeChildImpl {
         verbose: bool,
         name: String,
         principal: Principal,
+        cancellation: NativeToolCancellation,
         mut stdin: NativeToolStdin,
         mut stdout: Option<NativeToolStdout>,
     ) -> String {
@@ -252,7 +257,10 @@ impl NativeChild for NativeChildImpl {
             stdout.finish().unwrap();
         }
         context.push(name.clone());
-        format!("{verbose}:{name}:{principal:?}")
+        format!(
+            "{verbose}:{name}:{principal:?}:{}",
+            cancellation.is_cancelled()
+        )
     }
 }
 
@@ -260,15 +268,38 @@ impl NativeChild for NativeChildImpl {
 trait NativeParent {
     #[arg(verbose = "global", aliases = ["chatty"], kind = "flag")]
     #[command(name = "child", aliases = ["c"], subtree = NativeChild)]
-    fn child(&self, context: &mut Vec<String>, verbose: bool) -> NativeChildImpl;
+    fn child(
+        &self,
+        context: &mut Vec<String>,
+        verbose: bool,
+        cancellation: NativeToolCancellation,
+    ) -> NativeChildImpl;
 }
 
 struct NativeParentImpl;
 
 #[tool_implementation]
 impl NativeParent for NativeParentImpl {
-    fn child(&self, _context: &mut Vec<String>, _verbose: bool) -> NativeChildImpl {
+    fn child(
+        &self,
+        context: &mut Vec<String>,
+        _verbose: bool,
+        cancellation: NativeToolCancellation,
+    ) -> NativeChildImpl {
+        context.push(format!("factory:{}", cancellation.is_cancelled()));
         NativeChildImpl
+    }
+}
+
+struct Cancelled;
+
+impl golem_native_tool::NativeToolCancellationObserver for Cancelled {
+    fn is_cancelled(&self) -> bool {
+        true
+    }
+
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
     }
 }
 
@@ -329,6 +360,7 @@ async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliase
                 command_path: vec!["c".into(), "run".into()],
                 input,
                 principal: Principal::anonymous(),
+                cancellation: NativeToolCancellation::from_observer(Cancelled),
                 stdin: Some(Box::new(Input(Some(b"hello".to_vec())))),
                 stdout: Some(Box::new(Output)),
             },
@@ -336,10 +368,10 @@ async fn subtree_routes_to_explicit_child_instance_with_inherited_globals_aliase
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(context, ["Ada"]);
+    assert_eq!(context, ["factory:true", "Ada"]);
     assert_eq!(
         result.result.unwrap().value(),
-        &SchemaValue::String("true:Ada:Anonymous(Empty)".into())
+        &SchemaValue::String("true:Ada:Anonymous(Empty):true".into())
     );
 }
 

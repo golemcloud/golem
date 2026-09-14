@@ -1075,7 +1075,7 @@ impl AppCommandHandler {
 
         // Ambient tools are registry-owned input. Resolve them before local validation and
         // hashing; planning remains read-only.
-        let ambient_plan = self
+        let deployment_plan = self
             .ctx
             .golem_clients()
             .await?
@@ -1085,14 +1085,14 @@ impl AppCommandHandler {
             .map_service_error()?;
 
         let deploy_quick_diff = self
-            .deploy_quick_diff(environment, resolved_tool_grants, &ambient_plan)
+            .deploy_quick_diff(environment, resolved_tool_grants, &deployment_plan)
             .await?;
 
         debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
 
         let deployment_is_up_to_date = deploy_quick_diff.is_deployment_up_to_date();
 
-        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+        let deploy_diff = self.deploy_diff(deploy_quick_diff, deployment_plan).await?;
         debug!("deploy_diff: {:#?}", deploy_diff);
 
         let environment_setup = if deployment_is_up_to_date {
@@ -1258,7 +1258,7 @@ impl AppCommandHandler {
         &self,
         environment: ResolvedEnvironmentIdentity,
         resolved_tool_grants: &ResolvedToolGrants,
-        ambient_plan: &golem_common::model::deployment::DeploymentPlan,
+        deployment_plan: &golem_common::model::deployment::DeploymentPlan,
     ) -> anyhow::Result<DeployQuickDiff> {
         let ResolvedManifestComponentsAndTools {
             components,
@@ -1270,7 +1270,7 @@ impl AppCommandHandler {
             .resolve_manifest_components_and_tools(
                 &environment,
                 resolved_tool_grants,
-                &ambient_plan.ambient_tools,
+                &deployment_plan.ambient_tools,
             )
             .await?;
 
@@ -1415,7 +1415,11 @@ impl AppCommandHandler {
         ))
     }
 
-    async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
+    async fn deploy_diff(
+        &self,
+        deploy_quick_diff: DeployQuickDiff,
+        deployment_plan: golem_common::model::deployment::DeploymentPlan,
+    ) -> anyhow::Result<DeployDiff> {
         let clients = self.ctx.golem_clients().await?;
 
         let current_deployment = match &deploy_quick_diff
@@ -1443,13 +1447,7 @@ impl AppCommandHandler {
 
         let current_deployment_hash = diffable_current_deployment.hash()?;
 
-        let staged_deployment = clients
-            .environment
-            .get_environment_deployment_plan(&deploy_quick_diff.environment.environment_id.0)
-            .await
-            .map_service_error()?;
-
-        let diffable_staged_deployment = staged_deployment.to_diffable();
+        let diffable_staged_deployment = deployment_plan.to_diffable();
 
         let staged_deployment_hash = diffable_staged_deployment.hash()?;
 
@@ -1469,7 +1467,7 @@ impl AppCommandHandler {
             diffable_current_deployment,
             current_deployment_hash,
             current_agent_types: HashMap::new(),
-            staged_deployment,
+            staged_deployment: deployment_plan,
             staged_deployment_hash,
             staged_agent_types: HashMap::new(),
             diffable_staged_deployment,

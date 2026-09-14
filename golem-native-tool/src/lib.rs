@@ -109,10 +109,54 @@ pub trait NativeToolStdoutHandle: Send {
 pub type NativeToolStdin = Box<dyn NativeToolStdinHandle>;
 pub type NativeToolStdout = Box<dyn NativeToolStdoutHandle>;
 
+/// Observation-only view of cancellation requested by the caller of a native tool.
+///
+/// This handle cannot cancel the invocation. Cancellation is cooperative, and a task awaiting
+/// [`Self::cancelled`] is not guaranteed to run cleanup before the executor stops the tool body.
+#[derive(Clone)]
+pub struct NativeToolCancellation {
+    observer: Option<std::sync::Arc<dyn NativeToolCancellationObserver>>,
+}
+
+impl NativeToolCancellation {
+    /// Returns a handle for an invocation without a live cancellation source, such as completed
+    /// replay.
+    pub fn unavailable() -> Self {
+        Self { observer: None }
+    }
+
+    #[doc(hidden)]
+    pub fn from_observer(observer: impl NativeToolCancellationObserver) -> Self {
+        Self {
+            observer: Some(std::sync::Arc::new(observer)),
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.observer
+            .as_ref()
+            .is_some_and(|observer| observer.is_cancelled())
+    }
+
+    pub async fn cancelled(&self) {
+        match &self.observer {
+            Some(observer) => observer.cancelled().await,
+            None => std::future::pending().await,
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait NativeToolCancellationObserver: Send + Sync + 'static {
+    fn is_cancelled(&self) -> bool;
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
 pub struct NativeToolInvocation {
     pub command_path: Vec<String>,
     pub input: TypedSchemaValue,
     pub principal: Principal,
+    pub cancellation: NativeToolCancellation,
     pub stdin: Option<NativeToolStdin>,
     pub stdout: Option<NativeToolStdout>,
 }

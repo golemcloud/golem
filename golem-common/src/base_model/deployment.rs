@@ -129,6 +129,9 @@ declare_structs! {
         pub published_tools: Vec<ToolName>,
         /// Registry-owned ambient tool catalog inputs. These are read-only deployment inputs;
         /// applications neither declare nor receive grants for them.
+        // Auxiliary metadata for constructing the proposed deployment, not staged contents.
+        // Excluded from the staged hash and diff; releases and effective bindings are
+        // represented in remote_tools instead.
         pub ambient_tools: Vec<DeploymentPlanAmbientToolEntry>,
     }
 

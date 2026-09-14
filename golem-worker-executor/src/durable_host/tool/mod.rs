@@ -2117,9 +2117,12 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
         .context_mut()
         .durable_ctx_mut()
         .set_invocation_principal(None);
-    if let Err(error) = retained.prepare_parent_end().await {
-        return (Err(error), Some(Box::new(retained)));
-    }
+    let parent_end = retained.prepare_parent_end().await;
+    let result = select_native_body_result(
+        result,
+        parent_end,
+        operation.has_pending_live_admission_rejection().await,
+    );
     let result = match result {
         Ok(result) => {
             if let Some(error) = stdout_limit_error(
@@ -2137,6 +2140,20 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
     };
     let retained = Box::new(retained) as Box<dyn RetainedEntityStore>;
     (result, Some(retained))
+}
+
+fn select_native_body_result<T>(
+    body: Result<T, WorkerExecutorError>,
+    parent_end: Result<(), WorkerExecutorError>,
+    live_admission_rejected: bool,
+) -> Result<T, WorkerExecutorError> {
+    if live_admission_rejected {
+        return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
+    }
+    match body {
+        Ok(result) => parent_end.map(|()| result),
+        Err(error) => Err(error),
+    }
 }
 
 async fn await_native_entity_body<T>(
@@ -4725,8 +4742,8 @@ mod tests {
         ToolStdinStreamConsumer, ToolStdoutWriterEntry, UnderlyingToolStdinStreamConsumer,
         WitRegisteredTool, await_native_entity_body, caller_tool_owner,
         classify_tool_discovery_error, cleanup_tool_endpoints, recorded_tool_body_is_skipped,
-        resolve_tool_command, stdout_limit_error, terminal_tool_discovery_error,
-        validate_stream_attachments,
+        resolve_tool_command, select_native_body_result, stdout_limit_error,
+        terminal_tool_discovery_error, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -4745,7 +4762,7 @@ mod tests {
     use golem_common::model::oplog::HostResponseEntityInvocation;
     use golem_common::model::oplog::payload::types::{
         SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
-        SerializableToolRpcError,
+        SerializableToolRpcError, SerializableToolStructuredResult,
     };
     use golem_common::model::tool::{RegisteredTool, ToolName, ToolProvisionConfig, ToolSource};
     use golem_common::schema::tool::{
@@ -4814,6 +4831,41 @@ mod tests {
 
         assert!(format!("{error}").contains("native entity body was aborted"));
         assert_eq!(handler_polls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn native_post_body_admission_rejection_overrides_a_caught_handler_error() {
+        let result =
+            select_native_body_result(Ok("handler returned success"), Ok(()), true).unwrap_err();
+
+        assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&result));
+    }
+
+    #[test]
+    fn native_body_failure_precedes_parent_cleanup_failure() {
+        let result = select_native_body_result::<()>(
+            Err(WorkerExecutorError::runtime("body failed")),
+            Err(WorkerExecutorError::runtime("cleanup failed")),
+            false,
+        )
+        .unwrap_err();
+
+        assert!(format!("{result}").contains("body failed"));
+    }
+
+    #[test]
+    fn native_parent_cleanup_failure_replaces_a_successful_declared_result() {
+        let declared_error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult("declared failure".to_string()),
+        ));
+        let result = select_native_body_result(
+            Ok(Err::<SerializableToolStructuredResult, _>(declared_error)),
+            Err(WorkerExecutorError::runtime("cleanup failed")),
+            false,
+        )
+        .unwrap_err();
+
+        assert!(format!("{result}").contains("cleanup failed"));
     }
 
     impl<D> StreamProducer<D> for OneBufferProducer {

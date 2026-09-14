@@ -99,8 +99,7 @@ use golem_worker_executor::model::{
     AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
 };
 use golem_worker_executor::native_tool::{
-    NativeToolAdapter, NativeToolCatalog, NativeToolHandler, NativeToolInvocation,
-    NativeToolRegistration,
+    NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
 use golem_worker_executor::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, FutureInvokeResult,
@@ -1795,69 +1794,71 @@ impl NativeDurableHelper for NativeDurableHelperImpl {
     }
 }
 
-struct NativeTestTool(Arc<AtomicUsize>);
+#[golem_native_tool::tool_definition(version = "1.0.0")]
+trait NativeTestTool {
+    async fn run(
+        &self,
+        context: &mut TestWorkerCtx,
+        mode: String,
+        cancellation: golem_native_tool::NativeToolCancellation,
+        stdin: Option<golem_native_tool::NativeToolStdin>,
+        stdout: Option<golem_native_tool::NativeToolStdout>,
+        principal: golem_native_tool::Principal,
+    ) -> golem_native_tool::HostResult<()>;
+}
 
-#[async_trait]
-impl NativeToolHandler<TestWorkerCtx> for NativeTestTool {
-    async fn invoke(
+struct NativeTestToolImpl(Arc<AtomicUsize>);
+
+#[golem_native_tool::tool_implementation]
+impl NativeTestTool for NativeTestToolImpl {
+    async fn run(
         &self,
         ctx: &mut TestWorkerCtx,
-        invocation: NativeToolInvocation,
-    ) -> Result<golem_worker_executor::native_tool::NativeToolResult, WorkerExecutorError> {
-        let mode = match invocation.input.value() {
-            golem_common::schema::SchemaValue::Record { fields } => match fields.first() {
-                Some(golem_common::schema::SchemaValue::String(value)) => value.as_str(),
-                _ => "",
-            },
-            _ => "",
-        };
+        mode: String,
+        cancellation: golem_native_tool::NativeToolCancellation,
+        mut stdin: Option<golem_native_tool::NativeToolStdin>,
+        mut stdout: Option<golem_native_tool::NativeToolStdout>,
+        _principal: golem_native_tool::Principal,
+    ) -> golem_native_tool::HostResult<()> {
         if mode != "read-counter" && ctx.is_live() {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
 
         if mode == "wait-cancel" {
-            if let Some(stdout) = &invocation.stdout {
+            if let Some(stdout) = &mut stdout {
                 stdout
                     .write(b"native:started".to_vec())
                     .await
-                    .map_err(WorkerExecutorError::runtime)?;
+                    .map_err(anyhow::Error::msg)?;
             }
-            if let Some(cancellation) = invocation.cancellation {
-                cancellation.cancelled().await;
-                return Ok(Err(
-                    golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
-                ));
-            }
+            cancellation.cancelled().await;
+            return Ok(());
         }
 
-        if let Some(stdout) = invocation.stdout {
+        if let Some(mut stdout) = stdout {
             if mode == "read-counter" {
                 stdout
                     .write(self.0.load(Ordering::SeqCst).to_string().into_bytes())
                     .await
-                    .map_err(WorkerExecutorError::runtime)?;
+                    .map_err(anyhow::Error::msg)?;
             } else {
                 stdout
                     .write(b"native:".to_vec())
                     .await
-                    .map_err(WorkerExecutorError::runtime)?;
-                if let Some(stdin) = invocation.stdin {
+                    .map_err(anyhow::Error::msg)?;
+                if let Some(stdin) = &mut stdin {
                     while let Some(item) = stdin.read().await {
                         stdout
-                            .write(item.map_err(WorkerExecutorError::runtime)?)
+                            .write(item.map_err(anyhow::Error::msg)?)
                             .await
-                            .map_err(WorkerExecutorError::runtime)?;
+                            .map_err(anyhow::Error::msg)?;
                     }
                 }
             }
-            stdout.finish().map_err(WorkerExecutorError::runtime)?;
+            stdout.finish().map_err(anyhow::Error::msg)?;
         }
 
-        Ok(Ok(
-            golem_common::model::oplog::payload::types::SerializableToolStructuredResult {
-                result: None,
-            },
-        ))
+        Ok(())
     }
 }
 
@@ -2648,6 +2649,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             handler: Arc::new(NativeToolAdapter(helper.native_tool_invoker())),
         }];
         if let Some(metadata) = &self.overrides.native_tool_metadata {
+            let native_test_tool =
+                NativeTestToolImpl(self.additional_test_deps.native_test_effects.clone());
             registrations.push(NativeToolRegistration {
                 definition: golem_native_tool::NativeToolDefinition::new(
                     "executor-native-test",
@@ -2655,9 +2658,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                     metadata.clone(),
                 )
                 .map_err(anyhow::Error::msg)?,
-                handler: Arc::new(NativeTestTool(
-                    self.additional_test_deps.native_test_effects.clone(),
-                )),
+                handler: Arc::new(NativeToolAdapter(native_test_tool.native_tool_invoker())),
             });
         }
         Ok(Arc::new(

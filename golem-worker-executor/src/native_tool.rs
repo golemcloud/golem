@@ -87,6 +87,31 @@ pub trait NativeToolHandler<Ctx: WorkerCtx>: Send + Sync + 'static {
 /// Connects a typed macro-generated invoker to the executor's durable tool operation.
 pub struct NativeToolAdapter<T>(pub T);
 
+struct NativeToolCancellationObserver(tokio_util::sync::CancellationToken);
+
+fn cancellation_handle(
+    token: Option<tokio_util::sync::CancellationToken>,
+) -> golem_native_tool::NativeToolCancellation {
+    token.map_or_else(
+        golem_native_tool::NativeToolCancellation::unavailable,
+        |token| {
+            golem_native_tool::NativeToolCancellation::from_observer(
+                NativeToolCancellationObserver(token),
+            )
+        },
+    )
+}
+
+impl golem_native_tool::NativeToolCancellationObserver for NativeToolCancellationObserver {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+
+    fn cancelled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(self.0.cancelled())
+    }
+}
+
 impl golem_native_tool::NativeToolStdinHandle for NativeToolStdin {
     fn read<'a>(&'a mut self) -> golem_native_tool::NativeToolReadFuture<'a> {
         Box::pin(NativeToolStdin::read(self))
@@ -125,6 +150,7 @@ where
                     command_path: invocation.command_path,
                     input: invocation.input,
                     principal: invocation.principal,
+                    cancellation: cancellation_handle(invocation.cancellation),
                     stdin: invocation.stdin.map(|input| Box::new(input) as _),
                     stdout: invocation.stdout.map(|output| Box::new(output) as _),
                 },
@@ -254,3 +280,6 @@ impl<Ctx: WorkerCtx> Default for NativeToolCatalog<Ctx> {
         Self::new(compiled_native_tools()).expect("compiled native tool inventory is invalid")
     }
 }
+
+#[cfg(test)]
+mod tests;

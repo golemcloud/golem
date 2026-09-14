@@ -2424,3 +2424,31 @@ fn split_result(output: &ReturnType) -> (Option<&Type>, Option<&Type>) {
 fn is_unit(ty: &Type) -> bool {
     matches!(ty, Type::Tuple(t) if t.elems.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::definition::build_tool_definition_ir;
+    use test_r::test;
+
+    #[test]
+    fn ordinary_tool_types_named_native_tool_cancellation_remain_schema_inputs() {
+        let item: syn::ItemTrait = syn::parse_quote! {
+            trait OrdinaryTool {
+                #[arg(explicit = "option")]
+                fn run(
+                    &self,
+                    bare: NativeToolCancellation,
+                    qualified: user::NativeToolCancellation,
+                    explicit: NativeToolCancellation,
+                );
+            }
+        };
+        let ir = build_tool_definition_ir(&item, None).unwrap();
+        let descriptor = synthesize_descriptor_fn(&ir).unwrap().to_string();
+
+        assert!(descriptor.contains("\"bare\""));
+        assert!(descriptor.contains("\"qualified\""));
+        assert!(descriptor.contains("\"explicit\""));
+    }
+}
