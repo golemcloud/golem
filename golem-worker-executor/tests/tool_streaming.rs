@@ -63,6 +63,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
+mod moonbit_exports;
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
