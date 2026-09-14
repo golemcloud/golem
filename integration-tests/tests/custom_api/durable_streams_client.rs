@@ -1,117 +1,40 @@
-use crate::app::{TestContext, cmd, flag};
-use crate::{Tracing, workspace_path};
-use golem_cli::fs;
-use golem_cli::versions;
-use indoc::formatdoc;
-use std::process::Stdio;
-use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
-use tokio::process::Command;
+use crate::custom_api::http_test_context::HttpTestContext;
+use golem_test_framework::components::durable_streams_client;
+use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 
-inherit_test_dep!(Tracing);
+inherit_test_dep!(HttpTestContext);
+inherit_test_dep!(
+    #[tagged_as("postgres")]
+    HttpTestContext
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite")]
+    HttpTestContext
+);
+define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
-async fn run(command: &mut Command, timeout: Duration) -> std::process::Output {
-    command
-        .kill_on_drop(true)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    tokio::time::timeout(timeout, command.output())
-        .await
-        .expect("subprocess timed out")
-        .expect("failed to start subprocess")
-}
-
-fn assert_success(output: std::process::Output, command: &str) {
-    assert!(
-        output.status.success(),
-        "{command} failed\n--- stdout ---\n{}\n--- stderr ---\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
+#[test]
+#[timeout("10 minutes")]
+async fn reference_client_reads_json_and_bytes_in_all_ds3_modes(
+    #[dimension(db)] context: &HttpTestContext,
+) {
+    run_reference_client(context, DRIVER).await;
 }
 
 #[test]
 #[timeout("10 minutes")]
-async fn reference_client_reads_json_and_bytes_in_all_ds3_modes() {
-    run_reference_client(DRIVER).await;
+async fn reference_client_export_protocol_compatibility(#[dimension(db)] context: &HttpTestContext) {
+    run_reference_client(context, include_str!("durable_streams_client.mjs")).await;
 }
 
-#[test]
-#[timeout("10 minutes")]
-async fn reference_client_export_protocol_compatibility() {
-    run_reference_client(include_str!("durable_streams_client.mjs")).await;
-}
-
-async fn run_reference_client(driver: &str) {
-    let mut ctx = TestContext::new();
-    let fixture = workspace_path().join("test-components/golem_it_agent_sdk_rust_release.wasm");
-    assert!(
-        fixture.exists(),
-        "missing durable stream fixture {}; build the agent-sdk-rust release test component first",
-        fixture.display()
-    );
-
-    fs::write_str(
-        ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {manifest_version}
-
-            app: durable-stream-reference-client
-
-            componentTemplates:
-              prebuilt:
-                componentWasm: "{fixture}"
-
-            components:
-              golem-it:agent-sdk-rust:
-                templates: prebuilt
-
-            httpApi:
-              deployments:
-                local:
-                - domain: localhost:9006
-                  agents:
-                    DurableStreamAgent: {{}}
-
-            environments:
-              local:
-                server: local
-        "#, manifest_version = versions::sdk::MANIFEST, fixture = fixture.display()},
+async fn run_reference_client(context: &HttpTestContext, driver: &str) {
+    durable_streams_client::run(
+        driver,
+        context.base_url.as_str().trim_end_matches('/'),
+        context.host_header.to_str().unwrap(),
     )
+    .await
     .unwrap();
-
-    ctx.start_server().await;
-    let deployed = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(deployed.success_or_dump());
-
-    let driver_dir = ctx.cwd_path_join("reference-client");
-    fs::create_dir_all(&driver_dir).unwrap();
-    fs::write_str(
-        driver_dir.join("package.json"),
-        r#"{
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@durable-streams/client": "0.2.7"
-  }
-}
-"#,
-    )
-    .unwrap();
-    fs::write_str(driver_dir.join("driver.mjs"), driver).unwrap();
-
-    let mut npm = Command::new("npm");
-    npm.args(["install", "--ignore-scripts", "--no-audit", "--no-fund"])
-        .current_dir(&driver_dir);
-    assert_success(run(&mut npm, Duration::from_secs(120)).await, "npm install");
-
-    let origin = format!("http://localhost:{}", ctx.custom_request_port());
-    let mut node = Command::new("node");
-    node.arg("driver.mjs").arg(origin).current_dir(&driver_dir);
-    assert_success(
-        run(&mut node, Duration::from_secs(180)).await,
-        "reference client driver",
-    );
 }
 
 const DRIVER: &str = r#"
