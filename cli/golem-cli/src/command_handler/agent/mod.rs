@@ -3237,7 +3237,8 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
@@ -3448,5 +3449,140 @@ mod tests {
         .unwrap();
 
         assert!(matches!(parsed, SchemaValue::Binary(_)));
+    }
+
+    // The shapes the SDKs produce for unstructured and multimodal parameters, as seen in the
+    // extracted agent types of the code-first test apps. The literals below are the ones used
+    // by the `*_with_rpc_and_all_types` integration tests, pinned here so a parser regression
+    // shows up without a server round-trip.
+
+    fn variant_case(name: &str, payload: SchemaType) -> VariantCaseType {
+        VariantCaseType {
+            name: name.to_string(),
+            payload: Some(payload),
+            metadata: Default::default(),
+        }
+    }
+
+    fn unstructured_text_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::text(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn unstructured_binary_type() -> SchemaType {
+        SchemaType::variant(vec![
+            variant_case("inline", SchemaType::binary(Default::default())),
+            variant_case("url", SchemaType::url(Default::default())),
+        ])
+    }
+
+    fn multimodal_type() -> SchemaType {
+        SchemaType::list(SchemaType::variant(vec![
+            variant_case("Text", unstructured_text_type()),
+            variant_case("Binary", unstructured_binary_type()),
+        ]))
+    }
+
+    /// `MultimodalAdvanced<TextImageData>` with `Data` being a user-defined (named) record, as
+    /// the Rust SDK extracts it.
+    fn multimodal_advanced_graph() -> SchemaGraph {
+        let data_id = TypeId("rust_code_first_rust_main.model.Data".to_string());
+        SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: data_id.clone(),
+                name: Some("Data".to_string()),
+                body: SchemaType::record(vec![
+                    NamedFieldType {
+                        name: "id".to_string(),
+                        body: SchemaType::u32(),
+                        metadata: Default::default(),
+                    },
+                    NamedFieldType {
+                        name: "name".to_string(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    },
+                ]),
+            }],
+            root: SchemaType::list(SchemaType::variant(vec![
+                variant_case("Text", SchemaType::string()),
+                variant_case("Image", SchemaType::list(SchemaType::u8())),
+                variant_case("Data", SchemaType::ref_to(data_id)),
+            ])),
+        }
+    }
+
+    fn assert_parses(language: SourceLanguage, ty: SchemaType, input: &str) {
+        assert_parses_in_graph(language, SchemaGraph::anonymous(ty), input);
+    }
+
+    fn assert_parses_in_graph(language: SourceLanguage, graph: SchemaGraph, input: &str) {
+        parse_method_argument_schema_value(input, &graph, &graph.root, &language)
+            .unwrap_or_else(|err| panic!("failed to parse {input:?} as {language:?}: {err}"));
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_rust_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Text("foo"))"#,
+            r#"Inline(Text("foo", "en"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"Url(Url("https://example.com/foo"))"#,
+            r#"Inline(Binary("data:text/plain;base64,Zm9v"))"#,
+        ] {
+            assert_parses(SourceLanguage::Rust, unstructured_binary_type(), input);
+        }
+        assert_parses(
+            SourceLanguage::Rust,
+            multimodal_type(),
+            r#"[Text(Url(Url("https://example.com/foo"))), Binary(Inline(Binary("data:text/plain;base64,Zm9v")))]"#,
+        );
+        assert_parses_in_graph(
+            SourceLanguage::Rust,
+            multimodal_advanced_graph(),
+            r#"[Text("foo"), Image([1, 2, 3]), Data(Data { id: 1, name: "foo" })]"#,
+        );
+    }
+
+    #[test]
+    fn parse_method_argument_schema_value_parses_ts_unstructured_and_multimodal_literals() {
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Text("foo")}"#,
+        ] {
+            assert_parses(SourceLanguage::TypeScript, unstructured_text_type(), input);
+        }
+        for input in [
+            r#"{tag: "url", value: Url("https://example.com/foo")}"#,
+            r#"{tag: "inline", value: Binary("data:application/json;base64,e30")}"#,
+        ] {
+            assert_parses(
+                SourceLanguage::TypeScript,
+                unstructured_binary_type(),
+                input,
+            );
+        }
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("text", unstructured_text_type()),
+                variant_case("binary", unstructured_binary_type()),
+            ])),
+            r#"[{tag: "text", value: {tag: "inline", value: Text("data")}}, {tag: "binary", value: {tag: "url", value: Url("https://example.com/foo")}}]"#,
+        );
+        assert_parses(
+            SourceLanguage::TypeScript,
+            SchemaType::list(SchemaType::variant(vec![
+                variant_case("image", SchemaType::list(SchemaType::u8())),
+                variant_case("text", SchemaType::string()),
+            ])),
+            r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#,
+        );
     }
 }

@@ -2226,55 +2226,63 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
-    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_multi_modal",
-    //     &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_multi_modal_basic",
-    //     &[r#"[text(url("foo"))]"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text",
-    //     &[r#"inline({data: "foo", text-type: none})"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text_lc",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text_lc",
-    //     &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_binary",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
+    // Multimodal with user-defined element types
+    run_and_assert(
+        &ctx,
+        "fun_multi_modal",
+        &[r#"[Text("foo"), Image([1, 2, 3]), Data(Data { id: 1, name: "foo" })]"#],
+    )
+    .await;
+
+    // Multimodal with the built-in unstructured text / binary element types
+    run_and_assert(
+        &ctx,
+        "fun_multi_modal_basic",
+        &[
+            r#"[Text(Url(Url("https://example.com/foo"))), Binary(Inline(Binary("data:text/plain;base64,Zm9v")))]"#,
+        ],
+    )
+    .await;
+
+    // Unstructured text
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(&ctx, "fun_unstructured_text", &[r#"Inline(Text("foo"))"#]).await;
+
+    // Unstructured text with language restrictions
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text_lc",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text_lc",
+        &[r#"Inline(Text("foo", "en"))"#],
+    )
+    .await;
+
+    // Unstructured binary with mime type restrictions
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_binary",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_binary",
+        &[r#"Inline(Binary("data:text/plain;base64,Zm9v"))"#],
+    )
+    .await;
 }
 
 /// End-to-end test for the Rust guest tool bridge: a provider component
@@ -3714,27 +3722,50 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""foo""#]).await;
 
-    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
-    // // Unstructured text type
-    // run_and_assert(&ctx, "funUnstructuredText", &["url(\"foo\")"]).await;
-    //
-    // // Unstructured binary
-    // run_and_assert(&ctx, "funUnstructuredBinary", &["url(\"foo\")"]).await;
-    //
-    // // Multimodal
-    // run_and_assert(
-    //     &ctx,
-    //     "funMultimodal",
-    //     &["[text(inline({data: \"data\", text-type: none}))]"],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "funMultimodalAdvanced",
-    //     &["[text(\"foo\")]"],
-    // )
-    // .await;
+    // Unstructured text type
+    run_and_assert(
+        &ctx,
+        "funUnstructuredText",
+        &[r#"{tag: "url", value: Url("https://example.com/foo")}"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funUnstructuredText",
+        &[r#"{tag: "inline", value: Text("foo")}"#],
+    )
+    .await;
+
+    // Unstructured binary
+    run_and_assert(
+        &ctx,
+        "funUnstructuredBinary",
+        &[r#"{tag: "url", value: Url("https://example.com/foo")}"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funUnstructuredBinary",
+        &[r#"{tag: "inline", value: Binary("data:application/json;base64,e30")}"#],
+    )
+    .await;
+
+    // Multimodal
+    run_and_assert(
+        &ctx,
+        "funMultimodal",
+        &[r#"[{tag: "text", value: {tag: "inline", value: Text("data")}}, {tag: "binary", value: {tag: "url", value: Url("https://example.com/foo")}}]"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funMultimodalAdvanced",
+        &[r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#],
+    )
+    .await;
 
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""bar""#]).await;
