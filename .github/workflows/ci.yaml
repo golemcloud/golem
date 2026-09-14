@@ -360,6 +360,7 @@ jobs:
     runs-on: blacksmith-32vcpu-ubuntu-2204
     needs:
       - build-and-store
+      - build-golem-effect
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
@@ -460,6 +461,20 @@ jobs:
       - name: Install TS SDK dependencies
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
+
+      - name: Restore built Effect SDK
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install Effect SDK dependencies
+        working-directory: sdks/effect
+        run: npm ci
 
       - uses: ./.github/actions/restore-binaries
         with:
@@ -893,6 +908,100 @@ jobs:
             sdks/ts/packages/golem-ts-bridge/dist
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-${{ github.run_id }}
+
+  build-golem-effect:
+    runs-on: blacksmith
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+
+      - name: Check code quality
+        working-directory: sdks/effect
+        run: npm run lint
+
+      - name: Check code formatting
+        working-directory: sdks/effect
+        run: npm run format:check
+
+      - name: Typecheck
+        working-directory: sdks/effect
+        run: npm run typecheck
+
+      - name: Build the package and agent template
+        working-directory: sdks/effect
+        run: |
+          npm test
+          npm run build
+          npm run build-agent-template
+          npm run check:dts
+          npm run check:contracts
+          npm run check:artifacts
+          npm run check:package
+
+      - name: Save built Effect SDK for CLI integration tests
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-${{ github.run_id }}
+
+      - name: Upload Effect SDK for Windows package checks
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-effect-sdk-windows
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          if-no-files-found: error
+
+  check-golem-effect-package-windows:
+    runs-on: windows-latest
+    needs: build-golem-effect
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: sdks/effect/package-lock.json
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+      - name: Download built Effect SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-effect-sdk-windows
+          path: sdks/effect
+      - name: Build package declarations
+        working-directory: sdks/effect
+        run: npm run build
+      - name: Smoke-test cross-platform package tooling
+        working-directory: sdks/effect
+        run: npm run check:package
 
   list-test-component-groups:
     runs-on: blacksmith

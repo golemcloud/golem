@@ -413,6 +413,9 @@ object OplogApi {
     final case class Restart(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
+    final case class Resumed(ts: ContextApi.DateTime) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
     final case class ActivatePlugin(params: ActivatePluginParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -530,6 +533,7 @@ object OplogApi {
         case "drop-resource"   => DropResource(parseDropResourceParameters(v.asInstanceOf[JsDropResourceParameters]))
         case "log"             => Log(parseLogParameters(v.asInstanceOf[JsLogParameters]))
         case "restart"         => Restart(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "resumed"         => Resumed(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "activate-plugin" =>
           ActivatePlugin(parseActivatePluginParameters(v.asInstanceOf[JsActivatePluginParameters]))
         case "deactivate-plugin" =>

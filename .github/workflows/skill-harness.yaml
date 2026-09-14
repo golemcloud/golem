@@ -95,6 +95,46 @@ jobs:
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-skill-harness-${{ github.run_id }}
 
+  build-golem-effect:
+    runs-on: blacksmith
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+
+      - name: Build the package and agent templates
+        working-directory: sdks/effect
+        run: |
+          npm run build
+          npm run build-agent-template
+
+      - name: Save built Effect SDK
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-skill-harness-${{ github.run_id }}
+
   # Provider-grouped jobs: jobs within each group run sequentially (max-parallel: 1)
   # to avoid rate limiting, while different provider groups run in parallel.
 
@@ -104,6 +144,7 @@ jobs:
     needs:
       - build-and-store-release
       - build-golem-ts
+      - build-golem-effect
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -111,6 +152,8 @@ jobs:
         include:
           - agent: claude-code
             language: ts
+          - agent: claude-code
+            language: effect
           - agent: claude-code
             language: rust
           - agent: claude-code
@@ -140,6 +183,7 @@ jobs:
     needs:
       - build-and-store-release
       - build-golem-ts
+      - build-golem-effect
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -147,6 +191,8 @@ jobs:
         include:
           - agent: codex
             language: ts
+          - agent: codex
+            language: effect
           - agent: codex
             language: rust
           - agent: codex
@@ -176,6 +222,7 @@ jobs:
     needs:
       - build-and-store-release
       - build-golem-ts
+      - build-golem-effect
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -183,6 +230,8 @@ jobs:
         include:
           - agent: gemini
             language: ts
+          - agent: gemini
+            language: effect
           - agent: gemini
             language: rust
           - agent: gemini
