@@ -934,6 +934,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     filesystem_cleanup_failed,
                 }) => {
                     warn!("Failed to start the worker: {err}");
+                    let err = if matches!(err, WorkerExecutorError::PreviousInvocationFailed { .. })
+                    {
+                        err
+                    } else {
+                        self.parent.record_recovery_failure(&err).await;
+                        if matches!(err, WorkerExecutorError::FailedToResumeAgent { .. }) {
+                            err
+                        } else {
+                            WorkerExecutorError::failed_to_resume_worker(
+                                self.owned_agent_id.agent_id.clone(),
+                                err,
+                            )
+                        }
+                    };
                     self.parent
                         .complete_startup(self.start_attempt, Err(err.clone()));
                     let final_state = if filesystem_cleanup_failed {

@@ -41,10 +41,11 @@ use golem_common::model::oplog::public_oplog_entry::{
     FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
     LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
     PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
+    RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -317,6 +318,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
+            | OplogEntry::RecoverySucceeded { .. }
             | OplogEntry::Interrupted { .. }
             | OplogEntry::Exited { .. }
             | OplogEntry::PendingAgentInvocation { .. }
@@ -968,6 +970,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::Error {
                 timestamp,
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
@@ -975,11 +978,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 ..
             } => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp,
+                kind,
                 error: error.to_string(""),
                 retry_from,
                 inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(Into::into),
             })),
+            OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
+                RecoverySucceededParams { timestamp },
+            )),
             OplogEntry::NoOp { timestamp, .. } => {
                 Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp }))
             }

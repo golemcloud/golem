@@ -134,8 +134,15 @@ object OplogApi {
     consumedFuel: Long
   )
 
+  sealed trait OplogErrorKind extends Product with Serializable
+  object OplogErrorKind {
+    case object Invocation extends OplogErrorKind
+    case object Recovery   extends OplogErrorKind
+  }
+
   final case class ErrorParameters(
     timestamp: ContextApi.DateTime,
+    kind: OplogErrorKind,
     error: String,
     retryFrom: OplogIndex
   )
@@ -356,6 +363,9 @@ object OplogApi {
     final case class Error(params: ErrorParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class RecoverySucceeded(ts: ContextApi.DateTime) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
     final case class NoOp(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -500,13 +510,14 @@ object OplogApi {
           AgentInvocationFinished(
             parseAgentInvocationFinishedParameters(v.asInstanceOf[JsAgentInvocationFinishedParameters])
           )
-        case "suspend"          => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "error"            => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
-        case "no-op"            => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "jump"             => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
-        case "interrupted"      => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "exited"           => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "set-retry-policy" =>
+        case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "error"              => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
+        case "recovery-succeeded" => RecoverySucceeded(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "no-op"              => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "jump"               => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
+        case "interrupted"        => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "exited"             => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "set-retry-policy"   =>
           SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
         case "remove-retry-policy" =>
           RemoveRetryPolicy(parseRemoveRetryPolicyParameters(v.asInstanceOf[JsRemoveRetryPolicyParameters]))
@@ -794,6 +805,11 @@ object OplogApi {
   private def parseErrorParameters(raw: JsErrorParameters): ErrorParameters =
     ErrorParameters(
       timestamp = parseDateTime(raw.timestamp),
+      kind = raw.kind match {
+        case "invocation" => OplogErrorKind.Invocation
+        case "recovery"   => OplogErrorKind.Recovery
+        case other        => throw new IllegalArgumentException(s"Unknown oplog error kind: $other")
+      },
       error = raw.error,
       retryFrom = BigInt(raw.retryFrom.toString)
     )

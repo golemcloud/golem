@@ -25,7 +25,7 @@ use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
@@ -4957,6 +4957,7 @@ async fn stderr_returned_for_failed_component(
 
     assert_eq!(metadata.status, AgentStatus::Failed);
     assert!(metadata.last_error.is_some());
+    assert_eq!(metadata.last_error_kind, Some(OplogErrorKind::Invocation));
     let last_error = metadata.last_error.unwrap();
     assert!(
         last_error.contains("error log message"),
@@ -4970,6 +4971,7 @@ async fn stderr_returned_for_failed_component(
     assert!(next.is_none());
     assert_eq!(all.len(), 1);
     assert!(all[0].last_error.is_some());
+    assert_eq!(all[0].last_error_kind, Some(OplogErrorKind::Invocation));
     let all_last_error = all[0].last_error.clone().unwrap();
     assert!(
         all_last_error.contains("error log message"),

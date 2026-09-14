@@ -4516,6 +4516,12 @@
         "updates": { "type": "array", "items": { "$ref": "#/definitions/UpdateRecord" } },
         "createdAt": { "type": "string" },
         "lastError": { "type": ["string", "null"] },
+        "lastErrorKind": {
+          "oneOf": [
+            { "type": "string", "enum": ["invocation", "recovery"] },
+            { "type": "null" }
+          ]
+        },
         "componentSize": { "type": "integer", "minimum": 0 },
         "totalLinearMemorySize": { "type": "integer", "minimum": 0 },
         "exportedResourceInstances": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentResourceDescription" } }
@@ -4658,6 +4664,7 @@
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
         { "$ref": "#/definitions/PublicOplogEntryError" },
+        { "$ref": "#/definitions/PublicOplogEntryRecoverySucceeded" },
         { "$ref": "#/definitions/PublicOplogEntryNoOp" },
         { "$ref": "#/definitions/PublicOplogEntryJump" },
         { "$ref": "#/definitions/PublicOplogEntryInterrupted" },
@@ -4830,6 +4837,7 @@
       "additionalProperties": false
     },
     "PublicOplogEntrySuspend": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Suspend" } } }] },
+    "PublicOplogEntryRecoverySucceeded": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "RecoverySucceeded" } } }] },
     "PublicOplogEntryNoOp": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "NoOp" } } }] },
     "PublicOplogEntryInterrupted": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Interrupted" } } }] },
     "PublicOplogEntryExited": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Exited" } } }] },
@@ -4837,10 +4845,11 @@
     "PublicOplogEntryRestart": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Restart" } } }] },
     "PublicOplogEntryError": {
       "type": "object",
-      "required": ["type", "timestamp", "error", "retryFrom", "insideAtomicRegion"],
+      "required": ["type", "timestamp", "kind", "error", "retryFrom", "insideAtomicRegion"],
       "properties": {
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
+        "kind": { "type": "string", "enum": ["invocation", "recovery"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
         "insideAtomicRegion": { "type": "boolean" },

@@ -11,7 +11,7 @@ A durable host call that fails with a retryable error can recover in two ways:
 | | In-function (inline) retry | Trap-based retry |
 |---|---|---|
 | Where | Inside the same host function, under the **same** `Start` | The invocation traps; the worker is torn down and reconstructed |
-| Oplog | Appends and commits one `OplogEntry::Error { retry_from, inside_atomic_region, retry_policy_state }` hint per attempt (`InFunctionRetryHost::append_retry_error_entry`) | Appends `OplogEntry::Error` in `on_invocation_failure`, then the outer loop replays to `retry_from` |
+| Oplog | Appends and commits one `OplogEntry::Error { kind: Invocation, retry_from, inside_atomic_region, retry_policy_state }` hint per attempt (`InFunctionRetryHost::append_retry_error_entry`) | Appends `OplogEntry::Error { kind: Invocation, .. }` in `on_invocation_failure`, then the outer loop replays to `retry_from` |
 | Cost | A sleep and a second live action | Full `Store` teardown, instance creation, replay of all history since the last baseline |
 | Decided by | `InFunctionRetryState::decide_retry_with_properties` → `AsyncRetryDecision::{Retry, FallBackToTrap, Exhausted}` | `try_trigger_host_trap_retry` attaches a `SemanticTrapRetryOverride`; `on_invocation_failure` turns it into a `RetryDecision` (`Immediate`, `Delayed`, `None`, …) |
 

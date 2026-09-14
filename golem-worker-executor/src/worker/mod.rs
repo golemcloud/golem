@@ -122,7 +122,7 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, OplogEntry, OplogIndex, OplogPayload, TimestampedUpdateDescription,
+    AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, TimestampedUpdateDescription,
     UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
@@ -132,7 +132,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, Timestamp,
     TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
@@ -1755,18 +1755,43 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker stopped before startup completed",
             ))
         };
+        drop(instance_guard);
+
+        if is_active
+            && self.last_known_status.load().last_error_kind == Some(OplogErrorKind::Recovery)
+        {
+            self.add_and_commit_oplog(OplogEntry::recovery_succeeded())
+                .await;
+        }
+
         let completed = match &result {
             Ok(()) => self
                 .startup_attempt
                 .complete_success_if_active(start_attempt, active_attempt),
             Err(_) => self.startup_attempt.complete(start_attempt, &result),
         };
-        drop(instance_guard);
 
         if completed {
             self.publish_completed_startup_result(start_attempt, result);
         }
         is_active
+    }
+
+    pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
+        let retry_from = self.oplog.current_oplog_index().await;
+        let error = match error {
+            WorkerExecutorError::FailedToResumeAgent { reason, .. } => reason.to_string(),
+            error => error.to_string(),
+        };
+        self.add_and_commit_oplog(OplogEntry::error(
+            None,
+            OplogErrorKind::Recovery,
+            AgentError::InternalError(error),
+            retry_from,
+            false,
+            Some(RetryPolicyState::Terminal),
+        ))
+        .await;
     }
 
     pub(crate) fn pending_startup_attempt(&self) -> Option<Uuid> {
@@ -8130,13 +8155,16 @@ fn lookup_result_from_cached_result(
                 Err(FailedInvocationResult {
                     // Retry marker error entries are persisted before the invocation has
                     // actually finished. While the same idempotency key is still current
-                    // and the worker has not entered a terminal state, report it as
-                    // pending so lookup callers can observe the eventual terminal result.
+                    // and there is no terminal invocation outcome, report it as pending
+                    // so lookup callers can observe the eventual result. A recovery
+                    // failure makes the agent unavailable but does not finish this invocation.
                     trap_type: TrapType::Error { .. },
                     ..
                 }),
         } if status.current_idempotency_key.as_ref() == Some(key)
-            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+            && (status.status != AgentStatus::Failed
+                || status.last_error_kind == Some(OplogErrorKind::Recovery))
+            && status.status != AgentStatus::Exited =>
         {
             LookupResult::Pending
         }
@@ -8765,6 +8793,31 @@ mod tests {
             }
             other => panic!("expected terminal lookup failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
+        let key = IdempotencyKey::fresh();
+        let mut status = status_with_current_key(AgentStatus::Failed, &key);
+        status.last_error_kind = Some(OplogErrorKind::Recovery);
+        let lookup = lookup_result_from_cached_result(
+            &status,
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("prior retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
+                        semantic_trap_retry_override: None,
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(lookup, LookupResult::Pending));
     }
 
     #[test]

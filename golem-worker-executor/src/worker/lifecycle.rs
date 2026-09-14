@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex, UpdateDescription};
 use golem_common::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentMetadata, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -66,8 +66,15 @@ fn interrupt_decision(status: &AgentStatus, recover_immediately: bool) -> Interr
     }
 }
 
-fn resume_decision(status: &AgentStatus, force: bool) -> ResumeDecision {
+fn resume_decision(
+    status: &AgentStatus,
+    last_error_kind: Option<OplogErrorKind>,
+    force: bool,
+) -> ResumeDecision {
     match status {
+        AgentStatus::Failed if force && last_error_kind == Some(OplogErrorKind::Recovery) => {
+            ResumeDecision::ForceStart
+        }
         AgentStatus::Failed => ResumeDecision::PreviousFailed,
         AgentStatus::Exited => ResumeDecision::PreviousExited,
         AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
@@ -225,7 +232,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let metadata = Self::existing_metadata(deps, owned_agent_id).await?;
 
-        match resume_decision(&metadata.last_known_status.status, force) {
+        match resume_decision(
+            &metadata.last_known_status.status,
+            metadata.last_known_status.last_error_kind,
+            force,
+        ) {
             ResumeDecision::PreviousFailed => {
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     deps,
@@ -235,10 +246,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {
-                    return Err(WorkerExecutorError::PreviousInvocationFailed {
-                        error: last_error.error,
-                        stderr: last_error.stderr,
-                    });
+                    return if metadata.last_known_status.last_error_kind
+                        == Some(golem_common::model::oplog::OplogErrorKind::Recovery)
+                    {
+                        Err(WorkerExecutorError::failed_to_resume_worker(
+                            owned_agent_id.agent_id.clone(),
+                            WorkerExecutorError::runtime(
+                                last_error.error.to_string(&last_error.stderr),
+                            ),
+                        ))
+                    } else {
+                        Err(WorkerExecutorError::PreviousInvocationFailed {
+                            error: last_error.error,
+                            stderr: last_error.stderr,
+                        })
+                    };
                 }
                 Err(WorkerExecutorError::runtime(
                     "Previous invocation failed, but failed to get error details",
@@ -655,9 +677,14 @@ mod tests {
         for ((status, expected), expected_forced) in
             STATUSES.iter().zip(expected).zip(expected_forced)
         {
-            assert_eq!(resume_decision(status, false), expected);
-            assert_eq!(resume_decision(status, true), expected_forced);
+            assert_eq!(resume_decision(status, None, false), expected);
+            assert_eq!(resume_decision(status, None, true), expected_forced);
         }
+
+        assert_eq!(
+            resume_decision(&AgentStatus::Failed, Some(OplogErrorKind::Recovery), true),
+            ResumeDecision::ForceStart
+        );
     }
 
     #[test]

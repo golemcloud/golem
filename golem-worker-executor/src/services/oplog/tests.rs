@@ -33,7 +33,7 @@ use golem_common::model::agent::{AgentMode, Principal};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{AgentError, LogLevel};
+use golem_common::model::oplog::{AgentError, LogLevel, OplogErrorKind};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
     AgentFingerprint, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
@@ -2767,6 +2767,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
         let entry = OplogEntry::Error {
             timestamp,
             entity_parent_start_index: None,
+            kind: OplogErrorKind::Invocation,
             error: AgentError::Unknown(i.to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -2870,6 +2871,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
             OplogEntry::Error {
                 timestamp,
                 entity_parent_start_index: None,
+                kind: OplogErrorKind::Invocation,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -3814,6 +3816,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             OplogEntry::Error {
                 timestamp,
                 entity_parent_start_index: None,
+                kind: OplogErrorKind::Invocation,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4629,6 +4632,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             OplogEntry::Error {
                 timestamp,
                 entity_parent_start_index: None,
+                kind: OplogErrorKind::Invocation,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4724,6 +4728,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             OplogEntry::Error {
                 timestamp,
                 entity_parent_start_index: None,
+                kind: OplogErrorKind::Invocation,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4820,6 +4825,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             OplogEntry::Error {
                 timestamp,
                 entity_parent_start_index: None,
+                kind: OplogErrorKind::Invocation,
                 error: AgentError::Unknown("last".to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
@@ -4869,6 +4875,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         OplogEntry::Error {
             timestamp,
             entity_parent_start_index: None,
+            kind: OplogErrorKind::Invocation,
             error: AgentError::Unknown("0".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4881,6 +4888,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         OplogEntry::Error {
             timestamp,
             entity_parent_start_index: None,
+            kind: OplogErrorKind::Invocation,
             error: AgentError::Unknown("99".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4893,6 +4901,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         OplogEntry::Error {
             timestamp,
             entity_parent_start_index: None,
+            kind: OplogErrorKind::Invocation,
             error: AgentError::Unknown("999".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4905,6 +4914,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         OplogEntry::Error {
             timestamp,
             entity_parent_start_index: None,
+            kind: OplogErrorKind::Invocation,
             error: AgentError::Unknown("last".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
@@ -4992,6 +5002,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                 OplogEntry::Error {
                     timestamp,
                     entity_parent_start_index: None,
+                    kind: OplogErrorKind::Invocation,
                     error: AgentError::Unknown(i.to_string()),
                     retry_from: OplogIndex::NONE,
                     inside_atomic_region: false,
@@ -5118,6 +5129,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             OplogEntry::Error {
                 timestamp,
                 entity_parent_start_index: None,
+                kind: OplogErrorKind::Invocation,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,

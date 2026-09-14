@@ -846,6 +846,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
         updates: vec![],
         created_at: "2024-01-01T00:00:00Z".parse().unwrap(),
         last_error: None,
+        last_error_kind: None,
         component_size: 0,
         total_linear_memory_size: 0,
         exported_resource_instances: BTreeMap::new().into_iter().collect(),
@@ -2051,10 +2052,14 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::Error(ErrorParams {
             timestamp: timestamp(),
+            kind: OplogErrorKind::Invocation,
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
             inside_atomic_region: false,
             retry_policy_state: Some(retry_policy_state),
+        }),
+        PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
+            timestamp: timestamp(),
         }),
         PublicOplogEntry::NoOp(NoOpParams {
             timestamp: timestamp(),
@@ -3224,6 +3229,10 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
             proptest::collection::vec(arb_update_record(), 0..4),
             arb_timestamp_string(),
             proptest::option::of(arb_small_string()),
+            proptest::option::of(prop_oneof![
+                Just(golem_common::model::oplog::OplogErrorKind::Invocation),
+                Just(golem_common::model::oplog::OplogErrorKind::Recovery),
+            ]),
             arb_small_u64(),
             arb_small_u64(),
             proptest::collection::btree_map(
@@ -3252,6 +3261,7 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 updates,
                 created_at,
                 last_error,
+                last_error_kind,
                 component_size,
                 total_linear_memory_size,
                 exported_resource_instances,
@@ -3282,6 +3292,7 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                     .parse()
                     .expect("generated timestamp should parse"),
                 last_error,
+                last_error_kind,
                 component_size,
                 total_linear_memory_size,
                 exported_resource_instances: exported_resource_instances.into_iter().collect(),

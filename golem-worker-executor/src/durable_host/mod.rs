@@ -148,7 +148,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
+    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
+    UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -4870,6 +4871,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
+                                OplogErrorKind::Invocation,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 inside_atomic_region,
@@ -4908,6 +4910,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
+                OplogErrorKind::Invocation,
                 error.clone(),
                 *retry_from,
                 *atomic_region_had_side_effects,
@@ -5832,9 +5835,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    break Err(WorkerExecutorError::runtime(
-                                                        "Process exited",
-                                                    ));
+                                                    break Ok(Some(RetryDecision::None));
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -5844,7 +5845,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         .event_service()
                                                         .get_last_invocation_errors();
                                                     break Err(
-                                                        WorkerExecutorError::InvocationFailed {
+                                                        WorkerExecutorError::PreviousInvocationFailed {
                                                             error,
                                                             stderr,
                                                         },
@@ -6084,6 +6085,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 Ok(None)
             }
             Ok(other) => Ok(other),
+            Err(error @ WorkerExecutorError::PreviousInvocationFailed { .. }) => Err(error),
             Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
                 agent_id.clone(),
                 error,
