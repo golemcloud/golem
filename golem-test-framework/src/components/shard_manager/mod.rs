@@ -88,6 +88,7 @@ async fn wait_for_startup(
 
 async fn env_vars(
     number_of_shards_override: Option<usize>,
+    shard_lease_duration_override: Option<Duration>,
     http_port: u16,
     grpc_port: u16,
     rdb: &Arc<dyn Rdb>,
@@ -126,6 +127,13 @@ async fn env_vars(
 
     if let Some(number_of_shards) = number_of_shards_override {
         builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
+    }
+
+    if let Some(shard_lease_duration) = shard_lease_duration_override {
+        builder = builder.with(
+            "GOLEM__SHARD_LEASE_DURATION",
+            format!("{}ms", shard_lease_duration.as_millis()),
+        );
     }
 
     builder.build()

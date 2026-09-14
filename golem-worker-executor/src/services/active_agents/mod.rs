@@ -62,7 +62,8 @@ use crate::worker::instance::{
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
-    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
+    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, RelinquishReason,
+    UnloadRequest,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -800,12 +801,23 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     }
 
     pub async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+        self.remove_with(
+            owned_agent_id,
+            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
+        )
+        .await
+    }
+
+    /// [`Self::remove`] with an explicit reason for tearing the agent's entity bodies down.
+    /// A relinquished agent must not report itself as interrupted through the Golem API: it was
+    /// not, its shard moved.
+    pub(crate) async fn remove_with(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        owner_failure: OwnerFailureWinner,
+    ) {
         if let Some(active_agent) = self.agents.get(owned_agent_id).await {
-            active_agent
-                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(
-                    Timestamp::now_utc(),
-                )))
-                .await;
+            active_agent.fence_entity_bodies(owner_failure).await;
             let worker = active_agent.primary();
             self.card_interest_index
                 .set_card_interest(worker.owned_agent_id().clone(), &[])
@@ -867,6 +879,37 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 (primary.agent_id(), primary)
             })
             .collect()
+    }
+
+    /// Gives up every agent the predicate selects: stops each one here and drops it from this
+    /// executor, so the shard's new owner recovers it.
+    ///
+    /// Concurrent rather than sequential, unlike [`Self::unload_environment`]: a revoke can name
+    /// many agents and each stop waits for that agent's invocation loop to exit. No acknowledgement
+    /// channel is awaited either - [`Worker::relinquish`] never subscribes to one - so an agent
+    /// that is already stopping cannot panic the sweep, which is what the old
+    /// `set_interrupting(..).recv().await.unwrap()` shape risked.
+    ///
+    /// The snapshot includes suspended, loading and already-stopping agents; the stop state
+    /// machine has an arm for each, so none is skipped.
+    pub(crate) async fn relinquish_matching(
+        &self,
+        reason: RelinquishReason,
+        select: impl Fn(&AgentId) -> bool,
+    ) {
+        let selected: Vec<Arc<Worker<Ctx>>> = self
+            .snapshot()
+            .await
+            .into_iter()
+            .filter(|(agent_id, _)| select(agent_id))
+            .map(|(_, worker)| worker)
+            .collect();
+
+        futures::future::join_all(selected.into_iter().map(|worker| {
+            let reason = reason.clone();
+            async move { worker.relinquish(reason).await }
+        }))
+        .await;
     }
 
     /// Interrupts and unloads all in-memory workers whose environment matches

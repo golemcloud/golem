@@ -116,7 +116,7 @@ impl DroppedCall {
             start_index: self.start_idx,
             partial,
         };
-        oplog.add(cancelled).await;
+        oplog.add(cancelled).await?;
         Ok(())
     }
 }

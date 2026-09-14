@@ -676,6 +676,36 @@ impl<
         self.state.items.contains_async(key).await
     }
 
+    /// Like [`Self::create_weak_remover`], but removes the cached value only if it satisfies
+    /// `predicate`: a remover tied to one particular value cannot evict a replacement that was
+    /// cached under the same key after it. Pending entries are never removed.
+    pub fn create_weak_remover_if<F>(
+        &self,
+        key: K,
+        predicate: F,
+    ) -> impl FnOnce() + use<K, V, PV, E, F>
+    where
+        F: FnOnce(&V) -> bool,
+    {
+        let weak_state = Arc::downgrade(&self.state);
+        let name = self.name;
+        move || {
+            if let Some(state) = weak_state.upgrade() {
+                let removed = state
+                    .items
+                    .remove_if_sync(&key, |item| match item {
+                        Item::Cached { value, .. } => predicate(value),
+                        Item::Pending { .. } => false,
+                    })
+                    .is_some();
+                if removed {
+                    let count = state.count.fetch_sub(1, Ordering::SeqCst);
+                    record_cache_size(name, count.saturating_sub(1));
+                }
+            }
+        }
+    }
+
     pub fn create_weak_remover(&self, key: K) -> impl FnOnce() + use<K, V, PV, E> {
         let weak_state = Arc::downgrade(&self.state);
         let name = self.name;
@@ -1063,6 +1093,28 @@ mod tests {
 
         let removed = cache.remove_if_cached(&1, |v| *v == 42).await;
         assert!(removed);
+        assert!(!cache.contains_key(&1).await);
+    }
+
+    #[test]
+    async fn weak_remover_if_leaves_a_value_it_was_not_created_for() {
+        let cache = test_cache("weak_remover_if");
+        cache
+            .get_or_insert_simple(&1, || async { Ok(1u64) })
+            .await
+            .unwrap();
+        // Created for the first value, run after that value was replaced: the replacement stays.
+        let remover = cache.create_weak_remover_if(1, |v| *v == 1);
+        cache.remove(&1).await;
+        cache
+            .get_or_insert_simple(&1, || async { Ok(2u64) })
+            .await
+            .unwrap();
+        remover();
+        assert!(cache.contains_key(&1).await);
+
+        let remover = cache.create_weak_remover_if(1, |v| *v == 2);
+        remover();
         assert!(!cache.contains_key(&1).await);
     }
 

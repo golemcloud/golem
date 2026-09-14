@@ -61,5 +61,8 @@ url = { workspace = true }
 uuid = { workspace = true }
 wasm-metadata = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [features]
 default = []

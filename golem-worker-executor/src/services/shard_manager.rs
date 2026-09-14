@@ -105,6 +105,13 @@ pub trait ShardManagerService: Send + Sync {
     /// recovery only if nothing newer was registered since: a newer registration means a delivery
     /// this attempt did not see, whose agents it therefore did not start. No-op by default.
     fn recovery_succeeded(&self, _ticket: RecoveryTicket) {}
+
+    /// Whether shards can move between executors under this implementation, and therefore
+    /// whether the oplog fence has to exist for the executor to be safe.
+    ///
+    /// Deliberately without a default: the answer decides whether the process is allowed to
+    /// start at all, so a new implementation must state it rather than inherit a permissive one.
+    fn requires_oplog_fencing(&self) -> bool;
 }
 
 /// The interval arm of the renewal loop. A `None` delay is a lease that never
@@ -402,6 +409,12 @@ fn renewal_interval_for(expires_at: Option<Instant>, now: Instant) -> RenewalDel
 
 #[async_trait]
 impl ShardManagerService for GrpcShardManagerService {
+    /// Yes: a real shard manager moves shards between executors, so two of them can believe they
+    /// own the same agent at once and only the storage can tell them apart.
+    fn requires_oplog_fencing(&self) -> bool {
+        true
+    }
+
     async fn register(
         &self,
         port: u16,
@@ -586,6 +599,12 @@ pub struct ShardManagerServiceSingleShard;
 
 #[async_trait]
 impl ShardManagerService for ShardManagerServiceSingleShard {
+    /// No: this executor owns the single shard for its whole life and nothing can take it away,
+    /// so there is no second writer to fence out.
+    fn requires_oplog_fencing(&self) -> bool {
+        false
+    }
+
     async fn register(
         &self,
         _port: u16,
@@ -872,6 +891,20 @@ mod tests {
             floor,
         );
         (service, shard_service)
+    }
+
+    #[test]
+    // Which implementation is in effect is what decides whether the executor may start on an
+    // unfenced indexed storage, so both answers are pinned rather than left to the guard's caller.
+    fn only_the_real_shard_manager_requires_oplog_fencing() {
+        let mock = Arc::new(MockShardManager::new());
+        let (service, _shard_service) = make_service(mock, Shutdown::new());
+
+        // Shards move between executors here, so two of them can believe they own the same agent.
+        assert!(service.requires_oplog_fencing());
+
+        // Nothing can take the single shard away, so there is no second writer to fence out.
+        assert!(!ShardManagerServiceSingleShard.requires_oplog_fencing());
     }
 
     #[test]

@@ -345,7 +345,10 @@ mod tests {
 
     #[async_trait]
     impl Oplog for UnusedOplog {
-        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+        async fn add(
+            &self,
+            _entry: OplogEntry,
+        ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by promise waits")
         }
 
@@ -357,7 +360,7 @@ mod tests {
             &self,
             _start: OplogEntry,
             _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
+        ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by promise waits")
         }
 
@@ -365,7 +368,10 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        async fn commit(
+            &self,
+            _level: CommitLevel,
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
 
@@ -413,14 +419,14 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
 
         async fn add_start_with_indexed_reserved_raw_payload(
             &self,
             _build_request: crate::services::oplog::IndexedReservedStartBuilder,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
     }
@@ -506,7 +512,10 @@ mod tests {
 
     #[async_trait]
     impl Oplog for StubOplog {
-        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+        async fn add(
+            &self,
+            _entry: OplogEntry,
+        ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
             unreachable!("oplog writes are unused by wakeup scheduling")
         }
 
@@ -518,7 +527,7 @@ mod tests {
             &self,
             _start: OplogEntry,
             _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
+        ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
             unreachable!("oplog writes are unused by wakeup scheduling")
         }
 
@@ -526,7 +535,10 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        async fn commit(
+            &self,
+            _level: CommitLevel,
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
 
@@ -574,14 +586,14 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
 
         async fn add_start_with_indexed_reserved_raw_payload(
             &self,
             _build_request: crate::services::oplog::IndexedReservedStartBuilder,
-        ) -> Result<OrderedOplogStart, String> {
+        ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
     }

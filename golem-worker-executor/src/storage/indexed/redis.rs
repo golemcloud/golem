@@ -23,6 +23,7 @@ use fred::prelude::{Key, Value};
 use fred::types::config::Options;
 use fred::types::streams::XCapKind;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
+use golem_common::model::ShardEpoch;
 use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -245,6 +246,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
         let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
@@ -277,6 +279,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
             let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });

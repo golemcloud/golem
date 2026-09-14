@@ -18,6 +18,7 @@ use crate::storage::indexed::{
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
@@ -202,6 +203,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
         let composite_key = Self::composite_key(namespace, key);
@@ -389,6 +391,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -400,6 +403,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -411,6 +415,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -422,6 +427,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -455,6 +461,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -466,6 +473,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -477,6 +485,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -488,6 +497,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -521,6 +531,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -532,6 +543,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -543,6 +555,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -554,6 +567,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -587,6 +601,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -598,6 +613,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -609,6 +625,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -620,6 +637,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -654,6 +672,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -665,6 +684,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -676,6 +696,7 @@ mod tests {
             key,
             30,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -687,6 +708,7 @@ mod tests {
             key,
             40,
             &400,
+            None,
         )
         .await
         .unwrap();
@@ -721,6 +743,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -732,6 +755,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -764,6 +788,7 @@ mod tests {
             key,
             10,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -775,6 +800,7 @@ mod tests {
             key,
             20,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -807,6 +833,7 @@ mod tests {
             key,
             1,
             &100,
+            None,
         )
         .await
         .unwrap();
@@ -818,6 +845,7 @@ mod tests {
             key,
             2,
             &200,
+            None,
         )
         .await
         .unwrap();
@@ -829,6 +857,7 @@ mod tests {
             key,
             3,
             &300,
+            None,
         )
         .await
         .unwrap();
@@ -840,6 +869,7 @@ mod tests {
             key,
             4,
             &400,
+            None,
         )
         .await
         .unwrap();

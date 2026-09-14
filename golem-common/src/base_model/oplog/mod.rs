@@ -185,7 +185,10 @@ oplog_entry! {
         }
     },
     /// The agent has been invoked
-    #[desert(evolution(FieldAdded("wallet_pin", None::<InvocationWalletPin>)))]
+    #[desert(evolution(
+        FieldAdded("wallet_pin", None::<InvocationWalletPin>),
+        FieldAdded("shard_epoch", None::<u64>)
+    ))]
     AgentInvocationStarted {
         hint: false
         wit_raw_type: "raw-agent-invocation-started-parameters"
@@ -197,6 +200,12 @@ oplog_entry! {
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
             wallet_pin: Option<InvocationWalletPin>,
+            /// The shard epoch this executor held for the agent's shard when the invocation
+            /// started. Raw only - it is a record of which ownership generation produced the
+            /// entry, for operators and oplog-processor plugins reading a divergence, not
+            /// something the agent's own history should expose. `None` for entries written
+            /// before the fence existed, and for oplogs opened without an epoch to assert.
+            shard_epoch: Option<u64>,
         }
         public {
             invocation: PublicAgentInvocation,
