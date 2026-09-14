@@ -164,6 +164,107 @@ fn slot_handle(
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn create_stream_session(
+        self: &Arc<Self>,
+        mut request: golem_api_grpc::proto::golem::worker::InvocationStart,
+        key: IdempotencyKey,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess,
+        WorkerExecutorError,
+    > {
+        use crate::grpc::{
+            CanStartWorker, build_durable_streaming_request, decode_invocation_input,
+        };
+
+        let producer = self.durable_stream_producer().await?;
+        let pinned = producer
+            .with_metadata_activity(self.prepared_stream_session(&key))
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
+        if pinned.is_none() && self.agent_mode() != AgentMode::Ephemeral {
+            Self::ensure_not_failed(
+                &self.deps,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                self.get_last_known_status().await.as_ref(),
+            )
+            .await?;
+        }
+        let revision = match &pinned {
+            Some(prepared) => prepared.attempt.invocation.target_component_revision,
+            None => self.get_last_known_status().await.component_revision,
+        };
+        let component = self
+            .component_service()
+            .get_metadata(self.owned_agent_id.component_id(), Some(revision))
+            .await?;
+        let method_name = request
+            .method_name
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("method_name not found"))?;
+        let proto_input = request
+            .input
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("input not found"))?;
+        let input_len = proto_input.encoded_len();
+        let input =
+            decode_invocation_input(proto_input).map_err(WorkerExecutorError::invalid_request)?;
+        let parsed =
+            ParsedAgentId::parse(&self.owned_agent_id.agent_id.agent_id, &component.metadata)
+                .map_err(WorkerExecutorError::invalid_request)?;
+        if !crate::worker::invocation::validate_agent_method_invocation(
+            &component.metadata,
+            Some(&parsed),
+            &method_name,
+            &input,
+        )? {
+            return Err(WorkerExecutorError::invalid_request(
+                "Durable Streams requires a streaming method",
+            ));
+        }
+        request.attempt_id = Some(uuid::Uuid::new_v4().into());
+        request.expected_callee_fingerprint =
+            Some(self.get_initial_worker_metadata().fingerprint.0.into());
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key: key.clone(),
+            method_name,
+            input,
+            invocation_context: crate::grpc::from_proto_invocation_context(&request.context)
+                .limit_depth(self.config().limits.max_invocation_context_stack_depth),
+            principal: request.principal(),
+            scope_card: request
+                .scope_card
+                .clone()
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(WorkerExecutorError::permission_denied)?,
+        };
+        let (committed, _receipt) = tokio::sync::oneshot::channel();
+        let invocation = build_durable_streaming_request(
+            &request,
+            &component.metadata,
+            revision,
+            self.get_initial_worker_metadata().fingerprint,
+            invocation,
+            input_len,
+            committed,
+            self.config()
+                .limits
+                .live_stream_event_broadcast_capacity
+                .get(),
+        )?;
+        let acceptance = self
+            .accept_durable_stream_slot_invocation(invocation)
+            .await?;
+        Ok(
+            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess {
+                session: key.value,
+                replayed: acceptance.replayed,
+                component_revision: revision.into(),
+            },
+        )
+    }
+
     async fn resolve_stream_slot(
         &self,
         session: &str,

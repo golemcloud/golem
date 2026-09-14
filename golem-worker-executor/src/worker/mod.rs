@@ -769,6 +769,51 @@ fn into_pending_invocation_parts(
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+    ) -> Result<(), WorkerExecutorError> {
+        match &status.status {
+            AgentStatus::Failed => {
+                let error_and_retry_count =
+                    Ctx::get_last_error_and_retry_count(deps, owned_agent_id, agent_mode, status)
+                        .await;
+                if let Some(last_error) = error_and_retry_count {
+                    Err(WorkerExecutorError::PreviousInvocationFailed {
+                        error: last_error.error,
+                        stderr: last_error.stderr,
+                    })
+                } else {
+                    Err(WorkerExecutorError::runtime(
+                        "Previous invocation failed, but failed to get error details",
+                    ))
+                }
+            }
+            AgentStatus::Exited => Err(WorkerExecutorError::PreviousInvocationExited),
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) async fn find_durable_stream_worker<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<Arc<Self>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        if Self::get_latest_metadata(deps, owned_agent_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        Self::get_existing_suspended(deps, owned_agent_id, None, Principal::anonymous())
+            .await
+            .map(Some)
+    }
+
     pub(crate) fn durable_stream_consumer_journal(&self) -> Arc<dyn DurableStreamConsumerJournal> {
         Arc::new(WorkerDurableStreamConsumerJournal {
             state_actor: self.state_actor.clone(),

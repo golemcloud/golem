@@ -119,7 +119,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
     }
 
-    async fn get_existing_suspended<T>(
+    pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         component_revision: Option<ComponentRevision>,
