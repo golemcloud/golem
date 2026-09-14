@@ -1,15 +1,10 @@
 # Application API
 
 ## List all applications in the account
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/apps`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -28,13 +23,10 @@ Path|Method|Protected
 ```
 
 ## Create an application in the account
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/apps`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -56,15 +48,10 @@ Path|Method|Protected
 ```
 
 ## Get application in the account by name
+
 Path|Method|Protected
 ---|---|---
 `/v1/accounts/{account_id}/apps/{application_name}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -79,15 +66,10 @@ Path|Method|Protected
 ```
 
 ## Get application by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/apps/{application_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -102,11 +84,10 @@ Path|Method|Protected
 ```
 
 ## Update application by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/apps/{application_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
@@ -114,18 +95,11 @@ Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
 
-
-
-
-
 ## Update application by id.
+
 Path|Method|Protected
 ---|---|---
 `/v1/apps/{application_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
