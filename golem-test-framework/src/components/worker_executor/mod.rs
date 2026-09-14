@@ -113,6 +113,7 @@ async fn env_vars(
         .with_str("GOLEM__SHARD_MANAGER__RETRIES__MAX_DELAY", "2s")
         .with_str("GOLEM__SHARD_MANAGER__RETRIES__MULTIPLIER", "2")
         .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
+        .with_str("GOLEM__RESOURCE_USAGE_METERING__COMPUTE", "true")
         .with_str(
             "GOLEM__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
             "false",

@@ -2,8 +2,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc")
+rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts")
+scala_test_apps=("tool-streaming-scala")
+moonbit_test_apps=("tool-streaming-moonbit")
 go_test_apps=("agent-sdk-go")
 benchmark_apps=("benchmarks")
 
@@ -15,7 +17,7 @@ GO_CHUNKS=1   # Number of chunks to split go apps into for parallel CI builds
 # - clean: clean all projects without building
 # - rebuild: clean all projects before building them
 # - check: run only `golem-cli build --step check` for selected projects
-# - rust / ts / benchmarks: build only the specified group
+# - rust / ts / scala / moonbit / benchmarks: build only the specified group
 # - rust-N / ts-N: build only the Nth chunk of that group (for parallel CI)
 # - list-groups: print available group names for CI matrix generation
 
@@ -61,18 +63,19 @@ print_groups_json() {
   local i sep=""
   printf '['
   for ((i=1; i<=RUST_CHUNKS; i++)); do
-    printf '%s{"name":"rust-%d","needs-node":false}' "$sep" "$i"
+    printf '%s{"name":"rust-%d","needs-node":false,"needs-moonbit":false}' "$sep" "$i"
     sep=","
   done
   for ((i=1; i<=TS_CHUNKS; i++)); do
-    printf '%s{"name":"ts-%d","needs-node":true}' "$sep" "$i"
+    printf '%s{"name":"ts-%d","needs-node":true,"needs-moonbit":true}' "$sep" "$i"
     sep=","
   done
+  printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
+  printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true,"expected-artifact":"golem_it_tool_streaming_moonbit.wasm"}'
   for ((i=1; i<=GO_CHUNKS; i++)); do
-    printf '%s{"name":"go-%d","needs-node":false,"needs-go":true}' "$sep" "$i"
-    sep=","
+    printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
   done
-  printf '%s{"name":"benchmarks","needs-node":true}]\n' "$sep"
+  printf ',{"name":"benchmarks","needs-node":true,"needs-moonbit":false}]\n'
 }
 
 clean_only=false
@@ -91,7 +94,7 @@ for arg in "$@"; do
     check)
       check_only=true
       ;;
-    rust|ts|go|benchmarks)
+    rust|ts|scala|moonbit|go|benchmarks)
       single_group=true
       group="$arg"
       ;;
@@ -245,6 +248,46 @@ build_node_apps() {
   done
 }
 
+build_sdk_apps() {
+  local label=$1
+  shift
+  local apps=("$@")
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning $label test apps"
+  elif [ "$check_only" = true ]; then
+    echo "Checking $label test apps"
+  else
+    echo "Building $label test apps"
+  fi
+  for subdir in "${apps[@]}"; do
+    pushd "$subdir" || exit
+
+    if should_clean; then
+      echo "Cleaning $subdir..."
+      "$GOLEM_CLI" clean
+    fi
+
+    if [ "$check_only" = true ]; then
+      echo "Checking $subdir..."
+      "$GOLEM_CLI" build --step check --yes
+    elif [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      "$GOLEM_CLI" --preset release build --yes --skip-check
+      "$GOLEM_CLI" --preset release exec copy
+      case "$subdir" in
+        tool-streaming-scala)
+          test -s ../golem_it_tool_streaming_scala.wasm
+          ;;
+        tool-streaming-moonbit)
+          test -s ../golem_it_tool_streaming_moonbit.wasm
+          ;;
+      esac
+    fi
+
+    popd || exit
+  done
+}
+
 # Handle chunk groups (rust-N, ts-N) or full groups
 if [[ "$group" =~ ^rust-([0-9]+)$ ]]; then
   chunk_idx="${BASH_REMATCH[1]}"
@@ -271,6 +314,14 @@ if [[ "$group" =~ ^ts-([0-9]+)$ ]]; then
   NODE_GROUP_LABEL="TS" build_node_apps "${chunk_apps[@]}"
 elif [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
   NODE_GROUP_LABEL="TS" build_node_apps "${ts_test_apps[@]}"
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "scala" ]; then
+  build_sdk_apps "Scala" "${scala_test_apps[@]}"
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "moonbit" ]; then
+  build_sdk_apps "MoonBit" "${moonbit_test_apps[@]}"
 fi
 
 if [[ "$group" =~ ^go-([0-9]+)$ ]]; then

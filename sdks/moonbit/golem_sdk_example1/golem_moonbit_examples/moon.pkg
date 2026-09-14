@@ -19,8 +19,11 @@ import {
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock,
 }
 
+pkgtype(kind: "executable")
+
+supported_targets = "+wasm"
+
 options(
-  "is-main": true,
   link: {
     "wasm": {
       "export-memory-name": "memory",

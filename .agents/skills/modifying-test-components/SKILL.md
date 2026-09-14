@@ -1,110 +1,57 @@
 ---
 name: modifying-test-components
-description: "Building or modifying test WASM components in test-components/. Use when a test component needs to be rebuilt, a new test component is needed, or SDK changes require downstream test component rebuilds."
+description: Builds or modifies selected test WASM components in test-components/. Use for fixture source changes, missing artifacts, or SDK changes requiring targeted downstream rebuilds.
 ---
 
 # Modifying Test Components
 
-Worker executor tests, integration tests, and CLI integration tests use built WASM artifacts from `test-components/`. These `.wasm` files are no longer checked into the repository; compiling the components needed by the selected tests is a separate step before running those tests.
+Test WASMs are normally generated, gitignored artifacts. Build only what the selected tests need; `test-components/build-components.sh` is authoritative for normal Rust, TypeScript, benchmark membership and CI chunking.
 
-## Key Rules
+## Find the Dependency and Build Path
 
-1. **Do not rebuild more test components than necessary.** Prefer rebuilding only the components required by the selected tests.
-2. **Only rebuild if the test component has its own `AGENTS.md`** with build instructions. If it doesn't, the component cannot be rebuilt by you.
-3. **SDK changes require rebuilding dependent test components.** If you modify `sdks/rust/` or `sdks/ts/`, you must rebuild any test components that use the changed SDK.
+1. Read the component's `AGENTS.md` when present and inspect its `golem.yaml`, `Cargo.toml`, or `package.json`.
+2. Locate consumers with exact artifact/component-name searches in `integration-tests/`, `golem-worker-executor/`, and `golem-test-framework/`.
+3. Locate SDK dependencies recursively without relying on a one-directory glob:
+   `rg -n -g 'Cargo.toml' -g 'package.json' -g 'golem.yaml' 'golem-rust|golem-ts-sdk' test-components/`.
+   Do not classify by language from directory names alone.
+4. Check membership in the arrays at the top of `test-components/build-components.sh`. Use its group/chunk commands for listed applications or the component-specific instructions for an unlisted fixture.
 
-## When to Rebuild
+For listed applications, ensure `golem-cli` exists (the script honors `GOLEM_CLI` and otherwise resolves the Cargo target directory). Build the package with `cargo build -p golem-cli --bin golem-cli` when needed—not `golem`. Do not hardcode `target/`; set `GOLEM_CLI` explicitly when using a redirected target directory.
 
-| Change | Action Required |
-|--------|----------------|
-| Modifying a test component's source code | Rebuild that component (if it has an AGENTS.md) |
-| Modifying `sdks/rust/` (golem-rust) | Rebuild Rust test components that depend on it |
-| Modifying `sdks/ts/` (golem-ts-sdk) | Rebuild agent template WASM first, then TS test components |
-| Modifying WIT interfaces | Run `cargo make wit`, then rebuild affected components |
-| Running worker executor / integration / CLI integration tests that depend on missing test-component WASMs | Rebuild the specific components those tests use before running the tests |
-| No source changes and required WASMs already exist | Do not rebuild |
-
-## Rebuilding a Test Component
-
-### Step 1: Check for build instructions
+All mutating `golem build` commands require `--yes`. Normal release Rust builds are orchestrated by:
 
 ```shell
-cat test-components/<component-name>/AGENTS.md
+cd test-components
+./build-components.sh rust       # or rust-N / ts / ts-N / benchmarks
 ```
 
-If no `AGENTS.md` exists, **stop** — you cannot rebuild this component.
+The script builds release Rust artifacts, runs each copy command, and handles TS presets. For one component, follow its current manifest/AGENTS command and verify the copied top-level `test-components/*.wasm`, not merely an intermediate `golem-temp` file.
 
-### Step 2: Follow the component's AGENTS.md
+## Keep Automatic Migrations
 
-Each component's `AGENTS.md` contains specific build instructions. Follow them exactly.
+Before rebuilding, note the existing status of the selected component's source directory. A build
+with the latest locally built Golem binary may migrate tracked source files, including manifests,
+embedded skills, and other current-format metadata. Inspect changes newly produced by the build to
+confirm they are migration output, then keep and include all of them in the changeset. They are part
+of the rebuild even when they are unrelated to the source or SDK change that prompted it. Do not
+revert, discard, or omit these migrations to narrow the diff; test components intentionally evolve
+with Golem.
 
-**Important:** When running `golem build` (or `../../target/debug/golem build`) for test components, always pass `--yes` to automatically confirm dependency/configuration updates without interactive prompts.
+## SDK Prerequisites
 
-For Rust Golem application test components, rebuild with the **release profile** so the `golem-temp/agents/*_release.wasm` artifact used by tests is regenerated. Use `-P release` and force the build if you need to refresh an existing artifact:
+- Rust SDK change: rebuild only components whose manifests resolve to the changed local SDK.
+- TypeScript SDK change: from `sdks/ts`, install dependencies, run `pnpm run build`, then `pnpm run build-agent-template` before affected TS components. Current tooling also needs the repository's configured Node/pnpm, WASI SDK, `wasm-rquickjs-cli`, Rust `wasm32-wasip2`, and other prerequisites documented by `sdks/ts/AGENTS.md`/CI.
+- `cargo make build-sdk-ts` skips when both `packages/golem-ts-sdk/dist` and `packages/golem-ts-sdk/wasm/agent_guest.wasm` exist; that is an existence cache, not freshness validation. Clean/rebuild explicitly after TS SDK source changes.
 
-```shell
-../../target/debug/golem build -P release --force-build --yes
-```
+## Tracked Concurrent Fixtures
 
-If a component's `AGENTS.md` gives a different component-specific command, follow it, but make sure Rust test-component rebuilds produce the release artifact unless the task explicitly asks for a debug build.
+Two intentional exceptions are tracked WASMs and are excluded from `build-components.sh`:
 
-## TS SDK Change Rebuild Chain
+- `test-components/concurrent-delivery-order/concurrent_delivery_order.wasm` — `cargo make build-concurrent-delivery-order-component`
+- `test-components/concurrent-runtime-events/concurrent_runtime_events.wasm` — `cargo make build-concurrent-runtime-events-component`
 
-When modifying the TypeScript SDK, you must follow this exact rebuild order:
+Use only their dedicated tasks; they build minimal component-model-async fixtures and run `wasm-tools validate --features all`. Commit changed fixture WASMs.
 
-### 1. Build the TS SDK packages
+## Validate
 
-```shell
-cd sdks/ts
-npx pnpm install
-npx pnpm run build
-```
-
-### 2. Rebuild the agent template WASM
-
-This step is **required** before rebuilding any TS test components. The agent template embeds the SDK runtime.
-
-```shell
-cd sdks/ts
-npx pnpm run build-agent-template
-```
-
-**Requires `cargo-component` v0.21.1** — see `sdks/ts/AGENTS.md` for installation.
-
-### 3. Rebuild affected TS test components
-
-Follow each component's `AGENTS.md` for specific instructions.
-
-## Rust SDK Change Rebuild Chain
-
-When modifying the Rust SDK:
-
-### 1. Build the Rust SDK
-
-```shell
-cargo build -p golem-rust
-cargo build -p golem-rust-macro
-```
-
-### 2. Rebuild affected Rust test components
-
-Follow each component's `AGENTS.md` for specific instructions. Rust Golem application test components should be rebuilt with `golem build -P release --force-build --yes`; Rust test components that are not Golem applications may use `cargo component build` or another component-specific command with a local path dependency on `golem-rust`.
-
-## Finding Test Components
-
-Test components live in `test-components/`. To find which ones have build instructions:
-
-```shell
-ls test-components/*/AGENTS.md
-```
-
-To find which test components depend on a specific SDK, check their `Cargo.toml` (Rust) or `package.json` (TS) for SDK references.
-
-## Checklist
-
-1. Confirmed the component has an `AGENTS.md` with build instructions
-2. If SDK was changed: rebuilt SDK first
-3. If TS SDK was changed: rebuilt agent template WASM before components
-4. Followed the component's specific `AGENTS.md` build instructions
-5. Confirmed the expected `.wasm` artifact now exists under `test-components/`; for Rust Golem application components, confirm the `golem-temp/agents/*_release.wasm` artifact was updated
-6. Ran the relevant tests after the rebuild (`cargo make worker-executor-tests`, `cargo make integration-tests`, or `cargo make cli-integration-tests`)
+Confirm every expected destination exists and is non-empty; run `wasm-tools validate --features all <artifact>` when diagnosing or changing component construction. Then run the smallest consuming test. Tests that invoke Cargo, Golem, npm, or compilers as subprocesses belong specifically in the CLI integration test suite; unit, worker-executor, and non-CLI integration tests must not spawn them. Do not add legacy build fallbacks or compatibility paths; that remains prohibited until the repository-wide backward-compatibility policy is revised.

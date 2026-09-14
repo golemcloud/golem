@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::wasmtime_config::wasmtime_artifact_fingerprint;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -109,8 +110,14 @@ impl DefaultCompiledComponentService {
         Self { blob_storage }
     }
 
-    fn key(component_id: ComponentId, component_revision: ComponentRevision) -> PathBuf {
-        Path::new(&component_id.to_string()).join(format!("{component_revision}.cwasm"))
+    fn key(
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        artifact_fingerprint: &str,
+    ) -> PathBuf {
+        Path::new(&component_id.to_string())
+            .join(component_revision.to_string())
+            .join(format!("{artifact_fingerprint}.cwasm"))
     }
 }
 
@@ -123,13 +130,14 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         component_revision: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
+        let artifact_fingerprint = wasmtime_artifact_fingerprint(engine);
         match self
             .blob_storage
             .get_raw(
                 "compiled_component",
                 "get",
                 BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_revision),
+                &Self::key(component_id, component_revision, &artifact_fingerprint),
             )
             .await
         {
@@ -177,6 +185,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         component_revision: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError> {
+        let artifact_fingerprint = wasmtime_artifact_fingerprint(component.engine());
         let bytes = component
             .serialize()
             .expect("Could not serialize component");
@@ -187,7 +196,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 "compiled_component",
                 "put",
                 BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_revision),
+                &Self::key(component_id, component_revision, &artifact_fingerprint),
                 &bytes,
             )
             .await
@@ -240,6 +249,81 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
         _component_revision: ComponentRevision,
         _component: &Component,
     ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::blob::memory::InMemoryBlobStorage;
+    use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
+    use test_r::test;
+    use wasmtime::OptLevel;
+
+    fn engine(opt_level: OptLevel) -> anyhow::Result<Engine> {
+        let mut config = create_wasmtime_config_without_fs_cache();
+        config.cranelift_opt_level(opt_level);
+        Ok(Engine::new(&config)?)
+    }
+
+    #[test]
+    async fn incompatible_engine_artifacts_are_not_cross_read_and_can_coexist() -> anyhow::Result<()>
+    {
+        let blob_storage = Arc::new(InMemoryBlobStorage::new());
+        let service = DefaultCompiledComponentService::new(blob_storage);
+        let unoptimized_engine = engine(OptLevel::None)?;
+        let optimized_engine = engine(OptLevel::Speed)?;
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::INITIAL;
+
+        assert_ne!(
+            wasmtime_artifact_fingerprint(&unoptimized_engine),
+            wasmtime_artifact_fingerprint(&optimized_engine)
+        );
+
+        let unoptimized_component = Component::new(&unoptimized_engine, b"(component)")?;
+        service
+            .put(
+                environment_id,
+                component_id,
+                component_revision,
+                &unoptimized_component,
+            )
+            .await?;
+
+        assert!(
+            service
+                .get(
+                    environment_id,
+                    component_id,
+                    component_revision,
+                    &optimized_engine,
+                )
+                .await?
+                .is_none()
+        );
+
+        let optimized_component = Component::new(&optimized_engine, b"(component)")?;
+        service
+            .put(
+                environment_id,
+                component_id,
+                component_revision,
+                &optimized_component,
+            )
+            .await?;
+
+        for engine in [&unoptimized_engine, &optimized_engine] {
+            assert!(
+                service
+                    .get(environment_id, component_id, component_revision, engine,)
+                    .await?
+                    .is_some()
+            );
+        }
+
         Ok(())
     }
 }

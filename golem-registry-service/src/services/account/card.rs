@@ -23,18 +23,20 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountOauth2IdentityResourcePattern, AccountPermissionShareResourcePattern,
     AccountPluginResourcePattern, AccountResourcePattern, AccountTokenResourcePattern,
-    AccountUsageResourcePattern, AgentResourcePattern, ApplicationResourcePattern,
-    BlobResourcePattern, CardId, CardManagedBy, CardManagedByAccountRoot, CardResourcePattern,
-    ClassPermissionPattern, ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
+    AccountToolReleaseResourcePattern, AccountUsageResourcePattern, AgentResourcePattern,
+    ApplicationResourcePattern, BlobResourcePattern, CardId, CardManagedBy,
+    CardManagedByAccountRoot, CardResourcePattern, ClassPermissionPattern,
+    ComponentResourcePattern, ConfigResourcePattern, EnvResourcePattern,
     EnvironmentAgentSecretResourcePattern, EnvironmentBlobBucketResourcePattern,
     EnvironmentDomainRegistrationResourcePattern, EnvironmentHttpApiDeploymentResourcePattern,
     EnvironmentInitialFilesResourcePattern, EnvironmentKvBucketResourcePattern,
     EnvironmentMcpDeploymentResourcePattern, EnvironmentPluginGrantResourcePattern,
     EnvironmentResourceDefinitionResourcePattern, EnvironmentResourcePattern,
     EnvironmentRetryPolicyResourcePattern, EnvironmentSecuritySchemeResourcePattern,
-    FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
-    PermissionPattern, PlanResourcePattern, RdbmsResourcePattern, SecretResourcePattern,
-    SystemResourcePattern, SystemVerb, ToolResourcePattern,
+    EnvironmentToolGrantResourcePattern, FilesystemResourcePattern, KvResourcePattern,
+    NetworkResourcePattern, OplogResourcePattern, PermissionPattern, PlanResourcePattern,
+    RdbmsResourcePattern, SecretResourcePattern, SystemResourcePattern, SystemVerb,
+    ToolResourcePattern,
 };
 
 pub(super) fn account_root_card_record(
@@ -171,6 +173,12 @@ fn add_account_grants(
             recipient: RecipientPattern::Any,
             resource: AccountPluginResourcePattern::Any,
         }),
+        PermissionPattern::AccountToolRelease(ClassPermissionPattern {
+            verb: None,
+            owner: account_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: AccountToolReleaseResourcePattern::Any,
+        }),
         PermissionPattern::AccountPermissionShare(ClassPermissionPattern {
             verb: None,
             owner: account_owner.clone(),
@@ -254,6 +262,12 @@ fn add_account_grants(
             owner: environment_owner.clone(),
             recipient: RecipientPattern::Any,
             resource: EnvironmentPluginGrantResourcePattern::Any,
+        }),
+        PermissionPattern::EnvironmentToolGrant(ClassPermissionPattern {
+            verb: None,
+            owner: environment_owner.clone(),
+            recipient: RecipientPattern::Any,
+            resource: EnvironmentToolGrantResourcePattern::Any,
         }),
         PermissionPattern::EnvironmentResourceDefinition(ClassPermissionPattern {
             verb: None,
@@ -340,4 +354,32 @@ fn add_account_grants(
             resource: ToolResourcePattern::any(),
         }),
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::account_root_card_record;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::card::{Card, PermissionPattern};
+    use test_r::test;
+
+    #[test]
+    fn account_root_card_includes_tool_release_and_environment_grant_permissions() {
+        let account_id = AccountId::new();
+        let account_email = AccountEmail::new("tool-owner@example.com");
+        let card: Card = account_root_card_record(account_id, account_email, &[])
+            .try_into()
+            .unwrap();
+
+        assert!(
+            card.lower_positive
+                .iter()
+                .any(|grant| matches!(grant, PermissionPattern::AccountToolRelease(_)))
+        );
+        assert!(
+            card.lower_positive
+                .iter()
+                .any(|grant| matches!(grant, PermissionPattern::EnvironmentToolGrant(_)))
+        );
+    }
 }

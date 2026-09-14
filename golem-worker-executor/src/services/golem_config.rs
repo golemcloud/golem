@@ -18,8 +18,11 @@ use figment::providers::{Format, Toml};
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
+use golem_common::model::{
+    DEFAULT_INVOCATION_RESULT_BLOOM_BITS, DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+    DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, InvocationResultMembership, RetryConfig,
+};
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
@@ -29,9 +32,11 @@ use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
@@ -42,9 +47,10 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
-    /// Retry policy applied to SQL-backed key-value storage operations when the connection pool
-    /// is briefly exhausted (a pool acquisition timeout). Retrying these transient failures keeps
-    /// hot paths such as promise and worker status updates from crashing the executor under load.
+    /// Retry policy applied to every key-value storage operation whose failure is classified as
+    /// transient, whichever backend serves it. Without it a brief backend outage - a connection
+    /// pool acquisition timeout, a dropped connection - surfaces to hot paths such as promise and
+    /// agent status updates as a hard failure.
     #[serde(default = "default_key_value_storage_retry")]
     pub key_value_storage_retry: RetryConfig,
     /// Retry policy applied when scheduling or cancelling hits a briefly exhausted connection
@@ -62,6 +68,8 @@ pub struct GolemConfig {
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
     pub limits: Limits,
+    #[serde(default)]
+    pub durable_stream: DurableStreamConfig,
     pub retry: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub max_in_function_retry_delay: Duration,
@@ -74,10 +82,14 @@ pub struct GolemConfig {
     pub agent_status_flush: AgentStatusFlushConfig,
     #[serde(default)]
     pub agent_status_checkpoint: AgentStatusCheckpointConfig,
+    #[serde(default)]
+    pub invocation_results: InvocationResultsConfig,
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
     pub filesystem_storage: FilesystemStorageConfig,
+    #[serde(default)]
+    pub resource_usage_metering: ResourceUsageMeteringConfig,
     pub rdbms: RdbmsConfig,
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
@@ -102,16 +114,31 @@ pub struct GolemConfig {
     pub runtime_metrics_sampling_interval: Duration,
 }
 
-fn default_key_value_storage_retry() -> RetryConfig {
-    RetryConfig::max_attempts_3()
-}
-
 fn default_scheduler_storage_retry() -> RetryConfig {
     RetryConfig::max_attempts_3()
 }
 
 fn default_indexed_storage_retry() -> RetryConfig {
     RetryConfig::max_attempts_3()
+}
+
+pub fn default_key_value_storage_retry() -> RetryConfig {
+    // Sized to outlast an AWS-side switchover rather than a momentary blip, because those are the
+    // outages this policy exists to hide. Aurora promotes a reader to writer in high single-digit
+    // to mid-tens of seconds, worst case around a minute; ElastiCache Multi-AZ promotes a replica
+    // in around thirty. Roughly 93 seconds of backoff across these attempts covers both with
+    // margin, and the delay is capped so the tail stays responsive once the new writer answers.
+    //
+    // The other half of this budget is `DbPostgresConfig::acquire_timeout`: an attempt against an
+    // endpoint that blackholes packets, rather than one that refuses fast, costs that timeout
+    // before the backoff below even starts.
+    RetryConfig {
+        max_attempts: 15,
+        min_delay: Duration::from_millis(200),
+        max_delay: Duration::from_secs(10),
+        multiplier: 2.0,
+        max_jitter_factor: Some(0.15),
+    }
 }
 
 impl SafeDisplay for GolemConfig {
@@ -171,6 +198,12 @@ impl SafeDisplay for GolemConfig {
         );
         let _ = writeln!(&mut result, "limits:");
         let _ = writeln!(&mut result, "{}", self.limits.to_safe_string_indented());
+        let _ = writeln!(&mut result, "durable stream:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.durable_stream.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "retry:");
         let _ = writeln!(&mut result, "{}", self.retry.to_safe_string_indented());
         let _ = writeln!(
@@ -212,6 +245,12 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.agent_status_checkpoint.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "invocation_results:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.invocation_results.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "scheduler:");
         let _ = writeln!(&mut result, "{}", self.scheduler.to_safe_string_indented());
         let _ = writeln!(&mut result, "public worker api:");
@@ -227,6 +266,12 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.filesystem_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "resource usage metering:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.resource_usage_metering.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "rdbms:");
         let _ = writeln!(&mut result, "{}", self.rdbms.to_safe_string_indented());
@@ -328,6 +373,7 @@ impl Default for GolemConfig {
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
+            durable_stream: DurableStreamConfig::default(),
             retry: RetryConfig::max_attempts_3(),
             max_in_function_retry_delay: Duration::from_secs(20),
             compiled_component_service: CompiledComponentServiceConfig::default(),
@@ -338,9 +384,11 @@ impl Default for GolemConfig {
             active_agents: ActiveAgentsConfig::default(),
             agent_status_flush: AgentStatusFlushConfig::default(),
             agent_status_checkpoint: AgentStatusCheckpointConfig::default(),
+            invocation_results: InvocationResultsConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
             filesystem_storage: FilesystemStorageConfig::default(),
+            resource_usage_metering: ResourceUsageMeteringConfig::default(),
             rdbms: RdbmsConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             component_cache: ComponentCacheConfig::default(),
@@ -375,6 +423,7 @@ impl Default for GolemConfig {
 pub struct Limits {
     pub max_active_agents: usize,
     pub invocation_result_broadcast_capacity: usize,
+    pub live_stream_event_broadcast_capacity: NonZeroUsize,
     pub max_concurrent_streams: u32,
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
@@ -385,6 +434,8 @@ pub struct Limits {
     pub epoch_ticks: u64,
     pub max_oplog_query_pages_size: usize,
     pub max_invocation_context_stack_depth: usize,
+    /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
+    pub max_tool_attachment_bytes: usize,
     /// Optional wall-clock upper bound for a single guest invocation. When exceeded, the
     /// invocation fails like a trap (no invocation-finished marker is written) and normal
     /// retry handling applies. `None` (the default) leaves invocations unbounded.
@@ -404,6 +455,11 @@ impl SafeDisplay for Limits {
             &mut result,
             "invocation result broadcast capacity: {}",
             self.invocation_result_broadcast_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "live stream event broadcast capacity: {}",
+            self.live_stream_event_broadcast_capacity
         );
         let _ = writeln!(
             &mut result,
@@ -444,6 +500,11 @@ impl SafeDisplay for Limits {
         );
         let _ = writeln!(
             &mut result,
+            "max tool attachment bytes: {}",
+            self.max_tool_attachment_bytes
+        );
+        let _ = writeln!(
+            &mut result,
             "max invocation duration: {:?}",
             self.max_invocation_duration
         );
@@ -453,6 +514,105 @@ impl SafeDisplay for Limits {
             self.tail_work_settle_timeout
         );
 
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamConfig {
+    #[serde(with = "humantime_serde")]
+    pub lease_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub renewal_interval: Duration,
+    #[serde(with = "humantime_serde")]
+    pub reconciliation_interval: Duration,
+    pub reconciliation_batch_size: usize,
+    #[serde(with = "humantime_serde")]
+    pub abandoned_prepare_after: Duration,
+}
+
+impl DurableStreamConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.lease_ttl
+                == Duration::from_millis(
+                    golem_common::base_model::durable_stream::STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
+                ),
+            "durable stream lease TTL is fixed at 60 seconds in protocol v1"
+        );
+        anyhow::ensure!(
+            self.abandoned_prepare_after
+                == Duration::from_millis(
+                    golem_common::base_model::durable_stream::STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
+                ),
+            "durable stream abandoned-prepare threshold is fixed at 5 minutes in protocol v1"
+        );
+        anyhow::ensure!(
+            self.renewal_interval < self.lease_ttl,
+            "durable stream renewal interval must be shorter than lease TTL"
+        );
+        anyhow::ensure!(
+            self.renewal_interval
+                <= Duration::from_millis(
+                    golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS,
+                )
+                && self.reconciliation_interval
+                    <= Duration::from_millis(
+                        golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_INTERVAL_MILLIS,
+                    ),
+            "durable stream renewal and reconciliation intervals may only shorten the v1 defaults"
+        );
+        anyhow::ensure!(
+            !self.renewal_interval.is_zero()
+                && !self.reconciliation_interval.is_zero()
+                && self.reconciliation_batch_size > 0,
+            "durable stream reconciliation settings must be non-zero"
+        );
+        Ok(())
+    }
+}
+
+impl Default for DurableStreamConfig {
+    fn default() -> Self {
+        Self {
+            lease_ttl: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
+            ),
+            renewal_interval: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS,
+            ),
+            reconciliation_interval: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_INTERVAL_MILLIS,
+            ),
+            reconciliation_batch_size:
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE,
+            abandoned_prepare_after: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
+            ),
+        }
+    }
+}
+
+impl SafeDisplay for DurableStreamConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "lease TTL: {:?}", self.lease_ttl);
+        let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
+        let _ = writeln!(
+            &mut result,
+            "reconciliation interval: {:?}",
+            self.reconciliation_interval
+        );
+        let _ = writeln!(
+            &mut result,
+            "reconciliation batch size: {}",
+            self.reconciliation_batch_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "abandoned prepare after: {:?}",
+            self.abandoned_prepare_after
+        );
         result
     }
 }
@@ -640,6 +800,75 @@ impl Default for AgentStatusFlushConfig {
             enabled: true,
             interval: Duration::from_secs(1),
             max_concurrency: 128,
+        }
+    }
+}
+
+/// Controls the bounded in-memory and physical invocation-result lookup structures.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationResultsConfig {
+    /// Maximum number of recent invocation results retained exactly in agent status.
+    pub recent_capacity: usize,
+    /// Number of bits in the persistent invocation-result Bloom filter.
+    pub bloom_bits: usize,
+    /// Number of hash probes used by the persistent invocation-result Bloom filter.
+    pub bloom_hashes: u8,
+    /// Maximum number of oplog entries processed by one physical-index catch-up step.
+    pub physical_index_catch_up_chunk_size: u64,
+    /// Maximum number of invocation results hydrated from the oplog and retained in memory.
+    pub hydrated_cache_capacity: usize,
+}
+
+impl InvocationResultsConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.bloom_bits > 0,
+            "invocation result Bloom filter must not be empty"
+        );
+        anyhow::ensure!(
+            self.bloom_hashes > 0,
+            "invocation result Bloom filter must use at least one hash"
+        );
+        anyhow::ensure!(
+            self.physical_index_catch_up_chunk_size > 0,
+            "invocation result physical-index catch-up chunk size must be at least one"
+        );
+        Ok(())
+    }
+
+    pub fn membership(&self) -> InvocationResultMembership {
+        InvocationResultMembership::new(self.recent_capacity, self.bloom_bits, self.bloom_hashes)
+    }
+}
+
+impl SafeDisplay for InvocationResultsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "recent capacity: {}", self.recent_capacity);
+        let _ = writeln!(&mut result, "bloom bits: {}", self.bloom_bits);
+        let _ = writeln!(&mut result, "bloom hashes: {}", self.bloom_hashes);
+        let _ = writeln!(
+            &mut result,
+            "physical index catch-up chunk size: {}",
+            self.physical_index_catch_up_chunk_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "hydrated cache capacity: {}",
+            self.hydrated_cache_capacity
+        );
+        result
+    }
+}
+
+impl Default for InvocationResultsConfig {
+    fn default() -> Self {
+        Self {
+            recent_capacity: DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
+            bloom_bits: DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
+            bloom_hashes: DEFAULT_INVOCATION_RESULT_BLOOM_HASHES,
+            physical_index_catch_up_chunk_size: 1024,
+            hydrated_cache_capacity: 1024,
         }
     }
 }
@@ -1150,6 +1379,42 @@ pub struct MemoryConfig {
     pub oom_retry_config: RetryConfig,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ResourceUsageMeteringConfig {
+    /// Measures Wasmtime fuel and exports it as compute usage. When disabled, cumulative fuel is
+    /// explicitly unlimited and invocation results report zero consumed fuel.
+    pub compute: bool,
+    /// Measures allocated linear-memory byte-time. Memory limits and admission remain enabled.
+    pub memory: bool,
+    /// Measures authoritative filesystem allocated-byte-time. Filesystem quotas and pressure
+    /// recovery remain enabled.
+    pub filesystem: bool,
+}
+
+impl ResourceUsageMeteringConfig {
+    pub const fn all_enabled() -> Self {
+        Self {
+            compute: true,
+            memory: true,
+            filesystem: true,
+        }
+    }
+
+    pub const fn any_byte_time_enabled(self) -> bool {
+        self.memory || self.filesystem
+    }
+}
+
+impl SafeDisplay for ResourceUsageMeteringConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "compute: {}", self.compute);
+        let _ = writeln!(&mut result, "memory: {}", self.memory);
+        let _ = writeln!(&mut result, "filesystem: {}", self.filesystem);
+        result
+    }
+}
+
 impl MemoryConfig {
     /// The admission policy for the measured-headroom gate. Reuses
     /// `worker_memory_ratio` as the usable fraction of the measured limit (the
@@ -1658,6 +1923,7 @@ impl Default for Limits {
         Self {
             max_active_agents: 1024,
             invocation_result_broadcast_capacity: 100000,
+            live_stream_event_broadcast_capacity: NonZeroUsize::new(32).unwrap(),
             max_concurrent_streams: 1024,
             event_broadcast_capacity: 1024,
             event_history_size: 128,
@@ -1667,6 +1933,7 @@ impl Default for Limits {
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
             max_invocation_context_stack_depth: 1024,
+            max_tool_attachment_bytes: 16 * 1024 * 1024,
             max_invocation_duration: None,
             tail_work_settle_timeout: Duration::from_secs(30),
         }
@@ -1772,47 +2039,12 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Configuration for the executor-wide worker storage semaphore.
-///
-/// The semaphore pool size is `total_worker_filesystem_storage_bytes`. Workers acquire
-/// permits proportional to their estimated storage usage; when the pool is
-/// exhausted, idle workers are evicted to free space. Use
-/// `total_worker_filesystem_storage_bytes` in tests to create a small,
-/// predictable pool.
-///
-/// # Permit release vs actual disk reclaim — configure with headroom
-///
-/// When a worker is evicted its storage semaphore permits are released at the
-/// moment `RunningWorker` drops, which is **slightly before** the worker's
-/// temp directory is deleted from disk. The directory is removed when the
-/// invocation task fully unwinds (dropping the wasmtime `Store` and its
-/// contained `TempDir`). In practice this gap is sub-millisecond, but it means
-/// the semaphore can briefly report available space that has not yet been
-/// reclaimed on disk.
-///
-/// This is the same race that exists for the memory semaphore
-/// (`MemoryConfig::total_memory`): memory permits are released when
-/// `RunningWorker` drops, before the wasmtime linear memory is actually freed.
-/// It has never caused problems in production because the semaphore is not
-/// configured to 100% of physical capacity.
-///
-/// **Recommended practice:** assuming the executor's temp directory has a
-/// dedicated volume (e.g. a pod-local tmpfs or block device mounted at `/tmp`),
-/// set `total_worker_filesystem_storage_bytes` to around 80–90% of that volume's
-/// capacity. The headroom absorbs the transient over-commitment window
-/// described above and any filesystem metadata overhead for the temp directory
-/// tree itself.
+/// Configuration for managed agent filesystems and their cleanup.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilesystemStorageConfig {
-    /// Override the total storage pool size (bytes). When `None`, the default
-    /// of 10 GB is used. Set to a small value in tests to trigger eviction.
-    ///
-    /// Should be set to ~80–90% of the dedicated volume capacity, not 100% —
-    /// see the `FilesystemStorageConfig` doc comment for the rationale.
-    #[serde(alias = "total_worker_filesystem_storage_bytes_override")]
-    pub total_worker_filesystem_storage_bytes: Option<u64>,
-    #[serde(with = "humantime_serde")]
-    pub acquire_retry_delay: Duration,
+    /// Retry policy for deleting and verifying runtime filesystem directories.
+    /// `max_attempts` includes the initial deletion attempt.
+    pub cleanup_retry: RetryConfig,
     /// When set, use deterministic per-agent directory names rooted at this
     /// path instead of random OS temp directories. The directory structure is:
     ///
@@ -1824,31 +2056,280 @@ pub struct FilesystemStorageConfig {
     /// Directories are cleaned up when the worker is dropped, just like temp
     /// dirs. When `None` (the default), random temp directories are used.
     pub deterministic_root_dir: Option<PathBuf>,
+    /// Dedicated XFS root managed through project quotas. Managed mode is
+    /// fail-closed and cannot be combined with `deterministic_root_dir`.
+    pub managed_xfs_root_dir: Option<PathBuf>,
+    /// Private policy for deriving an agent's filesystem-object hard limit
+    /// proportionally from its allocated-byte limit, with fixed bounds.
+    pub filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
+    /// Physical capacity watermarks for managed filesystem pressure recovery.
+    #[serde(default)]
+    pub pressure: FilesystemPressureConfig,
 }
 
-impl FilesystemStorageConfig {
-    /// The total number of bytes available to the storage semaphore pool.
-    pub fn worker_filesystem_storage(&self) -> usize {
-        self.total_worker_filesystem_storage_bytes
-            .unwrap_or(10 * 1024 * 1024 * 1024) // 10 GB default
-            as usize
+#[derive(Clone, Debug, Serialize)]
+pub struct FilesystemPressureConfig {
+    /// Available bytes at or below which physical pressure is active.
+    minimum_available_bytes: u64,
+    /// Available bytes required after reclamation before retrying a mutation.
+    target_available_bytes: u64,
+    /// Available filesystem objects at or below which object pressure is active.
+    minimum_available_filesystem_objects: u64,
+    /// Available filesystem objects required after reclamation before retrying a mutation.
+    target_available_filesystem_objects: u64,
+    /// Number of fresh observations allowed after each completed deletion.
+    reclamation_observation_attempts: NonZeroU32,
+    /// Delay between post-deletion observations while reclamation settles.
+    #[serde(with = "humantime_serde")]
+    reclamation_observation_delay: Duration,
+}
+
+#[derive(Deserialize)]
+struct RawFilesystemPressureConfig {
+    minimum_available_bytes: u64,
+    target_available_bytes: u64,
+    minimum_available_filesystem_objects: u64,
+    target_available_filesystem_objects: u64,
+    reclamation_observation_attempts: u32,
+    #[serde(with = "humantime_serde")]
+    reclamation_observation_delay: Duration,
+}
+
+impl FilesystemPressureConfig {
+    pub fn new(
+        minimum_available_bytes: u64,
+        target_available_bytes: u64,
+        minimum_available_filesystem_objects: u64,
+        target_available_filesystem_objects: u64,
+        reclamation_observation_attempts: u32,
+        reclamation_observation_delay: Duration,
+    ) -> Result<Self, String> {
+        if minimum_available_bytes >= target_available_bytes {
+            return Err(
+                "minimum_available_bytes must be less than target_available_bytes".to_string(),
+            );
+        }
+        if minimum_available_filesystem_objects >= target_available_filesystem_objects {
+            return Err("minimum_available_filesystem_objects must be less than target_available_filesystem_objects".to_string());
+        }
+        let reclamation_observation_attempts = NonZeroU32::new(reclamation_observation_attempts)
+            .ok_or_else(|| {
+                "reclamation_observation_attempts must be greater than zero".to_string()
+            })?;
+
+        Ok(Self {
+            minimum_available_bytes,
+            target_available_bytes,
+            minimum_available_filesystem_objects,
+            target_available_filesystem_objects,
+            reclamation_observation_attempts,
+            reclamation_observation_delay,
+        })
+    }
+
+    pub const fn minimum_available_bytes(&self) -> u64 {
+        self.minimum_available_bytes
+    }
+
+    pub const fn target_available_bytes(&self) -> u64 {
+        self.target_available_bytes
+    }
+
+    pub const fn minimum_available_filesystem_objects(&self) -> u64 {
+        self.minimum_available_filesystem_objects
+    }
+
+    pub const fn target_available_filesystem_objects(&self) -> u64 {
+        self.target_available_filesystem_objects
+    }
+
+    pub const fn reclamation_observation_attempts(&self) -> u32 {
+        self.reclamation_observation_attempts.get()
+    }
+
+    pub const fn reclamation_observation_delay(&self) -> Duration {
+        self.reclamation_observation_delay
+    }
+}
+
+impl<'de> Deserialize<'de> for FilesystemPressureConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawFilesystemPressureConfig::deserialize(deserializer)?;
+        Self::new(
+            raw.minimum_available_bytes,
+            raw.target_available_bytes,
+            raw.minimum_available_filesystem_objects,
+            raw.target_available_filesystem_objects,
+            raw.reclamation_observation_attempts,
+            raw.reclamation_observation_delay,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+impl Default for FilesystemPressureConfig {
+    fn default() -> Self {
+        Self::new(
+            64 * 1024 * 1024,
+            128 * 1024 * 1024,
+            8_192,
+            16_384,
+            4,
+            Duration::from_millis(25),
+        )
+        .expect("default filesystem pressure configuration must be valid")
+    }
+}
+
+impl SafeDisplay for FilesystemPressureConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "minimum available bytes: {}",
+            self.minimum_available_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "target available bytes: {}",
+            self.target_available_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "minimum available filesystem objects: {}",
+            self.minimum_available_filesystem_objects
+        );
+        let _ = writeln!(
+            &mut result,
+            "target available filesystem objects: {}",
+            self.target_available_filesystem_objects
+        );
+        let _ = writeln!(
+            &mut result,
+            "reclamation observation attempts: {}",
+            self.reclamation_observation_attempts
+        );
+        let _ = writeln!(
+            &mut result,
+            "reclamation observation delay: {:?}",
+            self.reclamation_observation_delay
+        );
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FilesystemObjectLimitPolicyConfig {
+    /// Number of filesystem objects granted per GiB of allocated storage.
+    objects_per_gib: NonZeroU64,
+    /// Object quota floor for small storage allocations.
+    minimum_objects: NonZeroU64,
+    /// Object quota ceiling for large storage allocations.
+    maximum_objects: NonZeroU64,
+}
+
+#[derive(Deserialize)]
+struct RawFilesystemObjectLimitPolicyConfig {
+    objects_per_gib: u64,
+    minimum_objects: u64,
+    maximum_objects: u64,
+}
+
+impl FilesystemObjectLimitPolicyConfig {
+    pub fn new(
+        objects_per_gib: u64,
+        minimum_objects: u64,
+        maximum_objects: u64,
+    ) -> Result<Self, String> {
+        let objects_per_gib = NonZeroU64::new(objects_per_gib)
+            .ok_or_else(|| "objects_per_gib must be greater than zero".to_string())?;
+        let minimum_objects = NonZeroU64::new(minimum_objects)
+            .ok_or_else(|| "minimum_objects must be greater than zero".to_string())?;
+        let maximum_objects = NonZeroU64::new(maximum_objects)
+            .ok_or_else(|| "maximum_objects must be greater than zero".to_string())?;
+        if minimum_objects > maximum_objects {
+            return Err("minimum_objects must not exceed maximum_objects".to_string());
+        }
+
+        Ok(Self {
+            objects_per_gib,
+            minimum_objects,
+            maximum_objects,
+        })
+    }
+
+    pub const fn objects_per_gib(&self) -> u64 {
+        self.objects_per_gib.get()
+    }
+
+    pub const fn minimum_objects(&self) -> u64 {
+        self.minimum_objects.get()
+    }
+
+    pub const fn maximum_objects(&self) -> u64 {
+        self.maximum_objects.get()
+    }
+}
+
+impl<'de> Deserialize<'de> for FilesystemObjectLimitPolicyConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawFilesystemObjectLimitPolicyConfig::deserialize(deserializer)?;
+        Self::new(
+            raw.objects_per_gib,
+            raw.minimum_objects,
+            raw.maximum_objects,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+impl Default for FilesystemObjectLimitPolicyConfig {
+    fn default() -> Self {
+        Self::new(32_768, 8192, 131_072)
+            .expect("default filesystem object limit policy must be valid")
+    }
+}
+
+impl SafeDisplay for FilesystemObjectLimitPolicyConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "objects per GiB: {}", self.objects_per_gib);
+        let _ = writeln!(&mut result, "minimum objects: {}", self.minimum_objects);
+        let _ = writeln!(&mut result, "maximum objects: {}", self.maximum_objects);
+        result
     }
 }
 
 impl SafeDisplay for FilesystemStorageConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        if let Some(limit) = &self.total_worker_filesystem_storage_bytes {
-            let _ = writeln!(&mut result, "total worker storage bytes: {limit}");
-        }
+        let _ = writeln!(&mut result, "cleanup retry:");
         let _ = writeln!(
             &mut result,
-            "acquire retry delay: {:?}",
-            self.acquire_retry_delay
+            "{}",
+            self.cleanup_retry.to_safe_string_indented()
         );
         if let Some(root) = &self.deterministic_root_dir {
             let _ = writeln!(&mut result, "deterministic root dir: {}", root.display());
         }
+        if let Some(root) = &self.managed_xfs_root_dir {
+            let _ = writeln!(&mut result, "managed XFS root dir: {}", root.display());
+        }
+        let _ = writeln!(&mut result, "filesystem object limit policy:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.filesystem_object_limit_policy
+                .to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "pressure:");
+        let _ = writeln!(&mut result, "{}", self.pressure.to_safe_string_indented());
         result
     }
 }
@@ -1856,9 +2337,17 @@ impl SafeDisplay for FilesystemStorageConfig {
 impl Default for FilesystemStorageConfig {
     fn default() -> Self {
         Self {
-            total_worker_filesystem_storage_bytes: None,
-            acquire_retry_delay: Duration::from_millis(500),
+            cleanup_retry: RetryConfig {
+                max_attempts: 4,
+                min_delay: Duration::from_millis(25),
+                max_delay: Duration::from_millis(250),
+                multiplier: 4.0,
+                max_jitter_factor: None,
+            },
             deterministic_root_dir: None,
+            managed_xfs_root_dir: None,
+            filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig::default(),
+            pressure: FilesystemPressureConfig::default(),
         }
     }
 }
@@ -2061,4 +2550,86 @@ impl Default for QuotaServiceConfig {
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
     ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DurableStreamConfig, InvocationResultsConfig, Limits};
+    use golem_common::SafeDisplay;
+    use serde_json::Value;
+    use test_r::test;
+
+    #[test]
+    fn durable_stream_config_enforces_renewal_before_lease_expiry() {
+        let mut config = DurableStreamConfig::default();
+        assert!(config.validate().is_ok());
+        config.renewal_interval = config.lease_ttl;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invocation_results_config_rejects_invalid_lookup_structures() {
+        let mut config = InvocationResultsConfig::default();
+        assert!(config.validate().is_ok());
+
+        config.bloom_bits = 0;
+        assert!(config.validate().is_err());
+
+        config.bloom_bits = 1;
+        config.bloom_hashes = 0;
+        assert!(config.validate().is_err());
+
+        config.bloom_hashes = 1;
+        config.physical_index_catch_up_chunk_size = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invocation_results_config_constructs_configured_membership() {
+        let config = InvocationResultsConfig {
+            recent_capacity: 2,
+            bloom_bits: 128,
+            bloom_hashes: 3,
+            ..InvocationResultsConfig::default()
+        };
+        let mut membership = config.membership();
+        for index in 1..=6 {
+            membership.insert(
+                golem_common::model::IdempotencyKey::fresh(),
+                golem_common::model::oplog::OplogIndex::from_u64(index),
+            );
+        }
+
+        assert_eq!(membership.len(), 2);
+        assert!(!membership.is_exact_complete());
+    }
+
+    #[test]
+    fn live_stream_event_broadcast_capacity_defaults_to_32() {
+        let limits = Limits::default();
+
+        assert_eq!(limits.live_stream_event_broadcast_capacity.get(), 32);
+        let decoded: Limits =
+            serde_json::from_value(serde_json::to_value(&limits).unwrap()).unwrap();
+        assert_eq!(decoded.live_stream_event_broadcast_capacity.get(), 32);
+        assert!(
+            limits
+                .to_safe_string()
+                .contains("live stream event broadcast capacity: 32")
+        );
+    }
+
+    #[test]
+    fn live_stream_event_broadcast_capacity_rejects_zero() {
+        let mut serialized = serde_json::to_value(Limits::default()).unwrap();
+        let Value::Object(fields) = &mut serialized else {
+            panic!("limits must serialize as an object");
+        };
+        fields.insert(
+            "live_stream_event_broadcast_capacity".to_string(),
+            Value::from(0),
+        );
+
+        assert!(serde_json::from_value::<Limits>(serialized).is_err());
+    }
 }

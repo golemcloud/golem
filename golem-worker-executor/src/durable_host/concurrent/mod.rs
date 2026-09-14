@@ -55,18 +55,23 @@ use crate::durable_host::durability::{
     TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
     try_trigger_host_trap_retry,
 };
-use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
-use crate::durable_host::{
-    AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState,
+use crate::durable_host::durable_session::DroppedDurableInput;
+use crate::durable_host::replay_state::{
+    OplogEntryLookupResult, ReplayState, ReplayToLiveRole, ScopeStartClaimOutcome,
 };
-use crate::services::HasWorker;
+use crate::durable_host::{
+    AtomicRegionLease, BeginReplayToLive, DurableScopeKind, DurableWorkerCtx, FinishReplayToLive,
+    PendingReplayToLive, PublicDurableWorkerState,
+};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
+use crate::services::{HasShutdownToken, HasWorker};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use std::fmt::Display;
 
 mod access;
 mod call;
 mod delivery;
+mod demand_stream;
 mod drop_events;
 mod replay;
 
@@ -85,6 +90,7 @@ use call::{
     BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost, unregistered_atomic_lease,
 };
 pub use delivery::*;
+pub(crate) use demand_stream::*;
 pub use drop_events::*;
 pub use replay::*;
 

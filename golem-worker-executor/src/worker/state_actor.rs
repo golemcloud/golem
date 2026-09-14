@@ -51,8 +51,10 @@
 
 use super::status::{calculate_last_known_status_with_checkpoint, update_status_with_new_entries};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
-use super::{PendingMemoryGrowth, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric};
-use crate::services::agent_memory_meter::AgentMemoryMeter;
+use super::{
+    PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric,
+};
+use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog};
 use crate::services::{All, HasConfig, HasSchedulerService};
 use crate::workerctx::WorkerCtx;
@@ -62,7 +64,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
+    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::any::Any;
@@ -104,6 +106,7 @@ enum StatusJob {
     /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
     CommitAndUpdateState {
         level: CommitLevel,
+        committed: Option<oneshot::Sender<()>>,
         done: oneshot::Sender<(OplogIndex, bool)>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
@@ -114,6 +117,14 @@ enum StatusJob {
         _instance_guard: OwnedMutexGuard<WorkerInstance>,
         _card_event_boundary_guard: OwnedMutexGuard<()>,
         done: oneshot::Sender<()>,
+    },
+    AppendInvocationIfVersion {
+        entry: Box<OplogEntry>,
+        idempotency_key: IdempotencyKey,
+        expected_result_generation: u64,
+        expected_revert_generation: u64,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        done: oneshot::Sender<bool>,
     },
     /// Returns the published status after reattaching it when a jump or revert detached it.
     /// Serialization on the status queue prevents observing an in-flight status transition.
@@ -126,7 +137,7 @@ enum StatusJob {
     /// but the caller decides how to react (it asserts): a job whose caller was cancelled must
     /// not be able to panic the actor.
     NonDetachedStatus {
-        done: oneshot::Sender<Option<AgentStatusRecord>>,
+        done: oneshot::Sender<Option<Arc<AgentStatusRecord>>>,
     },
     /// Commits, then — if the status became detached (a jump or revert made it non-foldable) —
     /// recomputes it from the oplog, republishes it, and forces a cache flush.
@@ -151,7 +162,7 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     },
     MemoryLimitExceeded {
         worker: Arc<Worker<Ctx>>,
-        meter: AgentMemoryMeter,
+        memory: LinearMemoryTracker,
     },
 }
 
@@ -219,10 +230,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
-                    StatusJob::CommitAndUpdateState { level, done } => {
+                    StatusJob::CommitAndUpdateState {
+                        level,
+                        committed,
+                        done,
+                    } => {
                         complete_status_job(
                             async {
-                                let changed = state.commit_and_update_state(level).await;
+                                let changed = state.commit_and_update_state(level, committed).await;
                                 let index = state.oplog.current_oplog_index().await;
                                 (index, changed)
                             },
@@ -240,8 +255,44 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         complete_status_job(
                             async {
                                 state.oplog.add(*entry).await;
-                                state.commit_and_update_state(CommitLevel::Always).await;
+                                state
+                                    .commit_and_update_state(CommitLevel::Always, None)
+                                    .await;
                                 state.ensure_status_attached().await;
+                            },
+                            done,
+                        )
+                        .await;
+                    }
+                    StatusJob::AppendInvocationIfVersion {
+                        entry,
+                        idempotency_key,
+                        expected_result_generation,
+                        expected_revert_generation,
+                        instance_guard,
+                        done,
+                    } => {
+                        complete_status_job(
+                            async {
+                                state.ensure_status_attached().await;
+                                let status = state.last_known_status.load();
+                                if !can_append_invocation(
+                                    &status,
+                                    &idempotency_key,
+                                    expected_result_generation,
+                                    expected_revert_generation,
+                                ) {
+                                    return false;
+                                }
+                                drop(status);
+                                state.oplog.add(*entry).await;
+                                state
+                                    .commit_and_update_state(CommitLevel::Always, None)
+                                    .await;
+                                if let WorkerInstance::Running(running) = &*instance_guard {
+                                    running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+                                }
+                                true
                             },
                             done,
                         )
@@ -257,7 +308,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         let status = if state.detached.load(Ordering::Acquire) {
                             None
                         } else {
-                            Some(state.last_known_status.load_full().as_ref().clone())
+                            Some(state.last_known_status.load_full())
                         };
                         let _ = done.send(status);
                     }
@@ -293,13 +344,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         worker.add_and_commit_oplog(*entry).await;
                         let _ = done.send(());
                     }
-                    LifecycleJob::MemoryLimitExceeded { worker, meter } => {
+                    LifecycleJob::MemoryLimitExceeded { worker, memory } => {
                         worker
                             .memory_limit_interrupt_queued
                             .store(false, Ordering::Release);
-                        if meter.exceeds_current_limit() {
+                        if memory.exceeds_current_limit() {
                             worker
-                                .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
+                                .set_interrupting_for(
+                                    InterruptKind::Suspend(Timestamp::now_utc()),
+                                    UnloadReason::MemoryLimit,
+                                )
                                 .await;
                         }
                     }
@@ -327,7 +381,25 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
         self.commit
-            .run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+            .run_status_job(|done| StatusJob::CommitAndUpdateState {
+                level,
+                committed: None,
+                done,
+            })
+            .await
+    }
+
+    pub async fn commit_and_update_state_notifying(
+        &self,
+        level: CommitLevel,
+        committed: oneshot::Sender<()>,
+    ) -> (OplogIndex, bool) {
+        self.commit
+            .run_status_job(|done| StatusJob::CommitAndUpdateState {
+                level,
+                committed: Some(committed),
+                done,
+            })
             .await
     }
 
@@ -350,6 +422,26 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .await
     }
 
+    pub async fn append_invocation_if_version(
+        &self,
+        entry: OplogEntry,
+        idempotency_key: IdempotencyKey,
+        expected_result_generation: u64,
+        expected_revert_generation: u64,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+    ) -> bool {
+        self.commit
+            .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
+                entry: Box::new(entry),
+                idempotency_key,
+                expected_result_generation,
+                expected_revert_generation,
+                instance_guard,
+                done,
+            })
+            .await
+    }
+
     pub async fn attached_status(&self) -> Arc<AgentStatusRecord> {
         self.commit
             .run_status_job(|done| StatusJob::AttachedStatus { done })
@@ -359,7 +451,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// Returns the published status, asserting it is attached to the oplog. Serialized behind
     /// any in-flight commit/reattach transactions. The assert lives here on the caller side, so
     /// a job left behind by a cancelled caller cannot panic the actor.
-    pub async fn non_detached_status(&self) -> AgentStatusRecord {
+    pub async fn non_detached_status(&self) -> Arc<AgentStatusRecord> {
         self.commit
             .run_status_job(|done| StatusJob::NonDetachedStatus { done })
             .await
@@ -408,10 +500,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
     }
 
-    pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, meter: AgentMemoryMeter) {
+    pub fn memory_limit_exceeded(&self, worker: Arc<Worker<Ctx>>, memory: LinearMemoryTracker) {
         if self
             .lifecycle_jobs
-            .send(LifecycleJob::MemoryLimitExceeded { worker, meter })
+            .send(LifecycleJob::MemoryLimitExceeded { worker, memory })
             .is_err()
         {
             panic!(
@@ -447,8 +539,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
 impl OwnerCommitController {
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
-        self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
-            .await
+        self.run_status_job(|done| StatusJob::CommitAndUpdateState {
+            level,
+            committed: None,
+            done,
+        })
+        .await
     }
 
     /// Sends a job to the status task and waits for its reply.
@@ -484,8 +580,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// committed entries into the published status or marks the status detached when it can no
     /// longer be incrementally computed (e.g. after a revert or a snapshot update). Returns
     /// whether the published status (or its detachment) changed.
-    async fn commit_and_update_state(&self, commit_level: CommitLevel) -> bool {
+    async fn commit_and_update_state(
+        &self,
+        commit_level: CommitLevel,
+        committed: Option<oneshot::Sender<()>>,
+    ) -> bool {
         let new_entries = self.oplog.commit(commit_level).await;
+        if let Some(committed) = committed {
+            let _ = committed.send(());
+        }
+
         let authority_change_count = new_entries
             .values()
             .filter(|entry| is_authority_state_entry(entry))
@@ -501,27 +605,41 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 &self.deps.config().retry,
             );
 
-            if let Some(updated_status) = updated_status {
-                if updated_status != *old_status {
-                    self.update_last_known_status(updated_status.clone()).await;
+            match updated_status {
+                // The comparison stays. Skipping the fold when the commit produced no entries
+                // would not be equivalent: the fold's `finalize` step prunes oplog-processor
+                // checkpoints that are neither active nor in-flight, and it runs whether or not
+                // there were entries (see `empty_fold_is_not_the_identity` in `status`).
+                Ok(Some(updated_status)) if updated_status != *old_status => {
+                    let updated_status = self.update_last_known_status(updated_status).await;
 
                     self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                         .await;
 
                     true
-                } else {
-                    false
                 }
-            } else {
-                // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
-                // This can happen during a revert or a snapshot update for example.
-                debug!(agent_id = %self.owned_agent_id.agent_id, "Detaching worker_status from oplog");
-                self.detached.store(true, Ordering::Release);
-                // The in-memory status is no longer authoritative, and after reattach it will be
-                // recomputed from scratch, so the persisted baseline can no longer be trusted: the
-                // next flush must be a full reconcile write.
-                self.status_flusher.invalidate_baseline().await;
-                true
+                Ok(Some(_)) => false,
+                Ok(None) => {
+                    // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
+                    // This can happen during a revert or a snapshot update for example.
+                    debug!(agent_id = %self.owned_agent_id.agent_id, "Detaching worker_status from oplog");
+                    self.detached.store(true, Ordering::Release);
+                    // The in-memory status is no longer authoritative, and after reattach it will be
+                    // recomputed from scratch, so the persisted baseline can no longer be trusted: the
+                    // next flush must be a full reconcile write.
+                    self.status_flusher.invalidate_baseline().await;
+                    true
+                }
+                Err(error) => {
+                    tracing::error!(
+                        agent_id = %self.owned_agent_id,
+                        %error,
+                        "Failed to update worker status from newly committed oplog entries; detaching status"
+                    );
+                    self.detached.store(true, Ordering::Release);
+                    self.status_flusher.invalidate_baseline().await;
+                    true
+                }
             }
         } else {
             false
@@ -541,7 +659,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     }
 
     async fn reattach(&self) {
-        self.commit_and_update_state(CommitLevel::Always).await;
+        self.commit_and_update_state(CommitLevel::Always, None)
+            .await;
 
         self.ensure_status_attached().await;
     }
@@ -560,11 +679,23 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 None,
             )
             .await
-            .expect("Failed to recompute worker status for existing worker");
+            .and_then(|status| {
+                status
+                    .ok_or_else(|| "worker oplog disappeared while reattaching status".to_string())
+            });
+
+            let Ok(worker_status) = worker_status else {
+                tracing::error!(
+                    agent_id = %self.owned_agent_id,
+                    error = %worker_status.unwrap_err(),
+                    "Failed to recompute detached worker status"
+                );
+                return false;
+            };
 
             // Install the recomputed status while still detached, so a concurrent background sweep
             // keeps skipping (the in-memory status is not authoritative until it is installed).
-            self.update_last_known_status(worker_status.clone()).await;
+            self.update_last_known_status(worker_status).await;
 
             // Now the in-memory status is authoritative again; clear the flag and force a flush.
             // Release ordering pairs with the Acquire loads in the checkpoint/flusher paths: with
@@ -591,14 +722,23 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// Publishes a new status and hands the (previous, new) pair to the flusher, which updates
     /// the `RunningWorkers` recovery index synchronously and either marks the worker dirty for
     /// the background sweeper or writes the blob inline (when background flushing is disabled).
-    async fn update_last_known_status(&self, new_status: AgentStatusRecord) {
+    ///
+    /// Returns the published record. The `Arc` is built before the swap and shared with the
+    /// follow-up work, so the record itself is never copied here: it is large, and this runs on
+    /// every commit that changed the status.
+    async fn update_last_known_status(
+        &self,
+        new_status: AgentStatusRecord,
+    ) -> Arc<AgentStatusRecord> {
         let previous_metrics_status = self.metrics_status.status();
-        let previous_status = self.last_known_status.swap(Arc::new(new_status.clone()));
+        let new_status = Arc::new(new_status);
+        let previous_status = self.last_known_status.swap(new_status.clone());
         self.metrics_status
             .update(previous_metrics_status, new_status.status);
         self.status_flusher
             .on_status_changed(&previous_status, &new_status)
             .await;
+        new_status
     }
 
     async fn schedule_oplog_archive_if_needed(
@@ -654,13 +794,125 @@ fn is_authority_state_entry(entry: &OplogEntry) -> bool {
     )
 }
 
+fn can_append_invocation(
+    status: &AgentStatusRecord,
+    idempotency_key: &IdempotencyKey,
+    expected_result_generation: u64,
+    expected_revert_generation: u64,
+) -> bool {
+    status.invocation_results.change_generation() == expected_result_generation
+        && status.invocation_results.revert_generation() == expected_revert_generation
+        && !status.invocation_results.contains_key(idempotency_key)
+        && status.current_idempotency_key.as_ref() != Some(idempotency_key)
+        && !status
+            .pending_invocations
+            .iter()
+            .any(|invocation| invocation.has_idempotency_key(idempotency_key))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::complete_status_job;
+    use super::{can_append_invocation, complete_status_job};
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{AgentStatusRecord, IdempotencyKey, PendingInvocationRef, Timestamp};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use test_r::test;
     use tokio::sync::{Notify, oneshot};
+
+    fn pending_invocation(key: IdempotencyKey) -> PendingInvocationRef {
+        PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: Some(key),
+            manual_update_target_revision: None,
+        }
+    }
+
+    #[test]
+    fn invocation_admission_ignores_unrelated_oplog_and_pending_changes() {
+        let key = IdempotencyKey::fresh();
+        let mut status = AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(100),
+            pending_invocations: vec![pending_invocation(IdempotencyKey::fresh())],
+            ..AgentStatusRecord::default()
+        };
+        let result_generation = status.invocation_results.change_generation();
+        let revert_generation = status.invocation_results.revert_generation();
+
+        assert!(can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status.oplog_idx = OplogIndex::from_u64(1_000);
+        status
+            .pending_invocations
+            .push(pending_invocation(IdempotencyKey::fresh()));
+        assert!(can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+    }
+
+    #[test]
+    fn invocation_admission_rejects_same_key_or_result_branch_changes() {
+        let key = IdempotencyKey::fresh();
+        let mut status = AgentStatusRecord::default();
+        let result_generation = status.invocation_results.change_generation();
+        let revert_generation = status.invocation_results.revert_generation();
+
+        status.pending_invocations = vec![pending_invocation(key.clone())];
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status.pending_invocations.clear();
+        status.current_idempotency_key = Some(key.clone());
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status.current_idempotency_key = None;
+        status
+            .invocation_results
+            .insert(IdempotencyKey::fresh(), OplogIndex::INITIAL);
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            result_generation,
+            revert_generation
+        ));
+
+        status
+            .invocation_results
+            .insert(key.clone(), OplogIndex::from_u64(2));
+        let key_result_generation = status.invocation_results.change_generation();
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            key_result_generation,
+            revert_generation
+        ));
+
+        status.invocation_results.set_revert_generation(1);
+        assert!(!can_append_invocation(
+            &status,
+            &key,
+            key_result_generation,
+            revert_generation
+        ));
+    }
 
     #[test]
     async fn authority_publication_survives_producer_cancellation_before_actor_reply() {

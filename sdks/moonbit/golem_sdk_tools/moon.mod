@@ -3,10 +3,9 @@ name = "golemcloud/golem_sdk_tools"
 version = "0.5.1"
 
 import {
-  "moonbitlang/x@0.4.39",
-  "moonbitlang/parser@0.2.5",
-  "moonbitlang/formatter@0.1.5",
-  "Yoorkin/prettyprinter@0.4.9",
+  "moonbitlang/x@0.5.1",
+  "moonbitlang/parser@0.3.18",
+  "moonbitlang/lexer@0.3.15",
 }
 
 readme = "README.mbt.md"

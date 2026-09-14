@@ -173,7 +173,15 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
     fn drop(&mut self) {
         match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { call } => {
-                P::unfinished_drop(call, self.sink.as_ref());
+                if call.is_executor_shutting_down() {
+                    call.release_atomic_lease();
+                    tracing::debug!(
+                        start_idx = %call.start_idx(),
+                        "durable call terminal abandoned during executor shutdown"
+                    );
+                } else {
+                    P::unfinished_drop(call, self.sink.as_ref());
+                }
             }
             AccessTerminalGuardState::CleanupAfterTerminal {
                 atomic_lease,

@@ -22,6 +22,7 @@ use golem_common::schema::{
     NamedField, NamedFieldType, OutputSchema, Role, SchemaGraph, SchemaType, SchemaTypeDef, TypeId,
     VariantCaseType,
 };
+use test_r::test;
 
 pub fn field(name: impl Into<String>, schema: SchemaType) -> NamedField {
     NamedField::user_supplied(name, schema)
@@ -119,6 +120,118 @@ pub fn def(id: impl Into<String>, body: SchemaType) -> SchemaTypeDef {
 
 pub fn ref_to(id: impl Into<String>) -> SchemaType {
     SchemaType::ref_to(TypeId::new(id))
+}
+
+/// Native guest streams with recursive items and runtime-dependent endpoint counts.
+pub fn guest_streaming_agent_type(source_language: &str) -> AgentTypeSchema {
+    let stream = |item| SchemaType::stream(Some(item));
+    agent(
+        "GuestStreamingAgent",
+        source_language,
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "consume",
+                vec![field("items", stream(SchemaType::string()))],
+                Some(SchemaType::u32()),
+            ),
+            method("produce", vec![], Some(stream(ref_to("StreamItem")))),
+            method(
+                "exchange",
+                vec![
+                    field("label", SchemaType::string()),
+                    field("items", stream(ref_to("StreamItem"))),
+                ],
+                Some(ref_to("StreamBundle")),
+            ),
+            method(
+                "forward",
+                vec![field("bundle", ref_to("StreamBundle"))],
+                Some(ref_to("StreamBundle")),
+            ),
+            method(
+                "nested",
+                vec![field("items", stream(stream(ref_to("StreamItem"))))],
+                Some(stream(stream(ref_to("StreamItem")))),
+            ),
+            method(
+                "recursive",
+                vec![field("tree", ref_to("StreamTree"))],
+                Some(ref_to("StreamTree")),
+            ),
+            method(
+                "shapes",
+                vec![
+                    field("narrow", stream(SchemaType::s8())),
+                    field("wide", stream(SchemaType::s32())),
+                    field("list", stream(SchemaType::list(SchemaType::string()))),
+                    field(
+                        "fixed",
+                        stream(SchemaType::fixed_list(SchemaType::string(), 2)),
+                    ),
+                    field(
+                        "entries",
+                        stream(SchemaType::map(SchemaType::string(), SchemaType::u32())),
+                    ),
+                    field(
+                        "single",
+                        stream(SchemaType::tuple(vec![SchemaType::string()])),
+                    ),
+                ],
+                None,
+            ),
+            method("status", vec![], Some(SchemaType::string())),
+        ],
+        vec![
+            def(
+                "StreamItem",
+                SchemaType::record(vec![
+                    named_field("label", SchemaType::string()),
+                    named_field("children", SchemaType::list(ref_to("StreamItem"))),
+                ]),
+            ),
+            def(
+                "StreamBundle",
+                SchemaType::record(vec![
+                    named_field("optional", SchemaType::option(stream(ref_to("StreamItem")))),
+                    named_field("siblings", SchemaType::list(stream(ref_to("StreamItem")))),
+                    named_field(
+                        "named",
+                        SchemaType::map(SchemaType::string(), stream(SchemaType::u32())),
+                    ),
+                    named_field(
+                        "outcome",
+                        SchemaType::result(golem_common::schema::ResultSpec {
+                            ok: Some(Box::new(stream(ref_to("StreamItem")))),
+                            err: Some(Box::new(SchemaType::string())),
+                        }),
+                    ),
+                ]),
+            ),
+            def(
+                "StreamTree",
+                SchemaType::variant(vec![
+                    variant_case("leaf", Some(stream(ref_to("StreamItem")))),
+                    variant_case("branch", Some(SchemaType::list(ref_to("StreamTree")))),
+                ]),
+            ),
+        ],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn guest_streaming_fixture_classifies_recursive_methods() {
+    let agent = guest_streaming_agent_type("rust");
+    agent.validate().expect("valid guest streaming schema");
+    for method in &agent.methods {
+        assert_eq!(
+            method.uses_streams(&agent.schema),
+            method.name != "status",
+            "incorrect stream classification for {}",
+            method.name,
+        );
+    }
 }
 
 pub fn single_agent_wrapper_types() -> Vec<AgentTypeSchema> {

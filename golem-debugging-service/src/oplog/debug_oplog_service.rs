@@ -24,6 +24,7 @@ use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
+use golem_worker_executor::services::stream_session_index::StreamSessionIndexService;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -52,6 +53,14 @@ impl Debug for DebugOplogService {
 
 #[async_trait]
 impl OplogService for DebugOplogService {
+    fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
+        self.inner.set_stream_session_index(index);
+    }
+
+    fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
+        self.inner.stream_session_index()
+    }
+
     async fn create(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -126,7 +135,7 @@ impl OplogService for DebugOplogService {
         self.inner.delete(owned_agent_id, agent_mode).await
     }
 
-    async fn read(
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -138,7 +147,21 @@ impl OplogService for DebugOplogService {
         // created), and letting them move the session index would corrupt the session's replay
         // position. Replay progress is tracked by the sequential entry reads going through
         // `DebugOplog::read` instead.
-        self.inner.read(owned_agent_id, agent_mode, idx, n).await
+        self.inner
+            .read_exact(owned_agent_id, agent_mode, idx, n)
+            .await
+    }
+
+    async fn read_source(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner
+            .read_source(owned_agent_id, agent_mode, idx, n)
+            .await
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {

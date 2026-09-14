@@ -1,4 +1,4 @@
-warnings = "-44"
+warnings = "-44-1"
 
 import {
   "golemcloud/golem_sdk/async-core",

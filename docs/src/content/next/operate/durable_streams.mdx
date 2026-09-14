@@ -1,0 +1,66 @@
+# Operating Durable Stream Sessions
+
+Streaming agent invocations use the same durability model as other durable agent work. Stream registrations, items, terminals, attachment epochs, consumer journals, and deletion barriers are committed to agent oplogs. Losing a CLI connection, worker process, executor, or service connection does not by itself cancel the invocation.
+
+## Configuration
+
+Worker executors expose the protocol-v1 timing controls under `[durable_stream]`:
+
+```toml
+[durable_stream]
+lease_ttl = "1m"
+renewal_interval = "20s"
+reconciliation_interval = "30s"
+reconciliation_batch_size = 256
+abandoned_prepare_after = "5m"
+
+[limits]
+live_stream_event_broadcast_capacity = 32
+```
+
+The lease TTL and abandoned-prepare threshold are fixed in protocol v1. Renewal and reconciliation intervals may be shortened, but must be non-zero; renewal must remain below the TTL. The reconciliation batch size must be non-zero. The per-reader live buffer must be between 1 and 1024 events.
+
+Other protocol-v1 limits are fixed: 16 MiB per logical value item, 1 MiB per packed-byte batch, 1024 streams per session, 256 newly discovered streams per value, recursive traversal depth 128, and 16 live readers per stream. A limit failure terminates or rejects the affected stream operation rather than silently truncating data.
+
+## Resume and takeover
+
+Use a saved session checkpoint when an operator or client must reconnect explicitly:
+
+```shell
+golem agent invoke 'MyAgent()' stream_method --save-session session.json
+golem agent invoke 'MyAgent()' stream_method --resume-session session.json
+```
+
+`--resume-session` is valid after the previous transport detached. If the previous transport is still attached, use `--takeover-session session.json`. Every accepted resume or takeover advances the attachment epoch and fences the old transport. Frames from a stale epoch are rejected; they are never applied to the new attachment.
+
+The CLI does not retry automatically. Keep the checkpoint file private because it contains invocation identity and cursor state. It does not contain agent values or credentials.
+
+## Attachments and leases
+
+Cross-agent streams create durable producer-to-consumer attachments. Their states are `Prepared`, `Active`, or `Finalized`. An expired lease is a reconciliation signal, not proof that the consumer disappeared: the reconciler probes the durable consumer journal and consumer incarnation before finalizing an attachment.
+
+Use the worker-executor metrics and traces to inspect attachment activity:
+
+- `golem_durable_stream_attachment_operation_total` shows prepare, activate, renew, and finalize commits or replay no-ops.
+- `golem_durable_stream_lease_remaining_seconds` shows observed lease headroom.
+- `golem_durable_stream_reconciliation_total` shows reconciler outcomes.
+- `golem_durable_stream_cascade_total` shows durable deletion-cascade outcomes.
+- `durable_stream.attachment.*` and `durable_stream.resume_attempt` OTLP spans carry attachment, stream, attempt, and epoch identifiers, but no stream values or credentials.
+
+See [Metrics](/next/operate/metrics) and [Logs](/next/operate/logs) for endpoint and exporter setup.
+
+## Deletion failures
+
+Normal producer deletion is fail-closed while a prepared or active attachment may still need producer history. A blocked deletion reports the dependent attachment, stream, epoch, consumer identity, and consumer incarnation fingerprint. Do not force-delete the oplog or use fork/revert to bypass this check.
+
+Retry deletion after the consumer has durably journaled the stream terminal or after reconciliation proves that the consumer was deleted or recreated. Cascade deletion first commits a producer barrier, then records one durable outcome per dependent. If unread history remains, it writes a source-unavailable overlay to the consumer journal before completing the cascade. Retrying the operation resumes from those committed facts.
+
+## Recovery procedure
+
+1. Confirm that the producer and consumer use durable agent mode and that their current incarnation fingerprints match the attachment diagnostics.
+2. Check `golem_durable_stream_producer_operation_total` for replay no-ops. Replays after a lost response are expected and must not create additional logical items.
+3. Check catch-up distance, journal lag, live-reader backpressure, and attachment lease metrics. A growing catch-up distance indicates a recovering reader; sustained backpressure indicates a slow attached reader.
+4. Resume a detached client with its saved checkpoint. Use takeover only when intentionally fencing a still-attached client.
+5. For blocked deletion, let reconciliation run and retry. Investigate `probe_error`, `journal_error`, or `write_error` reconciliation outcomes before taking further action.
+
+Never edit stream-related oplog entries. Registration identity and every offset are derived from committed oplog positions; rewriting that history can alias stream identity or lose journal evidence and is rejected by supported fork/revert operations.

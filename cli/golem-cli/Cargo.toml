@@ -29,8 +29,10 @@ test = true
 harness = false
 
 [dependencies]
+golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-schema = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
@@ -57,6 +59,7 @@ futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 heck = { workspace = true }
 http = { workspace = true }
+humanize-rs = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -71,6 +74,7 @@ phf = { workspace = true }
 portable-pty = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
+prost = { workspace = true }
 quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
@@ -92,9 +96,10 @@ tempfile = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
@@ -134,6 +139,7 @@ pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
+sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }
 wat = { workspace = true }

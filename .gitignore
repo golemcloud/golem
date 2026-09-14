@@ -70,3 +70,6 @@ docs/snippets/loop.log
 
 /sdks/scala/out/
 /sdks/scala/mill/out/
+
+/sdks/moonbit/_build
+/sdks/moonbit/.mooncakes

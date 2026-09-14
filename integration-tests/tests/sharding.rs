@@ -695,6 +695,14 @@ mod tests {
                     let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_resources")
                         .execute(&pool)
                         .await;
+                    // The local-mode mirror of the shard state; assignments first, because of
+                    // the foreign key.
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.shard_assignments")
+                        .execute(&pool)
+                        .await;
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.executor_leases")
+                        .execute(&pool)
+                        .await;
                     pool.close().await;
                 }
                 DbInfo::Mysql(_) => {

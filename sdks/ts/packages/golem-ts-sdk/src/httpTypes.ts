@@ -334,7 +334,8 @@ type NonBindableKind =
   | 'unstructured-binary'
   | 'result'
   | 'typed-array'
-  | 'principal';
+  | 'principal'
+  | 'stream';
 
 // A value is bindable unless it is a marker tagged with a non-bindable kind.
 // Plain schemas (Zod / Valibot / ArkType / Effect Schema) and scalar markers

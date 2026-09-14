@@ -31,8 +31,7 @@ use tracing::debug;
 /// invocation loop) or when the agent is stopped.
 ///
 /// Extracted as a standalone struct (no `WorkerCtx` generic) so it can be
-/// unit-tested in isolation, following the same pattern as
-/// `FilesystemStorageSemaphore`.
+/// unit-tested in isolation.
 ///
 /// ## Unlimited accounts
 ///

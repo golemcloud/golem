@@ -345,12 +345,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .write_data(
-                        environment_id,
-                        container_name.clone(),
-                        name.clone(),
-                        data.clone(),
-                    )
+                    .write_data(environment_id, &container_name, &name, &data)
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -535,7 +530,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_objects(environment_id, container_name.clone(), names.clone())
+                    .delete_objects(environment_id, &container_name, &names)
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)

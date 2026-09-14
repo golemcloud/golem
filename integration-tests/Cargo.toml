@@ -32,6 +32,7 @@ futures-concurrency = { workspace = true }
 headers = { workspace = true }
 indoc = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }
+prost = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rlimit = { workspace = true }
@@ -80,11 +81,6 @@ harness = false
 [[test]]
 name = "environment-deletion"
 path = "tests/environment_deletion.rs"
-harness = false
-
-[[test]]
-name = "storage-billing"
-path = "tests/storage_billing.rs"
 harness = false
 
 [[test]]

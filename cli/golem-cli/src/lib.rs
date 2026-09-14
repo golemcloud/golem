@@ -21,6 +21,7 @@ use shadow_rs::shadow;
 use std::future::Future;
 use std::process::ExitCode;
 use tracing_log::LogTracer;
+use tracing_subscriber::filter::Directive;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod agent_help_hints;
@@ -81,6 +82,12 @@ pub fn version() -> &'static str {
     }
 }
 
+/// Environment variable holding extra `EnvFilter` directives (comma separated, e.g.
+/// `golem_worker_executor::durable_host=debug`) appended to the verbosity-derived log filter.
+/// It only raises or lowers the named targets; the default level still comes from the
+/// verbosity flags.
+pub const LOG_FILTER_ENV_VAR: &str = "GOLEM_LOG_FILTER";
+
 pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
     if let Some(level) = verbosity.tracing_level() {
         let subscriber = FmtSubscriber::builder();
@@ -100,6 +107,16 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
                 warn("sqlx")
             },
         );
+        if let Ok(extra) = std::env::var(LOG_FILTER_ENV_VAR) {
+            for directive in extra.split(',').map(str::trim).filter(|d| !d.is_empty()) {
+                match directive.parse::<Directive>() {
+                    Ok(directive) => filter = filter.add_directive(directive),
+                    Err(err) => eprintln!(
+                        "Ignoring invalid {LOG_FILTER_ENV_VAR} directive '{directive}': {err}"
+                    ),
+                }
+            }
+        }
 
         if pretty_mode {
             let subscriber = subscriber

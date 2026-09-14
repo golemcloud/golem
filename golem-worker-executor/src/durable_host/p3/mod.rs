@@ -41,17 +41,16 @@ use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryProperties;
 use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
+use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{HasData, Linker};
 
 use wasmtime_wasi::cli::{WasiCliCtxView, WasiCliView};
 use wasmtime_wasi::clocks::{WasiClocksCtxView, WasiClocksView};
-use wasmtime_wasi::filesystem::{WasiFilesystemCtxView, WasiFilesystemView};
 use wasmtime_wasi::sockets::{WasiSocketsCtxView, WasiSocketsView};
 use wasmtime_wasi_http::p3::{WasiHttpCtxView, WasiHttpView};
 
 mod cli;
 mod clocks;
-mod filesystem;
 pub(crate) mod http;
 mod random;
 mod sockets;
@@ -66,10 +65,10 @@ impl<Ctx: WorkerCtx> HasData for DurableP3<Ctx> {
 
 /// Per-call view wrapping the worker context. The synchronous `Host` traits are implemented on
 /// this type and delegate to the underlying `wasmtime_wasi` views.
-pub struct DurableP3View<'a, Ctx: WorkerCtx>(&'a mut Ctx);
+pub struct DurableP3View<'a, Ctx: WorkerCtx>(pub(crate) &'a mut Ctx);
 
 /// Getter projecting the store data into the Golem Preview 3 view.
-fn durable_p3_view<Ctx: WorkerCtx>(ctx: &mut Ctx) -> DurableP3View<'_, Ctx> {
+pub(crate) fn durable_p3_view<Ctx: WorkerCtx>(ctx: &mut Ctx) -> DurableP3View<'_, Ctx> {
     DurableP3View(ctx)
 }
 
@@ -79,7 +78,7 @@ fn durable_p3_view<Ctx: WorkerCtx>(ctx: &mut Ctx) -> DurableP3View<'_, Ctx> {
 /// these wrappers are only ever registered into a `Linker<Ctx>`, so `U` is always `Ctx` at
 /// runtime. This downcast recovers `Ctx` so we can produce the built-in `wasmtime_wasi` view
 /// required to delegate to the built-in `HostWithStore` implementations.
-fn expect_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut Ctx {
+pub(crate) fn expect_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut Ctx {
     (u as &mut dyn Any)
         .downcast_mut::<Ctx>()
         .unwrap_or_else(|| {
@@ -91,7 +90,9 @@ fn expect_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut Ctx {
         })
 }
 
-fn durable_worker_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut DurableWorkerCtx<Ctx> {
+pub(crate) fn durable_worker_ctx<Ctx: WorkerCtx, U: 'static>(
+    u: &mut U,
+) -> &mut DurableWorkerCtx<Ctx> {
     expect_ctx::<Ctx, U>(u).durable_ctx_mut()
 }
 
@@ -99,13 +100,13 @@ fn durable_worker_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut DurableWork
 /// Durable calls are observed by `DurableCallSession::start_access` / `prepare_access_start` with their
 /// host-function pair's interface/function names; every other host method observes explicitly
 /// through this helper, mirroring the P2 wrappers.
-fn observe_function_call<Ctx: WorkerCtx>(ctx: &Ctx, interface: &str, function: &str) {
+pub(crate) fn observe_function_call<Ctx: WorkerCtx>(ctx: &Ctx, interface: &str, function: &str) {
     DurabilityHost::observe_function_call(ctx.durable_ctx(), interface, function);
 }
 
 /// [`observe_function_call`] for `HostWithStore` methods that only have the method-generic store
 /// data type `U`.
-fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
+pub(crate) fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
     u: &mut U,
     interface: &str,
     function: &str,
@@ -113,9 +114,10 @@ fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
     observe_function_call(expect_ctx::<Ctx, U>(u), interface, function);
 }
 
-/// Drives the live / replay / incomplete-replay flow for a re-executable durable p3 accessor
-/// call whose response never carries a guest-visible error value (or whose errors must never be
-/// retried by the host).
+/// Drives the live / replay flow for a durable p3 accessor call whose response never carries a
+/// guest-visible error value (or whose errors must never be retried by the host). Incomplete replay
+/// re-executes reads and idempotent writes, while the durable-call policy rejects incomplete
+/// non-re-executable writes.
 ///
 /// Durable p3 host wrappers surface failures in two ways: traps, which escape via
 /// [`DurableCallSession::trap`] and are classified by the trap-recovery machinery; and error *values*
@@ -124,7 +126,7 @@ fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
 /// unwraps them and the worker fails deterministically — so any wrapper whose response payload
 /// carries such an error value must use [`run_read_access_classified`] instead and classify it
 /// as retryable-via-host vs guest-visible.
-async fn run_read_access<T, D, Ctx, Pair, F, Fut>(
+pub(crate) async fn run_read_access<T, D, Ctx, Pair, F>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
@@ -135,15 +137,13 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
     Pair: HostPayloadPair,
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
+    F: AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
 {
-    run_read_access_classified::<T, D, Ctx, Pair, F, Fut>(
+    DurableCallSession::<Pair, Cancellable>::invoke_access(
         store,
+        durable_worker_ctx::<Ctx, T>,
         request,
         function_type,
-        |_| None,
-        RetryProperties::new(),
         live,
     )
     .await
@@ -201,6 +201,12 @@ where
     let response = match live().await {
         Ok(response) => response,
         Err(err) => {
+            if err.root_cause().downcast_ref::<InterruptKind>().is_some() {
+                // Interrupts and sleep-suspend are non-error control flow. Leave the Start
+                // incomplete for replay without attaching a durable-call trap context.
+                handle.abandon_for_trap();
+                return Err(err);
+            }
             // Mark the escaping trap with this call's own scope so post-trap retry grouping is
             // immune to ambient state a sibling subtask could have clobbered. The context is pure
             // (call-owned), so no store access is needed here.
@@ -239,11 +245,6 @@ fn wasi_cli_view<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> WasiCliCtxView<'_> {
     WasiCliView::cli(expect_ctx::<Ctx, U>(u))
 }
 
-#[allow(dead_code)]
-fn wasi_filesystem_view<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> WasiFilesystemCtxView<'_> {
-    WasiFilesystemView::filesystem(expect_ctx::<Ctx, U>(u))
-}
-
 fn wasi_sockets_view<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> WasiSocketsCtxView<'_> {
     WasiSocketsView::sockets(expect_ctx::<Ctx, U>(u))
 }
@@ -260,7 +261,6 @@ pub fn add_to_linker<Ctx: WorkerCtx>(
 ) -> wasmtime::Result<()> {
     use wasmtime_wasi::p3::bindings::cli;
     use wasmtime_wasi::p3::bindings::clocks;
-    use wasmtime_wasi::p3::bindings::filesystem;
     use wasmtime_wasi::p3::bindings::random;
     use wasmtime_wasi::p3::bindings::sockets;
     use wasmtime_wasi_http::p3::bindings::http;
@@ -280,8 +280,7 @@ pub fn add_to_linker<Ctx: WorkerCtx>(
     clocks::system_clock::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
     clocks::monotonic_clock::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
 
-    filesystem::types::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
-    filesystem::preopens::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
+    crate::wasi_filesystem::p3::add_to_linker(linker)?;
 
     random::random::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;
     random::insecure::add_to_linker::<_, DurableP3<Ctx>>(linker, durable_p3_view::<Ctx>)?;

@@ -35,6 +35,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestKVBucket, HostRequestKVBucketAndKeySizePairs,
     HostRequestKVBucketAndKeys, HostResponseKVGetMany, HostResponseKVKeys, HostResponseKVUnit,
 };
+use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{IoView, ResourceTableError};
 
@@ -102,6 +103,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
+            // Materialised once and refcounted through every attempt below. The list is
+            // guest-supplied and unbounded, and the loop can run several times; the durability
+            // record above still gets the owned `Vec` it has to serialise.
+            let keys: Arc<[String]> = keys.into();
             let result = loop {
                 let result = self
                     .state
@@ -352,6 +357,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
+            // Refcounted once, like the get and delete paths: the loop below can run several
+            // times, and the payload bytes are guest-supplied and unbounded.
+            let key_values: Arc<[(String, Vec<u8>)]> = key_values.into();
             let result = loop {
                 let result = self
                     .state
@@ -460,6 +468,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
+            // See `get_many`: one materialisation, refcounted through every retry below.
+            let keys: Arc<[String]> = keys.into();
             let result = loop {
                 let result = self
                     .state

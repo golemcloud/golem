@@ -17,6 +17,7 @@ pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
 pub mod grpcapi;
+pub mod invocation_session_token;
 pub mod mcp;
 pub mod metrics;
 pub mod model;

@@ -1,0 +1,32 @@
+export const templateMatrix = [
+  {
+    role: 'agent',
+    world: 'agent-guest',
+    wrapperDirectory: 'agent-template',
+    sdkModuleName: '@golemcloud/golem-ts-sdk',
+    sdkEntry: 'dist/index.mjs',
+    cargoArtifact: 'agent_guest.wasm',
+    wasmFile: 'agent_guest.wasm',
+    declarationFile: 'exports.d.ts',
+  },
+  {
+    role: 'tool-middleware',
+    world: 'tool-middleware-guest',
+    wrapperDirectory: 'tool-middleware-template',
+    sdkModuleName: '@golemcloud/golem-ts-sdk/middleware',
+    sdkEntry: 'dist/middleware-runtime.mjs',
+    cargoArtifact: 'tool_middleware_guest.wasm',
+    wasmFile: 'tool_middleware_guest.wasm',
+    declarationFile: 'tool_middleware_exports.d.ts',
+  },
+  {
+    role: 'agent-tool-middleware',
+    world: 'agent-tool-middleware-guest',
+    wrapperDirectory: 'agent-tool-middleware-template',
+    sdkModuleName: '@golemcloud/golem-ts-sdk',
+    sdkEntry: 'dist/index.mjs',
+    cargoArtifact: 'agent_tool_middleware_guest.wasm',
+    wasmFile: 'agent_tool_middleware_guest.wasm',
+    declarationFile: 'agent_tool_middleware_exports.d.ts',
+  },
+];

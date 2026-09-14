@@ -653,10 +653,33 @@ object JsSchemaValueNode {
   def quotaTokenHandle(resource: js.Any): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("quota-token-handle", resource)
 
+  def streamValue(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("stream-value", resource)
+
   /** `schema-value-node :: permission-card-handle(own<permission-card>)`. */
   def permissionCardHandle(resource: js.Any): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("permission-card-handle", resource)
 }
+
+@js.native
+trait JsAsyncIteratorResult[+A] extends js.Object {
+  def done: Boolean = js.native
+  def value: A      = js.native
+}
+
+@js.native
+trait JsSchemaValueIterator extends js.Object {
+  def next(): js.Promise[JsAsyncIteratorResult[JsSchemaValueTree]] = js.native
+}
+
+@js.native
+trait JsSchemaValueIterable extends js.Object {
+  @scala.scalajs.js.annotation.JSName(js.Symbol.asyncIterator)
+  def iterator(): JsSchemaValueIterator = js.native
+}
+
+@js.native
+trait JsSchemaValueStream extends js.Object
 
 @js.native
 sealed trait JsSchemaValueTree extends js.Object {

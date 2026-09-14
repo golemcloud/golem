@@ -24,7 +24,7 @@ use golem_worker_executor::services::golem_config::{
     EngineConfig, EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
     KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, QuotaServiceConfig, RdbmsConfig,
     ResourceLimitsConfig, SchedulerConfig, SchedulerStorageConfig, SuspendConfig,
-    WorkerServiceGrpcConfig,
+    WorkerServiceGrpcConfig, default_key_value_storage_retry,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -36,6 +36,7 @@ pub struct DebugConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    #[serde(default = "default_key_value_storage_retry")]
     pub key_value_storage_retry: RetryConfig,
     pub scheduler_storage_retry: RetryConfig,
     pub indexed_storage_retry: RetryConfig,
@@ -77,6 +78,7 @@ impl DebugConfig {
             scheduler_storage: self.scheduler_storage,
             blob_storage: self.blob_storage,
             limits: self.limits,
+            durable_stream: Default::default(),
             retry: self.retry,
             compiled_component_service: self.compiled_component_service,
             oplog: self.oplog,
@@ -84,10 +86,12 @@ impl DebugConfig {
             active_agents: self.active_agents,
             agent_status_flush: Default::default(),
             agent_status_checkpoint: Default::default(),
+            invocation_results: Default::default(),
             scheduler: self.scheduler,
             public_worker_api: self.public_worker_api,
             memory: self.memory,
             filesystem_storage: Default::default(),
+            resource_usage_metering: Default::default(),
             rdbms: self.rdbms,
             resource_limits: self.resource_limits,
             component_cache: self.component_cache,
@@ -170,4 +174,19 @@ impl HasConfigExamples<DebugConfig> for DebugConfig {
 
 pub fn make_debug_config_loader() -> ConfigLoader<DebugConfig> {
     ConfigLoader::new_with_examples(&PathBuf::from("config/debug-worker-executor.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn debugging_executor_does_not_expose_unsupported_metering() {
+        let config = DebugConfig::default().into_golem_config();
+
+        assert!(!config.resource_usage_metering.compute);
+        assert!(!config.resource_usage_metering.memory);
+        assert!(!config.resource_usage_metering.filesystem);
+    }
 }

@@ -32,9 +32,10 @@ use std::sync::Arc;
 
 /// Applies the common log emission policy for a single worker log event.
 ///
-/// `is_live` must be sampled from the worker state at the time of the call; `oplog` must be the
-/// worker's private oplog (used by the [`LogEventEmitBehaviour::Always`] branch, which appends
-/// without going through the invocation queue).
+/// `is_live` must be sampled from worker state at the time
+/// of the call; `oplog` must be the worker's private oplog (used by the
+/// [`LogEventEmitBehaviour::Always`] branch, which appends without going through the invocation
+/// queue).
 pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
     event: InternalWorkerEvent,
     has_oplog_processor: bool,

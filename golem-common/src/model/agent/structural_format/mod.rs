@@ -26,9 +26,7 @@
 use crate::model::agent::text_utils::{
     write_json_escaped, write_json_escaped_char, write_with_decimal_point,
 };
-use crate::schema::canonical::{
-    datetime, duration, permission_card, quantity, quota_token, secret,
-};
+use crate::schema::canonical::{datetime, duration, quantity};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_type::{SchemaType, UnionSpec};
 use crate::schema::schema_value::{
@@ -51,6 +49,8 @@ pub enum StructuralFormatError {
     RejectedFloat,
     #[error("Handle types cannot be serialized to agent IDs")]
     HandleType,
+    #[error("Host-managed capability types cannot be serialized to agent IDs")]
+    HostManagedCapability,
     #[error("Max nesting depth ({0}) exceeded")]
     MaxDepthExceeded(usize),
     #[error("Parse error at position {position}: {message}")]
@@ -488,19 +488,12 @@ fn format_schema_value(
         (SchemaValue::Quantity(v), SchemaType::Quantity { .. }) => {
             format_tagged_string(buf, "qty", &quantity::to_text(v).map_err(canonical_err)?)
         }
-        (SchemaValue::Secret(v), SchemaType::Secret { .. }) => {
-            format_tagged_string(buf, "secret", &secret::to_text(v).map_err(canonical_err)?)
-        }
-        (SchemaValue::QuotaToken(v), SchemaType::QuotaToken { .. }) => {
-            format_tagged_string(buf, "qt", &quota_token::to_text(v).map_err(canonical_err)?)
-        }
-        (SchemaValue::PermissionCard(v), SchemaType::PermissionCard { .. }) => {
-            format_tagged_string(
-                buf,
-                "pc",
-                &permission_card::to_text(v).map_err(canonical_err)?,
-            )
-        }
+        (
+            _,
+            SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. },
+        ) => return Err(StructuralFormatError::HostManagedCapability),
         (SchemaValue::Union(UnionValuePayload { tag, body }), SchemaType::Union { spec, .. }) => {
             let (idx, branch) = union_branch(spec, tag)?;
             write!(buf, "u{idx}").unwrap();
@@ -794,18 +787,11 @@ impl<'a> Parser<'a> {
                 quantity::from_text(&self.parse_tagged_string("qty")?)
                     .map_err(|e| self.error(&format!("Invalid quantity: {e}")))?,
             )),
-            SchemaType::Secret { .. } => Ok(SchemaValue::Secret(
-                secret::from_text(&self.parse_tagged_string("secret")?)
-                    .map_err(|e| self.error(&format!("Invalid secret: {e}")))?,
-            )),
-            SchemaType::QuotaToken { .. } => Ok(SchemaValue::QuotaToken(
-                quota_token::from_text(&self.parse_tagged_string("qt")?)
-                    .map_err(|e| self.error(&format!("Invalid quota token: {e}")))?,
-            )),
-            SchemaType::PermissionCard { .. } => Ok(SchemaValue::PermissionCard(
-                permission_card::from_text(&self.parse_tagged_string("pc")?)
-                    .map_err(|e| self.error(&format!("Invalid permission card: {e}")))?,
-            )),
+            SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. } => {
+                Err(StructuralFormatError::HostManagedCapability)
+            }
             SchemaType::Union { spec, .. } => self.parse_schema_union(spec, graph, depth),
             SchemaType::Future { .. } | SchemaType::Stream { .. } => {
                 Err(StructuralFormatError::HandleType)

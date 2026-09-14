@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::{
+    ClassifiedHostError, DurableCallTrapContextMarker, SemanticTrapRetryOverrideMarker,
+};
+use crate::durable_host::schema_value_stream::StoreValueResolver;
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::preview2::exports::golem::agent::guest as guest_exports;
@@ -22,21 +27,40 @@ use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
+#[cfg(test)]
+use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
-use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::schema::validation::value::{validate_record_fields, validate_value};
+use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_schema::schema::wit::{decode_value_with, encode_value_with};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
+
+pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+/// Polls an invocation task outside Wasmtime's fiber and accessor TLS scopes, with enough native
+/// stack for the nested host futures. Production runtime threads already have sufficient stack;
+/// smaller embedding runtimes grow a temporary stack that is released after each poll.
+pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    std::future::poll_fn(|cx| {
+        stacker::maybe_grow(INVOCATION_STACK_SIZE, INVOCATION_STACK_SIZE, || {
+            future.as_mut().poll(cx)
+        })
+    })
+    .await
+}
 
 /// Describes how an invocation is being executed with respect to the oplog.
 #[allow(clippy::large_enum_variant)]
@@ -161,7 +185,10 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         }
     };
 
-    store.data_mut().set_running();
+    let manages_owner_execution_status = primary_body.is_some();
+    if manages_owner_execution_status {
+        store.data_mut().set_running();
+    }
 
     // Arm the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`).
     // When it fires, a synthetic interrupt wakes every cooperative host park point and traps
@@ -184,30 +211,72 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             .enter_operator_authorized_oplog_processor_invocation()
     });
 
+    let invocation_principal = call.principal();
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .set_invocation_principal(invocation_principal);
     let call_future = dispatch_call(&mut store, instance, call, &display_name);
 
     let call_outcome = std::panic::AssertUnwindSafe(call_future)
         .catch_unwind()
         .await;
+    store
+        .data_mut()
+        .durable_ctx_mut()
+        .set_invocation_principal(None);
 
     if read_only_method.is_some() {
         store.data_mut().exit_read_only_mode();
     }
     drop(operator_authorization);
 
-    store.data_mut().on_agent_invocation_finished().await;
-
-    let call_result = match call_outcome {
+    let mut call_result = match call_outcome {
         Ok(result) => result,
         Err(payload) => std::panic::resume_unwind(payload),
     };
 
+    if let Some(parent) = primary_body
+        .as_ref()
+        .and_then(|primary_body| primary_body.invocation().cloned())
+    {
+        if let Err(error) =
+            crate::durable_host::tool::prepare_tool_parent_end(&mut store, parent.clone()).await
+        {
+            call_result = Err(error);
+        }
+        if let Some(primary_body) = primary_body {
+            primary_body.complete();
+        }
+        if let Err(error) =
+            crate::durable_host::tool::settle_tool_children(&mut store, parent).await
+        {
+            call_result = Err(error);
+        }
+        if let Some(owner_failure) = store.data().durable_ctx().selected_tool_owner_failure() {
+            let consumed_fuel = call_result
+                .as_ref()
+                .map(InvokeResult::consumed_fuel)
+                .unwrap_or_default();
+            call_result = match owner_failure {
+                OwnerFailureWinner::Trap(trap) => {
+                    Ok(InvokeResult::from_trap_type(consumed_fuel, trap))
+                }
+                OwnerFailureWinner::Lifecycle(interrupt_kind) => Ok(InvokeResult::Interrupted {
+                    consumed_fuel,
+                    interrupt_kind,
+                }),
+                OwnerFailureWinner::Infrastructure(error) => Err(error),
+            };
+        }
+    }
+
+    store.data_mut().on_agent_invocation_finished().await;
+
     let call_result = apply_invocation_deadline(&mut store, deadline, call_result).await;
 
-    store.data().set_suspended();
-
-    if let Some(primary_body) = primary_body {
-        primary_body.complete().await;
+    if manages_owner_execution_status {
+        store.data().set_suspended();
     }
 
     call_result
@@ -245,6 +314,7 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
                 store.data().current_atomic_region_had_side_effects();
             Ok(InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: true,
                 error: OplogAgentError::InternalError(format!(
                     "invocation exceeded the configured maximum invocation duration of {:?}",
                     deadline
@@ -262,10 +332,78 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
 }
 
 /// Pure settlement predicate for [`run_guest_call_settled`]: an invocation's tail work is
-/// settled when no tracked spawned store task is active (every one has finished or parked at a
-/// safe park point) and no task holds an open replay-cursor transaction.
-fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> bool {
-    active_spawned_tasks == 0 && !replay_cursor_open
+/// settled when no tracked spawned Store task is active (every one has finished or parked at a
+/// safe park point).
+fn tail_work_settled(active_spawned_tasks: usize) -> bool {
+    active_spawned_tasks == 0
+}
+
+#[derive(Debug)]
+pub(crate) enum GuestCallSettlementError {
+    Interrupted(wasmtime::Error),
+    Trap(wasmtime::Error),
+    Infrastructure(WorkerExecutorError),
+}
+
+fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
+    let chain_contains = |predicate: &dyn Fn(&(dyn std::error::Error + 'static)) -> bool| {
+        error.chain().any(predicate)
+    };
+
+    if let Some(trap) = error.root_cause().downcast_ref::<wasmtime::Trap>() {
+        return !matches!(trap, wasmtime::Trap::AsyncDeadlock);
+    }
+    if chain_contains(&|cause| {
+        cause.is::<GolemSpecificWasmTrap>()
+            || cause.is::<ClassifiedHostError>()
+            || cause.is::<SemanticTrapRetryOverrideMarker>()
+            || cause.is::<DurableCallTrapContextMarker>()
+            || cause.is::<wasmtime_wasi::I32Exit>()
+            || matches!(
+                cause.downcast_ref::<WorkerExecutorError>(),
+                Some(
+                    WorkerExecutorError::InvalidRequest { .. }
+                        | WorkerExecutorError::UnexpectedOplogEntry { .. }
+                        | WorkerExecutorError::ParamTypeMismatch { .. }
+                        | WorkerExecutorError::ValueMismatch { .. }
+                        | WorkerExecutorError::InvocationFailed { .. }
+                        | WorkerExecutorError::ReadOnlyViolation { .. }
+                        | WorkerExecutorError::PermissionDenied { .. }
+                )
+            )
+    }) {
+        return true;
+    }
+    if chain_contains(&|cause| cause.is::<WorkerExecutorError>()) {
+        return false;
+    }
+
+    error.downcast_ref::<wasmtime::WasmBacktrace>().is_some()
+}
+
+fn classify_guest_call_settlement<R>(
+    result: wasmtime::Result<R>,
+    tail_timeout: Option<(std::time::Duration, usize)>,
+    interrupted: bool,
+) -> Result<R, GuestCallSettlementError> {
+    if let Some((timeout, active)) = tail_timeout {
+        return Err(GuestCallSettlementError::Infrastructure(
+            WorkerExecutorError::runtime(format!(
+                "invocation tail work did not settle within {timeout:?}: {active} spawned task(s) still active"
+            )),
+        ));
+    }
+    result.map_err(|error| {
+        if interrupted || error.root_cause().downcast_ref::<InterruptKind>().is_some() {
+            GuestCallSettlementError::Interrupted(error)
+        } else if is_guest_semantic_trap(&error) {
+            GuestCallSettlementError::Trap(error)
+        } else {
+            GuestCallSettlementError::Infrastructure(WorkerExecutorError::runtime(format!(
+                "guest call settlement task failed: {error}"
+            )))
+        }
+    })
 }
 
 /// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
@@ -281,12 +419,10 @@ fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> b
 /// finished or parked at a designated safe park point (a wait on future guest action, which may
 /// legitimately span invocations). Safe-parked tasks are left parked in the store.
 ///
-/// Settlement additionally requires that no task holds an open replay-cursor transaction: a task
-/// suspended inside one keeps the fair cursor lock held, which would deadlock the cursor reads
-/// the completion path performs outside the event loop (e.g. reading `AgentInvocationFinished`
-/// after a replayed invocation). Tracked tasks park only outside cursor transactions, so this is
-/// a redundant safety net that keeps the invariant explicit even if a future task's accounting
-/// regresses.
+/// Tracked tasks park only outside replay-cursor transactions. A task waiting for or holding the
+/// cursor therefore remains active until it releases the transaction. The cursor itself is shared
+/// by every owner Store, so its global lock state cannot be used as a Store-local settlement
+/// condition: a sibling sidecar may legitimately hold it while this Store has settled.
 ///
 /// The drain phase is bounded by `limits.tail_work_settle_timeout`. It normally settles as soon as
 /// the tasks' pending durable appends and I/O complete; the bound only fires when such work is
@@ -302,10 +438,10 @@ fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> b
 /// is instead delivered *cooperatively*: every blocking host park point races the worker's
 /// interrupt signal, abandons its durable call handles for the trap, and unwinds the event loop
 /// with the interrupt from within.
-async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
+pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     store: &mut StoreContextMut<'_, Ctx>,
     fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
-) -> wasmtime::Result<R> {
+) -> Result<R, GuestCallSettlementError> {
     let tracker = store.data().durable_ctx().tail_work_tracker();
     let tracker_for_error = tracker.clone();
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -321,16 +457,10 @@ async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
             result
         }
     };
-    let mut settled = move |store: StoreContextMut<'_, Ctx>| {
+    let mut settled = move |_store: StoreContextMut<'_, Ctx>| {
         let active = tracker.active_count();
-        let replay_cursor_open = store
-            .data()
-            .durable_ctx()
-            .has_open_replay_cursor_transaction();
-        tracing::debug!(
-            "invocation tail-work settlement check: {active} spawned task(s) active, replay cursor open: {replay_cursor_open}"
-        );
-        tail_work_settled(active, replay_cursor_open)
+        tracing::debug!("invocation tail-work settlement check: {active} spawned task(s) active");
+        tail_work_settled(active)
     };
     let tail_work_deadline = store
         .data()
@@ -340,15 +470,17 @@ async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
         .as_context_mut()
         .run_concurrent_and_settle(fun, &mut settled)
         .await;
-    if tail_work_deadline.exceeded() && !store.data().durable_ctx().is_interrupting() {
-        let timeout = tail_work_deadline.duration();
-        Err(wasmtime::Error::msg(format!(
-            "invocation tail work did not settle within {timeout:?}: {} spawned task(s) still active",
-            tracker_for_error.active_count()
-        )))
+    let interrupted = store.data().durable_ctx().is_interrupting()
+        || store.data().durable_ctx().invocation_deadline_exceeded();
+    let tail_timeout = if tail_work_deadline.exceeded() && !interrupted {
+        Some((
+            tail_work_deadline.duration(),
+            tracker_for_error.active_count(),
+        ))
     } else {
-        result
-    }
+        None
+    };
+    classify_guest_call_settlement(result, tail_timeout, interrupted)
 }
 
 /// Dispatches a single lowered invocation to the matching typed guest export
@@ -374,17 +506,23 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     .call_initialize(accessor, agent_type, input, principal)
                     .await
             })
-            .await
-            .and_then(|result| result);
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(Ok(())) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(Ok(()))) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
                     result: AgentInvocationResult::AgentInitialization,
                 }),
-                Ok(Err(wire_err)) => invoke_result_from_agent_error(store, consumed_fuel, wire_err),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Ok(Err(wire_err))) => {
+                    invoke_result_from_agent_error(store, consumed_fuel, wire_err)
+                }
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::Invoke {
@@ -395,26 +533,46 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_invoke(accessor, method_name, input, principal)
-                    .await
-            })
-            .await
-            .and_then(|result| result);
+            let result = if expected_output.uses_streams() {
+                let result = store
+                    .as_context_mut()
+                    .run_concurrent(async |accessor| {
+                        guest
+                            .call_invoke(accessor, method_name, input, principal)
+                            .await
+                    })
+                    .await;
+                let interrupted = store.data().durable_ctx().is_interrupting()
+                    || store.data().durable_ctx().invocation_deadline_exceeded();
+                classify_guest_call_settlement(result, None, interrupted)
+            } else {
+                run_guest_call_settled(store, async |accessor| {
+                    guest
+                        .call_invoke(accessor, method_name, input, principal)
+                        .await
+                })
+                .await
+            };
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(Ok(maybe_output)) => {
-                    let output = decode_invoke_output(store, maybe_output)?;
+                Ok(Ok(Ok(invoke_output))) => {
+                    let output = decode_invoke_output(store, invoke_output)?;
                     validate_invoke_output(display_name, &expected_output, &output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
                         result: AgentInvocationResult::AgentMethod { output },
                     })
                 }
-                Ok(Err(wire_err)) => invoke_result_from_agent_error(store, consumed_fuel, wire_err),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Ok(Err(wire_err))) => {
+                    invoke_result_from_agent_error(store, consumed_fuel, wire_err)
+                }
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::SaveSnapshot => {
@@ -422,18 +580,22 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             prepare_guest_call(store, display_name).await;
             let result =
                 run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
-                    .await
-                    .and_then(|result| result);
+                    .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(snapshot) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(snapshot)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
                     result: AgentInvocationResult::SaveSnapshot {
                         snapshot: snapshot.into(),
                     },
                 }),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::LoadSnapshot { snapshot } => {
@@ -442,16 +604,20 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let result = run_guest_call_settled(store, async |accessor| {
                 guest.call_load(accessor, snapshot).await
             })
-            .await
-            .and_then(|result| result);
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(inner) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(inner)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
                     result: AgentInvocationResult::LoadSnapshot { error: inner.err() },
                 }),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
         PreparedCall::ProcessOplogEntries {
@@ -479,16 +645,20 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     )
                     .await
             })
-            .await
-            .and_then(|result| result);
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(inner) => Ok(InvokeResult::Succeeded {
+                Ok(Ok(inner)) => Ok(InvokeResult::Succeeded {
                     consumed_fuel,
                     result: AgentInvocationResult::ProcessOplogEntries { error: inner.err() },
                 }),
-                Err(err) => Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await),
+                Ok(Err(err))
+                | Err(GuestCallSettlementError::Interrupted(err))
+                | Err(GuestCallSettlementError::Trap(err)) => {
+                    Ok(invoke_result_from_trap::<Ctx>(store, consumed_fuel, err).await)
+                }
+                Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
     }
@@ -496,7 +666,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
 
 /// Resets call counters and emits the invocation-start event before a guest
 /// call. Mirrors the bookkeeping the legacy dynamic dispatch performed.
-async fn prepare_guest_call<Ctx: WorkerCtx>(
+pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) {
@@ -561,6 +731,7 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
             })?;
     Ok(InvokeResult::Failed {
         consumed_fuel,
+        timed_out: false,
         error: OplogAgentError::InternalError(agent_error.to_string()),
         retry_from: OplogIndex::INITIAL,
         in_atomic_region: false,
@@ -569,26 +740,46 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
     })
 }
 
-/// Decodes the `option<schema-value-tree>` output of `invoke` into the
-/// schema-native [`SchemaValue`] carried across the gRPC / oplog boundary.
+/// Decodes the optional value returned by `invoke` into the schema-native
+/// [`SchemaValue`] carried across the gRPC / oplog boundary.
 ///
 /// A `none` result (the declared `unit` output) is represented by the
 /// canonical empty tuple, matching the `unit` projection used on the caller
 /// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
 fn decode_invoke_output<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    maybe_output: Option<core_wire::SchemaValueTree>,
+    output: Option<core_wire::SchemaValueTree>,
 ) -> Result<SchemaValue, WorkerExecutorError> {
-    match maybe_output {
+    match output {
         // `none` is the declared `unit` output.
         None => Ok(SchemaValue::Tuple {
             elements: Vec::new(),
         }),
-        // The output is a guest-owned value tree, so any `quota-token` handles
-        // it carries are lifted into trusted snapshots (and consumed) here.
-        Some(tree) => decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
-            WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
-        }),
+        // Quota-token handles are lifted into trusted snapshots. Durable stream
+        // sessions materialize stream handles before the invocation result is
+        // committed.
+        Some(tree) => {
+            let output =
+                decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to decode agent method output: {e}"
+                    ))
+                })?;
+            Ok(output)
+        }
+    }
+}
+
+#[cfg(test)]
+fn reject_stream_at_materializing_boundary(
+    value: SchemaValue,
+) -> Result<SchemaValue, WorkerExecutorError> {
+    if crate::durable_host::schema_value_stream::contains_stream(&value) {
+        Err(WorkerExecutorError::runtime(
+            "live stream at a materializing invocation boundary without a durable Stream Session",
+        ))
+    } else {
+        Ok(value)
     }
 }
 
@@ -604,6 +795,13 @@ pub struct ExpectedInvokeOutput {
     /// The method's declared output type; the canonical empty tuple for
     /// `unit` outputs (see [`decode_invoke_output`]).
     root: SchemaType,
+    uses_streams: bool,
+}
+
+impl ExpectedInvokeOutput {
+    fn uses_streams(&self) -> bool {
+        self.uses_streams
+    }
 }
 
 /// Validates the decoded output of an agent method invocation against the
@@ -653,8 +851,8 @@ pub(crate) struct AgentExportFuncs {
 /// `DurableWorkerCtx`; subsequent calls return the cached handle, skipping the
 /// name-based lookup and typed signature checks.
 macro_rules! cached_guest_loader {
-    ($fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
-        fn $fn_name<Ctx: WorkerCtx>(
+    ($vis:vis $fn_name:ident, $exports:ident, $field:ident, $missing_msg:literal, $load_msg:literal) => {
+        $vis fn $fn_name<Ctx: WorkerCtx>(
             store: &mut StoreContextMut<'_, Ctx>,
             instance: &wasmtime::component::Instance,
         ) -> Result<$exports::Guest, WorkerExecutorError> {
@@ -701,7 +899,7 @@ cached_guest_loader!(
     "failed to load save-snapshot export"
 );
 cached_guest_loader!(
-    load_load_snapshot_guest,
+    pub(crate) load_load_snapshot_guest,
     load_snapshot_exports,
     load_snapshot,
     "load-snapshot export not available",
@@ -715,10 +913,13 @@ cached_guest_loader!(
     "failed to load oplog-processor export"
 );
 
-async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
+pub(crate) async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) -> Result<u64, WorkerExecutorError> {
+    if !store.data().fuel_metering_enabled() {
+        return Ok(0);
+    }
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store.data_mut().return_fuel(current_fuel_level);
 
@@ -742,6 +943,9 @@ pub enum InvokeResult {
     Failed {
         consumed_fuel: u64,
         error: OplogAgentError,
+        /// Deadline failures share the public internal-error representation but are not evidence
+        /// that a restored snapshot disagrees with recorded execution.
+        timed_out: bool,
         retry_from: OplogIndex,
         /// Whether the trapping call was inside an atomic region (membership). Round-tripped via
         /// `as_trap_type` into `TrapType::Error` so the post-trap recovery decision uses the call's
@@ -769,6 +973,31 @@ pub enum InvokeResult {
 }
 
 impl InvokeResult {
+    fn from_trap_type(consumed_fuel: u64, trap: TrapType) -> Self {
+        match trap {
+            TrapType::Interrupt(interrupt_kind) => Self::Interrupted {
+                consumed_fuel,
+                interrupt_kind,
+            },
+            TrapType::Exit => Self::Exited { consumed_fuel },
+            TrapType::Error {
+                error,
+                retry_from,
+                in_atomic_region,
+                atomic_region_had_side_effects,
+                semantic_trap_retry_override,
+            } => Self::Failed {
+                consumed_fuel,
+                timed_out: false,
+                error,
+                retry_from,
+                in_atomic_region,
+                atomic_region_had_side_effects,
+                semantic_trap_retry_override,
+            },
+        }
+    }
+
     pub fn from_error<Ctx: WorkerCtx>(
         consumed_fuel: u64,
         error: &anyhow::Error,
@@ -797,6 +1026,7 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             } => InvokeResult::Failed {
                 consumed_fuel,
+                timed_out: false,
                 error,
                 retry_from,
                 in_atomic_region,
@@ -804,6 +1034,21 @@ impl InvokeResult {
                 semantic_trap_retry_override,
             },
         }
+    }
+
+    pub(crate) fn is_snapshot_replay_divergence(&self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                timed_out: false,
+                error: OplogAgentError::DeterministicTrap(_)
+                    | OplogAgentError::PermanentError(_)
+                    | OplogAgentError::InternalError(_)
+                    | OplogAgentError::ReadOnlyViolation(_)
+                    | OplogAgentError::StackOverflow,
+                ..
+            }
+        )
     }
 
     pub fn consumed_fuel(&self) -> u64 {
@@ -850,9 +1095,10 @@ pub struct LoweredInvocation {
     /// (e.g., the agent method name "do-something")
     pub display_name: String,
     /// `Some(method_name)` when the invocation targets an `AgentMethod` whose
-    /// `read_only` metadata is set. The worker-executor uses this to enable the
-    /// read-only invocation strictness mode for the duration of the call, trapping
-    /// outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
+    /// `read_only` metadata is set, or `Some("load-snapshot")` for the specially
+    /// restricted snapshot-loading lifecycle call. The worker-executor uses this
+    /// to enable read-only invocation strictness for the duration of the call,
+    /// trapping outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
     pub read_only_method: Option<String>,
     /// The typed export call to perform.
     call: LoweredCall,
@@ -924,6 +1170,19 @@ enum PreparedCall {
     },
 }
 
+impl PreparedCall {
+    fn principal(&self) -> Option<golem_common::model::agent::Principal> {
+        match self {
+            Self::Initialize { principal, .. } | Self::Invoke { principal, .. } => {
+                Some(principal.clone().into())
+            }
+            Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
+                None
+            }
+        }
+    }
+}
+
 /// Encode the schema-native inputs of a [`LoweredCall`] into the wire trees the
 /// guest expects, minting any capability handles into the guest store's resource
 /// table through the resolvers implemented by
@@ -961,12 +1220,14 @@ fn materialize_call<Ctx: WorkerCtx>(
             principal,
             expected_output,
         } => {
-            let input =
-                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+            let input = {
+                let mut resolver = StoreValueResolver::new(store);
+                encode_value_with_streams(&input, &mut resolver).map_err(|e| {
                     WorkerExecutorError::runtime(format!(
                         "Failed to encode agent method input: {e}"
                     ))
-                })?;
+                })?
+            };
             PreparedCall::Invoke {
                 method_name,
                 input,
@@ -1043,15 +1304,17 @@ pub fn lower_invocation(
                 })?;
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
-            validate_schema_input_against_method_schema(
-                &input,
+            let stream_metadata = validate_method_invocation(
+                component_metadata,
                 agent_type,
-                &method.input_schema,
+                method,
+                &input,
                 &method_name,
             )?;
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
+                uses_streams: stream_metadata.output,
                 root: match method.output_schema.schema() {
                     Some(ty) => ty.clone(),
                     None => SchemaType::tuple(Vec::new()),
@@ -1079,7 +1342,7 @@ pub fn lower_invocation(
         }),
         AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
             display_name: "load-snapshot".to_string(),
-            read_only_method: None,
+            read_only_method: Some("load-snapshot".to_string()),
             call: LoweredCall::LoadSnapshot {
                 snapshot: snapshot.into(),
             },
@@ -1125,51 +1388,77 @@ pub fn lower_invocation(
     }
 }
 
-fn validate_schema_input_against_method_schema(
-    input: &SchemaValue,
-    agent_type: &AgentTypeSchema,
-    input_schema: &InputSchema,
+pub fn validate_agent_method_invocation(
+    component_metadata: &ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
     method_name: &str,
-) -> Result<(), WorkerExecutorError> {
-    let SchemaValue::Record { fields } = input else {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected input parameter record"
-        )));
-    };
-
-    // Auto-injected fields (e.g. the principal) are supplied by the host to the
-    // guest export separately from the caller-provided input record, so they
-    // are excluded from both the parameter count and the value validation here.
-    let user_fields: Vec<_> = input_schema
-        .fields()
+    input: &SchemaValue,
+) -> Result<bool, WorkerExecutorError> {
+    let agent_type = resolve_agent_type(component_metadata, agent_id)?;
+    let method = agent_type
+        .methods
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .collect();
-    if fields.len() != user_fields.len() {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected {} parameters, got {}",
-            user_fields.len(),
-            fields.len()
-        )));
-    }
+        .find(|method| method.name == method_name)
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Agent method '{method_name}' not found in agent type '{}'",
+                agent_type.type_name
+            ))
+        })?;
 
-    validate_record_fields(
-        &agent_type.schema,
-        user_fields
-            .iter()
-            .map(|field| (field.name.as_str(), &field.schema)),
-        fields,
-    )
-    .map_err(|errors| {
-        WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': invalid input parameter value: {}",
-            errors
-                .into_iter()
-                .map(|error| error.to_string())
-                .collect::<Vec<_>>()
-                .join("; ")
-        ))
+    validate_method_invocation(component_metadata, agent_type, method, input, method_name)
+        .map(AgentMethodStreamMetadata::uses_streams)
+}
+
+/// Classifies session work using the executing component's input and output schemas, including
+/// input-only streams and optional streams that are absent from this invocation's values.
+pub(crate) fn invocation_uses_streams(
+    invocation: &AgentInvocation,
+    component_metadata: &ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
+) -> bool {
+    let AgentInvocation::AgentMethod { method_name, .. } = invocation else {
+        return false;
+    };
+    let method = resolve_agent_type(component_metadata, agent_id)
+        .ok()
+        .and_then(|agent_type| {
+            agent_type
+                .methods
+                .iter()
+                .find(|method| method.name == *method_name)
+                .map(|method| (agent_type, method))
+        });
+    // Missing metadata is not proof of a scalar invocation; preserve session failure handling
+    // while the normal lowering path reports the schema error.
+    method.is_none_or(|(agent_type, method)| {
+        component_metadata
+            .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+            .is_none_or(|metadata| metadata.uses_streams())
     })
+}
+
+fn validate_method_invocation(
+    component_metadata: &ComponentMetadata,
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    input: &SchemaValue,
+    method_name: &str,
+) -> Result<AgentMethodStreamMetadata, WorkerExecutorError> {
+    method
+        .validate_input(&agent_type.schema, input)
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!(
+                "Method '{method_name}': invalid input parameter value: {error}"
+            ))
+        })?;
+    component_metadata
+        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Streaming classification for method '{method_name}' is missing from component metadata"
+            ))
+        })
 }
 
 /// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
@@ -1210,6 +1499,7 @@ mod tests {
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::{AgentTypeName, Principal};
     use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::RawSnapshotData;
     use golem_common::schema::TypedSchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
@@ -1219,8 +1509,139 @@ mod tests {
     use std::collections::BTreeMap;
     use test_r::test;
 
+    #[test]
+    fn snapshot_divergence_excludes_deadlines_and_infrastructure_failures() {
+        for (error, timed_out, expected) in [
+            (
+                OplogAgentError::InternalError("boundary mismatch".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::InternalError("deadline".into()),
+                true,
+                false,
+            ),
+            (
+                OplogAgentError::DeterministicTrap("unreachable".into()),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::ReadOnlyViolation(
+                    golem_common::model::oplog::ReadOnlyViolationError {
+                        method: "load-snapshot".into(),
+                        host_function: "keyvalue.set".into(),
+                    },
+                ),
+                false,
+                true,
+            ),
+            (
+                OplogAgentError::TransientError("storage unavailable".into()),
+                false,
+                false,
+            ),
+            (
+                OplogAgentError::Unknown("unclassified host failure".into()),
+                false,
+                false,
+            ),
+            (OplogAgentError::OutOfMemory, false, false),
+            (OplogAgentError::ExceededMemoryLimit, false, false),
+        ] {
+            let result = InvokeResult::Failed {
+                consumed_fuel: 0,
+                error,
+                timed_out,
+                retry_from: OplogIndex::INITIAL,
+                in_atomic_region: false,
+                atomic_region_had_side_effects: false,
+                semantic_trap_retry_override: None,
+            };
+            assert_eq!(
+                result.is_snapshot_replay_divergence(),
+                expected,
+                "{result:?}"
+            );
+        }
+        assert!(
+            !InvokeResult::Interrupted {
+                consumed_fuel: 0,
+                interrupt_kind: InterruptKind::Restart,
+            }
+            .is_snapshot_replay_divergence()
+        );
+    }
+
+    #[test]
+    fn invocation_poll_reuses_production_thread_stack() {
+        let runtime = crate::bootstrap::create_runtime().unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                let mut polls = 0;
+                with_invocation_stack(std::future::poll_fn(|cx| {
+                    // A temporary stack would have less than INVOCATION_STACK_SIZE remaining.
+                    // Check every poll, including after suspension and possible task migration.
+                    assert!(stacker::remaining_stack().unwrap() >= INVOCATION_STACK_SIZE);
+                    polls += 1;
+                    if polls < 100 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(())
+                    }
+                }))
+                .await;
+                assert_eq!(polls, 100);
+            })
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn invocation_poll_stack_is_reestablished_after_suspension() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(256 * 1024)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::spawn(async {
+                assert!(stacker::remaining_stack().unwrap() < 1024 * 1024);
+                let mut polls = 0;
+                let result = with_invocation_stack(std::future::poll_fn(|cx| {
+                    assert!(stacker::remaining_stack().unwrap() > 8 * 1024 * 1024);
+                    polls += 1;
+                    if polls < 3 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(42)
+                    }
+                }))
+                .await;
+                assert_eq!(result, 42);
+                assert_eq!(polls, 3);
+                assert!(stacker::remaining_stack().unwrap() < 1024 * 1024);
+            })
+            .await
+            .unwrap();
+        });
+    }
+
     const AGENT_TYPE: &str = "test-agent";
     const METHOD_NAME: &str = "do-work";
+
+    #[test]
+    async fn live_streaming_response_is_published_exactly_once() {
+        let value = SchemaValue::U64(42);
+        assert_eq!(
+            reject_stream_at_materializing_boundary(value.clone()).unwrap(),
+            value
+        );
+    }
 
     /// Component metadata with one agent type whose `do-work` method takes two
     /// user-supplied parameters (`count: u32`, `label: string`) plus an
@@ -1243,6 +1664,10 @@ mod tests {
             http_endpoint: Vec::new(),
             read_only: None,
         };
+        metadata_with_method(method)
+    }
+
+    fn metadata_with_method(method: AgentMethodSchema) -> ComponentMetadata {
         let at = AgentTypeSchema {
             type_name: AgentTypeName(AGENT_TYPE.to_string()),
             description: String::new(),
@@ -1304,6 +1729,40 @@ mod tests {
     }
 
     #[test]
+    fn load_snapshot_uses_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::LoadSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-load".to_string()),
+                snapshot: RawSnapshotData {
+                    data: vec![1, 2, 3],
+                    mime_type: "application/octet-stream".to_string(),
+                },
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot load should lower");
+
+        assert_eq!(lowered.display_name, "load-snapshot");
+        assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
+    }
+
+    #[test]
+    fn save_snapshot_does_not_use_read_only_strictness() {
+        let lowered = lower_invocation(
+            AgentInvocation::SaveSnapshot {
+                idempotency_key: IdempotencyKey::new("snapshot-save".to_string()),
+            },
+            &metadata(),
+            Some(&agent_id()),
+        )
+        .expect("snapshot save should lower");
+
+        assert_eq!(lowered.display_name, "save-snapshot");
+        assert!(lowered.read_only_method.is_none());
+    }
+
+    #[test]
     fn method_with_non_record_input_is_rejected() {
         let metadata = metadata();
         let agent_id = agent_id();
@@ -1315,7 +1774,7 @@ mod tests {
             panic!("non-record input must be rejected");
         };
         assert!(
-            err.to_string().contains("expected input parameter record"),
+            err.to_string().contains("expected record, found u32"),
             "unexpected error: {err}"
         );
     }
@@ -1333,7 +1792,7 @@ mod tests {
             panic!("arity mismatch must be rejected");
         };
         assert!(
-            err.to_string().contains("expected 2 parameters, got 1"),
+            err.to_string().contains("has 1 field(s), expected 2"),
             "unexpected error: {err}"
         );
     }
@@ -1356,12 +1815,205 @@ mod tests {
         );
     }
 
+    #[test]
+    fn streaming_output_is_accepted_at_the_invocation_boundary() {
+        let metadata = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::u32(),
+            )))),
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let result = lower_invocation(
+            method_invocation(SchemaValue::Record { fields: Vec::new() }),
+            &metadata,
+            Some(&agent_id()),
+        );
+        if let Err(error) = result {
+            panic!("unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn streaming_method_is_classified_while_stream_free_method_is_not() {
+        let streaming = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::u32(),
+            )))),
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let empty_input = SchemaValue::Record { fields: Vec::new() };
+
+        assert!(
+            validate_agent_method_invocation(
+                &streaming,
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+        assert!(
+            !validate_agent_method_invocation(
+                &metadata_with_method(AgentMethodSchema {
+                    name: METHOD_NAME.to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(Vec::new()),
+                    output_schema: OutputSchema::Unit,
+                    http_endpoint: Vec::new(),
+                    read_only: None,
+                }),
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn method_stream_classification_survives_metadata_roundtrips_and_copies() {
+        let streaming = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                "input",
+                SchemaType::option(SchemaType::stream(Some(SchemaType::u32()))),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let streaming = streaming
+            .with_provision_configs(BTreeMap::new())
+            .with_tools(BTreeMap::new());
+        let bytes = golem_common::serialization::serialize(&streaming).unwrap();
+        let stored: ComponentMetadata = golem_common::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(stored, streaming);
+        let json = serde_json::to_value(&stored).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ComponentMetadata>(json.clone()).unwrap(),
+            stored
+        );
+        let mut missing = json;
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("agentMethodStreams");
+        assert!(serde_json::from_value::<ComponentMetadata>(missing).is_err());
+        let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
+            stored.try_into().unwrap();
+        let decoded = ComponentMetadata::try_from(proto).unwrap();
+        assert_eq!(decoded, streaming);
+        assert_eq!(
+            decoded
+                .agent_method_stream_metadata(&AgentTypeName(AGENT_TYPE.to_string()), METHOD_NAME)
+                .unwrap(),
+            golem_common::model::component_metadata::AgentMethodStreamMetadata {
+                input: true,
+                output: false,
+            }
+        );
+    }
+
+    #[test]
+    fn invocation_session_classification_covers_scalar_and_absent_streams() {
+        let optional_stream = SchemaType::option(SchemaType::stream(Some(SchemaType::u32())));
+        for (input_schema, output_schema, fields, expected, output_streams) in [
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Unit,
+                Vec::new(),
+                false,
+                false,
+            ),
+            (
+                InputSchema::Parameters(vec![NamedField::user_supplied(
+                    "input",
+                    optional_stream.clone(),
+                )]),
+                OutputSchema::Unit,
+                vec![SchemaValue::Option { inner: None }],
+                true,
+                false,
+            ),
+            (
+                InputSchema::Parameters(Vec::new()),
+                OutputSchema::Single(Box::new(optional_stream)),
+                Vec::new(),
+                true,
+                true,
+            ),
+        ] {
+            let metadata = metadata_with_method(AgentMethodSchema {
+                name: METHOD_NAME.to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema,
+                output_schema,
+                http_endpoint: Vec::new(),
+                read_only: None,
+            });
+            let invocation = method_invocation(SchemaValue::Record { fields });
+            assert_eq!(
+                invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
+                expected
+            );
+            let lowered = lower_invocation(invocation, &metadata, Some(&agent_id())).unwrap();
+            let LoweredCall::Invoke {
+                expected_output, ..
+            } = lowered.call
+            else {
+                panic!("expected a lowered method invocation");
+            };
+            assert_eq!(expected_output.uses_streams(), output_streams);
+        }
+        let mut unknown = method_invocation(SchemaValue::Record { fields: Vec::new() });
+        if let AgentInvocation::AgentMethod { method_name, .. } = &mut unknown {
+            *method_name = "missing".to_string();
+        }
+        assert!(invocation_uses_streams(
+            &unknown,
+            &metadata(),
+            Some(&agent_id())
+        ));
+    }
+
+    #[test]
+    fn materializing_boundary_rejects_a_real_stream_handle() {
+        let stream = golem_common::schema::stream::SchemaValueStream::from_host_endpoint(());
+        let output = SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(stream)],
+        };
+
+        let error = reject_stream_at_materializing_boundary(output)
+            .expect_err("a live stream reaching materialization is a contract violation");
+        assert!(
+            error
+                .to_string()
+                .contains("live stream at a materializing invocation boundary"),
+            "unexpected error: {error}"
+        );
+    }
+
     // --- validate_invoke_output ---
 
     fn unit_expected_output() -> ExpectedInvokeOutput {
         ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::tuple(Vec::new()),
+            uses_streams: false,
         }
     }
 
@@ -1393,6 +2045,7 @@ mod tests {
         let expected = ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::u32(),
+            uses_streams: false,
         };
         validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
             .expect("matching value must pass output validation");
@@ -1403,6 +2056,7 @@ mod tests {
         let expected = ExpectedInvokeOutput {
             graph: SchemaGraph::empty(),
             root: SchemaType::u32(),
+            uses_streams: false,
         };
         let Err(err) = validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::Bool(true))
         else {
@@ -1431,6 +2085,7 @@ mod tests {
                 root: SchemaType::record(Vec::new()),
             },
             root: SchemaType::ref_to(TypeId::new("Answer")),
+            uses_streams: false,
         };
         validate_invoke_output(METHOD_NAME, &expected, &SchemaValue::U32(42))
             .expect("ref output must resolve through the agent graph");
@@ -1443,21 +2098,137 @@ mod tests {
     #[test]
     fn tail_work_settlement_truth_table() {
         let cases = [
-            // (active_spawned_tasks, replay_cursor_open, expected)
-            (0, false, true),
+            // (active_spawned_tasks, expected)
+            (0, true),
             // An active spawned task (pending durable append or I/O) blocks settlement.
-            (1, false, false),
-            (3, false, false),
-            // An open replay-cursor transaction blocks settlement even with no active task.
-            (0, true, false),
-            (2, true, false),
+            (1, false),
+            (3, false),
         ];
-        for (active_spawned_tasks, replay_cursor_open, expected) in cases {
+        for (active_spawned_tasks, expected) in cases {
             assert_eq!(
-                tail_work_settled(active_spawned_tasks, replay_cursor_open),
+                tail_work_settled(active_spawned_tasks),
                 expected,
-                "active_spawned_tasks: {active_spawned_tasks}, replay_cursor_open: {replay_cursor_open}"
+                "active_spawned_tasks: {active_spawned_tasks}"
             );
         }
+    }
+
+    #[test]
+    fn guest_trap_and_settlement_failures_keep_distinct_provenance() {
+        let guest_trap = classify_guest_call_settlement(
+            Ok::<_, wasmtime::Error>(Err::<(), _>(wasmtime::Error::msg("guest trapped"))),
+            None,
+            false,
+        )
+        .expect("the event loop itself settled");
+        assert!(guest_trap.is_err());
+
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    wasmtime::Trap::UnreachableCodeReached.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Trap(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Trap(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    wasmtime::Trap::AsyncDeadlock.into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Infrastructure(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::msg("host task failed")),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Infrastructure(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::msg("interrupted")),
+                None,
+                true,
+            ),
+            Err(GuestCallSettlementError::Interrupted(_))
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()).into(),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Interrupted(_))
+        ));
+    }
+
+    #[test]
+    fn host_infrastructure_error_with_wasm_backtrace_stays_infrastructure() {
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(
+            &engine,
+            r#"
+                (module
+                    (import "host" "fail" (func $fail))
+                    (func (export "run")
+                        call $fail))
+            "#,
+        )
+        .unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker
+            .func_wrap("host", "fail", || -> wasmtime::Result<()> {
+                Err(wasmtime::Error::from_anyhow(
+                    WorkerExecutorError::runtime("registry unavailable").into(),
+                ))
+            })
+            .unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let instance = linker.instantiate(&mut store, &module).unwrap();
+        let run = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .unwrap();
+        let error = run.call(&mut store, ()).unwrap_err();
+
+        assert!(
+            error.downcast_ref::<wasmtime::WasmBacktrace>().is_some(),
+            "the reproducer must exercise Wasmtime's attached backtrace context"
+        );
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(Err(error), None, false),
+            Err(GuestCallSettlementError::Infrastructure(_))
+        ));
+    }
+
+    #[test]
+    fn settlement_timeout_is_infrastructure_even_after_root_return() {
+        let result = classify_guest_call_settlement(
+            Ok(()),
+            Some((std::time::Duration::from_secs(2), 1)),
+            false,
+        );
+        let Err(GuestCallSettlementError::Infrastructure(error)) = result else {
+            panic!("tail-work timeout must be an infrastructure failure");
+        };
+        assert!(error.to_string().contains("did not settle within 2s"));
     }
 }

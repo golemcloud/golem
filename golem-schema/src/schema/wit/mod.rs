@@ -47,6 +47,8 @@ pub(crate) use decode::decode_value_by_ref;
 pub use decode::{
     DecodeError, GraphDecoder, decode_graph, decode_metadata, decode_typed, decode_value,
 };
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub use encode::encode_value_async;
 pub use encode::{
     EncodeError, GraphEncoder, encode_graph, encode_metadata, encode_typed, encode_value,
 };
@@ -65,16 +67,25 @@ pub use decode::{
     reject_secret_handles_in_value_tree,
 };
 #[cfg(all(feature = "host", not(feature = "guest")))]
-pub use encode::encode_value_with;
+pub use encode::{encode_value_with, encode_value_with_streams};
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use host_support::{
     PermissionCardHandleDropper, PermissionCardHandleRep, PermissionCardResolver,
-    QuotaTokenHandleDropper, QuotaTokenHandleRep, QuotaTokenResolver, SecretHandleDropper,
-    SecretHandleRep, SecretResolver,
+    QuotaTokenHandleDropper, QuotaTokenHandleRep, QuotaTokenResolver, SchemaValueStreamResolver,
+    SecretHandleDropper, SecretHandleRep, SecretResolver,
 };
 
 #[cfg(all(feature = "guest", not(feature = "host")))]
 pub use guest_support::{GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle};
+
+/// Create a native Component Model stream carrying schema value trees.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub fn new_schema_value_stream() -> (
+    wit_bindgen::StreamWriter<wire::SchemaValueTree>,
+    wit_bindgen::StreamReader<wire::SchemaValueTree>,
+) {
+    guest::generated::wit_stream::new()
+}
 
 /// Host-side bridge for the opaque `golem:core/types.quota-token` resource.
 ///
@@ -89,7 +100,24 @@ mod host_support {
     use crate::schema::schema_value::{
         PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
     };
+    use crate::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
     use wasmtime::component::Resource;
+
+    pub trait SchemaValueStreamResolver {
+        type Error: std::fmt::Display;
+
+        fn handle_from_stream(
+            &mut self,
+            stream: SchemaValueStream,
+        ) -> Result<Resource<SchemaValueStreamHandleRep>, Self::Error>;
+
+        fn stream_from_handle(
+            &mut self,
+            handle: Resource<SchemaValueStreamHandleRep>,
+        ) -> Result<SchemaValueStream, Self::Error>;
+
+        fn drop_stream_handle(&mut self, handle: Resource<SchemaValueStreamHandleRep>);
+    }
 
     /// Opaque host representation backing the `quota-token` WIT resource.
     ///
@@ -373,12 +401,11 @@ mod guest_support {
     use crate::schema::metadata::TypeId;
     use crate::schema::schema_type::{PermissionCardSpec, QuotaTokenSpec, SchemaType};
     use crate::schema::schema_value::SchemaValue;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
     pub struct GuestQuotaTokenHandle {
-        inner: Rc<RefCell<Option<wire::QuotaToken>>>,
+        inner: Arc<Mutex<Option<wire::QuotaToken>>>,
     }
 
     // The methods below expose the affine owned handle so the codec (this
@@ -396,7 +423,7 @@ mod guest_support {
         #[doc(hidden)]
         pub fn new(handle: wire::QuotaToken) -> Self {
             Self {
-                inner: Rc::new(RefCell::new(Some(handle))),
+                inner: Arc::new(Mutex::new(Some(handle))),
             }
         }
 
@@ -404,13 +431,19 @@ mod guest_support {
         /// already transferred (consumed) by a previous encode.
         #[doc(hidden)]
         pub fn take(&self) -> Option<wire::QuotaToken> {
-            self.inner.borrow_mut().take()
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .take()
         }
 
         /// Whether the handle is still present (not yet transferred).
         #[doc(hidden)]
         pub fn is_present(&self) -> bool {
-            self.inner.borrow().is_some()
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .is_some()
         }
 
         /// Run `f` with a shared reference to the owned handle, if it is still
@@ -422,14 +455,18 @@ mod guest_support {
         /// ownership of it.
         #[doc(hidden)]
         pub fn with_handle<R>(&self, f: impl FnOnce(&wire::QuotaToken) -> R) -> Option<R> {
-            self.inner.borrow().as_ref().map(f)
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .as_ref()
+                .map(f)
         }
 
         /// Identity of the shared cell, used to detect the same token appearing
         /// more than once in a single value tree.
         #[doc(hidden)]
         pub fn cell_id(&self) -> *const () {
-            Rc::as_ptr(&self.inner).cast()
+            Arc::as_ptr(&self.inner).cast()
         }
     }
 
@@ -446,7 +483,7 @@ mod guest_support {
 
     impl PartialEq for GuestQuotaTokenHandle {
         fn eq(&self, other: &Self) -> bool {
-            Rc::ptr_eq(&self.inner, &other.inner)
+            Arc::ptr_eq(&self.inner, &other.inner)
         }
     }
 
@@ -495,7 +532,7 @@ mod guest_support {
 
     #[derive(Clone)]
     pub struct GuestSecretHandle {
-        inner: Rc<RefCell<Option<wire::Secret>>>,
+        inner: Arc<Mutex<Option<wire::Secret>>>,
     }
 
     impl GuestSecretHandle {
@@ -503,7 +540,7 @@ mod guest_support {
         #[doc(hidden)]
         pub fn new(handle: wire::Secret) -> Self {
             Self {
-                inner: Rc::new(RefCell::new(Some(handle))),
+                inner: Arc::new(Mutex::new(Some(handle))),
             }
         }
 
@@ -511,27 +548,37 @@ mod guest_support {
         /// already transferred by a previous encode.
         #[doc(hidden)]
         pub fn take(&self) -> Option<wire::Secret> {
-            self.inner.borrow_mut().take()
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .take()
         }
 
         /// Whether the handle is still present (not yet transferred).
         #[doc(hidden)]
         pub fn is_present(&self) -> bool {
-            self.inner.borrow().is_some()
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .is_some()
         }
 
         /// Run `f` with a shared reference to the owned handle, if it is still
         /// present.
         #[doc(hidden)]
         pub fn with_handle<R>(&self, f: impl FnOnce(&wire::Secret) -> R) -> Option<R> {
-            self.inner.borrow().as_ref().map(f)
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .as_ref()
+                .map(f)
         }
 
         /// Identity of the shared cell, used to detect the same secret
         /// appearing more than once in a single value tree.
         #[doc(hidden)]
         pub fn cell_id(&self) -> *const () {
-            Rc::as_ptr(&self.inner).cast()
+            Arc::as_ptr(&self.inner).cast()
         }
     }
 
@@ -548,7 +595,7 @@ mod guest_support {
 
     impl PartialEq for GuestSecretHandle {
         fn eq(&self, other: &Self) -> bool {
-            Rc::ptr_eq(&self.inner, &other.inner)
+            Arc::ptr_eq(&self.inner, &other.inner)
         }
     }
 
@@ -597,7 +644,7 @@ mod guest_support {
 
     #[derive(Clone)]
     pub struct GuestPermissionCardHandle {
-        inner: Rc<RefCell<Option<wire::PermissionCard>>>,
+        inner: Arc<Mutex<Option<wire::PermissionCard>>>,
     }
 
     // The methods below expose the affine owned handle so the codec (this
@@ -615,7 +662,7 @@ mod guest_support {
         #[doc(hidden)]
         pub fn new(handle: wire::PermissionCard) -> Self {
             Self {
-                inner: Rc::new(RefCell::new(Some(handle))),
+                inner: Arc::new(Mutex::new(Some(handle))),
             }
         }
 
@@ -623,27 +670,37 @@ mod guest_support {
         /// already transferred (consumed) by a previous encode.
         #[doc(hidden)]
         pub fn take(&self) -> Option<wire::PermissionCard> {
-            self.inner.borrow_mut().take()
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .take()
         }
 
         /// Whether the handle is still present (not yet transferred).
         #[doc(hidden)]
         pub fn is_present(&self) -> bool {
-            self.inner.borrow().is_some()
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .is_some()
         }
 
         /// Run `f` with a shared reference to the owned handle, if it is still
         /// present.
         #[doc(hidden)]
         pub fn with_handle<R>(&self, f: impl FnOnce(&wire::PermissionCard) -> R) -> Option<R> {
-            self.inner.borrow().as_ref().map(f)
+            self.inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .as_ref()
+                .map(f)
         }
 
         /// Identity of the shared cell, used to detect the same card appearing
         /// more than once in a single value tree.
         #[doc(hidden)]
         pub fn cell_id(&self) -> *const () {
-            Rc::as_ptr(&self.inner).cast()
+            Arc::as_ptr(&self.inner).cast()
         }
     }
 
@@ -660,7 +717,7 @@ mod guest_support {
 
     impl PartialEq for GuestPermissionCardHandle {
         fn eq(&self, other: &Self) -> bool {
-            Rc::ptr_eq(&self.inner, &other.inner)
+            Arc::ptr_eq(&self.inner, &other.inner)
         }
     }
 

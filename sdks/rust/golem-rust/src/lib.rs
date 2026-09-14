@@ -30,8 +30,9 @@ pub use wasip3;
 pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
-    SchemaType, SchemaValue, TypedSchemaValue,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema,
+    SchemaFingerprintError, SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue,
+    TypedSchemaValue, schema_fingerprint_v1,
 };
 pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 
@@ -51,6 +52,12 @@ pub fn encode_schema_value(
     value: &SchemaValue,
 ) -> Result<schema::wit::wire::SchemaValueTree, schema::wit::EncodeError> {
     schema::wit::encode_value(value)
+}
+
+pub async fn encode_schema_value_async(
+    value: &SchemaValue,
+) -> Result<schema::wit::wire::SchemaValueTree, schema::wit::EncodeError> {
+    schema::wit::encode_value_async(value).await
 }
 
 pub fn decode_schema_value(

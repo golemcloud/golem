@@ -14,25 +14,34 @@
 
 use crate::Tracing;
 
-use golem_api_grpc::proto::golem::workerexecutor;
+use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, IdempotencyKey, InvocationStatus};
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::storage::scheduler::SchedulerStorage;
+use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    scheduler_sqlite_storage_config, start,
 };
 use pretty_assertions::assert_eq;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
     #[tagged_as("agent_rpc")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -96,6 +105,217 @@ async fn agent_self_rpc_is_not_allowed(
     }
 
     Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let scheduler =
+        SqliteSchedulerStorage::configured(&scheduler_sqlite_storage_config(deps, &context))
+            .await
+            .map_err(anyhow::Error::msg)?;
+    let agent_id = agent_id!("StreamingRpcTarget", "rejected-schedule");
+    let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
+    let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
+    let input: golem_api_grpc::proto::golem::schema::SchemaValue =
+        input.try_into().map_err(anyhow::Error::msg)?;
+    let component_id = component.id.to_string();
+    let blobs_before = files_below(&deps.blob_storage_root())?
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains(&component_id))
+        .collect::<HashSet<_>>();
+
+    for schedule_at in [
+        None,
+        Some(prost_types::Timestamp {
+            seconds: chrono::Utc::now().timestamp() + 1,
+            nanos: 0,
+        }),
+    ] {
+        let error = executor
+            .invoke_agent_session(InvocationStart {
+                agent_id: Some(worker_id.clone().into()),
+                method_name: Some("produce".to_string()),
+                input: Some(input.clone()),
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+                schedule_at,
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                context: None,
+                principal: None,
+                freshness_disposition:
+                    golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                        as i32,
+                config: Vec::new(),
+                attempt_id: None,
+                expected_callee_fingerprint: None,
+                durable_input_mappings: Vec::new(),
+                scope_card: None,
+            })
+            .await
+            .expect_err("scheduled streaming invocation must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("require an attached Await invocation session"),
+            "unexpected error: {error}"
+        );
+    }
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
+    let assignment = golem_common::model::ShardAssignment {
+        number_of_shards: 1,
+        shard_ids: HashSet::from([golem_common::model::ShardId::new(0)]),
+    };
+    assert_eq!(
+        scheduler
+            .count_due(chrono::Utc::now() + chrono::Duration::days(1), &assignment)
+            .await?,
+        0,
+        "rejection must not create an immediate or delayed scheduled action"
+    );
+    assert_eq!(
+        files_below(&deps.blob_storage_root())?
+            .into_iter()
+            .filter(|path| path.to_string_lossy().contains(&component_id))
+            .collect::<HashSet<_>>(),
+        blobs_before,
+        "rejection must not upload an invocation or result payload"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn invocation_classification_uses_the_existing_workers_component_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let streaming_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let streaming_agent_id = agent_id!("StreamingRpcTarget", "pinned-streaming-revision");
+    let streaming_worker_id = executor
+        .start_agent(&streaming_component.id, streaming_agent_id.clone())
+        .await?;
+    executor
+        .update_component(&streaming_component.id, &agent_rpc.wasm_name)
+        .await?;
+
+    let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
+    let error = executor
+        .invoke_agent_session(InvocationStart {
+            agent_id: Some(streaming_worker_id.clone().into()),
+            method_name: Some("produce".to_string()),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: None,
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            component_owner_account_id: Some(streaming_component.account_id.into()),
+            environment_id: Some(streaming_component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            context: None,
+            principal: None,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
+            scope_card: None,
+        })
+        .await
+        .expect_err("the old streaming schema must still reject scheduling");
+    assert!(
+        error
+            .to_string()
+            .contains("require an attached Await invocation session"),
+        "unexpected error: {error}"
+    );
+    let streaming_metadata = executor.get_worker_metadata(&streaming_worker_id).await?;
+    assert_eq!(
+        streaming_metadata.component_revision,
+        ComponentRevision::INITIAL
+    );
+    assert_eq!(streaming_metadata.pending_invocation_count, 0);
+
+    let stream_free_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let stream_free_agent_id = agent_id!("TestAgent", "pinned-stream-free-revision");
+    let stream_free_worker_id = executor
+        .start_agent(&stream_free_component.id, stream_free_agent_id.clone())
+        .await?;
+    executor
+        .update_component(&stream_free_component.id, &agent_rpc_rust.wasm_name)
+        .await?;
+
+    let output = executor
+        .invoke_and_await_agent(
+            &stream_free_component,
+            &stream_free_agent_id,
+            "run",
+            data_value!(0_f64),
+        )
+        .await?;
+    assert_eq!(
+        output.into_return_value(),
+        Some(SchemaValue::List {
+            elements: Vec::new()
+        })
+    );
+    let stream_free_metadata = executor.get_worker_metadata(&stream_free_worker_id).await?;
+    assert_eq!(
+        stream_free_metadata.component_revision,
+        ComponentRevision::INITIAL
+    );
+    Ok(())
+}
+
+fn files_below(root: &Path) -> anyhow::Result<HashSet<PathBuf>> {
+    fn visit(root: &Path, current: &Path, files: &mut HashSet<PathBuf>) -> anyhow::Result<()> {
+        if !current.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(current)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                visit(root, &path, files)?;
+            } else {
+                files.insert(path.strip_prefix(root)?.to_path_buf());
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = HashSet::new();
+    visit(root, root, &mut files)?;
+    Ok(files)
 }
 
 #[test]
@@ -388,12 +608,14 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
 
     executor
-        .client
-        .clone()
-        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+        .invoke_agent_session(InvocationStart {
             agent_id: Some(worker_id.into()),
             method_name: Some("changeAndGet".to_string()),
-            method_parameters: Some(SchemaValue::Tuple { elements: vec![] }.into()),
+            input: Some(
+                SchemaValue::Record { fields: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: None,
             idempotency_key: Some(idempotency_key.into()),
@@ -402,9 +624,13 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
             principal: None,
-            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
             config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
             scope_card: None,
         })
         .await?;
@@ -438,13 +664,11 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
     let worker_id =
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
 
-    let response = executor
-        .client
-        .clone()
-        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+    executor
+        .invoke_agent_session(InvocationStart {
             agent_id: Some(worker_id.clone().into()),
             method_name: None,
-            method_parameters: None,
+            input: None,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
             schedule_at: None,
             idempotency_key: Some(idempotency_key.into()),
@@ -453,25 +677,16 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
             principal: None,
-            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
             config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
             scope_card: None,
         })
-        .await?
-        .into_inner();
-
-    let success = match response.result {
-        Some(workerexecutor::v1::invoke_agent_response::Result::Success(success)) => success,
-        other => anyhow::bail!("unexpected lookup response: {other:?}"),
-    };
-    assert_eq!(
-        success.status,
-        Some(
-            golem_api_grpc::proto::golem::worker::InvocationStatus::from(InvocationStatus::Unknown,)
-                as i32
-        )
-    );
+        .await?;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
 
     Ok(())
@@ -504,12 +719,14 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
         AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
 
     executor
-        .client
-        .clone()
-        .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+        .invoke_agent_session(InvocationStart {
             agent_id: Some(worker_id.clone().into()),
             method_name: Some("changeAndGet".to_string()),
-            method_parameters: Some(SchemaValue::Tuple { elements: vec![] }.into()),
+            input: Some(
+                SchemaValue::Record { fields: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: Some(prost_types::Timestamp {
                 seconds: chrono::Utc::now().timestamp() + 3,
@@ -521,9 +738,13 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
             principal: None,
-            freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
-                as i32,
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
             config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
             scope_card: None,
         })
         .await?;

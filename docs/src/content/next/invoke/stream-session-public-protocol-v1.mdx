@@ -1,0 +1,829 @@
+# Golem Stream Session Public Protocol v1
+
+_Status: normative, frozen for protocol version 1_
+
+This document defines the public protocol used by external bridge clients and
+`golem agent invoke` for invoking stream-bearing agent methods. The key words
+MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED,
+NOT RECOMMENDED, MAY, and OPTIONAL have the meanings defined by RFC 2119 and
+RFC 8174.
+
+The protocol does not expose Golem's private protobuf invocation protocol,
+oplog records, attachment epochs, durable offsets, internal stream IDs, or
+component fingerprints. Implementations may use those concepts behind this
+boundary.
+
+## 1. Transport and handshake
+
+The endpoint is:
+
+```text
+GET /v1/agents/invoke-agent-session
+```
+
+The client MUST send:
+
+```text
+Authorization: Bearer <token>
+Sec-WebSocket-Protocol: golem.agent-invocation.v1
+```
+
+The server MUST select exactly `golem.agent-invocation.v1`. Missing or
+unsupported subprotocols fail the HTTP upgrade with error code
+`unsupported-subprotocol`. Authentication is performed before upgrade.
+Authorization for the selected application, environment, agent type, agent,
+and method is performed before a start is accepted. Authentication and
+authorization are repeated on every resume or takeover; an opaque protocol
+token is not an authorization capability.
+
+Per-message WebSocket compression MUST NOT be negotiated. WebSocket
+fragmentation has no application meaning. One complete WebSocket text or
+binary message is one protocol message.
+
+The first application message MUST be a text `invocationStart` or
+`resumeAttach`. No stream item, stream terminal, or cancellation is valid
+before `invocationAccepted`.
+
+## 2. Common JSON rules
+
+Every text message is a UTF-8 JSON object with these two members:
+
+```json
+{"version":1,"type":"<variant>"}
+```
+
+Each variant adds only the members defined below. Decoders MUST reject:
+
+- invalid UTF-8 or invalid JSON;
+- a top-level value other than an object;
+- duplicate object member names at any depth;
+- unknown members;
+- a missing required member;
+- a member that is illegal for the selected variant;
+- a `version` other than the JSON number `1`;
+- an unknown `type`;
+- a JSON number where a canonical decimal string is required;
+- a non-canonical decimal string;
+- values that do not match the pinned method or stream element schema.
+
+Canonical unsigned decimal strings match `0|[1-9][0-9]*`. Canonical signed
+decimal strings match `0|-?[1-9][0-9]*`; `-0`, a leading plus sign, and leading
+zeroes are invalid. Range checks are performed after syntax checks.
+
+Canonical JSON emitted in golden vectors and by conforming encoders has no
+insignificant whitespace, escapes only as required by JSON, and writes object
+members in Unicode code-point order. Receivers MUST NOT depend on member order
+or insignificant whitespace.
+
+UUIDs are lower-case RFC 4122 hyphenated strings. Attempt IDs and provisional
+stream references are UUIDv4 values. An invocation idempotency key is a
+non-empty UTF-8 string of at most 1 KiB.
+
+## 3. Public SchemaValue JSON codec
+
+SchemaValue encoding is schema-directed. A decoder always has the exact
+`SchemaGraph` and the expected `SchemaType`; values do not carry arbitrary
+type names. A named reference is resolved through the pinned schema and then
+uses the representation of its resolved body.
+
+### 3.1 Scalar and rich values
+
+| Schema type | JSON representation |
+| --- | --- |
+| `bool` | JSON boolean |
+| `s8`, `s16`, `s32` | in-range JSON integer |
+| `u8`, `u16`, `u32` | in-range JSON integer |
+| `s64`, `u64` | canonical decimal string |
+| finite `f32`, `f64` | shortest round-tripping JSON number; negative zero is `-0` |
+| exceptional float | `{"$float":"nan"}`, `{"$float":"positive-infinity"}`, or `{"$float":"negative-infinity"}` |
+| `char` | JSON string containing exactly one Unicode scalar value |
+| `string` | JSON string |
+| `text` | `{"text":"..."}` with optional non-empty `"language":"<BCP-47>"` |
+| `binary` | `{"bytes":"<base64>"}` with optional `"mimeType":"type/subtype"` |
+| `path` | non-empty JSON string |
+| `url` | non-empty JSON string |
+| `datetime` | RFC 3339 UTC string with four-digit year and nanosecond precision |
+| `duration` | `{"nanoseconds":"<canonical s64>"}` |
+| `quantity` | `{"mantissa":"<canonical s64>","scale":<s32>,"unit":"..."}` |
+
+Binary `bytes` uses canonical padded RFC 4648 base64 with the standard `+/`
+alphabet. Padding is REQUIRED exactly when RFC 4648 requires it. Whitespace,
+URL-safe alphabet characters, omitted padding, and non-zero unused trailing
+bits are invalid. MIME types are ASCII and match
+`^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$`.
+
+The decoder applies all restrictions from the expected schema after decoding,
+including numeric ranges, text restrictions, binary MIME allow-lists, binary
+minimum and maximum lengths, path restrictions, URL restrictions, and
+quantity restrictions.
+
+### 3.2 Structural values
+
+| Schema type | JSON representation |
+| --- | --- |
+| record | object whose members exactly equal the schema field names |
+| tuple | JSON array with exact schema arity |
+| list | JSON array |
+| fixed list | JSON array with exact schema length |
+| map | JSON array of two-element `[key,value]` arrays; order and duplicate-key semantics follow the schema model |
+| enum | exact schema case name as a JSON string |
+| flags | array of unique schema flag names in schema declaration order |
+| variant without payload | `{"$case":"case-name"}` |
+| variant with payload | `{"$case":"case-name","value":<value>}` |
+| none option | `{"$option":"none"}` |
+| some option | `{"$option":"some","value":<value>}` |
+| unit `ok` result | `{"$result":"ok"}` |
+| value `ok` result | `{"$result":"ok","value":<value>}` |
+| unit `err` result | `{"$result":"err"}` |
+| value `err` result | `{"$result":"err","value":<value>}` |
+| union | `{"$union":"branch-tag","value":<branch-body>}` |
+
+The presence or absence of `value` for variants and results MUST agree with
+the schema. A union decoder MUST verify that the named branch exists and that
+the decoded body satisfies that branch's discriminator.
+
+Host-managed capability values (`secret`, `quota-token`, and
+`permission-card`) and `future` values cannot cross this public boundary and
+are rejected with `unsupported-value`. Stream leaves are represented as
+follows.
+
+Before acceptance, an input stream is a provisional reference:
+
+```json
+{"$stream":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}
+```
+
+After acceptance, every stream exposed by the server is a stable opaque
+reference:
+
+```json
+{"$stream":{"streamToken":"<opaque-token>"}}
+```
+
+The two forms are mutually exclusive. A client MUST reuse provisional
+references only for an exact retry of the same frozen start or input item. A
+stream object occurring at two structural coordinates is an affine ownership
+violation and is rejected with `stream-already-consumed`.
+
+## 4. Shared message structures
+
+### 4.1 Selector
+
+An invocation selector is:
+
+```json
+{
+  "agentType":"counter",
+  "application":"shopping",
+  "constructorParameters":{"name":"cart-1"},
+  "environment":"prod",
+  "method":"ingest",
+  "phantomId":"994df72a-ebc7-40e0-a8ef-c9ce258f3da7"
+}
+```
+
+`application`, `environment`, `agentType`, `constructorParameters`, and
+`method` are required. `phantomId` is optional and MUST be omitted rather than
+`null`. Constructor parameters MUST NOT contain streams.
+
+### 4.2 Configuration entry
+
+An optional configuration entry is:
+
+```json
+{"path":["provider","model"],"value":"gpt-5"}
+```
+
+`path` is a non-empty array of non-empty UTF-8 strings. `value` is a normalized
+JSON value under the existing agent-configuration contract. Configuration
+must not contain stream references.
+
+### 4.3 Stream mapping
+
+A server-issued mapping is:
+
+```json
+{
+  "channel":1,
+  "direction":"input",
+  "inputHighWater":{"sequence":"0","terminal":false},
+  "provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825",
+  "streamToken":"<opaque-token>"
+}
+```
+
+Fields:
+
+- `channel` is an integer from 1 through 4294967295.
+- `direction` is `input` or `output`.
+- `streamToken` is the stable opaque stream token.
+- `provisionalRef` is present only while resolving a client provisional
+  reference and is otherwise omitted.
+- `inputHighWater` is required for input mappings and forbidden for output
+  mappings. `sequence` is the cumulative count of durably accepted logical
+  items. `terminal` reports whether input has durably ended or been cancelled.
+
+Mappings in one message MUST have distinct channels, stream tokens, and
+provisional references. A stream token cannot be rebound to a different
+direction, element schema, producer, or structural coordinate.
+
+## 5. Client-to-server text messages
+
+### 5.1 `invocationStart`
+
+```json
+{
+  "attemptId":"ca7e5a82-2064-4c18-8359-806145c1562f",
+  "config":[],
+  "idempotencyKey":"upload-42",
+  "methodParameters":{"source":{"$stream":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}},
+  "selector":{
+    "agentType":"media",
+    "application":"demo",
+    "constructorParameters":{"name":"encoder"},
+    "environment":"default",
+    "method":"transcode"
+  },
+  "type":"invocationStart",
+  "version":1
+}
+```
+
+All shown top-level members are required. `config` may be empty. The complete
+message, including every provisional reference and ordinary value, is frozen
+for the operation. An uncertain retry resends the exact logical message with
+the same attempt ID. Reusing an attempt ID with changed contents is
+`attempt-conflict`.
+
+### 5.2 `resumeAttach`
+
+```json
+{
+  "attemptId":"47be00cd-78aa-4e41-a41d-2517060e540e",
+  "operation":"resume",
+  "outputCursors":["<opaque-cursor-token>"],
+  "sessionToken":"<opaque-session-token>",
+  "type":"resumeAttach",
+  "version":1
+}
+```
+
+`operation` is `resume` or `takeover`. `outputCursors` contains at most one
+cursor token for each output stream and MUST NOT contain duplicates. It may be
+empty. Input recovery evidence is server-owned and is not sent by the client.
+The complete message is frozen for uncertain retry.
+
+### 5.3 `inputStreamItem`
+
+```json
+{
+  "channel":1,
+  "sequence":"0",
+  "type":"inputStreamItem",
+  "value":{"event":"ready"},
+  "version":1
+}
+```
+
+This variant is used for non-direct-binary stream elements. `sequence` is the
+zero-based sequence of this logical item. Any newly nested input streams use
+provisional references in `value`; their mappings are returned in the ACK for
+this item before those streams may send data.
+
+### 5.4 `inputStreamEnd`
+
+```json
+{"channel":1,"sequence":"1","type":"inputStreamEnd","version":1}
+```
+
+`sequence` is the next expected logical item sequence. Natural source
+exhaustion sends this message. Exactly one terminal is allowed per stream.
+
+### 5.5 `streamCancel`
+
+```json
+{"channel":2,"reason":"consumer-drop","type":"streamCancel","version":1}
+```
+
+Client reasons are `cancelled`, `consumer-drop`, and `source-unavailable`.
+`cancelled` is an explicit user cancellation, `consumer-drop` is an unread
+output being dropped, and `source-unavailable` is an input producer failure.
+Transport disconnection is not represented by this message and only detaches.
+
+## 6. Server-to-client text messages
+
+### 6.1 `invocationAccepted`
+
+```json
+{
+  "attemptId":"ca7e5a82-2064-4c18-8359-806145c1562f",
+  "idempotencyKey":"upload-42",
+  "mappings":[],
+  "sessionToken":"<opaque-session-token>",
+  "type":"invocationAccepted",
+  "version":1
+}
+```
+
+`mappings` installs the complete initial or resumed channel table before
+execution or output exposure. An exact-attempt replay returns the committed
+acceptance. If its durable attachment has already detached, the replay still
+returns the current session token and mappings, then revokes this transport;
+the client starts a new resume operation with a fresh attempt ID.
+
+### 6.2 `invocationRejected`
+
+```json
+{
+  "attemptId":"ca7e5a82-2064-4c18-8359-806145c1562f",
+  "code":"validation-error",
+  "message":"method parameters do not match the selected method",
+  "retryable":false,
+  "type":"invocationRejected",
+  "version":1
+}
+```
+
+`attemptId` is optional only when the first message could not be decoded far
+enough to recover it. `message` is safe public text and MUST NOT include Rust
+type names, protobuf names, gRPC details, credentials, tokens, oplog terms, or
+internal IDs. Before acceptance, rejection is definitive for this attempt.
+After acceptance, this variant is also the final diagnostic for a fatal client
+protocol violation such as `invalid-channel`, `input-gap`, or
+`input-conflict`; in that state `attemptId` is required and identifies the
+accepted attempt. `retryable` means a new resume or takeover attempt may
+recover the durable session, not that the rejected descriptor may be resent.
+The server closes with code 1002 after the diagnostic. Normal stream-terminal
+and `invocationFinished` guarantees do not apply to this protocol-violation
+close.
+
+### 6.3 `invocationResult`
+
+A value result is:
+
+```json
+{
+  "mappings":[],
+  "result":{"kind":"value","value":{"accepted":true}},
+  "type":"invocationResult",
+  "version":1
+}
+```
+
+A method with no result uses `{"kind":"none"}`. `mappings` announces every
+new stream reference first exposed by `value`; it is required and may be
+empty. This message occurs at most once and before `invocationFinished`.
+
+### 6.4 `outputStreamItem`
+
+```json
+{
+  "channel":2,
+  "cursorToken":"<opaque-cursor-token>",
+  "mappings":[],
+  "sequence":"0",
+  "type":"outputStreamItem",
+  "value":{"event":"ready"},
+  "version":1
+}
+```
+
+This variant is used for non-direct-binary elements. `cursorToken` identifies
+this item as the last completely delivered output position. The client MUST
+advance its retained cursor only after `value` has been delivered through the
+language-level stream. `mappings` obeys the same announcement-before-use rule
+as `invocationResult`.
+
+### 6.5 `outputStreamEnd`
+
+Normal end:
+
+```json
+{
+  "channel":2,
+  "cursorToken":"<opaque-cursor-token>",
+  "outcome":{"kind":"ok"},
+  "sequence":"1",
+  "type":"outputStreamEnd",
+  "version":1
+}
+```
+
+Error end:
+
+```json
+{
+  "channel":2,
+  "cursorToken":"<opaque-cursor-token>",
+  "outcome":{"code":"producer-error","kind":"error","message":"producer failed"},
+  "sequence":"1",
+  "type":"outputStreamEnd",
+  "version":1
+}
+```
+
+Cancelled end uses
+`{"kind":"cancelled","reason":"<server-cancel-reason>"}`. `cursorToken` is
+optional only if the stream produced no durable event; it MUST be omitted,
+not `null`. When present, this cursor identifies the terminal event itself,
+not the preceding item. The client retains it only after the language-level
+consumer observes completion, error, or cancellation. Resuming from the last
+item cursor replays the terminal; resuming from the terminal cursor does not.
+`sequence` is the next expected logical item sequence.
+
+### 6.6 `inputStreamAck`
+
+```json
+{
+  "channel":1,
+  "highestContiguousSequence":"1",
+  "mappings":[],
+  "terminal":false,
+  "type":"inputStreamAck",
+  "version":1
+}
+```
+
+`highestContiguousSequence` is the count of durably accepted logical items,
+not the last zero-based sequence. `terminal` reports durable input terminal
+state. `mappings` announces nested streams discovered in the acknowledged
+item. An identical duplicate input range returns the same cumulative ACK.
+
+### 6.7 `streamCancel`
+
+```json
+{"channel":1,"reason":"consumer-drop","type":"streamCancel","version":1}
+```
+
+Server reasons are `cancelled`, `consumer-drop`, `transport-detached`,
+`source-unavailable`, `producer-deleted`, `invocation-failed`, and
+`protocol-error`. `transport-detached` is observable only when durable state
+reports that reason; normal WebSocket loss by itself does not synthesize
+cancellation.
+
+### 6.8 `attachmentRevoked`
+
+```json
+{"reason":"replaced","type":"attachmentRevoked","version":1}
+```
+
+The sole v1 reason is `replaced`. No application message follows. The server
+closes the old transport after this message.
+
+### 6.9 `invocationFinished`
+
+Success:
+
+```json
+{"outcome":{"kind":"success"},"type":"invocationFinished","version":1}
+```
+
+Failure:
+
+```json
+{
+  "outcome":{"code":"invocation-failed","kind":"failure","message":"invocation failed"},
+  "type":"invocationFinished",
+  "version":1
+}
+```
+
+Fatal failure terminalizes every open input and output first. This message
+follows every declared output terminal and the optional invocation result.
+Nothing follows it.
+
+## 7. Binary WebSocket messages
+
+A binary WebSocket message is:
+
+```text
+0                   1                   2                   3
+0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|              metadata length (u32 big endian)                |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    metadata UTF-8 JSON ...                    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         raw payload ...                       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+The metadata is a strict JSON object using the common duplicate/unknown-field
+rules. It has:
+
+```json
+{
+  "channel":1,
+  "itemCount":"3",
+  "kind":"input-u8",
+  "sequence":"0",
+  "version":1
+}
+```
+
+Fields are `version`, `kind`, `channel`, `sequence`, `itemCount`, and the
+conditionally permitted `cursorToken` and `mimeType`.
+
+| Kind | Direction | Item count | MIME | Cursor |
+| --- | --- | --- | --- | --- |
+| `input-u8` | client to server | payload length | forbidden | forbidden |
+| `output-u8` | server to client | payload length | forbidden | required |
+| `input-binary` | client to server | exactly `1` | optional | forbidden |
+| `output-binary` | server to client | exactly `1` | optional | required |
+
+For packed `stream<u8>`, the payload is non-empty, at most 1 MiB, and each
+byte is one logical item. `sequence + itemCount` is checked for `u64`
+overflow. For `stream<binary>`, one message is one logical item; empty payload
+is allowed only when the element schema allows it, and the payload is at most
+16 MiB before schema-specific restrictions.
+
+An output cursor identifies the final logical item in the message. For packed
+`u8`, the language runtime advances the cursor only after every byte in the
+batch has been delivered. A crash part-way through a batch may replay the
+whole batch and MUST NOT skip the undelivered suffix.
+
+## 8. Channels and lifecycle
+
+Channel numbers are server-assigned, connection-local unsigned 32-bit JSON
+numbers. Zero is reserved and invalid. Channels are unique across both
+directions, are never persisted, and are replaced on every connection.
+
+A mapping is installed by `invocationAccepted`, `invocationResult`,
+`outputStreamItem`, or `inputStreamAck` before any item, terminal, or
+cancellation can reference its channel. Unknown, stale, duplicate,
+directionally invalid, or prematurely used channels are `invalid-channel`.
+
+Within one stream, items are totally ordered and every stream has exactly one
+terminal. Cross-stream order is unspecified. Stream-local failure terminates
+only that stream. Transport detach does not cancel execution or streams.
+Explicit cancellation and readable output drop propagate cancellation.
+Natural input exhaustion is a normal input end. Input source failure is
+`source-unavailable`.
+
+One WebSocket carries one invocation session and multiplexes all of its input
+and output streams.
+
+## 9. Attempts, retry, resume, and takeover
+
+Attempt equality covers the complete decoded logical first message. For a
+start this is the selector (including constructor parameters), configuration,
+method parameters, invocation idempotency key, all provisional references, and
+attempt ID. For a resume or takeover this is the operation, session token,
+complete output cursor set, and attempt ID. Equality is semantic after strict
+decoding and canonical SchemaValue normalization; raw JSON member order,
+whitespace, and equivalent JSON escaping do not affect it. The runtime creates
+a fresh UUIDv4 before each new start, resume, or takeover and freezes this
+complete operation descriptor.
+
+After an uncertain transport outcome, the runtime MUST retry the exact
+descriptor with the same attempt ID. A definitive rejection or a genuinely
+new attach uses a new attempt ID. Same attempt plus different descriptor is
+`attempt-conflict`.
+
+Acceptance is durable and replayable by exact attempt. Replaying acceptance
+does not create a new durable attachment generation. If another transport for
+the exact attempt remains live, the replacement becomes its sole in-memory
+owner and the older transport receives `attachmentRevoked`.
+
+Resume sends only opaque output cursor tokens. Acceptance returns each input
+stream's durable high-water. Clients keep a byte-bounded buffer of
+unacknowledged input and resend only the suffix beyond high-water. Identical
+duplicates are idempotent; conflicting duplicates are `input-conflict` and
+gaps are `input-gap`.
+
+Output cursor advancement occurs on application delivery, not WebSocket
+receipt, decoding, or queue insertion. Delivery is at-least-once at the last
+incompletely delivered item or packed batch boundary.
+
+## 10. Opaque tokens
+
+The token text is:
+
+```text
+gai1_<base64url-no-pad(payload || signature)>
+```
+
+`signature` is 32-byte HMAC-SHA256. The outer token is ASCII and at most 8192
+bytes. The decoded form must be bounded before allocation.
+
+### 10.1 Payload encoding
+
+The payload is a deterministic TLV sequence:
+
+```text
+u8  format-version = 1
+u8  token-kind      = 1 session | 2 stream | 3 cursor
+u8  key-id-length
+[]  key-id UTF-8
+repeated fields:
+    u8  field-id
+    u32 field-length, big endian
+    []  field bytes
+```
+
+Key IDs are 1..64 bytes. Fields are strictly increasing by field ID, MUST NOT
+repeat, and unknown fields are invalid in v1. Text fields are UTF-8. UUID
+fields are the 16 RFC 4122 network-order bytes. Unsigned integers are fixed
+eight-byte big-endian. A missing, empty, malformed, duplicate, or out-of-order
+required field is invalid.
+
+Common fields:
+
+| ID | Field |
+| --- | --- |
+| 1 | deployment issuer UTF-8 |
+| 2 | audience UTF-8 (`golem-agent-invocation`) |
+| 3 | account binding UTF-8 |
+| 4 | effective-principal binding UTF-8 |
+| 5 | issued-at Unix seconds, u64 |
+
+Session fields:
+
+| ID | Field |
+| --- | --- |
+| 16 | application identity UTF-8 |
+| 17 | environment identity UTF-8 |
+| 18 | agent identity UTF-8 |
+| 19 | invocation idempotency key UTF-8 |
+| 20 | logical invocation UUID |
+| 21 | attachment UUID |
+| 22 | expected attachment generation, u64 |
+| 23 | callee incarnation UUID |
+| 24 | stream-token signing key ID UTF-8 |
+
+Stream fields:
+
+| ID | Field |
+| --- | --- |
+| 32 | parent logical invocation UUID |
+| 33 | durable stream UUID |
+| 34 | producer identity UTF-8 |
+| 35 | producer incarnation UUID |
+| 36 | pinned component revision, u64 |
+| 37 | 32-byte `SchemaFingerprintV1` (BLAKE3-256 of the v1 deterministic-CBOR stream element schema closure) |
+| 38 | role byte (`1` input, `2` output) |
+| 39 | durable mapping UUID |
+
+Cursor fields:
+
+| ID | Field |
+| --- | --- |
+| 48 | parent logical invocation UUID |
+| 49 | output durable stream UUID |
+| 50 | last observed durable offset bytes |
+
+Stream tokens do not contain attachment generation and remain stable across
+reconnects. A refreshed session token and every new cursor token are signed
+with the deployment's active key. Stable stream tokens continue using the key
+named by session field 24, so reconnecting during key rotation does not change
+their identity. Session tokens issued before field 24 was introduced use their
+own outer signing key ID as the stream-token key ID. Verification-only keys
+must therefore remain configured for the full retained durable-history window.
+Token payloads are authenticated but not encrypted.
+
+### 10.2 Signature
+
+The HMAC input is:
+
+```text
+ASCII("golem.agent-invocation.token.v1") || 0x00 ||
+ASCII("session" | "stream" | "cursor") || 0x00 || payload
+```
+
+The token-kind byte and signature domain MUST agree. Verification uses a
+constant-time comparison. The key named in the payload must exist in the
+deployment-wide keyring. New tokens use the active key. Verify-only historical
+keys remain configured for at least as long as any retained session signed by
+them can resume.
+
+Every attach verifies issuer, audience, account, effective principal, token
+kind, type-specific parent identity, and current authorization. Tokens and
+signing keys MUST NOT be logged.
+
+## 11. Stable public error codes
+
+The v1 code set is frozen:
+
+| Code | Meaning |
+| --- | --- |
+| `unsupported-subprotocol` | required WebSocket subprotocol missing or unsupported |
+| `authentication-failed` | bearer authentication failed |
+| `unauthorized` | authenticated principal lacks permission or differs from token binding |
+| `not-found` | selected public application/environment/type/agent/method does not exist |
+| `validation-error` | selector, config, or value violates its public schema |
+| `unsupported-value` | capability, future, or other value cannot cross this boundary |
+| `malformed-message` | invalid UTF-8, JSON, binary envelope, duplicate/unknown field, or canonical form |
+| `unsupported-version` | JSON, binary, token, schema, or checkpoint version unsupported |
+| `protocol-error` | message is illegal in the current session state |
+| `invalid-channel` | channel unknown, stale, duplicate, premature, or wrong direction |
+| `invalid-sequence` | sequence or item count invalid or overflowed |
+| `stream-already-consumed` | affine stream ownership violated |
+| `stream-conflict` | stream token or provisional mapping rebound inconsistently |
+| `idempotency-conflict` | idempotency key identifies a different logical invocation |
+| `attempt-conflict` | attempt ID reused with a changed descriptor |
+| `stale-session` | session token carries stale attachment evidence |
+| `future-session` | session token carries impossible future attachment evidence |
+| `invalid-attachment-state` | requested resume/takeover illegal for current durable state |
+| `input-conflict` | duplicate input range differs from durably accepted data |
+| `input-gap` | input starts after the next expected sequence |
+| `invalid-cursor` | cursor malformed, duplicated, wrong stream/session, or ahead of history |
+| `token-invalid` | token malformed, tampered, wrong type/deployment/parent, or expired by retention |
+| `resource-exhausted` | a frozen protocol or configured account/session resource limit was exceeded |
+| `producer-error` | output producer terminated one stream with an application error |
+| `invocation-failed` | invocation failed after acceptance |
+| `internal-error` | safe, non-sensitive internal failure |
+
+Handshake failures use the existing public HTTP error envelope. Before
+acceptance, expected application errors use `invocationRejected`. After
+acceptance, stream-local failures use `outputStreamEnd`; fatal failures
+terminalize open streams and use `invocationFinished`. A framing or state
+violation sends a safe `invocationRejected` when enough of the message and
+attempt identity are available and then closes the WebSocket with code 1002;
+otherwise it closes directly with code 1002. Oversized input closes with code
+1009.
+
+## 12. Frozen limits
+
+Limits apply to decompressed complete WebSocket messages and decoded values.
+Deployments MAY impose smaller documented account limits but MUST NOT accept a
+value and later silently discard it.
+
+One MiB is 1,048,576 bytes. A decoded SchemaValue's language-independent byte
+charge is computed recursively with checked `u64` addition:
+
+- every value node costs one byte plus its payload below;
+- booleans cost one byte; integer and finite/exceptional float payloads cost
+  their schema width (1, 2, 4, or 8 bytes); duration costs 8 bytes;
+- a char, string, path, URL, datetime, text body/language, MIME type, quantity
+  unit, field/case/tag name, or opaque token costs its UTF-8 byte length;
+- binary costs its decoded raw byte length, not its base64 length; quantity
+  additionally costs 12 bytes for mantissa and scale;
+- a collection costs four bytes for its element count plus the charges of all
+  children; records additionally include schema field-name byte lengths and
+  maps include both key and value charges;
+- an option, result, variant, or union costs its selected discriminator UTF-8
+  length plus its optional child charge;
+- a provisional stream reference costs 16 payload bytes; a stable stream
+  reference costs its opaque token's UTF-8 length.
+
+The 256 per-stream item limit counts queued protocol entries or packed batches,
+not logical bytes within a packed `u8` batch. Byte limits apply independently,
+so one packed batch still charges every payload byte.
+
+| Limit | v1 value |
+| --- | ---: |
+| WebSocket text or binary message | 32 MiB |
+| binary metadata | 16 KiB |
+| packed `u8` payload | 1 MiB |
+| one decoded logical value / binary item | 16 MiB |
+| JSON/schema recursion depth | 64 |
+| members/elements/entries in one collection | 100,000 |
+| stream mappings per session | 4096 |
+| outer token text | 8192 bytes |
+| idempotency key | 1024 bytes |
+| per-stream queued items | 256 |
+| per-stream queued bytes | 16 MiB |
+| all queued output bytes per session | 32 MiB |
+| unacknowledged input bytes per client or server session | 16 MiB |
+| all admitted decode/validation/forward/write bytes per session | 64 MiB |
+
+Byte permits are acquired before decoding or copying a large payload whenever
+its encoded size is known and are released only when the downstream owner has
+consumed or durably accepted it. A slow stream backpressures the multiplexed
+session. Cancelling or dropping it releases its queue; data is never discarded
+to evade backpressure.
+
+## 13. Checkpoint v1
+
+CLI checkpoint v1 is strict JSON and stores only:
+
+- `version: 1`;
+- the public invocation selector and idempotency metadata;
+- the opaque session token;
+- delivered output cursor tokens;
+- a frozen pending operation and attempt ID, if one is in flight;
+- public protocol and schema version evidence.
+
+It MUST NOT store attachment IDs, generations/epochs, durable offsets,
+internal stream IDs, component fingerprints, protobuf bytes, or signing
+material. The CLI writes a complete output item, advances its cursor, then
+atomically replaces and syncs the checkpoint. A crash can replay but cannot
+skip output.
+
+Non-replayable stdin cannot be recovered after a process crash if bytes were
+neither durably acknowledged nor retained. In-process network reconnect uses
+the bounded unacknowledged buffer.
+
+## 14. Conformance vectors
+
+The normative machine-readable vectors are in
+`golem-client/tests/fixtures/stream-session-v1/`:
+
+- `json-messages.json` — all message variants;
+- `schema-values.json` — schema-directed value encodings;
+- `binary-messages.json` — metadata and complete envelope bytes;
+- `tokens.json` — deterministic token and key-rotation vectors;
+- `malformed.json` — required rejection cases.
+
+The Rust, TypeScript, Scala, and MoonBit runtimes MUST consume the same vectors.
+Changing an existing vector requires a new public protocol version.

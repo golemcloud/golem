@@ -192,6 +192,7 @@ impl DebugServiceDefault {
             .worker_service()
             .get(&owned_agent_id)
             .await
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?
             .ok_or_else(|| {
                 DebugServiceError::conflict(
                     agent_id.clone(),
@@ -307,10 +308,7 @@ impl DebugServiceDefault {
         let mut index = OplogIndex::INITIAL;
         while index <= scan_end {
             let available = u64::from(scan_end) - u64::from(index) + 1;
-            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
-            if entries.is_empty() {
-                break;
-            }
+            let entries = raw_oplog.read_exact(index, CHUNK_SIZE.min(available)).await;
             for (idx, entry) in &entries {
                 match entry {
                     OplogEntry::Start { function_name, .. } => {
@@ -329,7 +327,10 @@ impl DebugServiceDefault {
                     _ => {}
                 }
             }
-            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+            index = entries
+                .last_key_value()
+                .map(|(idx, _)| idx.next())
+                .expect("non-empty exact oplog read");
         }
 
         unmatched.pop_first()
@@ -369,10 +370,7 @@ impl DebugServiceDefault {
         let mut index = OplogIndex::INITIAL;
         while index <= scan_end {
             let available = u64::from(scan_end) - u64::from(index) + 1;
-            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
-            if entries.is_empty() {
-                break;
-            }
+            let entries = raw_oplog.read_exact(index, CHUNK_SIZE.min(available)).await;
             for (idx, entry) in &entries {
                 match entry {
                     OplogEntry::End { start_index, .. } if *idx <= target_index => {
@@ -397,7 +395,10 @@ impl DebugServiceDefault {
                     _ => {}
                 }
             }
-            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+            index = entries
+                .last_key_value()
+                .map(|(idx, _)| idx.next())
+                .expect("non-empty exact oplog read");
         }
 
         markers.into_iter().find_map(|(marker_idx, start_idx)| {
@@ -1089,6 +1090,7 @@ mod tests {
     fn noop_entry() -> OplogEntry {
         OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         }
     }
 
@@ -1118,6 +1120,7 @@ mod tests {
     fn jump_entry(start: u64, end: u64) -> OplogEntry {
         OplogEntry::Jump {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             jump: OplogRegion {
                 start: OplogIndex::from_u64(start),
                 end: OplogIndex::from_u64(end),
@@ -1245,6 +1248,13 @@ mod tests {
             unimplemented!()
         }
 
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: golem_worker_executor::services::oplog::IndexedReservedStartBuilder,
+        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+            unimplemented!()
+        }
+
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
             unimplemented!()
         }
@@ -1266,10 +1276,13 @@ mod tests {
         }
 
         async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            self.entries[(u64::from(oplog_index) - 1) as usize].clone()
+            self.entries
+                .get((u64::from(oplog_index) - 1) as usize)
+                .cloned()
+                .unwrap_or_else(|| panic!("Missing oplog entry at index {oplog_index}"))
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
@@ -1277,9 +1290,6 @@ mod tests {
             let mut result = BTreeMap::new();
             let mut current = oplog_index;
             for _ in 0..n {
-                if u64::from(current) > self.entries.len() as u64 {
-                    break;
-                }
                 result.insert(current, self.read(current).await);
                 current = current.next();
             }
@@ -1350,6 +1360,13 @@ mod tests {
             unimplemented!()
         }
 
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: golem_worker_executor::services::oplog::IndexedReservedStartBuilder,
+        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+            unimplemented!()
+        }
+
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
             unimplemented!()
         }
@@ -1385,11 +1402,12 @@ mod tests {
                 // Any other oplog entry other than export function completed
                 OplogEntry::NoOp {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                 }
             }
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,

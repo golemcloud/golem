@@ -561,7 +561,7 @@ async fn test_playback_with_overrides(
 
     if let Some(PublicOplogEntryWithIndex {
         entry: PublicOplogEntry::AgentInvocationFinished(completed),
-        oplog_index: _,
+        ..
     }) = entry
     {
         assert_eq!(completed.result, original_result);

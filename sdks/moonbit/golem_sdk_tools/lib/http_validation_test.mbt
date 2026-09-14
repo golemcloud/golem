@@ -32,7 +32,7 @@ test "error: catch-all in mount" {
     #|pub fn FileAgent::new(rest : String) -> FileAgent {
     #|  { rest }
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("file.mbt", content)])
     @lib.validate_http_routes(agents)
   })
@@ -56,7 +56,7 @@ test "error: mount variable not in constructor params" {
     #|pub fn ItemAgent::new(name : String) -> ItemAgent {
     #|  { name }
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
@@ -81,7 +81,7 @@ test "error: constructor param not bound by mount variable" {
     #|pub fn ItemAgent::new(name : String, category : String) -> ItemAgent {
     #|  { name, category }
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
@@ -110,7 +110,7 @@ test "error: method has endpoint but agent has no mount" {
     #|pub fn Counter::get_value(self : Self) -> UInt64 {
     #|  self.value
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("counter.mbt", content)])
     @lib.validate_http_routes(agents)
   })
@@ -139,7 +139,7 @@ test "error: endpoint variable not in method params" {
     #|pub fn ItemAgent::get_detail(self : Self) -> String {
     #|  self.name
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
@@ -168,7 +168,7 @@ test "error: endpoint variable binds to Principal param" {
     #|pub fn ItemAgent::get_by_user(self : Self, user : @common.Principal) -> String {
     #|  self.name
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
@@ -199,7 +199,7 @@ test "error: duplicate header name" {
     #|pub fn ItemAgent::get_info(self : Self, token : String, token2 : String) -> String {
     #|  self.name
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })
@@ -228,7 +228,7 @@ test "error: duplicate param binding in path and query" {
     #|pub fn ItemAgent::search(self : Self, query : String) -> String {
     #|  self.name
     #|}
-  let result : Result[_, _] = try? ({
+  let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
     let agents = @lib.parse_agents([("item.mbt", content)])
     @lib.validate_http_routes(agents)
   })

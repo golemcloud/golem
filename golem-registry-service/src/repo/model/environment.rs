@@ -38,6 +38,8 @@ use uuid::Uuid;
 pub enum EnvironmentRepoError {
     #[error("Environment violates unique index")]
     EnvironmentViolatesUniqueness,
+    #[error("versionCheck cannot be enabled while the environment has mutable tool grants")]
+    MutableToolGrantsInVersionCheckedEnvironment,
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]

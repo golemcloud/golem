@@ -241,7 +241,7 @@ object RpcCodegen {
 
     if (ephemeral) {
       sb.append(
-        s"    def cancelable($paramDecls): _root_.scala.Either[_root_.scala.Predef.String, _root_.golem.runtime.rpc.CancelableAsyncInvocation[$outputType]] =\n"
+        s"    def cancelable($paramDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancelableAsyncInvocation[$outputType]] =\n"
       )
       sb.append(s"      cancelableAwaitWithMetadata($packExpr)\n\n")
     } else {

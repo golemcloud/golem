@@ -14,7 +14,8 @@
 
 use crate::bridge_gen::fixtures::{
     agent, code_first_snippets_agent_type, def, field, local_config, method,
-    multi_agent_wrapper_2_types, ref_to, single_agent_wrapper_types,
+    multi_agent_wrapper_2_types, multimodal, named_field, ref_to, single_agent_wrapper_types,
+    variant_case,
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -43,6 +44,203 @@ use golem_common::schema::{
 };
 use tempfile::TempDir;
 use test_r::{test, test_dep};
+
+#[test]
+fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("stream-client");
+    let mut agent = crate::bridge_gen::fixtures::guest_streaming_agent_type("rust");
+    agent.methods.push(method(
+        "tree_items",
+        vec![field(
+            "items",
+            SchemaType::stream(Some(ref_to("StreamTree"))),
+        )],
+        Some(SchemaType::stream(Some(ref_to("StreamTree")))),
+    ));
+    let path = SchemaType::path(golem_common::schema::schema_type::PathSpec {
+        direction: golem_common::schema::schema_type::PathDirection::InOut,
+        kind: golem_common::schema::schema_type::PathKind::Any,
+        allowed_mime_types: None,
+        allowed_extensions: None,
+    });
+    agent.methods.push(method(
+        "paths",
+        vec![field("items", SchemaType::stream(Some(path.clone())))],
+        Some(SchemaType::stream(Some(path))),
+    ));
+    agent.methods.push(method(
+        "pairs",
+        vec![field(
+            "items",
+            SchemaType::stream(Some(SchemaType::list(SchemaType::tuple(vec![
+                SchemaType::string(),
+                SchemaType::u32(),
+            ])))),
+        )],
+        Some(SchemaType::stream(Some(SchemaType::list(
+            SchemaType::tuple(vec![SchemaType::string(), SchemaType::u32()]),
+        )))),
+    ));
+    let mut generator =
+        RustBridgeGenerator::new_with_mode(agent, &target, true, RustBridgeMode::GuestWasmRpc)
+            .unwrap();
+    generator.generate().unwrap();
+    let path = target.join("src/lib.rs");
+    let mut source = std::fs::read_to_string(&path).unwrap();
+    assert!(source.contains("golem_rust::agentic::AgentStream<"));
+    assert!(source.contains("encode_schema_value_async(&method_parameters)"));
+    for method in [
+        "consume",
+        "produce",
+        "exchange",
+        "forward",
+        "nested",
+        "recursive",
+        "shapes",
+        "paths",
+        "pairs",
+        "tree_items",
+    ] {
+        assert!(!source.contains(&format!("pub fn trigger_{method}(")));
+        assert!(!source.contains(&format!("pub fn schedule_{method}(")));
+        assert!(!source.contains(&format!("pub fn schedule_cancelable_{method}(")));
+    }
+    assert!(source.contains("pub fn trigger_status("));
+    assert!(source.contains("pub fn schedule_status("));
+    let parsed = syn::parse_file(&source).unwrap();
+    let mut factory_count = 0;
+    let mut codec_count = 0;
+    for item in parsed.items {
+        let syn::Item::Fn(factory) = item else {
+            continue;
+        };
+        let name = factory.sig.ident.to_string();
+        if !name.starts_with("new_") || !name.contains("_stream") {
+            continue;
+        }
+        factory_count += 1;
+        let syn::ReturnType::Type(_, result) = factory.sig.output else {
+            panic!("factory result")
+        };
+        let syn::Type::Tuple(pair) = *result else {
+            panic!("writer and reader pair")
+        };
+        let reader = &pair.elems[1];
+        let syn::Type::Path(reader_path) = reader else {
+            panic!("AgentStream reader type")
+        };
+        let syn::PathArguments::AngleBracketed(reader_args) = &reader_path
+            .path
+            .segments
+            .last()
+            .expect("AgentStream segment")
+            .arguments
+        else {
+            panic!("AgentStream item type")
+        };
+        let syn::GenericArgument::Type(item_type) = &reader_args.args[0] else {
+            panic!("AgentStream item type")
+        };
+        let item_type = quote::quote!(#item_type).to_string();
+        let reader = quote::quote!(#reader).to_string();
+        let codec_test = match name.as_str() {
+            "new_string_stream" => Some(("String::from(\"value\")", "String(_)")),
+            "new_stream_item_stream" => Some((
+                "StreamItem { label: String::from(\"root\"), children: vec![StreamItem { label: String::from(\"child\"), children: vec![] }] }",
+                "Record { .. }",
+            )),
+            "new_path_stream" => Some(("String::from(\"value\")", "Path { .. }")),
+            "new_list_stream" => Some((
+                "vec![String::from(\"a\"), String::from(\"b\")]",
+                "List { .. }",
+            )),
+            "new_fixed_list_stream" => Some((
+                "vec![String::from(\"a\"), String::from(\"b\")]",
+                "FixedList { .. }",
+            )),
+            "new_map_stream" => Some(("vec![(String::from(\"a\"), 1u32)]", "Map { .. }")),
+            "new_list_stream1" => Some(("vec![(String::from(\"a\"), 1u32)]", "List { .. }")),
+            _ => None,
+        };
+        if let Some((value, kind)) = codec_test {
+            codec_count += 1;
+            let syn::Stmt::Expr(syn::Expr::Call(call), _) = &factory.block.stmts[0] else {
+                panic!("codec factory call")
+            };
+            let encode = &call.args[0];
+            let decode = &call.args[1];
+            let encode = quote::quote!(#encode).to_string();
+            let decode = quote::quote!(#decode).to_string();
+            source.push_str(&format!(r#"
+                #[test]
+                fn codec_{name}() {{
+                    let encode: fn({item_type}) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> = {encode};
+                    let decode = {decode};
+                    let original = {value};
+                    let wire = encode(original.clone()).unwrap();
+                    assert!(matches!(wire, crate::__golem_bridge_runtime::schema::SchemaValue::{kind}));
+                    assert_eq!(encode(decode(wire.clone()).unwrap()).unwrap(), wire);
+                    assert!(decode(crate::__golem_bridge_runtime::schema::SchemaValue::Bool(false)).is_err());
+                }}
+            "#));
+        }
+        source.push_str(&format!(
+            r#"
+            async fn exercise_{name}(mut input: {reader}) -> Result<(), String> {{
+                let (mut writer, output) = {name}();
+                if let Some(item) = input.next().await? {{
+                    writer.write_one(item).await?;
+                }}
+                writer.write_all(input.collect().await?).await?;
+                drop(writer);
+                let original = output.into_schema_stream();
+                drop(original);
+                Ok(())
+            }}
+        "#
+        ));
+    }
+    assert!(
+        factory_count >= 10,
+        "expected distinct schema-bound factories"
+    );
+    assert_eq!(codec_count, 7);
+    std::fs::write(path, source).unwrap();
+    cargo_check(&target);
+    let output = std::process::Command::new("cargo")
+        .args(["test", "--lib"])
+        .current_dir(&target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated codec tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn guest_rust_streaming_rejects_untyped_stream() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let agent = agent(
+        "Untyped",
+        "rust",
+        vec![],
+        vec![method("read", vec![], Some(SchemaType::stream(None)))],
+        vec![],
+        AgentMode::Durable,
+    );
+    let mut generator =
+        RustBridgeGenerator::new_with_mode(agent, target, true, RustBridgeMode::GuestWasmRpc)
+            .unwrap();
+    let error = generator.generate().unwrap_err();
+    assert!(format!("{error:#}").contains("untyped Rust AgentStream"));
+}
 
 struct GeneratedPackage {
     #[allow(dead_code)]
@@ -243,6 +441,85 @@ fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
 }
 
 #[test]
+fn guest_generation_compiles_host_managed_capability_methods() {
+    let dir = TempDir::new().unwrap();
+    let target_path = Utf8Path::from_path(dir.path()).unwrap();
+    let capability_tuple = SchemaType::tuple(vec![
+        SchemaType::secret(Default::default()),
+        SchemaType::quota_token(Default::default()),
+        SchemaType::permission_card(Default::default()),
+    ]);
+    let envelope = SchemaType::record(vec![named_field(
+        "capabilities",
+        SchemaType::list(capability_tuple),
+    )]);
+    let capability_modalities = multimodal(vec![
+        variant_case("secret", Some(SchemaType::secret(Default::default()))),
+        variant_case("quota", Some(SchemaType::quota_token(Default::default()))),
+        variant_case(
+            "permission",
+            Some(SchemaType::permission_card(Default::default())),
+        ),
+    ]);
+    let agent_type = agent(
+        "CapabilityAgent",
+        "rust",
+        vec![],
+        vec![
+            method(
+                "transfer",
+                vec![field("envelope", ref_to("CapabilityEnvelope"))],
+                Some(ref_to("CapabilityEnvelope")),
+            ),
+            method(
+                "transferMultimodal",
+                vec![field("capabilities", capability_modalities.clone())],
+                Some(capability_modalities),
+            ),
+        ],
+        vec![def("CapabilityEnvelope", envelope)],
+        AgentMode::Durable,
+    );
+    let mut generator = RustBridgeGenerator::new_with_mode(
+        agent_type,
+        target_path,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+    for capability_type in [
+        "golem_rust::secrets::GuestSecretHandle",
+        "golem_rust::quota::QuotaToken",
+        "golem_rust::schema::wit::GuestPermissionCardHandle",
+    ] {
+        assert!(
+            lib_rs.contains(capability_type),
+            "missing capability type {capability_type}:\n{lib_rs}"
+        );
+    }
+    assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub struct CapabilityEnvelope"));
+    assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub enum Multimodal0"));
+
+    let shared_target_dir = crate::workspace_path().join("target/shared_bridge_tests");
+    let output = std::process::Command::new("cargo")
+        .arg("check")
+        .arg("--target-dir")
+        .arg(shared_target_dir)
+        .current_dir(target_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated guest capability crate failed cargo check\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn bridge_rust_external_consumer_can_configure_with_only_generated_dependency() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -363,6 +640,58 @@ fn generate_and_compile(agent_type: AgentTypeSchema, target_dir: &Utf8Path) {
             .unwrap()
             .success()
     );
+}
+
+#[test]
+fn external_streaming_generation_compiles_recursive_streams_and_config() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let streaming_multimodal = multimodal(vec![
+        variant_case("bytes", Some(SchemaType::stream(Some(SchemaType::u8())))),
+        variant_case("label", Some(SchemaType::string())),
+    ]);
+    let mut agent_type = agent(
+        "StreamingAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "exchange",
+                vec![field("input", ref_to("StreamingInput"))],
+                Some(SchemaType::option(ref_to("StreamingOutput"))),
+            ),
+            method(
+                "multimodal",
+                vec![field("items", streaming_multimodal.clone())],
+                Some(streaming_multimodal),
+            ),
+            method("status", vec![], Some(SchemaType::string())),
+        ],
+        vec![
+            def(
+                "StreamingInput",
+                SchemaType::record(vec![named_field(
+                    "chunks",
+                    SchemaType::list(SchemaType::stream(Some(SchemaType::binary(
+                        BinaryRestrictions::default(),
+                    )))),
+                )]),
+            ),
+            def(
+                "StreamingOutput",
+                SchemaType::record(vec![named_field(
+                    "parts",
+                    SchemaType::list(SchemaType::option(SchemaType::stream(Some(
+                        SchemaType::u8(),
+                    )))),
+                )]),
+            ),
+        ],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(vec!["stream", "mode"], SchemaType::string())];
+
+    generate_and_compile(agent_type, target_dir);
 }
 
 // Compiler-backed generator checks live in the integration target.
@@ -1231,6 +1560,17 @@ fn cargo_check(target_path: &Utf8Path) {
 #[test]
 fn tool_generation_compiles() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
+    let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("pub fn replace("), "{lib_rs}");
+    assert!(
+        lib_rs.contains("agentic::ToolInvocation<(), std::convert::Infallible>"),
+        "{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("agentic::start_tool_invocation("),
+        "{lib_rs}"
+    );
+    assert!(!lib_rs.contains("expect_stdout"), "{lib_rs}");
     cargo_check(&target_path);
 }
 #[test]

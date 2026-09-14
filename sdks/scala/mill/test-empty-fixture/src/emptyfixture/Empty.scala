@@ -1,0 +1,3 @@
+package emptyfixture
+
+object Empty

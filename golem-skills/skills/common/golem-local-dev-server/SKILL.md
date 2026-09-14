@@ -29,6 +29,7 @@ golem server run
 | `--mcp-port <PORT>` | Port to serve the MCP server on | `9007` |
 | `--ports-file <PATH>` | Write discovered startup ports to this JSON file | _(none)_ |
 | `--data-dir <PATH>` | Directory to store data in | Platform-specific (see below) |
+| `--system-memory-override <SIZE>` | Override detected system memory, e.g. `2GiB`; not a hard RSS limit | Environment variable, manifest, then host/cgroup detection |
 | `--clean` | Clean the data directory before starting | `false` |
 | `--agent-filesystem-root <PATH>` | Use deterministic agent filesystem directories rooted at the given path instead of random temp directories. Layout: `<root>/<environment_id>/<component_id>/<agent_name>/` | _(none)_ |
 
@@ -87,6 +88,22 @@ When `--ports-file` is specified, the server writes a JSON file with the actual 
 ```
 
 The application manifest can configure the built-in local preset in its `localServer` section. `routerAddr` and `routerPort` define the main API endpoint used both by `golem server run` and by other `golem` commands that target the built-in local preset. `customRequestPort` and `mcpPort` control how deployment `subdomain` values expand: HTTP API domains resolve to `<label>.localhost:<customRequestPort>` and MCP domains resolve to `<label>.localhost:<mcpPort>`. Use nonzero ports for deployments that register persistent subdomains. Load `golem-configure-api-domain` or `golem-configure-mcp-server` for the full `subdomain` versus `domain` rules.
+
+#### Memory Budget
+
+Override detected system memory to leave room for other applications and control how much memory a local server uses for agent admission and eviction. This is useful for everyday development, smaller machines, and running multiple servers. Without an override, Golem detects host or cgroup memory; on macOS, a local server sees the full host RAM.
+
+```shell
+golem server run --system-memory-override 2GiB
+GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE=2GiB golem server run
+```
+
+All three inputs use the same positive byte-size format. Units are case-insensitive: `1mb` and `1MB` mean 1,000,000 bytes; `1MiB` means 1,048,576 bytes. Whole-number quantities and ASCII spaces are accepted; use `1536 MiB` instead of `1.5 GiB`. A value without a unit means bytes. Quote unitless values in YAML. Precedence is the `--system-memory-override` flag, then `GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE`, then `localServer.systemMemoryOverride` in the manifest, then automatic detection. These map to the executor's `memory.system_memory_override`. The executor uses 80% for agent admission and eviction, leaving 20% for host overhead. This is not an OS-enforced process RSS limit; compilation and other host allocations can exceed it. Check the startup log's measured memory limit and monitor RSS under load.
+
+```yaml
+localServer:
+  systemMemoryOverride: 2GiB
+```
 
 #### Manual Testing with Free Ports
 

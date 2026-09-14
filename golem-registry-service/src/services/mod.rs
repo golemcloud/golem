@@ -29,6 +29,7 @@ pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_state;
+pub mod environment_tool_grant;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
 pub mod oauth2;
@@ -42,6 +43,7 @@ pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
 pub mod token;
+pub mod tool_release;
 
 /// Run CPU-heavy work on the global Rayon pool, returning a Future
 pub async fn run_cpu_bound_work<F, R>(f: F) -> R

@@ -32,20 +32,24 @@ import scala.quoted.*
 private[macros] class ToolMacroCore(using val q: Quotes) {
   import q.reflect.*
 
-  private val ToolDefinitionFQN = "golem.runtime.annotations.toolDefinition"
-  private val CommandFQN        = "golem.runtime.annotations.command"
-  private val AnnotationsFQN    = "golem.runtime.annotations.annotations"
-  private val ArgFQN            = "golem.runtime.annotations.arg"
-  private val ConstraintFQN     = "golem.runtime.annotations.constraint"
-  private val ResultFQN         = "golem.runtime.annotations.result"
-  private val ErrorFQN          = "golem.runtime.annotations.error"
-  private val ExampleFQN        = "golem.runtime.annotations.example"
-  private val ValueIsFQN        = "golem.runtime.annotations.ValueIs"
-  private val ImpliesFQN        = "golem.runtime.annotations.Implies"
-  private val ForbidsFQN        = "golem.runtime.annotations.Forbids"
-  private val PrincipalFQN      = "golem.Principal"
-  private val StdinFQN          = "golem.tool.ToolInputStream"
-  private val StdoutFQN         = "golem.tool.ToolOutputStream"
+  private val ToolDefinitionFQN          = "golem.runtime.annotations.toolDefinition"
+  private val CommandFQN                 = "golem.runtime.annotations.command"
+  private val AnnotationsFQN             = "golem.runtime.annotations.annotations"
+  private val ArgFQN                     = "golem.runtime.annotations.arg"
+  private val ConstraintFQN              = "golem.runtime.annotations.constraint"
+  private val ResultFQN                  = "golem.runtime.annotations.result"
+  private val ErrorFQN                   = "golem.runtime.annotations.error"
+  private val ExampleFQN                 = "golem.runtime.annotations.example"
+  private val DescriptionFQN             = "golem.runtime.annotations.description"
+  private val ToolMiddlewareFQN          = "golem.runtime.annotations.toolMiddleware"
+  private val UniversalToolMiddlewareFQN = "golem.runtime.annotations.universalToolMiddleware"
+  private val MiddlewareFieldFQN         = "golem.runtime.annotations.internalToolMiddlewareField"
+  private val ValueIsFQN                 = "golem.runtime.annotations.ValueIs"
+  private val ImpliesFQN                 = "golem.runtime.annotations.Implies"
+  private val ForbidsFQN                 = "golem.runtime.annotations.Forbids"
+  private val PrincipalFQN               = "golem.Principal"
+  private val StdinFQN                   = "golem.tool.ToolInputStream"
+  private val StdoutFQN                  = "golem.tool.ToolOutputStream"
 
   // -------------------------------------------------------------------------
   // Name conversion (port of the Rust SDK's to_kebab_case)
@@ -276,6 +280,62 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       }
     Doc(summary, description, examplesOf(sym))
   }
+
+  def toolMiddlewareMetadata(sym: Symbol): (String, List[String], Doc) =
+    middlewareMetadata(sym, ToolMiddlewareFQN, "tool middleware", "@toolMiddleware")
+
+  def universalToolMiddlewareMetadata(sym: Symbol): (String, List[String], Doc) =
+    middlewareMetadata(
+      sym,
+      UniversalToolMiddlewareFQN,
+      "universal tool middleware",
+      "@universalToolMiddleware"
+    )
+
+  private def middlewareMetadata(
+    sym: Symbol,
+    annotationFqn: String,
+    label: String,
+    annotationLabel: String
+  ): (String, List[String], Doc) = {
+    val annotations = annotationsOf(sym, annotationFqn)
+    if (annotations.size != 1)
+      report.errorAndAbort(
+        s"$label implementation ${sym.fullName} must have exactly one $annotationLabel annotation",
+        sym.pos.getOrElse(Position.ofMacroExpansion)
+      )
+    val annotation = annotations.head
+    val values     = annotationValues(annotation, List("name", "aliases"))
+    val name       = values
+      .get("name")
+      .map(constString(_, s"$label name", annotation.pos))
+      .filter(_.trim.nonEmpty)
+      .getOrElse(report.errorAndAbort(s"$label name must not be empty", annotation.pos))
+    val aliases = values
+      .get("aliases")
+      .map(stringArray(_, s"$label aliases", annotation.pos))
+      .getOrElse(Nil)
+    val baseDoc     = docOf(sym)
+    val description = annotationsOf(sym, DescriptionFQN).headOption
+      .flatMap(annotationValues(_, List("value")).get("value"))
+      .map(constString(_, s"$label description", annotation.pos))
+      .getOrElse(baseDoc.description)
+    (name, aliases, baseDoc.copy(description = description))
+  }
+
+  def toolMiddlewareFieldMetadata(sym: Symbol): Option[(String, Boolean)] =
+    annotationsOf(sym, MiddlewareFieldFQN).headOption.map { annotation =>
+      val values = annotationValues(annotation, List("canonicalName", "countFlag"))
+      val name   = values
+        .get("canonicalName")
+        .map(constString(_, "generated middleware canonical field name", annotation.pos))
+        .getOrElse(report.errorAndAbort("generated middleware field metadata is missing its canonical name"))
+      val countFlag = values
+        .get("countFlag")
+        .map(constBoolean(_, "generated middleware count-flag marker", annotation.pos))
+        .getOrElse(false)
+      (name, countFlag)
+    }
 
   def argDoc(text: Option[String]): Doc = Doc(text.getOrElse(""), "")
 

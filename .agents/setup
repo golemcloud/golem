@@ -1,15 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+setup_started=$SECONDS
+step_started=$SECONDS
+step_name=""
+
+start_step() {
+    if [[ -n "$step_name" ]]; then
+        printf '<== %s (%ss)\n' "$step_name" "$((SECONDS - step_started))"
+    fi
+    step_name="$1"
+    step_started=$SECONDS
+    printf '==> %s\n' "$step_name"
+}
+
+start_step "Install system packages"
+
 packages=(
     build-essential
     clang
     cmake
     curl
-    docker.io
     jq
     libssl-dev
     lld
+    openjdk-17-jdk-headless
     pkg-config
     protobuf-compiler
     redis-server
@@ -22,21 +37,32 @@ for package in "${packages[@]}"; do
         missing_packages+=("$package")
     fi
 done
+if ! command -v dockerd >/dev/null 2>&1; then
+    missing_packages+=(docker.io)
+fi
 
 if ((${#missing_packages[@]})); then
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
 fi
 
+start_step "Install Rust toolchain"
+
+export PATH="$HOME/.cargo/bin:$PATH"
+rustup_installed=false
 if ! command -v rustup >/dev/null 2>&1; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    rustup_installed=true
 fi
-export PATH="$HOME/.cargo/bin:$PATH"
 
-rustup update stable --no-self-update
+if [[ "$rustup_installed" == false ]]; then
+    rustup update stable --no-self-update
+fi
 rustup default stable
 rustup component add clippy rustfmt
 rustup target add wasm32-wasip1 wasm32-wasip2
+
+start_step "Install Rust development tools"
 
 if ! command -v cargo-binstall >/dev/null 2>&1; then
     curl --proto '=https' --tlsv1.2 -sSfL \
@@ -44,8 +70,11 @@ if ! command -v cargo-binstall >/dev/null 2>&1; then
 fi
 
 if ! cargo make --version 2>/dev/null | grep -q 'cargo-make 0.37.24'; then
-    cargo install --force --locked cargo-make --version 0.37.24
+    cargo binstall --force --locked --no-confirm --disable-telemetry \
+        --targets x86_64-unknown-linux-musl cargo-make@0.37.24
 fi
+
+start_step "Install Node.js and pnpm"
 
 node_version="24.19.0"
 node_home="/opt/node24"
@@ -65,6 +94,8 @@ if ! pnpm --version 2>/dev/null | grep -q '^11\.22\.0$'; then
     sudo "$node_home/bin/npm" install --global pnpm@11.22.0
 fi
 
+start_step "Install WASI SDK"
+
 if [[ ! -f /opt/wasi-sdk/VERSION ]] || ! grep -q '^25\.0$' /opt/wasi-sdk/VERSION; then
     wasi_archive="$(mktemp)"
     curl -sSfL \
@@ -76,12 +107,45 @@ if [[ ! -f /opt/wasi-sdk/VERSION ]] || ! grep -q '^25\.0$' /opt/wasi-sdk/VERSION
     rm -f "$wasi_archive"
 fi
 
-if ! wasm-rquickjs --version 2>/dev/null | grep -q '0.4.1'; then
-    cargo binstall --force --locked wasm-rquickjs-cli@0.4.1
+start_step "Install WebAssembly development tools"
+
+wasm_rquickjs_version="$(awk -F'"' '/^[[:space:]]*WASM_RQUICKJS_VERSION: / { print $2; exit }' .github/workflows/benchmark.yaml)"
+if [[ -z "$wasm_rquickjs_version" ]]; then
+    echo "Failed to read WASM_RQUICKJS_VERSION from .github/workflows/benchmark.yaml" >&2
+    exit 1
+fi
+if [[ "$(wasm-rquickjs --version 2>/dev/null || true)" != "wasm-rquickjs-cli $wasm_rquickjs_version" ]]; then
+    cargo binstall --force --locked --no-confirm --disable-telemetry \
+        "wasm-rquickjs-cli@$wasm_rquickjs_version"
 fi
 
 if ! cargo component --version 2>/dev/null | grep -q '0.21.1'; then
-    cargo binstall --force cargo-component@0.21.1
+    cargo binstall --force --no-confirm --disable-telemetry cargo-component@0.21.1
+fi
+
+start_step "Install guest bridge toolchains"
+
+sbt_version="$(sed -n 's/^sbt.version=//p' sdks/scala/project/build.properties)"
+if [[ "$(sbt --script-version 2>/dev/null || true)" != "$sbt_version" ]]; then
+    sbt_archive="$(mktemp)"
+    curl -fsSL "https://github.com/sbt/sbt/releases/download/v$sbt_version/sbt-$sbt_version.tgz" \
+        -o "$sbt_archive"
+    sudo tar xzf "$sbt_archive" -C /opt
+    sudo ln -sf /opt/sbt/bin/sbt /usr/local/bin/sbt
+    rm -f "$sbt_archive"
+fi
+
+export PATH="$HOME/.moon/bin:$PATH"
+moonbit_version="$(awk -F'"' '/^[[:space:]]*MOONBIT_INSTALL_VERSION: / { print $2; exit }' .github/workflows/ci.yaml)"
+if [[ -z "$moonbit_version" ]]; then
+    echo "Failed to read MOONBIT_INSTALL_VERSION from .github/workflows/ci.yaml" >&2
+    exit 1
+fi
+if [[ "$(moonc -v 2>/dev/null || true)" != "v$moonbit_version "* ]]; then
+    moon_installer="$(mktemp)"
+    curl -fsSL https://cli.moonbitlang.com/install/unix.sh -o "$moon_installer"
+    bash "$moon_installer" "$moonbit_version"
+    rm -f "$moon_installer"
 fi
 
 profile_marker="# Golem Amp orb toolchain"
@@ -93,8 +157,20 @@ if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
 export PATH="/opt/node24/bin:$HOME/.cargo/bin:$PATH"
 export WASI_SDK_VERSION=25
 export WASI_SDK_PATH=/opt/wasi-sdk
-export WASM_RQUICKJS_VERSION=0.4.1
 EOF
 fi
 
+if ! grep -Fqx '# Golem guest bridge toolchains' "$HOME/.bash_profile"; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# Golem guest bridge toolchains
+export PATH="$HOME/.moon/bin:$PATH"
+EOF
+fi
+
+start_step "Start orb services"
+
 amp orb services ensure
+
+printf '<== %s (%ss)\n' "$step_name" "$((SECONDS - step_started))"
+printf 'Setup completed in %ss\n' "$((SECONDS - setup_started))"

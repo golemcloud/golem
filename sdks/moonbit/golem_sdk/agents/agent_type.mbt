@@ -89,9 +89,9 @@ fn AgentTypeDef::collect_graphs(
 ) -> Array[@model.SchemaGraph] {
   let graphs : Array[@model.SchemaGraph] = []
   collect_input_graphs(self.constructor_.input, graphs)
-  for method in self.methods {
-    collect_input_graphs(method.input, graphs)
-    if method.output is Some(g) {
+  for agent_method in self.methods {
+    collect_input_graphs(agent_method.input, graphs)
+    if agent_method.output is Some(g) {
       graphs.push(g)
     }
   }
@@ -169,17 +169,17 @@ pub fn AgentTypeDef::to_agent_type(
   let encoder = @model.GraphEncoder::new(defs)
   let constructor_input = encode_input_schema(encoder, self.constructor_.input)
   let methods : Array[@common.AgentMethod] = []
-  for method in self.methods {
-    let input_schema = encode_input_schema(encoder, method.input)
-    let output_schema = encode_output_schema(encoder, method.output)
+  for agent_method in self.methods {
+    let input_schema = encode_input_schema(encoder, agent_method.input)
+    let output_schema = encode_output_schema(encoder, agent_method.output)
     methods.push({
-      name: method.name,
-      description: method.description,
-      http_endpoint: method.http_endpoint,
-      prompt_hint: method.prompt_hint,
+      name: agent_method.name,
+      description: agent_method.description,
+      http_endpoint: agent_method.http_endpoint,
+      prompt_hint: agent_method.prompt_hint,
       input_schema,
       output_schema,
-      read_only: method.read_only,
+      read_only: agent_method.read_only,
     })
   }
   let config : Array[@common.AgentConfigDeclaration] = []

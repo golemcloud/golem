@@ -34,6 +34,9 @@ use std::time::Duration;
 use test_r::test;
 use tokio::sync::RwLock;
 
+/// A [`QuotaRepo`] that persists nothing, so these tests exercise the service and state
+/// machinery without a database.
+#[derive(Debug, Default)]
 struct InMemoryQuotaRepo;
 
 #[async_trait]
@@ -47,6 +50,7 @@ impl QuotaRepo for InMemoryQuotaRepo {
     ) -> Result<(), QuotaRepoError> {
         Ok(())
     }
+
     async fn save_lease_release(
         &self,
         _resource: &QuotaResourceRecord,
@@ -56,6 +60,7 @@ impl QuotaRepo for InMemoryQuotaRepo {
     ) -> Result<(), QuotaRepoError> {
         Ok(())
     }
+
     async fn save_resource(
         &self,
         _record: &QuotaResourceRecord,
@@ -63,21 +68,25 @@ impl QuotaRepo for InMemoryQuotaRepo {
     ) -> Result<(), QuotaRepoError> {
         Ok(())
     }
+
     async fn delete_resource_and_leases(
         &self,
-        _id: ResourceDefinitionId,
+        _resource_definition_id: ResourceDefinitionId,
     ) -> Result<(), QuotaRepoError> {
         Ok(())
     }
+
     async fn get_all_resources(&self) -> Result<Vec<QuotaResourceRecord>, QuotaRepoError> {
         Ok(Vec::new())
     }
+
     async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
         Ok(Vec::new())
     }
+
     async fn delete_leases_for_resource(
         &self,
-        _id: ResourceDefinitionId,
+        _resource_definition_id: ResourceDefinitionId,
     ) -> Result<(), QuotaRepoError> {
         Ok(())
     }

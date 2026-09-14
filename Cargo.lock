@@ -775,7 +775,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "h2 0.3.27",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 0.2.12",
  "http 1.5.0",
  "http-body 0.4.6",
@@ -1716,7 +1716,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2635,9 +2635,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99e561700fe8c3a51189d8f8b5e83344fb1747b88cc0343e14d3c22842459624"
+checksum = "ac6b6856f399753c591dcdb7b57fd651eee3e07787672392cf551b8ba1725bdd"
 dependencies = [
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -2647,6 +2647,7 @@ dependencies = [
  "chrono-tz",
  "flate2",
  "hashbrown 0.16.1",
+ "im",
  "lazy_static",
  "mac_address",
  "nonempty-collections",
@@ -2658,9 +2659,9 @@ dependencies = [
 
 [[package]]
 name = "desert_macro"
-version = "0.1.9"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e622883bc90493a0921717f5363f8adf7cb5307419abda5126bfd624379ca785"
+checksum = "4573798d7c0123902a9fc19f43c1c0dd2daf587c121119fd5ebcdab46f4e984a"
 dependencies = [
  "bytes",
  "desert_core",
@@ -2672,12 +2673,13 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.9"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94677f3ac0a0b303a8b3dd01576348652c85e55da1b71a60f6b92f25180b66dd"
+checksum = "88084a4ce8019c315bcc0142f2fa97c1d7b389a96cfadea6f07a5607126667a0"
 dependencies = [
  "desert_core",
  "desert_macro",
+ "im",
 ]
 
 [[package]]
@@ -3010,6 +3012,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5692dd7b5a1978a5aeb0ce83b7655c58ca8efdcb79d21036ea249da95afec2c6"
 
 [[package]]
+name = "etcd-client"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef5da6e9a6ae89f4a91f80ba1caae45a5a924397a19947e18f5121a43285e9bc"
+dependencies = [
+ "http 1.5.0",
+ "prost 0.14.4",
+ "tokio",
+ "tokio-stream",
+ "tonic 0.14.6",
+ "tonic-build",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower 0.5.3",
+ "tower-service",
+]
+
+[[package]]
 name = "etcetera"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3139,8 +3159,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8cb01cd46b0cf372153850f4c6c272d9cbea2da513e07538405148f95bd789f3"
 dependencies = [
  "atomic",
+ "parking_lot",
  "pear",
  "serde",
+ "tempfile",
  "toml 0.8.23",
  "uncased",
  "version_check",
@@ -3671,6 +3693,7 @@ dependencies = [
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "desert_rust",
  "miette",
  "prost 0.14.4",
@@ -3712,10 +3735,13 @@ dependencies = [
  "futures-util",
  "fuzzy-matcher",
  "goldenfile",
+ "golem-api-grpc",
  "golem-client",
  "golem-common",
+ "golem-schema",
  "heck",
  "http 1.5.0",
+ "humanize-rs",
  "humansize",
  "include_dir",
  "indexmap 2.14.0",
@@ -3734,6 +3760,7 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "proptest",
+ "prost 0.14.4",
  "quote",
  "regex",
  "reqwest 0.13.4",
@@ -3747,6 +3774,7 @@ dependencies = [
  "serde_yaml",
  "shadow-rs",
  "shlex 1.3.0",
+ "sqlx",
  "strip-ansi-escapes",
  "strum",
  "strum_macros",
@@ -3760,6 +3788,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
+ "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.23.10+spec-1.0.0",
  "tracing",
@@ -3793,8 +3822,10 @@ name = "golem-client"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
+ "futures-util",
  "golem-common",
  "golem-openapi-client-generator",
  "http 1.5.0",
@@ -3805,6 +3836,8 @@ dependencies = [
  "serde_yaml",
  "test-r",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-tungstenite",
  "tracing",
  "uuid",
 ]
@@ -4007,6 +4040,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "heck",
  "http 1.5.0",
@@ -4068,6 +4102,7 @@ dependencies = [
  "base64 0.22.1",
  "bigdecimal",
  "bit-vec 0.6.3",
+ "blake3",
  "bytes",
  "chrono",
  "combine",
@@ -4104,6 +4139,7 @@ dependencies = [
  "chrono",
  "darling 0.20.11",
  "golem-common",
+ "golem-schema",
  "heck",
  "poem-openapi",
  "proc-macro-crate",
@@ -4141,6 +4177,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "h2 0.4.19",
  "headers",
  "hex",
  "hmac 0.12.1",
@@ -4199,6 +4236,7 @@ dependencies = [
  "chrono",
  "conditional-trait-gen",
  "desert_rust",
+ "etcd-client",
  "futures",
  "golem-api-grpc",
  "golem-common",
@@ -4222,11 +4260,13 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tonic 0.14.6",
  "tonic-health",
  "tonic-reflection",
  "tonic-tracing-opentelemetry",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
  "url",
  "uuid",
@@ -4292,6 +4332,7 @@ dependencies = [
  "applying",
  "arc-swap",
  "assert2",
+ "async-broadcast",
  "async-lock",
  "async-recursion",
  "async-scoped",
@@ -4303,6 +4344,7 @@ dependencies = [
  "bit-vec 0.6.3",
  "blake3",
  "bytes",
+ "cap-fs-ext",
  "cap-std",
  "cap-time-ext",
  "chrono",
@@ -4337,6 +4379,8 @@ dependencies = [
  "include_dir",
  "itertools 0.14.0",
  "lazy_static",
+ "libc",
+ "linux-raw-sys 0.12.1",
  "log",
  "mac_address",
  "md5",
@@ -4354,6 +4398,7 @@ dependencies = [
  "redis",
  "regex",
  "ringbuf",
+ "rustix 1.1.4",
  "rustls 0.23.43",
  "scc",
  "serde",
@@ -4361,6 +4406,7 @@ dependencies = [
  "sqlparser",
  "sqlx",
  "sqlx-core",
+ "stacker",
  "sysinfo",
  "system-interface",
  "tempfile",
@@ -4413,6 +4459,7 @@ dependencies = [
  "tempfile",
  "test-r",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tonic 0.14.6",
  "tonic-tracing-opentelemetry",
@@ -4446,9 +4493,11 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "golem-test-framework",
  "headers",
+ "hmac 0.12.1",
  "http 1.5.0",
  "http-body-util",
  "humantime-serde",
@@ -4480,6 +4529,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "strum_macros",
@@ -4552,9 +4602,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.18"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "839c0e8a181239723652be9062bb56ca5bf5f64011f73b623f6f4fc59086a228"
+checksum = "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -4810,6 +4860,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "humanize-rs"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "016b02deb8b0c415d8d56a6f0ab265e50c22df61194e37f9be75ed3a722de8a6"
+
+[[package]]
 name = "humansize"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4877,7 +4933,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 1.5.0",
  "http-body 1.1.0",
  "httparse",
@@ -4985,7 +5041,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5336,6 +5392,7 @@ dependencies = [
  "opentelemetry 0.30.0",
  "opentelemetry_sdk 0.30.0",
  "pretty_assertions",
+ "prost 0.14.4",
  "rand 0.9.5",
  "redis",
  "reqwest 0.13.4",
@@ -7907,7 +7964,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.43",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -7946,7 +8003,7 @@ dependencies = [
  "cfg_aliases 0.2.2",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -8378,7 +8435,7 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
@@ -10058,7 +10115,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -10404,6 +10461,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "slab",
@@ -10571,7 +10629,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "flate2",
- "h2 0.4.18",
+ "h2 0.4.19",
  "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
@@ -11523,9 +11581,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.1"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3f4f07c06f38d6858db65eed7975674f19aca749e6fd8bd56dd6e9376b8d33"
+checksum = "b6b15c48fc33c7a6ec5b87ea703ff8f19cc17eafc0929cc2caea8805dbc8ecb7"
 dependencies = [
  "anyhow",
  "camino",
@@ -12148,7 +12206,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

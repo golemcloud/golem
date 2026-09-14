@@ -12,6 +12,16 @@ declare module 'golem:core/types@2.0.0' {
   }
   export class Secret {
   }
+  export class SchemaValueStream {
+    /**
+     * Wraps any native schema-value reader for placement in a value tree.
+     */
+    static wrap(reader: AsyncIterable<SchemaValueTree>): Promise<SchemaValueStream>;
+    /**
+     * Consumes a schema-value-stream wrapper and returns its native reader.
+     */
+    static unwrap(value: SchemaValueStream): Promise<AsyncIterable<SchemaValueTree>>;
+  }
   export class PermissionCard {
   }
   /**
@@ -795,6 +805,10 @@ declare module 'golem:core/types@2.0.0' {
   {
     tag: 'permission-card-handle'
     val: PermissionCard
+  } |
+  {
+    tag: 'stream-value'
+    val: SchemaValueStream
   };
   /**
    * ============================================================

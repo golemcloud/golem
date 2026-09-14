@@ -32,6 +32,7 @@ chrono = { workspace = true }
 async-trait = { workspace = true }
 conditional-trait-gen = { workspace = true }
 desert_rust = { workspace = true }
+etcd-client = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
@@ -49,6 +50,7 @@ sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
@@ -60,6 +62,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 golem-test-framework = { workspace = true }
 test-r = { workspace = true }
+tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true }
 uuid = { workspace = true }
 tempfile = { workspace = true }

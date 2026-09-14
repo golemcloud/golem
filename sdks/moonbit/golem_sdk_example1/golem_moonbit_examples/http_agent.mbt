@@ -12,7 +12,7 @@ pub(all) struct WeatherAgent {
 ///|
 /// Creates a weather agent for a specific city
 fn WeatherAgent::new(city : String) -> WeatherAgent {
-  { city, last_temperature: 0.0 }
+  { city, last_temperature: 0.0, }
 }
 
 ///|

@@ -36,3 +36,73 @@ componentTemplates:
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+  scala-tool-middleware:
+    presets:
+      optimized:
+        default: true
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "{{ component_name | to_snake_case }}/golemBuildComponent {{ component_name }} .golem/{{ component_name | to_snake_case }}.js .generated/tool_middleware_guest.wasm"
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ appRootDir }}/*.sbt"
+          - "{{ appRootDir }}/project"
+          targets:
+          - "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/.generated/tool_middleware_guest.wasm"
+          module: "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      quick:
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "{{ component_name | to_snake_case }}/golemBuildComponent {{ component_name }} .golem/{{ component_name | to_snake_case }}.js .generated/tool_middleware_guest.wasm"
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ appRootDir }}/*.sbt"
+          - "{{ appRootDir }}/project"
+          targets:
+          - "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/.generated/tool_middleware_guest.wasm"
+          module: "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+  scala-agent-tool-middleware:
+    presets:
+      optimized:
+        default: true
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "{{ component_name | to_snake_case }}/golemBuildComponent {{ component_name }} .golem/{{ component_name | to_snake_case }}.js .generated/agent_tool_middleware_guest.wasm"
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ appRootDir }}/*.sbt"
+          - "{{ appRootDir }}/project"
+          targets:
+          - "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/.generated/agent_tool_middleware_guest.wasm"
+          module: "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      quick:
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "{{ component_name | to_snake_case }}/golemBuildComponent {{ component_name }} .golem/{{ component_name | to_snake_case }}.js .generated/agent_tool_middleware_guest.wasm"
+          dir: "{{ appRootDir }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ appRootDir }}/*.sbt"
+          - "{{ appRootDir }}/project"
+          targets:
+          - "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/.generated/agent_tool_middleware_guest.wasm"
+          module: "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

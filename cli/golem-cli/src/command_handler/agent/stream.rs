@@ -84,6 +84,19 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
     }
 }
 
+pub(super) fn insecure_connector() -> anyhow::Result<Connector> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = InsecureServerCertVerifier {
+        signature_algorithms: provider.signature_verification_algorithms,
+    };
+    let tls_config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    Ok(Connector::Rustls(Arc::new(tls_config)))
+}
+
 pub struct AgentConnection {
     request: Request,
     connector: Option<Connector>,
@@ -227,16 +240,7 @@ impl AgentConnection {
         }
 
         let connector = if allow_insecure {
-            let provider = Arc::new(rustls::crypto::ring::default_provider());
-            let verifier = InsecureServerCertVerifier {
-                signature_algorithms: provider.signature_verification_algorithms,
-            };
-            let tls_config = rustls::ClientConfig::builder_with_provider(provider)
-                .with_safe_default_protocol_versions()?
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(verifier))
-                .with_no_client_auth();
-            Some(Connector::Rustls(Arc::new(tls_config)))
+            Some(insecure_connector()?)
         } else {
             None
         };

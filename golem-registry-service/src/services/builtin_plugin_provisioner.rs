@@ -311,6 +311,8 @@ async fn deploy_environment(
                 current_revision: plan.current_revision,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion(Uuid::new_v4().to_string()),
+                publish_tools: Vec::new(),
+                remote_tools: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
@@ -364,7 +366,8 @@ async fn register_plugin(
                 })?
                 .ok_or_else(|| {
                     anyhow::anyhow!("Plugin '{plugin_name}' exists but could not be loaded")
-                })?;
+                })?
+                .plugin;
             Ok(())
         }
         Err(other) => Err(anyhow::anyhow!(

@@ -14,10 +14,10 @@
 
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
-use crate::schema::render::openapi::to_openapi_components;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, SchemaType, UnionBranch, UnionSpec,
 };
+use golem_schema::schema::render::openapi::to_openapi_components;
 use serde_json::{Value, json};
 use test_r::test;
 

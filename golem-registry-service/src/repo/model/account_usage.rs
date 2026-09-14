@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::repo::model::plan::PlanRecord;
-use golem_common::model::account_usage::{
-    BYTE_SECONDS_PER_GB_MONTH, FUEL_PER_GCU, StorageLimit, StorageUsagePeriod,
-};
+use chrono::{DateTime, Utc};
+use golem_common::model::account_usage::{AccountUsagePeriod, StorageLimit};
+use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::model::ResourceLimits;
 use golem_service_base::repo::NumericU64;
 use sqlx::FromRow;
@@ -92,14 +92,6 @@ impl UsageType {
     }
 }
 
-pub fn byte_seconds_to_gb_month(byte_seconds: u64) -> f64 {
-    byte_seconds as f64 / BYTE_SECONDS_PER_GB_MONTH
-}
-
-pub fn fuel_to_gcu(fuel: u64) -> f64 {
-    fuel as f64 / FUEL_PER_GCU as f64
-}
-
 #[derive(FromRow, Debug, Clone, PartialEq)]
 pub struct AccountUsageStatsRecord {
     pub account_id: Uuid,
@@ -120,6 +112,7 @@ pub struct AccountUsage {
     pub storage_limit: StorageLimit,
     pub max_memory_per_worker: golem_common::model::account_usage::MemoryLimit,
     pub monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit,
+    pub metering: Option<ResourceUsageMetering>,
     pub changes: BTreeMap<UsageType, i64>,
 }
 
@@ -133,12 +126,62 @@ pub struct AccountUsagePlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StorageUsageHistoryRecord {
-    pub period: StorageUsagePeriod,
+pub struct AccountUsageRecord {
+    pub period: AccountUsagePeriod,
+    pub as_of: Option<DateTime<Utc>>,
     pub durable_storage_byte_seconds: u64,
     pub ephemeral_storage_byte_seconds: u64,
     pub compute_fuel: u64,
     pub memory_gb_seconds: u64,
+    pub metering: Option<ResourceUsageMetering>,
+}
+
+impl AccountUsageRecord {
+    pub fn new(period: AccountUsagePeriod) -> Self {
+        Self {
+            period,
+            as_of: None,
+            durable_storage_byte_seconds: 0,
+            ephemeral_storage_byte_seconds: 0,
+            compute_fuel: 0,
+            memory_gb_seconds: 0,
+            metering: None,
+        }
+    }
+
+    pub fn apply(&mut self, usage_type: UsageType, value: u64, updated_at: DateTime<Utc>) {
+        if self.as_of.is_none_or(|as_of| updated_at > as_of) {
+            self.as_of = Some(updated_at);
+        }
+        match usage_type {
+            UsageType::MonthlyDurableAgentStorageByteSeconds => {
+                self.durable_storage_byte_seconds = value
+            }
+            UsageType::MonthlyEphemeralStorageByteSeconds => {
+                self.ephemeral_storage_byte_seconds = value
+            }
+            UsageType::MonthlyGasLimit => self.compute_fuel = value,
+            UsageType::MonthlyMemoryGbSeconds => self.memory_gb_seconds = value,
+            _ => {}
+        }
+    }
+
+    pub fn apply_metering(
+        &mut self,
+        compute: bool,
+        memory: bool,
+        filesystem: bool,
+        updated_at: DateTime<Utc>,
+    ) {
+        if self.as_of.is_none_or(|as_of| updated_at > as_of) {
+            self.as_of = Some(updated_at);
+        }
+        self.metering = Some(ResourceUsageMetering {
+            compute,
+            memory,
+            filesystem,
+        });
+    }
 }
 
 impl AccountUsage {
@@ -204,19 +247,44 @@ impl AccountUsage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{AccountUsageRecord, UsageType};
+    use chrono::{DateTime, Utc};
+    use golem_common::model::account_usage::AccountUsagePeriod;
     use test_r::test;
 
-    #[test]
-    fn converts_byte_seconds_to_gb_month() {
-        assert_eq!(
-            byte_seconds_to_gb_month(BYTE_SECONDS_PER_GB_MONTH as u64),
-            1.0
-        );
+    fn timestamp(seconds: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(seconds, 0).unwrap()
     }
 
     #[test]
-    fn converts_fuel_to_gcu() {
-        assert_eq!(fuel_to_gcu(FUEL_PER_GCU), 1.0);
+    fn account_usage_record_keeps_latest_usage_timestamp() {
+        let mut record = AccountUsageRecord::new(AccountUsagePeriod {
+            year: 2026,
+            month: 4,
+        });
+
+        record.apply(UsageType::MonthlyGasLimit, 1, timestamp(100));
+        record.apply(UsageType::MonthlyMemoryGbSeconds, 2, timestamp(200));
+        record.apply(
+            UsageType::MonthlyDurableAgentStorageByteSeconds,
+            3,
+            timestamp(150),
+        );
+
+        assert_eq!(record.as_of, Some(timestamp(200)));
+    }
+
+    #[test]
+    fn account_usage_record_keeps_latest_metering_timestamp() {
+        let mut record = AccountUsageRecord::new(AccountUsagePeriod {
+            year: 2026,
+            month: 4,
+        });
+
+        record.apply_metering(true, true, true, timestamp(100));
+        record.apply_metering(false, false, false, timestamp(200));
+        record.apply_metering(true, false, true, timestamp(150));
+
+        assert_eq!(record.as_of, Some(timestamp(200)));
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::replay::ReplayedRequestBodyDrainReadiness;
 use super::request_body::{
     DurableRequestBody, DurableRequestBodyDrainOutcome, RecordedRequestBodyTerminal,
     recorded_request_body_replay, scan_recorded_request_body_frames,
@@ -47,6 +48,10 @@ pub(crate) struct P3HttpSendRebuild {
     /// the oplog yet; after a restart the body is reconstructed from the
     /// recorded frames instead.
     pub(super) durable_body: Option<DurableRequestBody>,
+    /// Completion of replay's request-body drain when the recorded frame stream was incomplete at
+    /// the send terminal. It proves the final reproduced body length and trailer presence after
+    /// healing; missing-scope recovery must validate the recording against it before re-issuing.
+    pub(super) replayed_request_body_drain: Option<ReplayedRequestBodyDrainReadiness>,
 }
 
 /// Aborts the spawned I/O task of a re-issued request when dropped, bounding
@@ -93,6 +98,79 @@ pub(super) enum ResendOutcome {
     /// The recorded request body cannot be reconstructed; the reason describes
     /// why (without any caller-specific context prefix).
     Refused(String),
+}
+
+/// Builds the readiness check used only after replay has proved the response-body scope is missing.
+/// It verifies that the replayed send has a complete request-body recording before recovery may
+/// re-issue it. The check performs no network I/O and writes no oplog entries.
+pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    rebuild: &mut P3HttpSendRebuild,
+) -> impl std::future::Future<Output = Result<(), String>> + Send + 'static {
+    let durable_body_present = rebuild.durable_body.is_some();
+    let replayed_request_body_drain = rebuild.replayed_request_body_drain.take();
+    let send_start_index = rebuild.recorded_request_body;
+    let oplog = accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .state
+            .oplog
+            .clone()
+    });
+    async move {
+        if durable_body_present {
+            return Ok(());
+        }
+
+        let reproduced = match replayed_request_body_drain {
+            Some(drain) => Some(drain.proof.await.map_err(|_| {
+                "the replayed request-body drain ended before proving recording health".to_string()
+            })??),
+            None => None,
+        };
+        let scan = scan_recorded_request_body_frames(oplog, send_start_index)
+            .await
+            .map_err(|error| {
+                format!("the recorded request-body frames could not be read: {error}")
+            })?;
+        match &scan.terminal {
+            Some(RecordedRequestBodyTerminal::End) => {}
+            Some(RecordedRequestBodyTerminal::Error(error)) => Err(format!(
+                "the recorded request body ended with a guest body error: {error:?}"
+            ))?,
+            None => {
+                return Err(
+                    "the recorded request body is incomplete (no terminal frame was recorded)"
+                        .to_string(),
+                );
+            }
+        }
+        if let Some(reproduced) = reproduced {
+            if scan.covered_len != reproduced.final_length {
+                return Err(format!(
+                    "the healed request-body recording covers {} bytes, but replay reproduced {} bytes",
+                    scan.covered_len, reproduced.final_length
+                ));
+            }
+            if scan
+                .data_frames
+                .iter()
+                .any(|frame| frame.offset.saturating_add(frame.len) > reproduced.final_length)
+            {
+                return Err(
+                    "the request-body recording contains data beyond the length reproduced during replay"
+                        .to_string(),
+                );
+            }
+            if scan.trailers_recorded() != reproduced.trailers_present {
+                return Err(format!(
+                    "the healed request-body recording's trailer presence does not match replay (recorded: {}, reproduced: {})",
+                    scan.trailers_recorded(),
+                    reproduced.trailers_present
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Reconstructs the p3 request resource-equivalent from the recorded head:
@@ -412,6 +490,7 @@ mod tests {
             recorded_status: 200,
             recorded_request_body: OplogIndex::INITIAL,
             durable_body: None,
+            replayed_request_body_drain: None,
         };
 
         let request = build_rebuilt_request(

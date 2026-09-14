@@ -8,7 +8,7 @@ struct RpcExampleAgent {
 ///|
 /// Creates a new RPC example agent
 fn RpcExampleAgent::new() -> RpcExampleAgent {
-  { last_value: 0 }
+  { last_value: 0, }
 }
 
 ///|

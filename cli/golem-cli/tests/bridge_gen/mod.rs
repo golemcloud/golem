@@ -16,7 +16,12 @@ pub mod fixtures;
 pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;
+// The Rust compile checks are the bulk of the bridge_gen suite; the it-cli `bridge_gen_rust`
+// CI shard runs only them and the `bridge_gen` shard skips them.
+test_r::tag_suite!(rust, bridge_gen_rust);
 pub mod scala;
+// Scala compile checks reference the in-tree SDK and share its sbt target directories.
+test_r::sequential_suite!(scala);
 pub mod schema_graph_literals;
 #[path = "../../src/bridge_gen/schema_graph_test_fixture.rs"]
 #[allow(dead_code)]

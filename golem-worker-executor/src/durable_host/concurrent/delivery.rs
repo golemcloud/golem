@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::tail_work::TailActivity;
 
 pub(super) type MarkerReceipt = tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>;
 
@@ -173,7 +174,7 @@ pub struct CompletionDelivery {
 pub(super) enum CompletionDeliveryState {
     /// Live, armed: the `End` is persisted and a torn/failed delivery must record a marker.
     Live(Box<LiveDelivery>),
-    /// Live, but the call was not persisted (snapshotting): nothing to reconcile.
+    /// Live, but the call was not persisted: nothing to reconcile.
     Unarmed,
     /// Replay of a recorded terminal the guest observed (or must observe): see [`ReplayDelivery`]
     /// for the per-disposition gating.
@@ -321,6 +322,16 @@ impl CompletionDelivery {
         matches!(self.state, CompletionDeliveryState::ReplayDiscarded)
     }
 
+    /// Whether this replayed completion has a recorded delivery marker that must be reached
+    /// before cancellation can settle the guest-facing transfer. Callers inspect this before
+    /// [`Self::prepare_delivery`] replaces the marker position with an armed barrier.
+    pub fn is_replay_at_marker(&self) -> bool {
+        matches!(
+            self.state,
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker { .. })
+        )
+    }
+
     /// Whether the token is live and armed (a torn delivery would record a marker). Callers use
     /// this to route ordered post-`End` appends through [`Self::append_ordered`] instead of a
     /// direct oplog append that would race the torn-drop marker.
@@ -343,8 +354,13 @@ impl CompletionDelivery {
     /// token tail-gated and settles it silently, keeping the `End` markerless for the next
     /// recovery.
     ///
-    /// Live and immediate replay are no-ops.
-    pub async fn prepare_delivery(&mut self) -> Result<(), WorkerExecutorError> {
+    /// Tracked background tasks supply their activity so only the passive markerless tail wait
+    /// can park across invocation settlement. Cursor transactions and marker-bearing waits stay
+    /// active. Live and immediate replay are no-ops.
+    pub async fn prepare_delivery(
+        &mut self,
+        activity: Option<&TailActivity>,
+    ) -> Result<(), WorkerExecutorError> {
         match &self.state {
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
                 replay_state,
@@ -361,7 +377,7 @@ impl CompletionDelivery {
             }
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(live)) => {
                 let replay_state = live.marker.recorder.replay_state.clone();
-                replay_state.await_natural_tail_end().await?;
+                replay_state.await_natural_tail_end(activity).await?;
                 if let CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(
                     live,
                 )) = std::mem::replace(&mut self.state, CompletionDeliveryState::Done)
@@ -468,7 +484,7 @@ impl CompletionDelivery {
     /// lets a markerless `End` be tail-gated on replay — a completion consumed host-internally
     /// would legitimize durable tail entries that depend on an unmarked delivery.
     ///
-    /// Non-live tokens (replay, unpersisted snapshotting calls) settle immediately; if the
+    /// Non-live tokens (replay and unpersisted calls) settle immediately; if the
     /// accessor has no guest-visible host subtask (e.g. a spawned background task), the token
     /// settles without a marker, matching the pre-observer behavior of consuming it at the host
     /// return. A tail-gated markerless replay token checks for that subtask *before* gating:
@@ -491,7 +507,7 @@ impl CompletionDelivery {
             self.state = CompletionDeliveryState::Done;
             return Ok(());
         }
-        self.prepare_delivery().await?;
+        self.prepare_delivery(None).await?;
         let replay_barrier = matches!(
             self.state,
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
@@ -609,7 +625,7 @@ impl CompletionDelivery {
         oplog: Arc<dyn Oplog>,
         start_idx: OplogIndex,
     ) -> Result<Self, WorkerExecutorError> {
-        let replay_state = ReplayState::new(
+        let replay_state = ReplayState::new_for_owner(
             golem_common::model::OwnedAgentId {
                 environment_id: golem_common::model::environment::EnvironmentId::new(),
                 agent_id: golem_common::model::AgentId {
@@ -620,6 +636,7 @@ impl CompletionDelivery {
             oplog.clone(),
             golem_common::model::regions::DeletedRegions::default(),
             None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
         )
         .await?;
         let recorder = CompletionMarkerRecorder::new(oplog, replay_state);

@@ -19,6 +19,7 @@ package golem.runtime.tool
 import golem.host.ToolWireInterop
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
+import golem.tool.{Doc, ToolMiddlewareDescriptor, ToolMiddlewareScope}
 import golem.tool.wire.{WitTool, WitToolError}
 import zio.test._
 
@@ -68,6 +69,55 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
     catch { case t: Throwable => Some(t) }
 
   def spec: Spec[Any, Any] = suite("ToolWireInteropSpec")(
+    test("tool_middleware_descriptors_roundtrip_through_js") {
+      val tool        = leafTool("interop-middleware-tool").tryToTool.toOption.get
+      val descriptors = List(
+        ToolMiddlewareDescriptor(
+          "interop-monomorphic",
+          List("mono"),
+          Doc("summary", "description"),
+          ToolMiddlewareScope.Monomorphic(tool, Some(tool))
+        ),
+        ToolMiddlewareDescriptor(
+          "interop-universal",
+          Nil,
+          Doc.empty,
+          ToolMiddlewareScope.Universal
+        )
+      )
+      val roundtripped =
+        descriptors.map(value => ToolWireInterop.toolMiddlewareFromJs(ToolWireInterop.toolMiddlewareToJs(value)))
+      assertTrue(roundtripped == descriptors)
+    },
+    test("tool_middleware_scope_js_shape_matches_dts") {
+      val tool        = leafTool("interop-middleware-shape").tryToTool.toOption.get
+      val monomorphic = dyn(
+        ToolWireInterop.toolMiddlewareToJs(
+          ToolMiddlewareDescriptor(
+            "interop-monomorphic-shape",
+            List("shape"),
+            Doc.empty,
+            ToolMiddlewareScope.Monomorphic(tool, None)
+          )
+        )
+      )
+      val universal = dyn(
+        ToolWireInterop.toolMiddlewareToJs(
+          ToolMiddlewareDescriptor("interop-universal-shape", Nil, Doc.empty, ToolMiddlewareScope.Universal)
+        )
+      )
+      val monomorphicScope = dyn(monomorphic.scope)
+      val monomorphicValue = dyn(monomorphicScope.selectDynamic("val"))
+      assertTrue(
+        monomorphic.name.asInstanceOf[String] == "interop-monomorphic-shape",
+        monomorphic.aliases.asInstanceOf[js.Array[String]].toList == List("shape"),
+        monomorphicScope.tag.asInstanceOf[String] == "monomorphic",
+        !js.isUndefined(monomorphicValue.presented),
+        js.isUndefined(monomorphicValue.expected),
+        dyn(universal.scope).tag.asInstanceOf[String] == "universal",
+        js.isUndefined(dyn(universal.scope).selectDynamic("val"))
+      )
+    },
     test("rich_tool_roundtrips_through_js") {
       val roundtripped = ToolWireInterop.toolFromJs(ToolWireInterop.toolToJs(richWit))
       assertTrue(roundtripped == richWit)

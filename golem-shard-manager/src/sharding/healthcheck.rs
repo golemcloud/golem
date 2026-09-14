@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::error::HealthCheckError;
+use super::model::{ExecutorAddr, ExecutorId};
 use super::worker_executor::WorkerExecutorService;
 use async_trait::async_trait;
 use golem_common::model::{Pod, RetryConfig};
@@ -28,19 +29,22 @@ pub trait HealthCheck: Send + Sync {
     async fn health_check(&self, pod: Pod, pod_name: Option<String>) -> bool;
 }
 
-/// Executes healthcheck on all the given worker executors, and returns a set of unhealthy ones
-pub async fn get_unhealthy_pods(
+/// Executes healthcheck on all the given worker executors, and returns the set of unhealthy ones
+pub async fn get_unhealthy_executors(
     health_check: &Arc<dyn HealthCheck>,
-    pods: &[(Pod, Option<String>)],
-) -> HashSet<Pod> {
-    let futures: Vec<_> = pods
+    executors: &[(ExecutorId, ExecutorAddr, Option<String>)],
+) -> HashSet<ExecutorId> {
+    let futures: Vec<_> = executors
         .iter()
-        .map(|(pod, pod_name)| {
+        .map(|(executor_id, addr, pod_name)| {
             let health_check = health_check.clone();
             Box::pin(async move {
-                match health_check.health_check(*pod, pod_name.clone()).await {
+                match health_check
+                    .health_check(Pod::from(*addr), pod_name.clone())
+                    .await
+                {
                     true => None,
-                    false => Some(*pod),
+                    false => Some(*executor_id),
                 }
             })
         })

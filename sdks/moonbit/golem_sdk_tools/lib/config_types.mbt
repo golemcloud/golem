@@ -2,7 +2,7 @@
 /// Parsed information about a config struct annotated with `#derive.config`.
 pub(all) struct ConfigTypeInfo {
   name : String
-  package : String
+  package_path : String
   fields : Array[(String, ParamType)]
 } derive(Debug, Eq)
 
@@ -11,7 +11,7 @@ pub(all) struct ConfigTypeInfo {
 /// The `package` parameter is the relative path of the package within the project.
 pub fn parse_config_types(
   files : Array[(String, String)],
-  package? : String = "",
+  package_path? : String = "",
 ) -> Array[ConfigTypeInfo] raise AgentParseError {
   let results : Array[ConfigTypeInfo] = []
   for pair in files {
@@ -30,13 +30,13 @@ pub fn parse_config_types(
           }
           if is_config {
             let name = type_decl.tycon
-            if not(type_decl.params.is_empty()) {
+            if !type_decl.params.is_empty() {
               raise AgentParseError(
                 "#derive.config does not support generic types, but '\{name}' has type parameters",
               )
             }
             match type_decl.components {
-              Record(fields~, ..) => {
+              Record(fields~) => {
                 let result : Array[(String, ParamType)] = []
                 let field_arr = fields.to_array()
                 for field in field_arr {
@@ -44,7 +44,7 @@ pub fn parse_config_types(
                   let field_type = syntax_type_to_param_type(field.ty)
                   result.push((field_name, field_type))
                 }
-                results.push({ name, package, fields: result })
+                results.push({ name, package_path, fields: result, })
               }
               _ =>
                 raise AgentParseError(
@@ -70,16 +70,16 @@ pub fn validate_config_types(
 ) -> Unit raise AgentParseError {
   // Build a lookup keyed by bare name, but store all config types with that name
   // to detect ambiguity. Also build a qualified lookup for cross-package refs.
-  let by_bare_name : Map[String, Array[ConfigTypeInfo]] = {}
-  let by_qualified : Map[String, ConfigTypeInfo] = {}
+  let by_bare_name : Map[String, Array[ConfigTypeInfo]] = Map([])
+  let by_qualified : Map[String, ConfigTypeInfo] = Map([])
   for ct in config_types {
     match by_bare_name.get(ct.name) {
       Some(arr) => arr.push(ct)
       None => by_bare_name[ct.name] = [ct]
     }
     // Qualified key: "@pkg_alias.TypeName" — use last segment of package path
-    if ct.package.length() > 0 {
-      let pkg_alias = last_path_segment(ct.package)
+    if ct.package_path.length() > 0 {
+      let pkg_alias = last_path_segment(ct.package_path)
       by_qualified["@\{pkg_alias}.\{ct.name}"] = ct
     }
   }
@@ -93,11 +93,11 @@ pub fn validate_config_types(
           // Bare name — match against same package or unambiguous global
           match by_bare_name.get(type_name) {
             Some(candidates) =>
-              candidates.iter().any(fn(ct) { ct.package == agent_package })
+              candidates.iter().any(fn(ct) { ct.package_path == agent_package })
             None => false
           }
         }
-        if not(found) {
+        if !found {
           raise AgentParseError(
             "Agent '\{agent.name}' references config type '\{type_name}' which is not annotated with #derive.config",
           )
@@ -113,7 +113,7 @@ pub fn validate_config_types(
   // (rather than silently treating them as opaque leaves, which would mis-encode
   // the override paths).
   reject_cross_package_config_refs(config_types)
-  let config_type_names : Map[String, ConfigTypeInfo] = {}
+  let config_type_names : Map[String, ConfigTypeInfo] = Map([])
   for ct in config_types {
     config_type_names[ct.name] = ct
   }
@@ -129,11 +129,11 @@ pub fn validate_config_types(
 fn reject_cross_package_config_refs(
   config_types : Array[ConfigTypeInfo],
 ) -> Unit raise AgentParseError {
-  let by_qualified : Map[String, ConfigTypeInfo] = {}
+  let by_qualified : Map[String, ConfigTypeInfo] = Map([])
   for ct in config_types {
-    if ct.package.length() > 0 {
-      let alias = last_path_segment(ct.package)
-      by_qualified["@\{alias}.\{ct.name}"] = ct
+    if ct.package_path.length() > 0 {
+      let package_alias = last_path_segment(ct.package_path)
+      by_qualified["@\{package_alias}.\{ct.name}"] = ct
     }
   }
   if by_qualified.is_empty() {
@@ -158,7 +158,7 @@ fn check_no_cross_package_config_ref(
     Simple(name) =>
       match by_qualified.get(name) {
         Some(resolved) =>
-          if resolved.package != owner.package {
+          if resolved.package_path != owner.package_path {
             raise AgentParseError(
               "Config type '\{owner.name}' field '\{field_name}' references #derive.config type '\{name}' in another package; cross-package nested config is not supported — move the nested config into the same package as '\{owner.name}'",
             )

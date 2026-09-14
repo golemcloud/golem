@@ -24,7 +24,7 @@ use golem_common::model::oplog::{
     HostResponseConfigGetAllResponse, HostResponseConfigGetResponse,
 };
 use golem_common::schema::TypedSchemaValue;
-use golem_common::schema::render::json_value::to_json_value;
+use golem_schema::schema::render::json_value::to_json_value;
 
 const CONFIG_PERMISSION_DENIED: &str = "permission denied";
 

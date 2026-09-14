@@ -40,18 +40,18 @@ fn make_client(
   constructor_input : @types.SchemaValueTree,
   phantom_id : @types.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   let rpc = @agentHost.WasmRpc::wasm_rpc(
     agent_type_name, constructor_input, phantom_id, agent_config,
   )
-  { agent_type_name, constructor_input, phantom_id, rpc }
+  { agent_type_name, constructor_input, phantom_id, rpc, }
 }
 
 ///|
 pub fn AgentClient::get(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   make_client(agent_type_name, constructor_input, None, [])
 }
 
@@ -60,7 +60,7 @@ pub fn AgentClient::get_with_config(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
   agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   make_client(agent_type_name, constructor_input, None, agent_config)
 }
 
@@ -68,7 +68,7 @@ pub fn AgentClient::get_with_config(
 pub fn AgentClient::new_phantom(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   let phantom_id = @apiHost.generate_idempotency_key()
   AgentClient::get_phantom(agent_type_name, constructor_input, phantom_id)
 }
@@ -78,7 +78,7 @@ pub fn AgentClient::new_phantom_with_config(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
   agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   let phantom_id = @apiHost.generate_idempotency_key()
   AgentClient::get_phantom_with_config(
     agent_type_name, constructor_input, phantom_id, agent_config,
@@ -91,7 +91,7 @@ pub fn AgentClient::new_phantom_with_config(
 pub fn AgentClient::ephemeral(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   make_client(agent_type_name, constructor_input, None, [])
 }
 
@@ -100,7 +100,7 @@ pub fn AgentClient::ephemeral_with_config(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
   agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   make_client(agent_type_name, constructor_input, None, agent_config)
 }
 
@@ -109,7 +109,7 @@ pub fn AgentClient::get_phantom(
   agent_type_name : String,
   constructor_input : @types.SchemaValueTree,
   phantom_id : @types.Uuid,
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   make_client(agent_type_name, constructor_input, Some(phantom_id), [])
 }
 
@@ -119,7 +119,7 @@ pub fn AgentClient::get_phantom_with_config(
   constructor_input : @types.SchemaValueTree,
   phantom_id : @types.Uuid,
   agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient raise @common.AgentError {
+) -> AgentClient {
   make_client(
     agent_type_name,
     constructor_input,
@@ -159,11 +159,9 @@ pub async fn AgentClient::invoke_and_await(
 ) -> InvocationResult[@types.SchemaValueTree?] {
   let invocation = self.rpc.async_invoke_and_await(function_name, input, None)
   defer invocation.future.drop()
-  let result = invocation.future.get() catch {
-    e => {
-      invocation.future.cancel()
-      raise e
-    }
+  let result = {
+    errdefer invocation.future.cancel()
+    invocation.future.get()
   }
   match result {
     Ok(value) => {
@@ -171,7 +169,7 @@ pub async fn AgentClient::invoke_and_await(
         agent_id: invocation.metadata.agent_id,
         idempotency_key: invocation.metadata.idempotency_key,
       }
-      { metadata, value }
+      { metadata, value, }
     }
     Err(e) => panic_on_rpc_error(e)
   }
@@ -185,7 +183,7 @@ pub fn AgentClient::invoke(
 ) -> InvocationMetadata {
   match self.rpc.invoke(function_name, input, None) {
     Ok(value) =>
-      { agent_id: value.agent_id, idempotency_key: value.idempotency_key }
+      { agent_id: value.agent_id, idempotency_key: value.idempotency_key, }
     Err(e) => panic_on_rpc_error(e)
   }
 }
@@ -250,7 +248,7 @@ fn[T] panic_on_rpc_error(e : @agentHost.RpcError) -> T {
     @agentHost.RpcError::RemoteInternalError(msg) =>
       abort("RPC remote internal error: " + msg)
     @agentHost.RpcError::RemoteAgentError(e) =>
-      abort("RPC remote agent error: \{e}")
+      abort("RPC remote agent error: \{Repr(e)}")
   }
 }
 
@@ -267,5 +265,5 @@ pub fn[T : @schema.IntoSchema] typed_config_value(
   ) catch {
     e => raise @common.AgentError::InvalidInput(e.to_string())
   }
-  { path, value: wire }
+  { path, value: wire, }
 }

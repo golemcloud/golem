@@ -4,3 +4,5 @@ import {
   "golemcloud/golem_sdk/interface/wasi/blobstore/container",
   "golemcloud/golem_sdk/interface/wasi/blobstore/types",
 }
+
+supported_targets = "+wasm"

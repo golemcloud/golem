@@ -21,6 +21,7 @@ use super::environment::EnvironmentId;
 use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use super::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
 use super::quota::ResourceDefinitionCreation;
+use super::tool::{RemoteToolDeployment, ToolName};
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use derive_more::Display;
 
@@ -97,6 +98,12 @@ declare_structs! {
         pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
+        pub publish_tools: Vec<ToolName>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub remote_tools: Vec<RemoteToolDeployment>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
         pub replace_incompatible_agent_secrets: bool,
     }
 
@@ -112,6 +119,8 @@ declare_structs! {
         pub components: Vec<DeploymentPlanComponentEntry>,
         pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>,
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
+        pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
+        pub published_tools: Vec<ToolName>,
     }
 
     /// Summary of all entities tracked by the deployment
@@ -121,6 +130,8 @@ declare_structs! {
         pub components: Vec<DeploymentPlanComponentEntry>,
         pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>,
         pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
+        pub remote_tools: Vec<DeploymentPlanRemoteToolEntry>,
+        pub published_tools: Vec<ToolName>,
     }
 
     pub struct DeploymentPlanComponentEntry {
@@ -141,6 +152,11 @@ declare_structs! {
         pub id: McpDeploymentId,
         pub revision: McpDeploymentRevision,
         pub domain: Domain,
+        pub hash: Hash,
+    }
+
+    pub struct DeploymentPlanRemoteToolEntry {
+        pub name: ToolName,
         pub hash: Hash,
     }
 }

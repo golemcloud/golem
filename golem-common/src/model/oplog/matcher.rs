@@ -326,10 +326,6 @@ impl PublicOplogEntry {
                 Self::string_match("growmemory", &[], query_path, query)
                     || Self::string_match("grow-memory", &[], query_path, query)
             }
-            PublicOplogEntry::FilesystemStorageUsageUpdate(_params) => {
-                Self::string_match("filesystemstorageusageupdate", &[], query_path, query)
-                    || Self::string_match("filesystem-storage-usage-update", &[], query_path, query)
-            }
             PublicOplogEntry::CreateResource(_params) => {
                 Self::string_match("createresource", &[], query_path, query)
                     || Self::string_match("create-resource", &[], query_path, query)
@@ -521,6 +517,31 @@ impl PublicOplogEntry {
                 Self::string_match("hoststreamframe", &[], query_path, query)
                     || Self::string_match("host-stream-frame", &[], query_path, query)
                     || Self::match_typed_schema_value(&params.payload, &[], query_path, query)
+            }
+            PublicOplogEntry::StreamRegistered(params) => {
+                Self::string_match("streamregistered", &[], query_path, query)
+                    || Self::string_match("stream-registered", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.record, &[], query_path, query)
+            }
+            PublicOplogEntry::StreamItems(params) => {
+                Self::string_match("streamitems", &[], query_path, query)
+                    || Self::string_match("stream-items", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.record, &[], query_path, query)
+            }
+            PublicOplogEntry::StreamEnd(params) => {
+                Self::string_match("streamend", &[], query_path, query)
+                    || Self::string_match("stream-end", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.record, &[], query_path, query)
+            }
+            PublicOplogEntry::StreamCancel(params) => {
+                Self::string_match("streamcancel", &[], query_path, query)
+                    || Self::string_match("stream-cancel", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.record, &[], query_path, query)
+            }
+            PublicOplogEntry::StreamSession(params) => {
+                Self::string_match("streamsession", &[], query_path, query)
+                    || Self::string_match("stream-session", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.record, &[], query_path, query)
             }
         }
     }
@@ -836,6 +857,7 @@ impl PublicOplogEntry {
             SchemaValue::QuotaToken(payload) => {
                 Self::string_match(&payload.resource_name, path_stack, query_path, query)
             }
+            SchemaValue::Stream(_) => false,
             SchemaValue::PermissionCard(payload) => {
                 Self::string_match(&payload.card_id.to_string(), path_stack, query_path, query)
                     || payload.parent_ids.iter().any(|parent_id| {

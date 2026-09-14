@@ -10,6 +10,8 @@ It builds and runs all primary benchmarks in `ci.yaml`, keeps timestamped result
 artifacts under `tmp/`, and then uses the validated publisher from `golemcloud/benchmark-results`
 to append and push exactly that run. The analysis compares the run with the immediately preceding
 run from the same runner and suite.
+Before building, it cleans the Cargo target directory and removes leftover benchmark Postgres
+containers and unused Docker volumes so every run starts with enough disk space and a fresh database.
 Failed or partial runs are never published. Publishing is idempotent, and non-fast-forward races
 are retried from a fresh `benchmark-results` checkout.
 
@@ -54,6 +56,6 @@ than inventing one.
 
 For recovery testing or an idempotent publication retry, set `GOLEM_BENCHMARK_RESULTS_INPUT` to an
 existing JSON artifact. The artifact must match the current commit and ref. The repository URL,
-expected ref, artifact directory, and space reclamation can be overridden with
+expected ref, and artifact directory can be overridden with
 `BENCHMARK_RESULTS_REPOSITORY`, `GOLEM_BENCHMARK_EXPECTED_REF`,
-`GOLEM_BENCHMARK_ARTIFACT_DIR`, and `GOLEM_BENCHMARK_RECLAIM_SPACE` respectively.
+and `GOLEM_BENCHMARK_ARTIFACT_DIR` respectively.

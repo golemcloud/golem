@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/schema"
 import {
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema_model",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -42,27 +43,60 @@ pub fn[U : QuantityUnit] unit_allowed(TypeTag[U], String) -> Bool
 pub fn value_kind(@schema_model.SchemaValue) -> String
 
 // Errors
+pub suberror AgentStreamReadError {
+  Ownership(String)
+  Transport(String)
+  WireDecode(@schema_model.SchemaModelError)
+  ItemDecode(FromSchemaError)
+} derive(Eq, @debug.Debug)
+
 pub suberror FromSchemaError {
   ShapeMismatch(expected~ : String, actual~ : String, context~ : String)
   OutOfRange(index~ : UInt, len~ : UInt, context~ : String)
   UnknownUnionTag(String)
   Custom(String)
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn FromSchemaError::custom(String) -> Self
 pub fn FromSchemaError::out_of_range(UInt, UInt, String) -> Self
 pub fn FromSchemaError::shape_mismatch(String, String, String) -> Self
 
 // Types and methods
+pub(all) struct AgentStream[T] {
+  // private fields
+}
+pub fn[T] AgentStream::drop(Self[T]) -> Unit
+pub fn[T] AgentStream::from_value_with_codec(@schema_model.SchemaValue, (@schema_model.SchemaValue) -> T raise FromSchemaError) -> Self[T] raise FromSchemaError
+pub fn[T : IntoSchema + FromSchema] AgentStream::new() -> (AgentStreamWriter[T], Self[T])
+pub fn[T] AgentStream::new_with_codec((T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit) -> (AgentStreamWriter[T], Self[T])
+pub fn[T : IntoSchema + FromSchema] AgentStream::produce(async (AgentStreamWriter[T]) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
+pub fn[T] AgentStream::produce_with_codec(async (AgentStreamWriter[T]) -> Unit, (T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
+pub async fn[T] AgentStream::read(Self[T]) -> T?
+pub fn[T] AgentStream::to_schema_value(Self[T]) -> @schema_model.SchemaValue
+pub impl[T : FromSchema] FromSchema for AgentStream[T]
+pub impl[T : IntoSchema] IntoSchema for AgentStream[T]
+
+pub(all) enum AgentStreamWriteOutcome {
+  Accepted
+  PeerDropped
+} derive(Eq, @debug.Debug)
+
+pub struct AgentStreamWriter[T] {
+  // private fields
+}
+pub async fn[T] AgentStreamWriter::close(Self[T]) -> Unit
+pub async fn[T] AgentStreamWriter::write_all(Self[T], Array[T]) -> AgentStreamWriteOutcome
+pub async fn[T] AgentStreamWriter::write_one(Self[T], T) -> AgentStreamWriteOutcome
+
 pub(all) struct Duration {
   nanoseconds : Int64
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Duration::new(Int64) -> Self
 pub impl FromSchema for Duration
 pub impl IntoSchema for Duration
 
 pub(all) struct Path {
   value : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Path::new(String) -> Self
 pub impl FromSchema for Path
 pub impl IntoSchema for Path
@@ -71,7 +105,7 @@ pub struct Quantity[U] {
   mantissa : Int64
   scale : Int
   unit : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn[U : QuantityUnit] Quantity::new(Int64, Int, String) -> Self[U] raise FromSchemaError
 pub fn[U] Quantity::value(Self[U]) -> @types.QuantityValue
 pub impl[U : QuantityUnit] FromSchema for Quantity[U]
@@ -82,7 +116,7 @@ pub(all) struct TypeTag[T] {
 
 pub(all) struct Url {
   value : String
-} derive(Eq, Show)
+} derive(Eq, @debug.Debug)
 pub fn Url::new(String) -> Self
 pub impl FromSchema for Url
 pub impl IntoSchema for Url
@@ -153,4 +187,3 @@ pub(open) trait QuantityUnit {
   fn base_unit() -> String
   fn allowed_suffixes() -> Array[String]
 }
-

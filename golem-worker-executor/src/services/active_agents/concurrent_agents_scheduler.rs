@@ -18,6 +18,7 @@ use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::debug;
 
@@ -112,6 +113,7 @@ pub struct ConcurrentAgentPermit {
     /// Bare permit for the unlimited-account bypass path. Unused for limited
     /// accounts (the permit lives inside `_slot`).
     _raw: Option<OwnedSemaphorePermit>,
+    held: Option<Arc<AtomicBool>>,
 }
 
 impl ConcurrentAgentPermit {
@@ -120,6 +122,7 @@ impl ConcurrentAgentPermit {
         Self {
             _slot: Some(slot),
             _raw: None,
+            held: None,
         }
     }
 
@@ -129,6 +132,23 @@ impl ConcurrentAgentPermit {
         Self {
             _slot: None,
             _raw: Some(raw),
+            held: None,
+        }
+    }
+
+    pub(crate) fn track_held(mut self, held: Arc<AtomicBool>) -> Self {
+        held.store(true, Ordering::Release);
+        self.held = Some(held);
+        self
+    }
+}
+
+impl Drop for ConcurrentAgentPermit {
+    fn drop(&mut self) {
+        drop(self._slot.take());
+        drop(self._raw.take());
+        if let Some(held) = self.held.take() {
+            held.store(false, Ordering::Release);
         }
     }
 }

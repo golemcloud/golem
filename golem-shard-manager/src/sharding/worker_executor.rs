@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use super::error::{HealthCheckError, ShardManagerError};
-use super::model::{Assignments, Unassignments, pod_shard_assignments_to_string};
+use super::model::{
+    Assignments, ExecutorAddrs, ExecutorId, Unassignments, shard_assignments_to_string,
+};
 use crate::config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::model::Pod;
@@ -23,7 +26,7 @@ use golem_common::model::ShardId;
 use golem_common::retries::with_retriable_errors;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
@@ -34,7 +37,7 @@ use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::info;
+use tracing::{info, warn};
 
 #[async_trait]
 pub trait WorkerExecutorService: Send + Sync {
@@ -62,74 +65,94 @@ pub trait WorkerExecutorService: Send + Sync {
 
 /// Sends revoke requests to all worker executors based on an `Unassignments` plan
 pub async fn revoke_shards(
-    worker_executors: Arc<dyn WorkerExecutorService>,
+    worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     unassignments: &Unassignments,
-) -> Vec<(Pod, BTreeSet<ShardId>)> {
-    let futures: Vec<_> = unassignments
-        .unassignments
-        .iter()
-        .map(|(pod, shard_ids)| {
+    addrs: &ExecutorAddrs,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+    fan_out(
+        &unassignments.unassignments,
+        addrs,
+        "revoke_shards",
+        |pod, shard_ids| {
             let worker_executors = worker_executors.clone();
-            Box::pin(async move {
-                match worker_executors.revoke_shards(pod, shard_ids).await {
-                    Ok(_) => None,
-                    Err(_) => Some((*pod, shard_ids.clone())),
-                }
-            })
-        })
-        .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
+            Box::pin(async move { worker_executors.revoke_shards(&pod, shard_ids).await })
+        },
+    )
+    .await
 }
 
-/// Sends assign requests to all worker executors based on an `Assignments` plan
+/// Sends assign requests to all worker executors based on an `Assignments` plan.
 pub async fn assign_shards(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     assignments: &Assignments,
-) -> Vec<(Pod, BTreeSet<ShardId>)> {
-    let futures: Vec<_> = assignments
-        .assignments
-        .iter()
-        .map(|(pod, shard_ids)| {
+    addrs: &ExecutorAddrs,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+    fan_out(
+        &assignments.assignments,
+        addrs,
+        "assign_shards",
+        |pod, shard_ids| {
             let worker_executors = worker_executors.clone();
-            Box::pin(async move {
-                match worker_executors.assign_shards(pod, shard_ids).await {
-                    Ok(_) => None,
-                    Err(_) => Some((*pod, shard_ids.clone())),
-                }
-            })
-        })
-        .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
+            Box::pin(async move { worker_executors.assign_shards(&pod, shard_ids).await })
+        },
+    )
+    .await
 }
 
-/// Reconciles executors to the routing-table shard assignments.
+/// Reconciles executors to the authoritative shard assignments.
 pub async fn set_shard_assignments(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     number_of_shards: usize,
     assignments: &Assignments,
-) -> Vec<(Pod, BTreeSet<ShardId>)> {
-    let futures: Vec<_> = assignments
-        .assignments
-        .iter()
-        .map(|(pod, shard_ids)| {
+    addrs: &ExecutorAddrs,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+    fan_out(
+        &assignments.assignments,
+        addrs,
+        "set_shard_assignment",
+        |pod, shard_ids| {
             let worker_executors = worker_executors.clone();
             Box::pin(async move {
-                match worker_executors
-                    .set_shard_assignment(pod, number_of_shards, shard_ids)
+                worker_executors
+                    .set_shard_assignment(&pod, number_of_shards, shard_ids)
                     .await
-                {
-                    Ok(_) => None,
-                    Err(_) => Some((*pod, shard_ids.clone())),
-                }
             })
+        },
+    )
+    .await
+}
+
+async fn fan_out<'a, F>(
+    plan: &'a BTreeMap<ExecutorId, BTreeSet<ShardId>>,
+    addrs: &ExecutorAddrs,
+    operation: &'static str,
+    call: F,
+) -> Vec<(ExecutorId, BTreeSet<ShardId>)>
+where
+    F: Fn(Pod, &'a BTreeSet<ShardId>) -> BoxFuture<'a, Result<(), ShardManagerError>>,
+{
+    let futures: Vec<_> = plan
+        .iter()
+        .map(|(executor_id, shard_ids)| {
+            let call = addrs
+                .get(executor_id)
+                .map(|addr| call(Pod::from(*addr), shard_ids));
+            async move {
+                match call {
+                    None => {
+                        warn!(
+                            executor_id = %executor_id,
+                            operation,
+                            "Executor has no known address; reporting the operation as failed"
+                        );
+                        Some((*executor_id, shard_ids.clone()))
+                    }
+                    Some(call) => match call.await {
+                        Ok(_) => None,
+                        Err(_) => Some((*executor_id, shard_ids.clone())),
+                    },
+                }
+            }
         })
         .collect();
     futures::future::join_all(futures)
@@ -152,7 +175,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            assigned_shards = pod_shard_assignments_to_string(pod, None, shard_ids.iter()),
+            assigned_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
             "Assigning shards",
         );
 
@@ -170,26 +193,30 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
         // NOTE: retries are handled in healthcheck.rs
         let endpoint = pod.endpoint(self.config.client_config.tls_enabled());
-        let conn = timeout(self.config.health_check_timeout, endpoint.connect()).await;
-        match conn {
-            Ok(conn) => match conn {
-                Ok(conn) => {
-                    let request = HealthCheckRequest {
-                        service: "".to_string(),
-                    };
-                    match HealthClient::new(conn).check(request).await {
-                        Ok(response) => {
-                            let status = health_check_serving_status(response);
-                            (status == ServingStatus::Serving)
-                                .then_some(())
-                                .ok_or_else(|| HealthCheckError::GrpcOther(status.as_str_name()))
-                        }
-                        Err(status) => Err(HealthCheckError::GrpcError(status)),
-                    }
-                }
-                Err(err) => Err(HealthCheckError::GrpcTransportError(err)),
-            },
-            Err(_) => Err(HealthCheckError::GrpcOther("connect timeout")),
+        // The deadline covers the check RPC as well as the connect: an executor that accepts
+        // connections but never answers would otherwise hold this call open forever.
+        let checked = timeout(self.config.health_check_timeout, async {
+            let conn = endpoint
+                .connect()
+                .await
+                .map_err(HealthCheckError::GrpcTransportError)?;
+            let request = HealthCheckRequest {
+                service: "".to_string(),
+            };
+            let response = HealthClient::new(conn)
+                .check(request)
+                .await
+                .map_err(HealthCheckError::GrpcError)?;
+            let status = health_check_serving_status(response);
+            (status == ServingStatus::Serving)
+                .then_some(())
+                .ok_or_else(|| HealthCheckError::GrpcOther(status.as_str_name()))
+        })
+        .await;
+
+        match checked {
+            Ok(result) => result,
+            Err(_) => Err(HealthCheckError::GrpcOther("health check timeout")),
         }
     }
 
@@ -199,7 +226,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            revoked_shards = pod_shard_assignments_to_string(pod, None, shard_ids.iter()),
+            revoked_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
             "Revoking shards",
         );
 
@@ -221,7 +248,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         shard_ids: &BTreeSet<ShardId>,
     ) -> Result<(), ShardManagerError> {
         info!(
-            assigned_shards = pod_shard_assignments_to_string(pod, None, shard_ids.iter()),
+            assigned_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
             number_of_shards, "Setting authoritative shard assignment",
         );
 
@@ -405,4 +432,47 @@ fn health_check_serving_status(response: Response<HealthCheckResponse>) -> Servi
         .status
         .try_into()
         .unwrap_or(ServingStatus::Unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+    use crate::config::WorkerExecutorServiceConfig;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    #[test]
+    // The executor accepts the connection and then never answers, so only a deadline covering the
+    // check RPC - not just the connect - lets this return.
+    async fn a_health_check_against_a_silent_executor_gives_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local address");
+        let _silent_executor = tokio::spawn(async move {
+            let mut accepted = Vec::new();
+            while let Ok((connection, _)) = listener.accept().await {
+                // Held open and never answered.
+                accepted.push(connection);
+            }
+        });
+
+        let health_check_timeout = Duration::from_millis(300);
+        let service = WorkerExecutorServiceDefault::new(WorkerExecutorServiceConfig {
+            health_check_timeout,
+            ..Default::default()
+        });
+        let pod = Pod {
+            ip: addr.ip(),
+            port: addr.port(),
+        };
+
+        let checked = timeout(health_check_timeout * 2, service.health_check(&pod))
+            .await
+            .expect("health_check outlived twice its own timeout");
+        assert!(
+            checked.is_err(),
+            "an executor that never answers must not be reported healthy"
+        );
+    }
 }

@@ -2,16 +2,14 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { templateMatrix } from './template-matrix.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageDir = path.resolve(scriptDir, '..');
-const manifestPath = path.join(packageDir, 'agent-template', 'Cargo.toml');
 
-// Resolve the actual cargo target directory instead of assuming
-// `agent-template/target`. This honors `CARGO_TARGET_DIR`, `build.target-dir`
-// in cargo config, and any other cargo configuration, matching wherever the
-// `compile-agent-template` step actually wrote the artifact.
-function resolveTargetDir() {
+// All wrapper crates compile into the first wrapper's resolved target directory
+// so their large shared dependency graph is built only once.
+function resolveTargetDir(manifestPath, wrapperDirectory) {
   try {
     const output = execFileSync(
       'cargo',
@@ -33,13 +31,18 @@ function resolveTargetDir() {
     return path.resolve(process.env.CARGO_TARGET_DIR);
   }
 
-  return path.join(packageDir, 'agent-template', 'target');
+  return path.join(packageDir, wrapperDirectory, 'target');
 }
 
-const targetDir = resolveTargetDir();
+const targetDir = resolveTargetDir(
+  path.join(packageDir, templateMatrix[0].wrapperDirectory, 'Cargo.toml'),
+  templateMatrix[0].wrapperDirectory,
+);
 
-const sourcePath = path.join(targetDir, 'wasm32-wasip2', 'release', 'agent_guest.wasm');
-const targetPath = path.join(packageDir, 'wasm', 'agent_guest.wasm');
+for (const template of templateMatrix) {
+  const sourcePath = path.join(targetDir, 'wasm32-wasip2', 'release', template.cargoArtifact);
+  const targetPath = path.join(packageDir, 'wasm', template.wasmFile);
 
-fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-fs.copyFileSync(sourcePath, targetPath);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.copyFileSync(sourcePath, targetPath);
+}

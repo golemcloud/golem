@@ -125,7 +125,7 @@ impl SafeDisplay for RegistryServiceConfig {
 
 impl Default for RegistryServiceConfig {
     fn default() -> Self {
-        let mut initial_accounts = HashMap::with_capacity(3);
+        let mut initial_accounts = HashMap::with_capacity(4);
         initial_accounts.insert(
             "root".to_string(),
             PrecreatedAccount {
@@ -158,6 +158,17 @@ impl Default for RegistryServiceConfig {
                 id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
                 name: "Builtin Plugin Owner".to_string(),
                 email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                token: None,
+                role: AccountRole::BuiltinPluginOwner,
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            },
+        );
+        initial_accounts.insert(
+            "builtin_tool_owner".to_string(),
+            PrecreatedAccount {
+                id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
+                name: "Builtin Tool Owner".to_string(),
+                email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
                 token: None,
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
@@ -204,6 +215,7 @@ impl Default for RegistryServiceConfig {
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
                 database: "golem_registry_service.db".to_string(),
+                foreign_keys: true,
                 ..Default::default()
             }),
             login: LoginConfig::default(),

@@ -125,6 +125,17 @@ interface types {
     /// and reveal it only through capability-gated host interfaces.
     resource secret;
 
+    /// An affine wrapper around a native Component Model stream of schema
+    /// values. The indirection lets a stream occur anywhere in a recursive
+    /// `schema-value-tree` while preserving the native stream endpoint.
+    resource schema-value-stream {
+        /// Wraps any native schema-value reader for placement in a value tree.
+        wrap: static async func(reader: stream<schema-value-tree>) -> own<schema-value-stream>;
+
+        /// Consumes a schema-value-stream wrapper and returns its native reader.
+        unwrap: static async func(value: own<schema-value-stream>) -> stream<schema-value-tree>;
+    }
+
     /// An unforgeable handle to a permission card held by the runtime. The
     /// handle is opaque to guests: components can hold, pass, derive, install,
     /// and revoke cards only through the `golem:permissions` interfaces. When
@@ -569,6 +580,7 @@ interface types {
         secret-value(own<secret>),
         quota-token-handle(own<quota-token>),
         permission-card-handle(own<permission-card>),
+        stream-value(own<schema-value-stream>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
     }
@@ -629,4 +641,5 @@ interface types {
         graph: schema-graph,
         value: schema-value-tree,
     }
+
 }

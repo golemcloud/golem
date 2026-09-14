@@ -16,7 +16,7 @@
 
 package golem.runtime.macros
 
-import golem.schema.{FromSchema, IntoSchema}
+import golem.schema.{FromSchema, IntoSchema, TypedSchemaValue}
 import golem.tool.*
 
 import scala.concurrent.Future
@@ -168,7 +168,7 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
     implE: Expr[Trait],
     argsE: Expr[Vector[Any]],
     stdoutE: Expr[Option[ToolOutputStream]]
-  ): Expr[Future[Either[ToolInvokeError, ToolInvokeResult]]] = {
+  ): Expr[Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]] = {
     val pos  = m.sym.pos.getOrElse(Position.ofMacroExpansion)
     val call = callTerm[Trait](m, implE, argsE)
 

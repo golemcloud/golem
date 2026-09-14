@@ -174,9 +174,7 @@ impl ProtobufInvocationDetails
     }
 }
 
-impl ProtobufInvocationDetails
-    for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAgentRequest
-{
+impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::InvocationStart {
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
         &self.agent_id
     }
@@ -240,7 +238,7 @@ mod tests {
 
     #[test]
     fn invoke_agent_request_decodes_creation_config() {
-        let request = golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAgentRequest {
+        let request = golem_api_grpc::proto::golem::worker::InvocationStart {
             config: vec![golem_api_grpc::proto::golem::worker::AgentConfigEntryDto {
                 path: vec!["database".into(), "port".into()],
                 value: "5432".into(),
@@ -256,7 +254,7 @@ mod tests {
 
     #[test]
     fn invoke_agent_request_rejects_invalid_creation_config_json() {
-        let request = golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAgentRequest {
+        let request = golem_api_grpc::proto::golem::worker::InvocationStart {
             config: vec![golem_api_grpc::proto::golem::worker::AgentConfigEntryDto {
                 path: vec!["database".into(), "port".into()],
                 value: "not-json".into(),

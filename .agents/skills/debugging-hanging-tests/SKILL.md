@@ -49,10 +49,10 @@ cargo test -p <crate> <test_name> -- --nocapture > tmp/test_output.txt 2>&1
 Search the saved output file for these patterns, in order of likelihood:
 
 ```shell
-grep -n "unimplemented" tmp/test_output.txt
-grep -n "panic" tmp/test_output.txt
-grep -n "ERROR" tmp/test_output.txt
-grep -n "WARN" tmp/test_output.txt
+rg -n "unimplemented" tmp/test_output.txt
+rg -n "panic" tmp/test_output.txt
+rg -n "ERROR" tmp/test_output.txt
+rg -n "WARN" tmp/test_output.txt
 ```
 
 ### What to look for

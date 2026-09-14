@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::{agent_owner, env_target};
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    BegunCallReplayOutcome, CallReplayOutcome, DurableCallSession, NotCancellable,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::AgentConfig;
 use crate::services::HasWorker;
@@ -171,7 +173,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await?;
             (call, Some(environment))
         } else {
-            (begun.start_replay(self).await?, None)
+            match begun.start_replay_or_continue_live(self).await? {
+                BegunCallReplayOutcome::Claimed(call) => (call, None),
+                BegunCallReplayOutcome::ContinueLive(begun) => {
+                    let (environment, decisions) = self.build_filtered_environment()?;
+                    for (target, allowed) in decisions {
+                        crate::durable_host::record_permission_decisions(
+                            std::slice::from_ref(&target),
+                            allowed,
+                        );
+                    }
+                    let call = begun
+                        .start_live(
+                            self,
+                            HostRequestCliEnvironmentGetEnvironment {
+                                environment: environment.clone(),
+                            },
+                        )
+                        .await?;
+                    (call, Some(environment))
+                }
+            }
         };
         if !call.is_live() {
             match call.replay(self).await? {

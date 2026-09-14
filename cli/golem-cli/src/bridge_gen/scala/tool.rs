@@ -357,15 +357,21 @@ impl ScalaToolBridgeGenerator {
             }
             None => "_root_.scala.None".to_string(),
         };
-        let ret_ty = self.return_type(body)?;
+        let result_ty = self.result_type(body)?;
         let path_expr = self.command_path_expr(command_index)?;
         let error_type = self.error_type_ref(command_index, body);
 
-        writer.line(format!(
-            "def {method_name}({}): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[{}], {ret_ty}]] = {{",
-            params.join(", "),
-            error_type,
-        ));
+        if body.stdout.is_some() {
+            writer.line(format!(
+                "def {method_name}({}): _root_.scala.Either[_root_.golem.tool.ToolError[{error_type}], _root_.golem.tool.ToolInvocation[{error_type}, {result_ty}]] = {{",
+                params.join(", "),
+            ));
+        } else {
+            writer.line(format!(
+                "def {method_name}({}): _root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[{error_type}], {result_ty}]] = {{",
+                params.join(", "),
+            ));
+        }
         writer.indent();
         writer.line(format!(
             "val __input: _root_.scala.Either[_root_.golem.tool.ToolError[{SCALA_NOTHING}], _root_.golem.schema.TypedSchemaValue] ="
@@ -396,9 +402,22 @@ impl ScalaToolBridgeGenerator {
         writer.line("}");
         writer.dedent();
 
-        let call = self.invoke_call(command_index, body, &path_expr, &stdin_expr)?;
-        writer.line(format!("val __call = {call}"));
-        writer.line("_root_.golem.tool.ToolClientRuntime.complete(__call) { __result =>");
+        if body.stdout.is_some() {
+            let error_decoder = if body.errors.is_empty() {
+                format!(
+                    "((_: _root_.golem.schema.TypedSchemaValue) => _root_.scala.Left(\"remote tool returned an undeclared custom error\"): _root_.scala.Either[_root_.scala.Predef.String, {SCALA_NOTHING}])"
+                )
+            } else {
+                format!("{}.decodeError", self.error_type_ref(command_index, body))
+            };
+            writer.line(format!(
+                "_root_.golem.tool.ToolClientRuntime.start[{error_type}, {result_ty}](rpc, {path_expr}, __input, {stdin_expr}, {error_decoder}) {{ __result =>"
+            ));
+        } else {
+            let call = self.invoke_call(command_index, body, &path_expr, &stdin_expr)?;
+            writer.line(format!("val __call = {call}"));
+            writer.line("_root_.golem.tool.ToolClientRuntime.complete(__call) { __result =>");
+        }
         writer.indent();
         self.result_decode(writer, body)?;
         writer.dedent();
@@ -434,16 +453,6 @@ impl ScalaToolBridgeGenerator {
         body: &CommandBody,
     ) -> anyhow::Result<()> {
         match (&body.result, &body.stdout) {
-            (Some(result), Some(stdout)) if stdout.required => {
-                let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
-                writer.line("for {");
-                writer.indent();
-                writer.line("__stdout <- __result.stdout.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain declared stdout stream\"))");
-                writer.line("__typed <- __result.result.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain a value\"))");
-                writer.line(format!("__decoded <- decodeResultValue({dec})"));
-                writer.dedent();
-                writer.line("} yield (__decoded, __stdout)");
-            }
             (Some(result), Some(_)) => {
                 let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
                 writer.line("for {");
@@ -451,37 +460,27 @@ impl ScalaToolBridgeGenerator {
                 writer.line("__typed <- __result.result.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain a value\"))");
                 writer.line(format!("__decoded <- decodeResultValue({dec})"));
                 writer.dedent();
-                writer.line("} yield (__decoded, __result.stdout)");
+                writer.line("} yield __decoded");
             }
             (Some(result), None) => {
                 let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
                 writer.line("for {");
                 writer.indent();
-                writer.line("_ <- if (__result.stdout.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained stdout stream\")) else _root_.scala.Right(())");
                 writer.line("__typed <- __result.result.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain a value\"))");
                 writer.line(format!("__decoded <- decodeResultValue({dec})"));
                 writer.dedent();
                 writer.line("} yield __decoded");
-            }
-            (None, Some(stdout)) if stdout.required => {
-                writer.line("for {");
-                writer.indent();
-                writer.line("__stdout <- __result.stdout.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain declared stdout stream\"))");
-                writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
-                writer.dedent();
-                writer.line("} yield __stdout");
             }
             (None, Some(_)) => {
                 writer.line("for {");
                 writer.indent();
                 writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
                 writer.dedent();
-                writer.line("} yield __result.stdout");
+                writer.line("} yield ()");
             }
             (None, None) => {
                 writer.line("for {");
                 writer.indent();
-                writer.line("_ <- if (__result.stdout.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained stdout stream\")) else _root_.scala.Right(())");
                 writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
                 writer.dedent();
                 writer.line("} yield ()");
@@ -561,24 +560,10 @@ impl ScalaToolBridgeGenerator {
         Ok(())
     }
 
-    fn return_type(&mut self, body: &CommandBody) -> anyhow::Result<String> {
-        let stdout = "_root_.golem.tool.ToolOutputStream".to_string();
-        let stdout_type = |required: bool| {
-            if required {
-                stdout.clone()
-            } else {
-                format!("_root_.scala.Option[{stdout}]")
-            }
-        };
-        match (&body.result, &body.stdout) {
-            (Some(result), Some(stdout)) => Ok(format!(
-                "({}, {stdout})",
-                self.inner.type_reference(&result.type_)?,
-                stdout = stdout_type(stdout.required)
-            )),
-            (Some(result), None) => self.inner.type_reference(&result.type_),
-            (None, Some(stdout)) => Ok(stdout_type(stdout.required)),
-            (None, None) => Ok("_root_.scala.Unit".to_string()),
+    fn result_type(&mut self, body: &CommandBody) -> anyhow::Result<String> {
+        match &body.result {
+            Some(result) => self.inner.type_reference(&result.type_),
+            None => Ok("_root_.scala.Unit".to_string()),
         }
     }
 
@@ -1181,7 +1166,7 @@ mod tests {
             "_root_.golem.runtime.tool.client.ToolRpcClient.transport(\"grep\")",
             "_root_.golem.schema.TypedSchemaValue(__schema, _root_.golem.schema.SchemaValue.RecordValue(__fields))",
             "_root_.golem.tool.ToolClientRuntime.invokeAndAwait[_root_.golem.bridge.client.grep.GrepError]",
-            "_root_.golem.tool.ToolClientRuntime.invokeAndAwaitInfallible",
+            "_root_.golem.tool.ToolClientRuntime.start[_root_.scala.Nothing, _root_.scala.Unit]",
             "object Codecs",
         ] {
             assert!(source.contains(shape), "missing {shape}:\n{source}");

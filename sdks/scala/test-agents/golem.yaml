@@ -33,10 +33,14 @@ agents:
       db:
         host: "manifest-db.example.com"
         port: 5432
+  ScalaToolStreamingCaller:
+    tools:
+      scala-streaming: { }
 
 tools:
   git: { }
   grep: { }
+  scala-streaming: { }
   tool-demo: { }
 
 httpApi:

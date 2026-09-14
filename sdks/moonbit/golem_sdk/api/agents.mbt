@@ -121,7 +121,7 @@ pub fn get_agents(
   filter : AgentAnyFilter?,
   precise : Bool,
 ) -> AgentsPager {
-  { inner: @raw.GetAgents::get_agents(component_id, filter, precise) }
+  { inner: @raw.GetAgents::get_agents(component_id, filter, precise), }
 }
 
 ///|

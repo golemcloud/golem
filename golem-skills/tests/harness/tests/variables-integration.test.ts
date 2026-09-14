@@ -309,6 +309,62 @@ describe("Variable substitution integration", () => {
     assert.equal(result.status, "pass", result.stepResults[0]?.error);
   });
 
+  it("extracts invoke_json results from invocation-session lifecycle documents", async () => {
+    const driver = new StubDriver();
+    const watcher = new SkillWatcher(workspace);
+    const opts: ScenarioExecutorOptions = { agent: "amp", language: "ts" };
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
+
+    (executor as unknown as Record<string, unknown>)["findGolemProjectDir"] = async () => workspace;
+    (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
+      success: true,
+      stdout: [
+        { $type: "agent.invoke-session", kind: "accepted", idempotencyKey: "abc-123" },
+        {
+          $type: "agent.invoke-session",
+          kind: "result",
+          idempotencyKey: "abc-123",
+          value: { count: 2, active: true },
+        },
+        {
+          $type: "agent.invoke-session",
+          kind: "finished",
+          idempotencyKey: "abc-123",
+          outcome: "success",
+        },
+      ]
+        .map((document) => JSON.stringify(document))
+        .join("\n"),
+      stderr: "",
+      output: "",
+      exitCode: 0,
+    });
+
+    const spec: ScenarioSpec = {
+      name: "invoke-json-session-output",
+      settings: { cleanup: false },
+      steps: [
+        {
+          id: "invoke-json",
+          tag: "invoke_json" as const,
+          invoke_json: {
+            agent: 'CounterAgent("test")',
+            method: "get",
+          },
+          expect: {
+            result_json: [
+              { path: "$.count", equals: 2 },
+              { path: "$.active", equals: true },
+            ],
+          },
+        },
+      ],
+    };
+
+    const result = await executor.execute(spec);
+    assert.equal(result.status, "pass", result.stepResults[0]?.error);
+  });
+
   it("resolves language-conditional invoke_json method names before execution", async () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);

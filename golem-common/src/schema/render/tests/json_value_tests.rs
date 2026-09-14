@@ -15,8 +15,6 @@
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::Role;
 use crate::schema::proptest_strategies::schema_values_eq;
-use crate::schema::render::error::RenderError;
-use crate::schema::render::json_value::{from_json_value, to_json_value, to_json_value_redacted};
 use crate::schema::render::tests::paired_strategy::paired_strategy;
 use crate::schema::schema_type::{
     DiscriminatorRule, FieldDiscriminator, NamedFieldType, PermissionCardSpec, QuotaTokenSpec,
@@ -28,6 +26,10 @@ use crate::schema::schema_value::{
 };
 use crate::schema::validation::validate_graph;
 use chrono::{TimeZone, Utc};
+use golem_schema::schema::render::error::RenderError;
+use golem_schema::schema::render::json_value::{
+    from_json_value, from_untrusted_json_value, to_json_value, to_json_value_redacted,
+};
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -56,7 +58,7 @@ proptest! {
     fn json_value_validates_against_json_schema((ty, value) in paired_strategy()) {
         let graph = SchemaGraph::anonymous(ty.clone());
         let json = to_json_value(&graph, &ty, &value).expect("to_json_value");
-        let schema = crate::schema::render::json_schema::to_json_schema(&graph, &ty);
+        let schema = golem_schema::schema::render::json_schema::to_json_schema(&graph, &ty);
         let compiled = jsonschema::draft202012::new(&schema).expect("compile schema");
         prop_assert!(
             compiled.is_valid(&json),
@@ -786,7 +788,7 @@ fn permission_card_json_round_trip_matches_schema_and_redacts() {
     let decoded = from_json_value(&graph, &ty, &json).expect("decode permission-card");
     assert_eq!(decoded, value);
 
-    let schema = crate::schema::render::json_schema::to_json_schema(&graph, &ty);
+    let schema = golem_schema::schema::render::json_schema::to_json_schema(&graph, &ty);
     let compiled = jsonschema::draft202012::new(&schema).expect("compile permission-card schema");
     assert!(
         compiled.is_valid(&json),
@@ -796,6 +798,150 @@ fn permission_card_json_round_trip_matches_schema_and_redacts() {
     let redacted =
         to_json_value_redacted(&graph, &ty, &value).expect("redact permission-card JSON value");
     assert_eq!(redacted, json!("<redacted: permission-card>"));
+}
+
+#[test]
+fn untrusted_json_rejects_every_host_managed_capability_without_changing_trusted_decode() {
+    let cases = vec![
+        (
+            SchemaType::secret(SecretSpec::default()),
+            secret_value(),
+            "secret",
+        ),
+        (
+            SchemaType::quota_token(QuotaTokenSpec::default()),
+            quota_token_value(),
+            "quota-token",
+        ),
+        (
+            SchemaType::permission_card(PermissionCardSpec { polymorphic: false }),
+            SchemaValue::PermissionCard(PermissionCardValuePayload {
+                card_id: uuid::Uuid::from_u128(1),
+                parent_ids: Vec::new(),
+                expires_at: None,
+                polymorphic: false,
+            }),
+            "permission-card",
+        ),
+    ];
+
+    for (ty, value, kind) in cases {
+        let graph = SchemaGraph::anonymous(ty.clone());
+        let json = to_json_value(&graph, &ty, &value).expect("trusted encode");
+        assert_eq!(
+            from_json_value(&graph, &ty, &json).expect("trusted decode"),
+            value
+        );
+
+        let error = from_untrusted_json_value(&graph, &ty, &json)
+            .expect_err("external JSON must not construct a capability");
+        assert_eq!(
+            error,
+            RenderError::ValueMismatch {
+                path: "$".to_string(),
+                reason: format!(
+                    "host-managed capability `{kind}` cannot be constructed from external JSON"
+                ),
+            }
+        );
+    }
+}
+
+#[test]
+fn untrusted_json_rejects_nested_capability_at_the_selected_value_path() {
+    let ty = SchemaType::record(vec![NamedFieldType {
+        name: "items".to_string(),
+        body: SchemaType::list(SchemaType::secret(SecretSpec::default())),
+        metadata: Default::default(),
+    }]);
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let secret_json = to_json_value(
+        &SchemaGraph::anonymous(SchemaType::secret(SecretSpec::default())),
+        &SchemaType::secret(SecretSpec::default()),
+        &secret_value(),
+    )
+    .expect("trusted secret encode");
+
+    let error = from_untrusted_json_value(&graph, &ty, &json!({ "items": [secret_json] }))
+        .expect_err("nested secret must be rejected");
+    assert!(matches!(
+        error,
+        RenderError::ValueMismatch { path, reason }
+            if path == ".items[0]" && reason.contains("`secret`")
+    ));
+}
+
+#[test]
+fn untrusted_json_accepts_absent_and_unselected_capability_branches() {
+    let optional = SchemaType::option(SchemaType::secret(SecretSpec::default()));
+    let optional_graph = SchemaGraph::anonymous(optional.clone());
+    assert_eq!(
+        from_untrusted_json_value(&optional_graph, &optional, &json!(null)).unwrap(),
+        SchemaValue::Option { inner: None }
+    );
+
+    let variant = SchemaType::variant(vec![
+        VariantCaseType {
+            name: "safe".to_string(),
+            payload: None,
+            metadata: Default::default(),
+        },
+        VariantCaseType {
+            name: "capability".to_string(),
+            payload: Some(SchemaType::quota_token(QuotaTokenSpec::default())),
+            metadata: Default::default(),
+        },
+    ]);
+    let variant_graph = SchemaGraph::anonymous(variant.clone());
+    assert_eq!(
+        from_untrusted_json_value(&variant_graph, &variant, &json!("safe")).unwrap(),
+        SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: None,
+        })
+    );
+
+    let result = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::string())),
+        err: Some(Box::new(SchemaType::permission_card(
+            PermissionCardSpec::default(),
+        ))),
+    });
+    let result_graph = SchemaGraph::anonymous(result.clone());
+    assert_eq!(
+        from_untrusted_json_value(&result_graph, &result, &json!({ "ok": "safe" })).unwrap(),
+        SchemaValue::Result(crate::schema::ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::String("safe".to_string()))),
+        })
+    );
+
+    let union = SchemaType::union(UnionSpec {
+        branches: vec![
+            UnionBranch {
+                tag: "safe".to_string(),
+                body: SchemaType::string(),
+                discriminator: DiscriminatorRule::Prefix {
+                    prefix: "safe:".to_string(),
+                },
+                metadata: Default::default(),
+            },
+            UnionBranch {
+                tag: "capability".to_string(),
+                body: SchemaType::secret(SecretSpec::default()),
+                discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                    field_name: "secretId".to_string(),
+                    literal: None,
+                }),
+                metadata: Default::default(),
+            },
+        ],
+    });
+    let union_graph = SchemaGraph::anonymous(union.clone());
+    assert!(matches!(
+        from_untrusted_json_value(&union_graph, &union, &json!("safe:value")).unwrap(),
+        SchemaValue::Union(UnionValuePayload { tag, body })
+            if tag == "safe" && *body == SchemaValue::String("safe:value".to_string())
+    ));
 }
 
 /// Redaction recurses through every container kind the walker descends into,

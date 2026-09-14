@@ -16,7 +16,7 @@ pub(all) struct GuestSecretHandle {
 ///|
 /// Wrap a freshly received owned handle in a take-once holder.
 pub fn GuestSecretHandle::new(handle : @types.Secret) -> GuestSecretHandle {
-  { cell: Some(handle) }
+  { cell: Some(handle), }
 }
 
 ///|
@@ -56,8 +56,8 @@ impl Eq for GuestSecretHandle with fn equal(self, other) {
 }
 
 ///|
-impl Show for GuestSecretHandle with fn output(self, logger) {
-  logger.write_string(
+impl Debug for GuestSecretHandle with fn to_repr(self) {
+  Repr::literal(
     if self.is_present() {
       "GuestSecretHandle(present)"
     } else {

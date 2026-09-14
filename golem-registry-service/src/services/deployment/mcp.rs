@@ -3,8 +3,6 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::repo::security_scheme::SecuritySchemeRepo;
 use golem_common::base_model::domain_registration::Domain;
-use golem_common::model::agent::RegisteredAgentType;
-use golem_common::schema::RegisteredAgentTypeSchema;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -82,44 +80,6 @@ impl DeployedMcpService {
                         });
                     }
                 }
-
-                let mut registered_agent_types = Vec::new();
-                for agent_type_name in compiled_mcp.agent_type_implementers.keys() {
-                    // Fail loudly on any inconsistency: an active MCP deployment
-                    // must advertise the full set of agent types it claims, or
-                    // none at all. Silently dropping a type would expose a
-                    // partial/empty capability set and hide conversion
-                    // regressions during the schema cutover.
-                    let record = self
-                        .deployment_repo
-                        .get_deployed_agent_type(compiled_mcp.environment_id.0, &agent_type_name.0)
-                        .await?
-                        .ok_or_else(|| {
-                            DeployedMcpError::InternalError(anyhow::anyhow!(
-                                "Agent type {} not found for domain {}",
-                                agent_type_name.0,
-                                domain.0,
-                            ))
-                        })?;
-
-                    let deployed =
-                        golem_common::model::agent::DeployedRegisteredAgentType::try_from(record)
-                            .map_err(|e| {
-                            DeployedMcpError::InternalError(anyhow::anyhow!(
-                                "Failed to convert agent type {} for domain {}: {}",
-                                agent_type_name.0,
-                                domain.0,
-                                e
-                            ))
-                        })?;
-
-                    let registered = RegisteredAgentType::from(deployed);
-                    registered_agent_types.push(RegisteredAgentTypeSchema {
-                        agent_type: registered.agent_type,
-                        implemented_by: registered.implemented_by,
-                    });
-                }
-                compiled_mcp.registered_agent_types = registered_agent_types;
 
                 Ok(compiled_mcp)
             }
