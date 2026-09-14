@@ -1785,7 +1785,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
     };
@@ -1832,6 +1832,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     let revoked = client
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
+            revision: 1,
         })
         .await?
         .into_inner();
@@ -1861,7 +1862,12 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     );
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![shard],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 2,
         })
         .await?
         .into_inner();
@@ -1879,7 +1885,12 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     faults.clear();
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![shard],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 3,
         })
         .await?
         .into_inner();
@@ -6162,6 +6173,7 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
         .clone()
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![ShardId { value: 0 }],
+            revision: 1,
         })
         .await?;
     Ok(())
@@ -6169,14 +6181,19 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
 
 /// Hands shard 0 back, so the agents on it are this executor's again.
 async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
     use golem_api_grpc::proto::golem::workerexecutor::v1::AssignShardsRequest;
 
     executor
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![ShardId { value: 0 }],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 0,
+            }],
+            number_of_shards: 1,
+            revision: 2,
         })
         .await?;
     Ok(())

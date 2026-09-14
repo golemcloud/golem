@@ -51,6 +51,7 @@ pub mod regions;
 pub mod reports;
 pub mod retry_policy;
 pub mod security_scheme;
+pub mod shard_lease;
 pub mod tool;
 pub mod tool_release;
 pub mod worker;
